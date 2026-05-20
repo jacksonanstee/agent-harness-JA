@@ -27,6 +27,11 @@
     "test:coverage": "vitest run --coverage",
     "eval": "node ./dist/cli.js eval"
   },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
   "keywords": [
     "llm",
     "agent",

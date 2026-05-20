@@ -92,9 +92,9 @@ Violating these rules is treated as a build failure (enforced by an ESLint rule 
 #### `harness/router`
 
 - **Owns:** model selection given a task descriptor.
-- **Public API:** `route(descriptor: TaskDescriptor): ModelChoice` where `ModelChoice = { model: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7', reason: string }`.
+- **Public API:** `route(descriptor: TaskDescriptor): ModelChoice` where `ModelChoice = { model: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7', rule_id: string, reason: string }`.
 - **Depends on:** routing-table config; no other modules.
-- **Design notes:** Task descriptor includes `shape` (review / build / research / lookup), `sensitivity` (low / med / high), and `expected_tokens`. Routing is deterministic given config.
+- **Design notes:** Task descriptor includes `shape` (review / build / research / lookup), `sensitivity` (low / medium / high), and `expected_tokens`. Routing is deterministic given config. Locked in [ADR-0007](./decisions/0007-task-descriptor-schema.md).
 
 #### `harness/skills`
 
