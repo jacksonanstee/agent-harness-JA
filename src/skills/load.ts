@@ -35,7 +35,12 @@ const MAX_FILE_BYTES = 1_000_000;
 //   2. SAFE_MATTER_OPTIONS replaces the `javascript`/`js` engines with ones
 //      that throw, so no eval happens even if guard (1) is ever bypassed.
 // Only YAML frontmatter is a valid skill (ADR-0006), so this loses nothing.
-const FENCE_LANGUAGE = /^﻿?---+([^\r\n]*)\r?\n/;
+// Matches exactly `---` (gray-matter's delimiter), not `---+`: the greedy
+// `---+` shared a `-` with the `[^\r\n]*` capture, giving O(n^2) backtracking
+// on a long dash run (a ~1 MB dash file hung validate() for minutes). Exactly
+// three dashes is also gray-matter's real behavior — it early-returns when the
+// 4th char is another dash — so this is stricter-or-equal, never looser.
+const FENCE_LANGUAGE = /^﻿?---([^\r\n]*)(?:\r?\n|$)/;
 
 function refuseNonYaml(): never {
   throw new Error('non-YAML frontmatter engine is disabled');

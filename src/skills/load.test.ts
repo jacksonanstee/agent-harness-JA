@@ -242,6 +242,17 @@ describe('skills: load', () => {
       expect(result.error.message).toMatch(/exceeds 1000000 bytes/);
     });
 
+    it('handles a near-cap file of dashes in linear time (no ReDoS in fence guard)', () => {
+      const dashes = join(tmp, 'dashes.md');
+      writeFileSync(dashes, '-'.repeat(999_999));
+      const start = process.hrtime.bigint();
+      const result = validate(dashes);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(result.ok).toBe(false);
+      // Was ~14 min with the `---+` regex; linear regex resolves in single-digit ms.
+      expect(elapsedMs).toBeLessThan(1000);
+    });
+
     it('strips ANSI/control bytes from attacker-influenced error messages', () => {
       const hostile = join(tmp, 'hostile.md');
       writeFileSync(hostile, '---\nname: "\u001b[31mSPOOFED\u001b[0m unclosed\n---\nbody\n');
