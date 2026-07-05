@@ -47,8 +47,8 @@ Build the four core harness modules. SDK integration last.
 - [x] **Skill loader** (H-3) — recursive scan, frontmatter validation, schema enforcement. Tests for valid + invalid skills. _(landed 2026-07-05, ADR-0006 amendment)_
 - [x] **Hook runtime** (H-4) — `pre-tool`, `post-tool`, `session-start`, `stop`. Contract documented. Integration tests. _(landed 2026-07-05, ADR-0008)_
 - [x] **Memory store** (H-5) — typed CRUD + retrieval-by-type. SQLite-backed. _(landed 2026-07-05, ADR-0009)_
-- [ ] **SDK integration** (H-1) — wire the above into a Claude Agent SDK session. `harness run` works end-to-end.
-- [ ] CI on every push: lint, typecheck, unit tests.
+- [x] **SDK integration** (H-1) — wire the above into a Claude Agent SDK session. `harness run` works end-to-end. _(landed 2026-07-06, ADR-0010)_
+- [x] CI on every push: lint, typecheck, unit tests. _(added 2026-07-06 with eslint flat config)_
 
 **Checkpoint:** `npx agent-harness-ja run` executes a hello-world agent with at least one skill loaded, at least one hook firing, and at least one memory entry persisted. All four modules have ≥70% test coverage.
 

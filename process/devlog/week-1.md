@@ -119,3 +119,36 @@ Final: 123 tests, `store.ts` 98.3% line / 92.8% branch, real cross-connection on
 
 - The Week-1 header date (`2026-05-18 → 2026-05-24`) is now *five* modules stale. It genuinely needs the honest re-date pass before Week 2 — flagged for the fourth time, still owed.
 - eslint config still absent. `CONTROL_CHARS` sanitizer: memory deliberately did **not** become the fourth consumer (parameterized SQL, no untrusted content in error messages), so the `src/internal/` extraction stays deferred as ADR-0008 planned.
+
+## H-1: SDK wiring (2026-07-06)
+
+The Week-1 checkpoint module. `src/session/` wires all four modules into one
+Claude Agent SDK session behind a `createSession(deps, config)` factory —
+the same injected-seam pattern as hooks and memory, this time with the SDK's
+`query` function as the injected dependency, so the entire session flow is
+unit-tested against fake async generators and the network is only touched by
+the real CLI. ADR-0010 records the three calls: injected `query`, structural
+SDK types instead of SDK imports (the harness compiles against zero SDK
+types; the one cast lives at the CLI boundary), and the hook mapping —
+`session-start`/`stop` fired directly by the session module around the stream
+(deterministic, exactly-once, fires-on-error via `finally`), `pre-tool`/
+`post-tool` bridged through the SDK's `PreToolUse`/`PostToolUse` callbacks
+with harness denials translated to `permissionDecision: "deny"`.
+
+`src/cli.ts` is deliberately thin: hand-rolled arg parsing (no dependency),
+fail-fast on a missing `ANTHROPIC_API_KEY`, streams assistant text, prints a
+one-line summary (model + rule id, turns, cost, denials, memory entry id).
+Every session persists a `session-<id>` summary entry through the memory
+store — the checkpoint's ≥1-memory-entry requirement is structural, not
+optional.
+
+CI finally landed with it: eslint flat config (typescript-eslint recommended)
++ `.github/workflows/ci.yml` running lint → typecheck → test on Node 20/22.
+Lint's first pass earned its keep immediately — it surfaced a literal U+FEFF
+BOM embedded in a skills-loader regex (now the explicit `\uFEFF` escape) and
+a stale disable-comment for a rule that no longer exists. The intentional
+control-character sanitizer regexes got a documented config-level opt-out
+rather than per-line pragmas.
+
+15 new tests (8 session, 7 CLI arg parsing); suite now 138 across 6 files,
+typecheck and lint clean.
