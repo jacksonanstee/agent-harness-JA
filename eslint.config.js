@@ -14,4 +14,15 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
+  // Dependency direction (docs/architecture.md): leaf harness modules must not
+  // import the orchestrator (session) or the CLI. Extend as layers land.
+  {
+    files: ['src/router/**', 'src/skills/**', 'src/hooks/**', 'src/memory/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: ['**/session/*', '**/session', '**/cli', '**/cli.js'] },
+      ],
+    },
+  },
 );

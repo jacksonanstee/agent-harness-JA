@@ -54,7 +54,7 @@ Hard rules:
 - No module in the harness layer imports from the eval layer.
 - Modules within the same layer may import from each other only via documented internal APIs (in `src/<module>/index.ts`); no reaching into siblings' internals.
 
-Violating these rules is treated as a build failure (enforced by an ESLint rule + import-restriction config).
+Violating these rules is treated as a build failure (enforced by an ESLint `no-restricted-imports` config (leaf-module restrictions landed with H-1; extended as new layers land)).
 
 ## Module specifications
 
@@ -124,6 +124,13 @@ Violating these rules is treated as a build failure (enforced by an ESLint rule 
 - **Public API:** `write(entry: MemoryEntry)`, `read(filter: MemoryFilter): MemoryEntry[]`.
 - **Depends on:** `harness/telemetry`'s SQLite connection (shared DB, separate tables).
 - **Design notes:** Type-tagged for retrieval-by-type. Optional decay/staleness fields.
+
+#### `harness/session`
+
+- **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
+- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`.
+- **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
+- **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output.
 
 ### Eval layer
 

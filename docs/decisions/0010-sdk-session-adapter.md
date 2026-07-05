@@ -55,7 +55,14 @@ Three design questions:
    `SessionResult`. Non-deny hook errors are isolated (per ADR-0008) and
    surfaced as warnings, never thrown.
 
-5. **Session identity.** The harness generates its own session id for the
+5. **Persistence boundary (post-review).** The per-session memory entry holds
+   a sanitized, truncated summary (prompt/result capped at 200 chars, control
+   chars stripped, 30-day `staleAfter` decay) and records denials and the
+   result subtype. Cost/usage/turn metrics are returned to the caller but
+   **not** persisted — those belong to the Week-2 telemetry module (ADR-0004).
+   The write happens on the error path too, so failed runs leave a trace.
+
+6. **Session identity.** The harness generates its own session id for the
    `session-start` payload (the SDK id is unknown until `system/init`); the
    SDK id, once seen, is used for `stop`, the memory entry
    (`session-<id>`), and the returned `SessionResult.sessionId`.
@@ -76,6 +83,17 @@ Three design questions:
   the Week-1 checkpoint and by guarding every optional read.
 - `session-start` fires with the harness id, `stop` with the SDK id — a
   consumer correlating the two must treat the memory entry as the join point.
+
+## Known limitations (flagged by the H-1 review gate)
+
+- **Week-2 redaction needs a result-rewrite surface.** `postToolCallback` is
+  observe-only; data-flow step 13 ("SDK receives the scanned, redacted tool
+  result") cannot be expressed through it. Week 2 must either use the SDK's
+  `updatedToolOutput` hook output or rework this seam — do not assume drop-in.
+- **SDK hook-timeout semantics are unverified.** The deny path is fail-closed
+  on the harness side (any pre-tool throw denies, including `fire()` itself
+  failing), but whether the SDK fails open on a hook *timeout* is SDK-defined.
+  Verify against the live SDK before relying on slow security hooks.
 
 ## Revisit if
 - The SDK exposes a stable, versioned public type package worth depending on.
