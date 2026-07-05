@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseRunArgs } from './cli.js';
+import { main, parseRunArgs, sanitizeForTerminal } from './cli.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 
 describe('parseRunArgs', () => {
@@ -62,5 +62,28 @@ describe('parseRunArgs', () => {
   it('rejects a non-positive --max-turns', () => {
     expect(parseRunArgs(['run', 'hi', '--max-turns', '0']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', 'abc']).ok).toBe(false);
+  });
+});
+
+describe('sanitizeForTerminal', () => {
+  it('strips ANSI/OSC escape introducers and C1 controls, keeps newlines and tabs', () => {
+    expect(sanitizeForTerminal('a\u001b[31mred\u0007b')).toBe('a [31mred b');
+    expect(sanitizeForTerminal('line1\nline2\tend')).toBe('line1\nline2\tend');
+  });
+});
+
+describe('main (pre-SDK paths)', () => {
+  it('returns 2 on invalid arguments without touching the environment', async () => {
+    expect(await main(['bogus'])).toBe(2);
+  });
+
+  it('returns 2 when ANTHROPIC_API_KEY is unset', async () => {
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(await main(['run', 'hello'])).toBe(2);
+    } finally {
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
   });
 });

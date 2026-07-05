@@ -125,8 +125,8 @@ describe('createSession', () => {
     expect(result.memoryEntryId).toBe('session-sdk-123');
     const rows = deps.memory.read({ type: 'project' });
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe('session-sdk-123');
-    expect(rows[0].tags).toContain('session');
+    expect(rows[0]?.id).toBe('session-sdk-123');
+    expect(rows[0]?.tags).toContain('session');
   });
 
   it('passes the routed model to the SDK options', async () => {
@@ -136,7 +136,7 @@ describe('createSession', () => {
       descriptor: { shape: 'lookup', sensitivity: 'low', expected_tokens: 100 },
     });
     const result = await session.run('quick lookup');
-    expect(fake.captured[0].options?.model).toBe(result.modelChoice.model);
+    expect(fake.captured[0]?.options?.model).toBe(result.modelChoice.model);
     expect(result.modelChoice.model).toBeTruthy();
   });
 
@@ -183,8 +183,8 @@ describe('createSession', () => {
 
     const result = await session.run('hi');
 
-    expect(fake.captured[0].options?.systemPrompt).toContain('greeting');
-    expect(fake.captured[0].options?.systemPrompt).toContain('How to greet');
+    expect(fake.captured[0]?.options?.systemPrompt).toContain('greeting');
+    expect(fake.captured[0]?.options?.systemPrompt).toContain('How to greet');
     expect(warnings.some((w) => w.includes('bad.md'))).toBe(true);
     expect(result.skillErrors).toHaveLength(1);
   });
@@ -248,6 +248,101 @@ describe('createSession', () => {
     const result = await session.run('hi');
     expect(result.memoryEntryId).toBeNull();
     expect(warnings.some((w) => w.includes('disk full'))).toBe(true);
+  });
+
+  it('surfaces session-start, post-tool, and stop hook errors as warnings', async () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: {}, output: 'x' },
+    ]);
+    const warnings: string[] = [];
+    const hooks = createHookRuntime();
+    hooks.register('session-start', () => {
+      throw new Error('start observer broke');
+    });
+    hooks.register('post-tool', () => {
+      throw new Error('post observer broke');
+    });
+    hooks.register('stop', () => {
+      throw new Error('stop observer broke');
+    });
+    const session = createSession(makeDeps(fake, { hooks }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+
+    const result = await session.run('hi');
+
+    expect(result.resultText).toBe('hello from claude'); // observers never abort the run
+    expect(warnings.some((w) => w.includes('session-start hook error'))).toBe(true);
+    expect(warnings.some((w) => w.includes('post-tool hook error'))).toBe(true);
+    expect(warnings.some((w) => w.includes('stop hook error'))).toBe(true);
+  });
+
+  it('persists a failure summary and rethrows when the stream errors mid-run', async () => {
+    const query: QueryFn = () =>
+      (async function* () {
+        yield INIT;
+        throw new Error('stream died');
+      })();
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const session = createSession(
+      makeDeps({ query, captured: [] }, { memory }),
+      { skillsDir: '/nowhere' },
+    );
+
+    await expect(session.run('boom')).rejects.toThrow('stream died');
+
+    const rows = memory.read({ type: 'project' });
+    expect(rows).toHaveLength(1);
+    const content = JSON.parse(rows[0]?.content ?? '{}') as { failed: boolean };
+    expect(content.failed).toBe(true);
+  });
+
+  it('threads the result subtype through and keeps telemetry metrics out of memory', async () => {
+    const fake = fakeQuery([
+      INIT,
+      {
+        type: 'result',
+        subtype: 'error_max_turns',
+        result: 'partial answer',
+        session_id: 'sdk-123',
+        num_turns: 10,
+        total_cost_usd: 0.5,
+      },
+    ]);
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const session = createSession(makeDeps(fake, { memory }), { skillsDir: '/nowhere' });
+
+    const result = await session.run('hi');
+
+    expect(result.resultSubtype).toBe('error_max_turns');
+    expect(result.costUsd).toBe(0.5); // still returned to the caller...
+    const content = JSON.parse(memory.read({})[0]?.content ?? '{}') as Record<string, unknown>;
+    expect(content.resultSubtype).toBe('error_max_turns');
+    expect(content).not.toHaveProperty('costUsd'); // ...but not persisted (telemetry is Week 2)
+    expect(content).not.toHaveProperty('usage');
+  });
+
+  it('sanitizes control characters and truncates persisted prompt/result text', async () => {
+    const longPrompt = `evil\u001b[2Jtext ${'a'.repeat(300)}`;
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash\u001b[31m', input: {}, output: 'x' },
+    ]);
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', () => {
+      throw new HookDenial('nope');
+    });
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const session = createSession(makeDeps(fake, { hooks, memory }), { skillsDir: '/nowhere' });
+
+    const result = await session.run(longPrompt);
+
+    expect(result.denied[0]?.tool).not.toContain('\u001b');
+    const row = memory.read({})[0];
+    expect(row?.content).not.toContain('\u001b');
+    expect(row?.staleAfter).not.toBeNull();
+    const content = JSON.parse(row?.content ?? '{}') as { prompt: string };
+    expect(content.prompt.length).toBeLessThanOrEqual(201); // 200 + ellipsis
   });
 
   it('streams assistant text through onText', async () => {

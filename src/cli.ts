@@ -20,6 +20,16 @@ export type ParseResult =
   | { ok: true; value: RunArgs }
   | { ok: false; error: string };
 
+// Keep in lockstep with CONTROL_CHARS in src/session/session.ts (and the
+// hooks/router/skills copies). Model output and warnings reach the user's
+// terminal; strip control chars so tool-poisoned text can't smuggle ANSI/OSC
+// escape sequences (newline/tab kept for readability).
+const TERMINAL_UNSAFE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u2028\u2029]/g;
+
+export function sanitizeForTerminal(text: string): string {
+  return text.replace(TERMINAL_UNSAFE, ' ');
+}
+
 const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]';
 
@@ -85,6 +95,12 @@ export async function main(argv: string[]): Promise<number> {
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
 
   const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
+  if (typeof sdk.query !== 'function') {
+    process.stderr.write(
+      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
+    );
+    return 2;
+  }
   const query = sdk.query as QueryFn;
 
   const session = createSession(
@@ -98,8 +114,8 @@ export async function main(argv: string[]): Promise<number> {
     {
       skillsDir,
       maxTurns,
-      onText: (text) => process.stdout.write(`${text}\n`),
-      onWarning: (message) => process.stderr.write(`warning: ${message}\n`),
+      onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),
+      onWarning: (message) => process.stderr.write(`warning: ${sanitizeForTerminal(message)}\n`),
     },
   );
 
@@ -112,7 +128,7 @@ export async function main(argv: string[]): Promise<number> {
       `denied=${result.denied.length} memory=${result.memoryEntryId ?? 'none'}\n`,
   );
 
-  return result.resultText === null ? 1 : 0;
+  return result.resultSubtype === 'success' ? 0 : 1;
 }
 
 const invokedDirectly =

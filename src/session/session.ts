@@ -22,6 +22,29 @@ const DEFAULT_DESCRIPTOR: TaskDescriptor = {
   expected_tokens: 4000,
 };
 
+/** Session-summary entries decay; telemetry (Week 2) owns durable metrics. */
+const SUMMARY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Cap on prompt/result text persisted in the session summary. */
+const SUMMARY_TEXT_LIMIT = 200;
+
+// Keep in lockstep with CONTROL_CHARS in src/hooks/runtime.ts,
+// src/router/route.ts, and src/skills/load.ts (copied, not imported — same
+// zero-dependency rationale as ADR-0008). Strips control chars + Unicode line
+// separators so tool names / reasons / persisted text can't carry terminal
+// escapes or log injection.
+const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
+
+function sanitizeText(value: string): string {
+  return value.replace(CONTROL_CHARS, ' ');
+}
+
+function truncate(value: string | null): string | null {
+  if (value === null) return null;
+  const clean = sanitizeText(value);
+  return clean.length > SUMMARY_TEXT_LIMIT ? `${clean.slice(0, SUMMARY_TEXT_LIMIT)}…` : clean;
+}
+
 function isSystemInit(message: SdkMessage): message is SdkSystemMessage {
   return message.type === 'system' && (message as SdkSystemMessage).subtype === 'init';
 }
@@ -80,19 +103,27 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
     const preToolCallback: SdkHookCallback = async (input) => {
-      const tool = input.tool_name ?? 'unknown';
-      const fireResult = await deps.hooks.fire('pre-tool', {
-        event: 'pre-tool',
-        tool,
-        args: input.tool_input,
-      });
-      if (fireResult.denied) {
-        denied.push({ tool, reason: fireResult.reason });
+      const tool = sanitizeText(input.tool_name ?? 'unknown');
+      let deniedReason: string | null = null;
+      try {
+        const fireResult = await deps.hooks.fire('pre-tool', {
+          event: 'pre-tool',
+          tool,
+          args: input.tool_input,
+        });
+        if (fireResult.denied) deniedReason = fireResult.reason;
+      } catch (error: unknown) {
+        // fire() itself failing must fail closed, not SDK-defined.
+        deniedReason =
+          error instanceof Error ? sanitizeText(error.message) : 'pre-tool hook failure';
+      }
+      if (deniedReason !== null) {
+        denied.push({ tool, reason: deniedReason });
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
-            permissionDecisionReason: fireResult.reason,
+            permissionDecisionReason: deniedReason,
           },
         };
       }
@@ -102,7 +133,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const postToolCallback: SdkHookCallback = async (input) => {
       const fireResult = await deps.hooks.fire('post-tool', {
         event: 'post-tool',
-        tool: input.tool_name ?? 'unknown',
+        tool: sanitizeText(input.tool_name ?? 'unknown'),
         result: input.tool_output,
         // Security layer (steps 10-11) lands in Week 2; until then these are null.
         scan: null,
@@ -115,16 +146,21 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     };
 
     // Step 4: session-start fires before the SDK turn begins.
-    await deps.hooks.fire('session-start', {
+    const startResult = await deps.hooks.fire('session-start', {
       event: 'session-start',
       sessionId: harnessSessionId,
       startedAt: now(),
     });
+    for (const error of startResult.errors) {
+      warn(`session-start hook error: ${error.reason}`);
+    }
 
     let resultText: string | null = null;
+    let resultSubtype: string | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
     let numTurns: number | null = null;
+    let streamError: unknown = null;
 
     try {
       // Steps 5-14: the SDK turn.
@@ -151,11 +187,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         } else if (isResult(message)) {
           if (message.session_id) sdkSessionId = message.session_id;
           resultText = message.result ?? null;
+          resultSubtype = message.subtype ?? null;
           usage = message.usage ?? null;
-          costUsd = message.total_cost_usd;
-          numTurns = message.num_turns;
+          costUsd = message.total_cost_usd ?? null;
+          numTurns = message.num_turns ?? null;
         }
       }
+    } catch (error: unknown) {
+      streamError = error;
     } finally {
       // Step 15: stop fires even when the stream throws.
       const sessionId = sdkSessionId ?? harnessSessionId;
@@ -171,22 +210,25 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     const sessionId = sdkSessionId ?? harnessSessionId;
 
-    // Week-1 checkpoint: persist at least one memory entry per session.
+    // Week-1 checkpoint: persist at least one memory entry per session — on
+    // the error path too, so failed runs leave a trace. Content is truncated
+    // and control-char-sanitized; cost/usage metrics belong to the Week-2
+    // telemetry module (ADR-0004), not memory, so they are not persisted here.
     let memoryEntryId: string | null = null;
     const writeResult = deps.memory.write({
       id: `session-${sessionId}`,
       type: 'project',
       key: 'session-summary',
       tags: ['session'],
+      staleAfter: now() + SUMMARY_TTL_MS,
       content: JSON.stringify({
-        prompt,
+        prompt: truncate(prompt),
         model: modelChoice.model,
         rule_id: modelChoice.rule_id,
-        resultText,
-        costUsd,
-        numTurns,
+        resultSubtype,
+        resultText: truncate(resultText),
         denied,
-        usage,
+        failed: streamError !== null,
       }),
     });
     if (writeResult.ok) {
@@ -195,8 +237,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       warn(`memory write failed: ${writeResult.error.message}`);
     }
 
+    if (streamError !== null) throw streamError;
+
     return {
       resultText,
+      resultSubtype,
       sessionId,
       modelChoice,
       usage,

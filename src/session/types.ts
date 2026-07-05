@@ -37,8 +37,9 @@ export interface SdkResultMessage {
   subtype: string;
   result?: string;
   session_id: string;
-  num_turns: number;
-  total_cost_usd: number;
+  /** Declared optional (unlike the SDK) so drift yields null, not undefined-typed-as-number. */
+  num_turns?: number;
+  total_cost_usd?: number;
   usage?: SdkUsage;
 }
 
@@ -120,6 +121,8 @@ export interface DeniedToolCall {
 
 export interface SessionResult {
   resultText: string | null;
+  /** SDK result subtype, e.g. 'success' or 'error_max_turns'; null if no result message arrived. */
+  resultSubtype: string | null;
   /** SDK session id when the stream provided one, else the harness-generated id. */
   sessionId: string;
   modelChoice: ModelChoice;
