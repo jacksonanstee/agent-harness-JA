@@ -75,7 +75,7 @@ function safeMatch(rule: RoutingRule, d: TaskDescriptor): boolean {
   }
 }
 
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F]/g;
+const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 function sanitizeReason(reason: string): string {
   return reason.replace(CONTROL_CHARS, ' ');

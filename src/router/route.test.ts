@@ -183,6 +183,58 @@ describe('router: custom table', () => {
   });
 });
 
+describe('router: contract locks (issue #2)', () => {
+  it('strips Unicode line separators (U+2028/U+2029) from custom reason strings', () => {
+    const table: RoutingRule[] = [
+      {
+        id: 'unicode-separator',
+        match: () => true,
+        model: 'claude-haiku-4-5',
+        reason: 'line1\u2028FAKE LOG ENTRY\u2029more',
+      },
+    ];
+    const c = createRouter({ table }).route(base);
+    expect(c.reason).not.toMatch(/[\u2028\u2029]/);
+    expect(c.reason).toBe('line1 FAKE LOG ENTRY more');
+  });
+
+  it('does not match a rule whose predicate returns a truthy non-boolean', () => {
+    const table: RoutingRule[] = [
+      {
+        id: 'truthy-not-true',
+        match: () => 1 as unknown as boolean,
+        model: 'claude-haiku-4-5',
+        reason: 'must never be selected',
+      },
+    ];
+    const c = createRouter({ table }).route(base);
+    expect(c.rule_id).toBe('fallthrough');
+  });
+
+  it('accepts expected_tokens of exactly 0 (inclusive lower bound)', () => {
+    const c = route({ ...base, expected_tokens: 0 });
+    expect(typeof c.model).toBe('string');
+    expect(c.rule_id.length).toBeGreaterThan(0);
+  });
+
+  it('lets a custom rule route on descriptor.hint', () => {
+    const table: RoutingRule[] = [
+      {
+        id: 'hint-fastpath',
+        match: (d) => d.hint === 'cheap-please',
+        model: 'claude-haiku-4-5',
+        reason: 'hint requested the cheap model',
+      },
+    ];
+    const router = createRouter({ table });
+    const hit = router.route({ ...base, hint: 'cheap-please' });
+    expect(hit.rule_id).toBe('hint-fastpath');
+    expect(hit.model).toBe('claude-haiku-4-5');
+    const miss = router.route(base);
+    expect(miss.rule_id).toBe('fallthrough');
+  });
+});
+
 describe('router: ModelChoice shape', () => {
   it('always returns rule_id and reason', () => {
     const c = route(base);

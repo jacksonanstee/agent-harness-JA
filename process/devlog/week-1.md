@@ -45,3 +45,25 @@ _What slipped:_
 _What I learned:_
 
 _What changes for Week 2:_
+
+## Resume after a six-week gap (2026-07-05)
+
+The Sunday close above was never written. Naming that plainly rather than backfilling it after the fact: the project stalled after H-2 landed on 2026-05-20. Other work took priority for the better part of six weeks — this is a hobby project worked evenings/weekends, and evenings/weekends went elsewhere. No spin on that; the slippage protocol in `process/05-week-plan.md` exists precisely so a gap like this gets logged, not hidden.
+
+### What landed today
+
+1. **Issue #2 router follow-ups, items 1–3.** The differential review of PR #1 (`process/reviews/differential-review-PR1.md`, finding A8) flagged that `sanitizeReason` stripped C0/C1/DEL control characters but not U+2028 (LINE SEPARATOR) / U+2029 (PARAGRAPH SEPARATOR), which could survive into a custom rule's `reason` and break log ingestors that split on Unicode line boundaries. Fixed the sanitizer, added 3 contract-lock tests pinning the router's public output shape, and installed `@vitest/coverage-v8` (wasn't wired up before — coverage numbers up to now were "100% by inspection," not measured). Baseline with the new tooling: 89.56%. Item 4 (a README warning about the same class of issue) stays open — deferred to Week 4's docs pass, not forgotten.
+
+2. **`harness/skills` (H-3).** The loader ADR-0006 half-specified: recursive scan of a `skills/` directory, `gray-matter` for frontmatter, ajv for schema validation, invalid files reported without failing the whole load. 19 tests, 100% line coverage on `load.ts`, 90.6% branch. The one real design tension: the ADR said `load(dir): Skill[]`, but "invalid files don't fail the load" and "errors are structured, per-file" can't both survive a bare array return — resolved by introducing `LoadResult` (`{ skills, errors }`); full reasoning is in the ADR-0006 amendment, not repeated here.
+
+3. **`vitest.config.ts` coverage excludes.** Added excludes for re-export barrels (`index.ts` files — no branching logic, just re-exports) and for `src/skills/types.ts` (type-only, erased at compile time). Justification is one line and worth keeping one line: there is no runtime code for v8 to observe in either case, so counting them against coverage would only be measuring the instrumenter, not the code.
+
+### Noted, not actioned
+
+- **`eslint` config is still missing.** The `lint` script has been declared since Week 0 and still resolves against zero installed `eslint` packages. Not blocking anything yet, but it's debt, not an oversight — logging it here so it doesn't quietly become permanent.
+- **`npm audit`** shows a dev-only advisory chain through `esbuild` → `vite` → `vitest@1.6`. The fix is a breaking `vitest@4` upgrade. Dev-only, not shipped to users, so not urgent — but also not free, since `vitest@4` will touch the coverage config just added above. Deferred, logged, revisit before it's the thing blocking a real security fix.
+
+### Next sessions
+
+- `harness/hooks` (H-4) — still next in the locked router → skills → hooks → memory → SDK order. Needs ADR-0008 for open question #3 (hook mutation vs observe-only) before implementation, same as noted back in May.
+- Given the six-week gap, Week 1's dates (`2026-05-18 → 2026-05-24`) are fiction at this point. `process/05-week-plan.md` needs an honest re-date pass before Week 2 work starts — not doing it in this entry because it deserves its own deliberate pass, not a rider on a devlog note.

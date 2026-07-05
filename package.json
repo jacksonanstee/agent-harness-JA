@@ -6,7 +6,7 @@
   "author": "Jackson Anstee",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.1.0"
   },
   "bin": {
     "agent-harness-ja": "./dist/cli.js"
@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.0",
+    "@vitest/coverage-v8": "^1.6.1",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },
@@ -50,5 +51,9 @@
   "bugs": {
     "url": "https://github.com/jacksonanstee/agent-harness-JA/issues"
   },
-  "homepage": "https://github.com/jacksonanstee/agent-harness-JA#readme"
+  "homepage": "https://github.com/jacksonanstee/agent-harness-JA#readme",
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "gray-matter": "^4.0.3"
+  }
 }

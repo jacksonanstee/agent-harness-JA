@@ -44,7 +44,7 @@ This is the current week. Most of it is already complete.
 Build the four core harness modules. SDK integration last.
 
 - [x] **Model router** (H-2) — declarative task descriptor → model selection. Unit tests. _(landed 2026-05-20, ADR-0007)_
-- [ ] **Skill loader** (H-3) — recursive scan, frontmatter validation, schema enforcement. Tests for valid + invalid skills.
+- [x] **Skill loader** (H-3) — recursive scan, frontmatter validation, schema enforcement. Tests for valid + invalid skills. _(landed 2026-07-05, ADR-0006 amendment)_
 - [ ] **Hook runtime** (H-4) — `pre-tool`, `post-tool`, `session-start`, `stop`. Contract documented. Integration tests.
 - [ ] **Memory store** (H-5) — typed CRUD + retrieval-by-type. SQLite-backed.
 - [ ] **SDK integration** (H-1) — wire the above into a Claude Agent SDK session. `harness run` works end-to-end.
