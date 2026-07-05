@@ -89,3 +89,21 @@ Implementation:
 - Skills grow structured logic (conditionals, loops) that Markdown body cannot cleanly express.
 - A user community emerges that prefers a typed module format and is willing to maintain it.
 - The frontmatter schema becomes large enough (≥30 fields) that authoring without an editor plugin becomes painful.
+
+## Amendment (2026-07-05)
+
+H-3 landed. This records the implementation decisions made while wiring the loader, some of which sharpen or correct what was originally specified above.
+
+**`LoadResult` return shape.** `load(dir)` returns `{ skills: Skill[]; errors: SkillError[] }`, not the bare `Skill[]` this ADR originally specified. Rationale: this ADR already requires partial-failure-non-fatal loading *and* per-file structured errors — a bare `Skill[]` discards the errors, silently. A tagged `{ ok: false }` result is the wrong shape too: a load with some invalid files is not a failure of `load` itself, it's `load` doing its job. A missing or unreadable directory collapses to a single `SkillError` of kind `read` inside that same result. A non-string or empty `dir` throws `TypeError` — a programmer error, consistent with the router's `assertValid` precedent from ADR-0007. `validate(file)` is unaffected and remains a tagged `ValidationResult`, per the cross-cutting convention. `docs/architecture.md`'s spec line has been amended to match.
+
+**Sync API.** `readFileSync` / `readdirSync` throughout — no promises. Loading happens once at session start, and the router precedent (also synchronous) already established this shape for the harness.
+
+**Schema loading mechanism.** `import skillSchema from './schema.json' with { type: 'json' }` (import attributes) — works under `tsc` with `NodeNext` module resolution and under vitest 1.6, with no separate copy-to-dist step: `tsc` emits the JSON alongside the compiled output.
+
+**Ajv.** Draft 2020-12, via the named import `{ Ajv2020 } from 'ajv/dist/2020.js'` — the default-import form isn't constructable under `NodeNext` typing. Used as a singleton, `allErrors: true`. No `ajv-formats` dependency: semver is validated with the official semver.org regex as a plain `pattern`, which keeps runtime deps at exactly two (`gray-matter`, `ajv`).
+
+**Scan semantics.** `readdirSync(dir, { recursive: true, withFileTypes: true })`. Symlinked directories are *not* traversed — this is native `recursive: true` behavior, not a guard we added, and it happens to buy us no-cycles / no-escapes-from-the-skills-dir for free. Symlinked `.md` files load normally. Depth is unbounded. Results are sorted by absolute path for deterministic output. Only lowercase `.md` extensions match.
+
+**Schema stances.** `required: [name, description, version]`; `trigger`, `requires`, `metadata` are optional. `additionalProperties: false` at the root and in every sub-object — this is the typo-catcher this ADR promised (e.g. `naem:` is rejected, not silently ignored). `name` must be kebab-case, ≤64 characters. `trigger.conditions` is a plain string array for v1 — a placeholder, not a design.
+
+**Error field pointers.** For a missing required property, ajv's `instancePath` is empty, which would leave `field` unusable. The loader appends `/` + `missingProperty` to it, so `field` always names a concrete field (e.g. `/name`) rather than the schema root.

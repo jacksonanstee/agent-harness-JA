@@ -99,7 +99,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint rule 
 #### `harness/skills`
 
 - **Owns:** discovery, validation, and loading of skill files.
-- **Public API:** `load(dir: string): Skill[]`, `validate(file: string): ValidationResult`.
+- **Public API:** `load(dir: string): LoadResult` (amended 2026-07-05 — see ADR-0006 amendment), `validate(file: string): ValidationResult`.
 - **Depends on:** `gray-matter` for frontmatter parsing, `ajv` for schema validation.
 - **Design notes:** Markdown + YAML frontmatter; see [ADR-0006](./decisions/0006-skill-schema-markdown-frontmatter.md).
 
