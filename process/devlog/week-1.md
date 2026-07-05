@@ -67,3 +67,30 @@ The Sunday close above was never written. Naming that plainly rather than backfi
 
 - `harness/hooks` (H-4) — still next in the locked router → skills → hooks → memory → SDK order. Needs ADR-0008 for open question #3 (hook mutation vs observe-only) before implementation, same as noted back in May.
 - Given the six-week gap, Week 1's dates (`2026-05-18 → 2026-05-24`) are fiction at this point. `process/05-week-plan.md` needs an honest re-date pass before Week 2 work starts — not doing it in this entry because it deserves its own deliberate pass, not a rider on a devlog note.
+
+## H-4 hook runtime (2026-07-05, same session as H-3)
+
+Fourth module, built straight after H-3 in the same sitting. Router → skills → **hooks** → memory → SDK; hooks is now done.
+
+### ADR-0008 first — the hard gate
+
+`harness/hooks` had an open design question parked since Week 0 (architecture.md open question #3): can a hook *mutate* tool args/results, or only observe + accept/deny? The build order note said "resolve the ADR before writing the runtime," so ADR-0008 was written and committed as a standalone commit before any `src/hooks/` code. It ratifies **observe + accept/deny only for v1.0**, mutation deferred to v1.x. The load-bearing reason is security-layer authority: a hook that could rewrite `args` after `pre-tool` but before `permissions.check` (turn steps 7→8) would let a harness-layer extension route around a security gate. Full reasoning + six rejected alternatives in the ADR.
+
+### The module
+
+`createHookRuntime(opts?)` factory + module-level default + bare `register`/`fire` (router precedent, not skills' singleton — hooks hold per-session mutable handler state, so each SDK session needs its own registry). Handlers run **sequentially in registration order**, awaited one at a time (proven by a descending-delay ordering test — completion order would differ if it were `Promise.all`). A `pre-tool` throw denies and short-circuits; other events' throws are isolated (recorded, later handlers still run). `fire()` catches the deny and returns a tagged `FireResult` rather than rethrowing — a deny is expected control flow, so callers branch on `result.denied` instead of wrapping in try/catch. Telemetry is an **injected sink** (no-op default) so the module keeps its "depends on nothing" contract while still emitting the architecture-named `denied-by-hook` event; telemetry will later adapt the record shape, dependency pointing the correct way.
+
+### The review gate did the work again
+
+Same gate as H-3 (3-agent → differential), and it earned its keep:
+
+- **3-agent pass** (code + security + architect) found three real issues. Security HIGH: the `tool` field on the `denied-by-hook` record went to the log/terminal-adjacent sink *unsanitized* while its sibling `reason` was scrubbed — and `tool` is model-requested, i.e. adversarial LLM output (the same log-injection class the router U+2028 fix and the H-3 error-sanitization closed). Code MAJOR: `fire<E>(event, payload)` bound `E` from the event but TypeScript won't correlate the payload argument through a widened caller — exactly the dispatch-loop shape H-1 will use — so a mismatched payload slid past the type checker with no runtime guard; fixed with an `assertPayloadMatchesEvent` throw (router `assertValid` precedent). Architecture MEDIUM: the ADR's immutability claim was aspirational — `Readonly<>` is compile-time-only — so a handler could mutate the shared payload; added `Object.freeze` before dispatch and reconciled the ADR to state the freeze is shallow and the SDK must re-read `args` authoritatively.
+- **Differential review** (run on Fable, 32 adversarial probes against the compiled `dist/`) confirmed every fix holds and every deny-bypass vector is closed — then caught one LOW *introduced by the sanitize fix itself*: `sanitize(payload.tool)` assumed a string, so a non-string tool made the deny path throw where the accept path resolves. One-line `String()` coercion, mirroring the existing `reasonOf`.
+
+Final: 87 tests (unit + per-event integration asserting payload shape, ordering, and deny short-circuit — the H-4 acceptance criterion), `runtime.ts` 100% line / 97% branch, RCE-class tool-injection verified closed against the built artifact.
+
+### Noted, not actioned (carried from H-3, still open)
+
+- `eslint` config still missing; `npm audit` dev-only `vitest@1.6` chain still deferred.
+- **The Week 1 date re-date is still owed** — this is now the fourth module landing on 2026-07-05 under a header that says "2026-05-18 → 2026-05-24." Deferred again, but it's overdue for its own honest pass before Week 2.
+- Sanitizer is now copied in three modules (router, skills, hooks). Rule-of-three is hit, but extraction needs relaxing hooks' "depends on nothing" first — tracked as a Revisit-if in ADR-0008, deliberately not scope-crept into H-4.
