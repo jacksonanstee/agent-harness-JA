@@ -202,7 +202,6 @@ describe('hooks: pre-tool deny', () => {
   it('a thrown non-Error value denies with its stringified reason', async () => {
     const runtime = createHookRuntime();
     runtime.register('pre-tool', () => {
-      // eslint-disable-next-line @typescript-eslint/no-throw-literal
       throw 'string denial';
     });
     const result = await runtime.fire('pre-tool', preTool);
