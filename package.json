@@ -21,16 +21,20 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "eval": "node ./dist/cli.js eval"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.12.0",
     "@vitest/coverage-v8": "^1.6.1",
+    "eslint": "^10.6.0",
     "typescript": "^5.4.0",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^1.6.0"
   },
   "keywords": [
@@ -53,7 +57,7 @@
   },
   "homepage": "https://github.com/jacksonanstee/agent-harness-JA#readme",
   "dependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.201",
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.11.1",
     "gray-matter": "^4.0.3"

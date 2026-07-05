@@ -1,0 +1,212 @@
+import { randomUUID } from 'node:crypto';
+
+import type { TaskDescriptor } from '../router/index.js';
+import type { Skill } from '../skills/index.js';
+import type {
+  DeniedToolCall,
+  SdkAssistantMessage,
+  SdkHookCallback,
+  SdkMessage,
+  SdkResultMessage,
+  SdkSystemMessage,
+  SdkTextBlock,
+  Session,
+  SessionConfig,
+  SessionDeps,
+  SessionResult,
+} from './types.js';
+
+const DEFAULT_DESCRIPTOR: TaskDescriptor = {
+  shape: 'build',
+  sensitivity: 'low',
+  expected_tokens: 4000,
+};
+
+function isSystemInit(message: SdkMessage): message is SdkSystemMessage {
+  return message.type === 'system' && (message as SdkSystemMessage).subtype === 'init';
+}
+
+function isAssistant(message: SdkMessage): message is SdkAssistantMessage {
+  return message.type === 'assistant';
+}
+
+function isResult(message: SdkMessage): message is SdkResultMessage {
+  return message.type === 'result';
+}
+
+function assistantText(message: SdkAssistantMessage): string[] {
+  const blocks = Array.isArray(message.message?.content) ? message.message.content : [];
+  return blocks
+    .filter(
+      (block): block is SdkTextBlock =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as SdkTextBlock).type === 'text' &&
+        typeof (block as SdkTextBlock).text === 'string',
+    )
+    .map((block) => block.text);
+}
+
+function buildSystemPrompt(skills: Skill[]): string | undefined {
+  if (skills.length === 0) return undefined;
+  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+  return ['You have the following harness skills available:', ...lines].join('\n');
+}
+
+/**
+ * Wires router, skills, hooks, and memory into one Claude Agent SDK session
+ * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
+ * is injected so tests never touch the network.
+ */
+export function createSession(deps: SessionDeps, config: SessionConfig): Session {
+  const now = config.now ?? Date.now;
+  const generateId = config.generateId ?? randomUUID;
+  const warn = config.onWarning ?? (() => undefined);
+
+  async function run(prompt: string): Promise<SessionResult> {
+    // Step 2: model selection.
+    const descriptor = config.descriptor ?? DEFAULT_DESCRIPTOR;
+    const modelChoice = deps.route(descriptor);
+
+    // Step 3: skills.
+    const loadResult = deps.loadSkills(config.skillsDir);
+    for (const error of loadResult.errors) {
+      warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
+    }
+
+    const harnessSessionId = generateId();
+    let sdkSessionId: string | null = null;
+    const denied: DeniedToolCall[] = [];
+
+    // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
+    const preToolCallback: SdkHookCallback = async (input) => {
+      const tool = input.tool_name ?? 'unknown';
+      const fireResult = await deps.hooks.fire('pre-tool', {
+        event: 'pre-tool',
+        tool,
+        args: input.tool_input,
+      });
+      if (fireResult.denied) {
+        denied.push({ tool, reason: fireResult.reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: fireResult.reason,
+          },
+        };
+      }
+      return {};
+    };
+
+    const postToolCallback: SdkHookCallback = async (input) => {
+      const fireResult = await deps.hooks.fire('post-tool', {
+        event: 'post-tool',
+        tool: input.tool_name ?? 'unknown',
+        result: input.tool_output,
+        // Security layer (steps 10-11) lands in Week 2; until then these are null.
+        scan: null,
+        redactions: null,
+      });
+      for (const error of fireResult.errors) {
+        warn(`post-tool hook error: ${error.reason}`);
+      }
+      return {};
+    };
+
+    // Step 4: session-start fires before the SDK turn begins.
+    await deps.hooks.fire('session-start', {
+      event: 'session-start',
+      sessionId: harnessSessionId,
+      startedAt: now(),
+    });
+
+    let resultText: string | null = null;
+    let usage: SessionResult['usage'] = null;
+    let costUsd: number | null = null;
+    let numTurns: number | null = null;
+
+    try {
+      // Steps 5-14: the SDK turn.
+      const stream = deps.query({
+        prompt,
+        options: {
+          model: modelChoice.model,
+          systemPrompt: buildSystemPrompt(loadResult.skills),
+          maxTurns: config.maxTurns,
+          hooks: {
+            PreToolUse: [{ hooks: [preToolCallback] }],
+            PostToolUse: [{ hooks: [postToolCallback] }],
+          },
+        },
+      });
+
+      for await (const message of stream) {
+        if (isSystemInit(message) && message.session_id) {
+          sdkSessionId = message.session_id;
+        } else if (isAssistant(message)) {
+          for (const text of assistantText(message)) {
+            config.onText?.(text);
+          }
+        } else if (isResult(message)) {
+          if (message.session_id) sdkSessionId = message.session_id;
+          resultText = message.result ?? null;
+          usage = message.usage ?? null;
+          costUsd = message.total_cost_usd;
+          numTurns = message.num_turns;
+        }
+      }
+    } finally {
+      // Step 15: stop fires even when the stream throws.
+      const sessionId = sdkSessionId ?? harnessSessionId;
+      const stopResult = await deps.hooks.fire('stop', {
+        event: 'stop',
+        sessionId,
+        stoppedAt: now(),
+      });
+      for (const error of stopResult.errors) {
+        warn(`stop hook error: ${error.reason}`);
+      }
+    }
+
+    const sessionId = sdkSessionId ?? harnessSessionId;
+
+    // Week-1 checkpoint: persist at least one memory entry per session.
+    let memoryEntryId: string | null = null;
+    const writeResult = deps.memory.write({
+      id: `session-${sessionId}`,
+      type: 'project',
+      key: 'session-summary',
+      tags: ['session'],
+      content: JSON.stringify({
+        prompt,
+        model: modelChoice.model,
+        rule_id: modelChoice.rule_id,
+        resultText,
+        costUsd,
+        numTurns,
+        denied,
+        usage,
+      }),
+    });
+    if (writeResult.ok) {
+      memoryEntryId = writeResult.value.id;
+    } else {
+      warn(`memory write failed: ${writeResult.error.message}`);
+    }
+
+    return {
+      resultText,
+      sessionId,
+      modelChoice,
+      usage,
+      costUsd,
+      numTurns,
+      denied,
+      memoryEntryId,
+      skillErrors: loadResult.errors,
+    };
+  }
+
+  return { run };
+}
