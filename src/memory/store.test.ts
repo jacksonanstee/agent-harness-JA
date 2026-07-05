@@ -100,6 +100,17 @@ describe('memory: filters', () => {
     expect(store.read({ limit: 2 })).toHaveLength(2);
   });
 
+  it('limit applies AFTER the tag post-filter (does not under-return)', () => {
+    const { store } = freshStore();
+    // 3 non-matching rows first, then 3 tagged rows — a SQL LIMIT before the
+    // tag filter would return 0 matches. The limit must cap matches, not scan.
+    for (let i = 0; i < 3; i++) writeOk(store, { type: 'user', content: `no${i}`, tags: ['other'] });
+    for (let i = 0; i < 3; i++) writeOk(store, { type: 'user', content: `yes${i}`, tags: ['want'] });
+    const result = store.read({ tag: 'want', limit: 2 });
+    expect(result).toHaveLength(2);
+    expect(result.every((e) => e.tags.includes('want'))).toBe(true);
+  });
+
   it('order asc reverses the default', () => {
     const { store } = freshStore();
     writeOk(store, { type: 'user', content: 'first', staleAfter: null });
@@ -129,6 +140,23 @@ describe('memory: upsert / update', () => {
     expect(second.updatedAt).toBeGreaterThanOrEqual(first.createdAt);
     expect(store.read()).toHaveLength(1);
     expect(store.read()[0]?.content).toBe('v2');
+  });
+
+  it('update has full-replace semantics: omitted key/tags reset to defaults', () => {
+    const { store } = freshStore();
+    const first = writeOk(store, {
+      type: 'user',
+      content: 'v1',
+      key: 'k',
+      tags: ['a', 'b'],
+      staleAfter: 123,
+    });
+    // Re-write the same id without key/tags/staleAfter → they reset, not persist.
+    const updated = writeOk(store, { id: first.id, type: 'user', content: 'v2' });
+    expect(updated.key).toBeNull();
+    expect(updated.tags).toEqual([]);
+    expect(updated.staleAfter).toBeNull();
+    expect(updated.createdAt).toBe(first.createdAt);
   });
 });
 
@@ -251,6 +279,19 @@ describe('memory: programmer errors throw TypeError', () => {
     expect(() =>
       store.read({ order: 'sideways' as unknown as 'asc' }),
     ).toThrow(TypeError);
+  });
+
+  it('rejects a non-string entry.key', () => {
+    const { store } = freshStore();
+    expect(() =>
+      store.write({ type: 'user', content: 'x', key: 5 as unknown as string }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects a non-string filter.key or filter.tag', () => {
+    const { store } = freshStore();
+    expect(() => store.read({ key: 5 as unknown as string })).toThrow(TypeError);
+    expect(() => store.read({ tag: 5 as unknown as string })).toThrow(TypeError);
   });
 });
 

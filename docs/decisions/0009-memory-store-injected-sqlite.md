@@ -78,15 +78,15 @@ export interface MemoryFilter {
 
 ### 3. CRUD reconciled with the locked 2-method surface
 
-- **`write` is an upsert keyed on `id`** — create *and* update through the one locked method. No `id` (or an unseen `id`) ⇒ INSERT with a generated id; a known `id` ⇒ UPDATE (preserve `createdAt`, bump `updatedAt`). Satisfies C and U.
+- **`write` is an upsert keyed on `id`** — create *and* update through the one locked method. No `id` (or an unseen `id`) ⇒ INSERT with a generated id; a known `id` ⇒ UPDATE. Satisfies C and U. **Update has full-replace (PUT), not partial-merge, semantics:** every field is taken from the input; omitting `key`/`tags`/`staleAfter` resets them to their defaults rather than preserving the prior row. Only `createdAt` survives an update (`updatedAt` is bumped). Full-replace is chosen over partial-merge because it is predictable (the written entry *is* the stored entry) and because merge makes clearing a field impossible without a sentinel. Callers editing one field read-then-write the whole entry.
 - **`read` is the query** (R).
 - **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe.
 
 ### 4. Return shapes: `write`/`delete` tagged, `read` bare
 
 ```ts
-export type MemoryErrorKind = 'write' | 'constraint' | 'db';
-export interface MemoryError { kind: MemoryErrorKind; field?: string; message: string; }
+export type MemoryErrorKind = 'constraint' | 'db';
+export interface MemoryError { kind: MemoryErrorKind; message: string; }
 
 export type WriteResult  = { ok: true; value: MemoryEntry }        | { ok: false; error: MemoryError };
 export type DeleteResult = { ok: true; value: { deleted: number } } | { ok: false; error: MemoryError };

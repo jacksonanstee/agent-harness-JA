@@ -17,6 +17,12 @@ export interface MemoryEntry {
 /**
  * What callers pass to `write`. The store fills `id`/`createdAt`/`updatedAt`.
  * Supplying an existing `id` turns `write` into an update (upsert).
+ *
+ * `write` has **full-replace (PUT) semantics**, not partial-merge: on update,
+ * every field is taken from this input. Omitting `key`/`tags`/`staleAfter`
+ * resets them to their defaults (`null`/`[]`/`null`) — it does NOT preserve the
+ * prior values. Only `createdAt` survives an update. To edit one field, read
+ * the entry first and write it back whole.
  */
 export interface MemoryInput {
   type: MemoryType;
@@ -40,11 +46,10 @@ export interface MemoryFilter {
   order?: 'asc' | 'desc';
 }
 
-export type MemoryErrorKind = 'write' | 'constraint' | 'db';
+export type MemoryErrorKind = 'constraint' | 'db';
 
 export interface MemoryError {
   kind: MemoryErrorKind;
-  field?: string;
   message: string;
 }
 

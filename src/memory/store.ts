@@ -90,18 +90,30 @@ function parseTags(raw: string): string[] {
 
 function rowToEntry(row: unknown): MemoryEntry {
   const r = row as EntryRow;
-  if (typeof r.id !== 'string' || typeof r.content !== 'string' || !MEMORY_TYPE_SET.has(r.type)) {
+  // Total structural validation (ADR-0009 §7 — never trust the DB blindly). The
+  // schema's NOT NULL/CHECK constraints make most of this unreachable today, but
+  // a shared DB file (telemetry, later) or a relaxed migration could produce a
+  // malformed row; fail loud rather than emit a mistyped MemoryEntry.
+  if (
+    typeof r.id !== 'string' ||
+    typeof r.content !== 'string' ||
+    !MEMORY_TYPE_SET.has(r.type) ||
+    (r.key !== null && typeof r.key !== 'string') ||
+    typeof r.created_at !== 'number' ||
+    typeof r.updated_at !== 'number' ||
+    (r.stale_after !== null && typeof r.stale_after !== 'number')
+  ) {
     throw new Error('memory_entries row failed structural validation');
   }
   return {
     id: r.id,
     type: r.type as MemoryType,
-    key: r.key ?? null,
+    key: r.key,
     content: r.content,
     tags: parseTags(r.tags),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    staleAfter: r.stale_after ?? null,
+    staleAfter: r.stale_after,
   };
 }
 
@@ -122,6 +134,9 @@ function assertValidInput(entry: MemoryInput): void {
   if (entry.id !== undefined && typeof entry.id !== 'string') {
     throw new TypeError(`entry.id must be a string when provided, got ${String(entry.id)}`);
   }
+  if (entry.key !== undefined && entry.key !== null && typeof entry.key !== 'string') {
+    throw new TypeError(`entry.key must be a string or null when provided, got ${String(entry.key)}`);
+  }
   if (entry.tags !== undefined && (!Array.isArray(entry.tags) || !entry.tags.every((t) => typeof t === 'string'))) {
     throw new TypeError('entry.tags must be a string[] when provided');
   }
@@ -140,6 +155,12 @@ function assertValidFilter(filter: MemoryFilter, requireNonEmpty: boolean): void
   }
   if (filter.type !== undefined && !MEMORY_TYPE_SET.has(filter.type)) {
     throw new TypeError(`filter.type must be one of ${MEMORY_TYPES.join('|')}, got ${String(filter.type)}`);
+  }
+  if (filter.key !== undefined && typeof filter.key !== 'string') {
+    throw new TypeError(`filter.key must be a string when provided, got ${String(filter.key)}`);
+  }
+  if (filter.tag !== undefined && typeof filter.tag !== 'string') {
+    throw new TypeError(`filter.tag must be a string when provided, got ${String(filter.tag)}`);
   }
   if (filter.limit !== undefined && (!Number.isInteger(filter.limit) || filter.limit < 0)) {
     throw new TypeError(`filter.limit must be a non-negative integer, got ${String(filter.limit)}`);
@@ -163,7 +184,8 @@ interface ReadQuery {
   sql: string;
   params: Record<string, unknown>;
   postFilterTag?: string;
-  excludeStale: boolean;
+  /** Applied in JS after the tag post-filter; undefined when SQL already limited. */
+  postFilterLimit?: number;
 }
 
 function buildReadQuery(filter: MemoryFilter): ReadQuery {
@@ -177,8 +199,7 @@ function buildReadQuery(filter: MemoryFilter): ReadQuery {
     clauses.push('key = @key');
     params.key = filter.key;
   }
-  const excludeStale = filter.includeStale === false;
-  if (excludeStale) {
+  if (filter.includeStale === false) {
     clauses.push('(stale_after IS NULL OR stale_after > @now)');
     params.now = Date.now();
   }
@@ -186,11 +207,19 @@ function buildReadQuery(filter: MemoryFilter): ReadQuery {
   // rowid (insertion order) is the tiebreaker so same-ms writes get a total,
   // deterministic order and asc is the exact reverse of desc.
   let sql = `SELECT * FROM memory_entries WHERE ${clauses.join(' AND ')} ORDER BY created_at ${direction}, rowid ${direction}`;
-  if (filter.limit !== undefined) {
+  // When a tag post-filter runs in JS, LIMIT must be applied AFTER it — pushing
+  // LIMIT into SQL here would cap the rows before the tag filter and under-return.
+  const tagPostFilter = filter.tag !== undefined;
+  if (filter.limit !== undefined && !tagPostFilter) {
     sql += ' LIMIT @limit';
     params.limit = filter.limit;
   }
-  return { sql: `${sql};`, params, postFilterTag: filter.tag, excludeStale };
+  return {
+    sql: `${sql};`,
+    params,
+    postFilterTag: filter.tag,
+    postFilterLimit: tagPostFilter ? filter.limit : undefined,
+  };
 }
 
 export function createMemoryStore(db: Database.Database): MemoryStore {
@@ -231,6 +260,9 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
     if (query.postFilterTag !== undefined) {
       const tag = query.postFilterTag;
       entries = entries.filter((e) => e.tags.includes(tag));
+      if (query.postFilterLimit !== undefined) {
+        entries = entries.slice(0, query.postFilterLimit);
+      }
     }
     return entries;
   }
