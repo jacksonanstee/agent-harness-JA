@@ -223,7 +223,7 @@ Configuration is fully optional — every module ships sensible defaults. The st
 
 ### Error handling
 
-- All public APIs return tagged results (`{ ok: true, value } | { ok: false, error }`) rather than throwing, except for programmer errors (invalid arguments, contract violations) which throw.
+- All public APIs return tagged results (`{ ok: true, value } | { ok: false, error }`) rather than throwing, except for programmer errors (invalid arguments, contract violations) which throw. Aggregate/batch operations may instead return an un-tagged result carrying both successes and per-item errors (e.g. `LoadResult { skills, errors }`) — partial failure is not a failure of the operation itself; see the ADR-0006 amendment.
 - Hook handlers that throw deny tool execution and record a `denied-by-hook` telemetry event.
 - The eval layer treats any uncaught exception in a task as a hard fail and reports the stack in the scorecard.
 

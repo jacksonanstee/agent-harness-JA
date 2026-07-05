@@ -6,7 +6,7 @@
   "author": "Jackson Anstee",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.1.0"
   },
   "bin": {
     "agent-harness-ja": "./dist/cli.js"

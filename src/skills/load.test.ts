@@ -1,4 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,10 +79,17 @@ describe('skills: validate — invalid files produce structured errors', () => {
     expect(error.field).toBe('/version');
   });
 
-  it('unknown frontmatter key (typo) → schema error', () => {
+  it('unknown frontmatter key (typo) → schema error pointing at the typo, not the shadowed field', () => {
     const error = expectError(invalid('unknown-field.md'));
     expect(error.kind).toBe('schema');
-    expect(error.message).toMatch(/naem|additional propert/i);
+    expect(error.field).toBe('/naem');
+    expect(error.message).toMatch(/additional propert/i);
+  });
+
+  it('unknown key nested in a sub-object → schema error (nested additionalProperties gate)', () => {
+    const error = expectError(invalid('nested-unknown-field.md'));
+    expect(error.kind).toBe('schema');
+    expect(error.field).toBe('/trigger/keywrods');
   });
 
   it('wrong type for trigger.keywords → schema error naming the nested field', () => {
@@ -124,7 +138,7 @@ describe('skills: load', () => {
   it('collects one structured error per invalid file, loads nothing', () => {
     const result = load(join(FIXTURES, 'invalid'));
     expect(result.skills).toEqual([]);
-    expect(result.errors).toHaveLength(6);
+    expect(result.errors).toHaveLength(7);
     for (const error of result.errors) {
       expect(isAbsolute(error.file)).toBe(true);
       expect(error.message.length).toBeGreaterThan(0);
@@ -167,5 +181,68 @@ describe('skills: load', () => {
   it('throws TypeError on empty or non-string dir argument (programmer error)', () => {
     expect(() => load('')).toThrow(TypeError);
     expect(() => load(null as unknown as string)).toThrow(TypeError);
+  });
+
+  describe('hardening (3-agent review findings)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'skills-hardening-'));
+    const permRoot = join(tmp, 'permroot');
+    const lockedDir = join(permRoot, 'locked');
+
+    afterAll(() => {
+      chmodSync(lockedDir, 0o755);
+      rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it('unreadable subdirectory mid-scan → read error, not a crash', () => {
+      mkdirSync(lockedDir, { recursive: true });
+      writeFileSync(join(lockedDir, 'inner.md'), '---\nname: x\n---\n');
+      chmodSync(lockedDir, 0o000);
+      const result = load(permRoot);
+      expect(result.skills).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.kind).toBe('read');
+    });
+
+    it('symlinked directory escaping the skills root → files refused, not loaded', () => {
+      const outside = join(tmp, 'outside');
+      const skillsDir = join(tmp, 'pack');
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(skillsDir, { recursive: true });
+      writeFileSync(
+        join(outside, 'secret.md'),
+        '---\nname: secret-skill\ndescription: exfiltrated\nversion: 1.0.0\n---\nSECRET BODY\n',
+      );
+      writeFileSync(
+        join(skillsDir, 'legit.md'),
+        '---\nname: legit-skill\ndescription: fine\nversion: 1.0.0\n---\nok\n',
+      );
+      symlinkSync(outside, join(skillsDir, 'evil'), 'dir');
+      const result = load(skillsDir);
+      expect(result.skills.map((s) => s.name)).toEqual(['legit-skill']);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.message).toMatch(/outside the skills directory/);
+      expect(JSON.stringify(result.skills)).not.toContain('SECRET BODY');
+    });
+
+    it('file above the size cap → read error naming the cap', () => {
+      const big = join(tmp, 'big.md');
+      writeFileSync(big, `---\nname: big\n---\n${'x'.repeat(1_000_001)}`);
+      const result = validate(big);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.error.kind).toBe('read');
+      expect(result.error.message).toMatch(/exceeds 1000000 bytes/);
+    });
+
+    it('strips ANSI/control bytes from attacker-influenced error messages', () => {
+      const hostile = join(tmp, 'hostile.md');
+      writeFileSync(hostile, '---\nname: "\u001b[31mSPOOFED\u001b[0m unclosed\n---\nbody\n');
+      const result = validate(hostile);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.error.kind).toBe('parse');
+      expect(result.error.message).not.toContain('\u001b');
+      expect(result.error.message).not.toContain('\n');
+    });
   });
 });
