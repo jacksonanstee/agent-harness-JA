@@ -63,9 +63,36 @@ function assertHandler(handler: unknown): void {
   }
 }
 
+// fire<E>(event, payload) binds E from the event argument, but TypeScript does
+// not correlate the two positions when both come from widened (non-literal)
+// variables — a caller can pass a StopPayload as a 'pre-tool' fire and it type-
+// checks. Every payload carries its own `event` discriminant, so verify it at
+// runtime (router assertValid precedent) rather than trusting the cast below.
+function assertPayloadMatchesEvent<E extends HookEvent>(
+  event: E,
+  payload: HookPayloadMap[E],
+): void {
+  if (payload.event !== event) {
+    throw new TypeError(
+      `payload.event (${String(payload.event)}) does not match fired event (${event})`,
+    );
+  }
+}
+
 export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
   const registry = new Map<HookEvent, HookHandler[]>();
-  const emit: HookSink = opts.onEvent ?? (() => {});
+  const sink: HookSink = opts.onEvent ?? (() => {});
+
+  // Telemetry is observational and must never affect control flow: a throwing
+  // sink adapter cannot be allowed to turn a successful fire into a rejection
+  // or abandon remaining records.
+  function emit(record: Parameters<HookSink>[0]): void {
+    try {
+      sink(record);
+    } catch {
+      // Intentionally swallowed — see above.
+    }
+  }
 
   function register<E extends HookEvent>(event: E, handler: HookHandler<E>): Unsubscribe {
     assertValidEvent(event);
@@ -90,7 +117,13 @@ export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
     payload: HookPayloadMap[E],
   ): Promise<FireResult> {
     assertValidEvent(event);
-    // Snapshot so unregister-during-fire cannot corrupt the in-flight sequence.
+    assertPayloadMatchesEvent(event, payload);
+    // Observe-only contract (ADR-0008 §1): freeze the payload so a handler
+    // cannot swap top-level fields. NB shallow — nested `args`/`result` are not
+    // deep-frozen, so the SDK must still treat post-fire nested state as
+    // untrusted and re-read from an authoritative source (ADR-0008 §1).
+    Object.freeze(payload);
+    // Snapshot so (un)register-during-fire cannot corrupt the in-flight sequence.
     const snapshot = [...(registry.get(event) ?? [])];
     const errors: HookHandlerError[] = [];
     let handlersFired = 0;
@@ -106,7 +139,9 @@ export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
             kind: 'denied-by-hook',
             event: 'pre-tool',
             handlerIndex: index,
-            tool: (payload as PreToolPayload).tool,
+            // Sanitized: for a real turn `tool` is model-requested and thus
+            // attacker-influenced; it reaches the log/terminal-adjacent sink.
+            tool: sanitize((payload as PreToolPayload).tool),
             reason,
           });
           return { event, handlersFired, errors, denied: true, deniedBy: index, reason, error: thrown };

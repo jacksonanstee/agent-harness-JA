@@ -33,6 +33,8 @@ This is the hard gate: no hook runtime code is written before this ADR lands. Tw
 Handlers receive a payload and may (a) observe it and (b) for `pre-tool`, deny the pending tool call by throwing. Handlers cannot mutate tool arguments or results. Payloads are `Readonly` by contract; the runtime does not read back any handler return value as a replacement payload.
 
 - **Coupling to internal state.** Mutation makes a hook a participant in the tool-execution data path, not an observer of it. The payload would become a bidirectional channel into permissions, the injection scanner, and the secrets scanner — all of which sit *below* hooks in the layer graph. A mutating hook that rewrites `args` after `pre-tool` but before `permissions.check` (step 7 → 8 of the turn diagram) would let a harness-layer extension route around a security-layer gate. Observe + deny keeps the security layer authoritative.
+
+  **Enforcement (and its limit).** The runtime `Object.freeze`s the payload before dispatch, so a handler cannot swap a top-level field (`payload.tool`, `payload.args` reference). This is a *shallow* freeze: `args`/`result` are typed `unknown` and may hold nested objects the freeze does not reach, so a determined handler could still mutate nested state in place. The freeze raises the bar and makes the common case safe, but it is not a complete immutability guarantee. The authoritative mitigation remains structural — the H-1 SDK wiring must re-read `args` from its own authoritative source when calling `permissions.check`, never from the post-`fire` payload object. Deep-freezing arbitrary payloads is deferred (cost, and it would freeze objects the caller still owns); see Revisit if.
 - **Typed-surface risk.** A safe mutation API must clone, re-validate, and re-scan the mutated value, and must define precedence when two handlers mutate the same field. That is a stricter typed surface than v1.0 can justify. Shipping a weak mutation API now (hand a handler the live object and hope) is worse than shipping none.
 - **Testability.** Observe + deny is a pure predicate over an immutable payload: `fire` either denies or does not, and the set of fired handlers is deterministic. Mutation makes `fire`'s output a function of handler-order-dependent edits, multiplying the test matrix.
 
@@ -143,13 +145,19 @@ Ordering is registration order, awaited sequentially. `fire` snapshots the handl
 
 ### 7. Error-message sanitization
 
-Handler messages reach the sink (a log/terminal-adjacent surface), so denial and error reasons are stripped of control characters with the same `/[\x00-\x1F\x7F-\x9F  ]/g` regex used by the router (`sanitizeReason`) and skills (`sanitize`). Because hooks depends on nothing, the regex is copied locally into `runtime.ts` with a "keep in lockstep" comment, exactly as skills copied it from the router rather than importing. Extraction to a shared util is deferred (see Revisit if) precisely because a `src/internal/*` import would give hooks its first in-repo dependency, which the locked "depends on nothing" forbids.
+Every attacker-influenced string that reaches the sink (a log/terminal-adjacent surface) is stripped of control characters with the same control-char regex used by the router (`sanitizeReason`) and skills (`sanitize`). This covers denial and error `reason`s AND the `tool` field on a `denied-by-hook` record: for a real turn `tool` is the model-requested tool name (adversarial LLM output), and `pre-tool` fires before any tool-registry validation is guaranteed. Because hooks depends on nothing, the regex is copied locally into `runtime.ts` with a "keep in lockstep" comment. Extraction to a shared util is deferred (see Revisit if) because a `src/internal/*` import would give hooks its first in-repo dependency, which the locked "depends on nothing" forbids.
+
+The sink is invoked through a swallowing wrapper: telemetry is observational and must never affect control flow, so a throwing sink adapter cannot turn a successful `fire` into a rejection or abandon later records.
+
+### 8. Telemetry event accounting
+
+A `pre-tool` deny emits exactly one `denied-by-hook` record and NO `hook-fired`; a non-denied fire emits one `hook-fired` (plus a `hook-error` per isolated throw). A telemetry consumer reconstructing how many fires happened must count `denied-by-hook` + `hook-fired`, not `hook-fired` alone.
 
 ## Consequences
 
 ### Positive
-- Security layer stays authoritative: hooks cannot route around `permissions.check` or the scanners by rewriting the payload.
-- `fire` is a clean, testable predicate over an immutable payload; deny is deterministic and order-defined.
+- Security layer stays authoritative: hooks cannot swap top-level payload fields (the payload is frozen), and the SDK re-reads `args` from its own source, so a hook cannot route around `permissions.check` or the scanners.
+- `fire` is a clean, testable predicate over a frozen payload; deny is deterministic and order-defined.
 - Callers never `try/catch` normal control flow; they branch on `result.denied`.
 - Zero runtime dependencies preserved; telemetry wiring is inverted, so the layer graph is intact before telemetry exists.
 - Per-session isolation via the factory prevents cross-session handler leakage.
@@ -158,6 +166,9 @@ Handler messages reach the sink (a log/terminal-adjacent surface), so denial and
 - No mutation means use cases like "normalize a path before permissions check" or "add a redaction" cannot be expressed as hooks in v1.0. Accepted; those belong to the security layer today, and mutation is a v1.x promotion.
 - `scan` and `redactions` are typed `unknown` in `PostToolPayload` to avoid a hooks → security type import. Handlers that need them must narrow. Tightening is deferred until the security contracts stabilize.
 - The `denied-by-hook` / `hook-error` / `hook-fired` record shape is a wire format the future telemetry module must accept; changing it later is a coordinated change.
+- **No per-handler timeout.** A handler that returns a never-settling promise stalls the sequential await and freezes the turn (for `pre-tool`, a soft-DoS on the session). Accepted for v1.0: handlers are trusted, config-registered extension code, and the fail-open-vs-fail-closed choice on timeout is itself security-relevant. Named in Revisit if for when handlers become less trusted.
+- **The bare `register`/`fire` exports share one process-global registry** (the module-level default instance). Intended for single-session / CLI / config-registered use, but a footgun for a library or multi-tenant embedding consumer, who must use `createHookRuntime()` per session.
+- **Payload freeze is shallow.** Nested `args`/`result` state is not deep-frozen; the SDK re-read obligation (§1) is what fully closes the mutation-bypass, not the freeze alone.
 
 ## Alternatives considered
 
@@ -174,5 +185,6 @@ Handler messages reach the sink (a log/terminal-adjacent surface), so denial and
 - A consumer needs `post-tool` hooks to contribute additional redactions or annotate results — same promotion, results side.
 - The security layer's `ScanResult` / redaction types stabilize enough that typing `PostToolPayload.scan` / `.redactions` as `unknown` is costing handler authors — introduce a shared contracts type or generic parametrization rather than a hooks → security import.
 - A consumer needs `session-start` or `stop` throws to abort the session (currently isolated-error-only) — define abort semantics for lifecycle events.
+- Handlers become less-trusted (third-party plugins) — add a per-handler timeout, and make the `pre-tool` timeout **fail-closed** (deny). Also revisit deep-freezing the payload rather than the current shallow freeze.
 - Concurrent / parallel hook dispatch is requested — out of scope in v1.0 (it would break the ordering guarantee); would need a new ADR.
 - The control-char sanitizer gains a fourth consumer or the "depends on nothing" constraint is relaxed — extract `CONTROL_CHARS` to a shared `src/internal` kernel and migrate router + skills + hooks.

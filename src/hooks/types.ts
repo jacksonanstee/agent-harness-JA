@@ -46,7 +46,11 @@ export type HookHandler<E extends HookEvent = HookEvent> = (
 export type Unsubscribe = () => void;
 
 export interface HookHandlerError {
-  /** Registration-order index of the throwing handler. */
+  /**
+   * Index of the throwing handler within this fire's snapshot of currently
+   * active handlers. Snapshot-relative, not a stable per-handler id: after an
+   * unregister, the same handler may report a different index on a later fire.
+   */
   handlerIndex: number;
   /** Sanitized message. */
   reason: string;
@@ -66,7 +70,7 @@ export type FireResult =
   | (FireResultBase & { denied: false })
   | (FireResultBase & {
       denied: true;
-      /** Registration-order index of the denying handler. */
+      /** Snapshot-relative index of the denying handler (see HookHandlerError.handlerIndex). */
       deniedBy: number;
       /** Sanitized denial message. */
       reason: string;

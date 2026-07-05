@@ -3,6 +3,7 @@ import { HOOK_EVENTS, HookDenial, createHookRuntime, fire, register } from './in
 import type {
   HookEvent,
   HookEventRecord,
+  HookPayload,
   PostToolPayload,
   PreToolPayload,
   SessionStartPayload,
@@ -76,6 +77,14 @@ describe('hooks: programmer errors throw TypeError', () => {
 
   it('fire rejects unknown event names', async () => {
     await expect(runtime.fire('nope' as unknown as HookEvent, stop)).rejects.toThrow(TypeError);
+  });
+
+  it('fire rejects a payload whose event does not match the fired event', async () => {
+    // Reproduces the widened-dispatch hole: TS binds E from `event` and won't
+    // correlate a separately-typed payload variable. Runtime must catch it.
+    const fireDynamic = (event: HookEvent, payload: HookPayload): Promise<unknown> =>
+      runtime.fire(event, payload);
+    await expect(fireDynamic('pre-tool', stop)).rejects.toThrow(TypeError);
   });
 });
 
@@ -269,8 +278,8 @@ describe('hooks: default sink is a safe no-op', () => {
   });
 });
 
-describe('hooks: unregister during fire', () => {
-  it('a handler unregistering a later one does not corrupt the in-flight sequence', async () => {
+describe('hooks: snapshot semantics under registry mutation during fire', () => {
+  it('unregistering a later handler does not corrupt the in-flight sequence', async () => {
     const runtime = createHookRuntime();
     const later = vi.fn();
     let off: () => void = () => {};
@@ -285,6 +294,92 @@ describe('hooks: unregister during fire', () => {
     // But it is gone from the next fire.
     await runtime.fire('post-tool', postTool);
     expect(later).toHaveBeenCalledTimes(1);
+  });
+
+  it('registering a new handler mid-fire does not inject it into the in-flight sequence', async () => {
+    const runtime = createHookRuntime();
+    const added = vi.fn();
+    runtime.register('post-tool', () => {
+      runtime.register('post-tool', added);
+    });
+    await runtime.fire('post-tool', postTool);
+    expect(added).not.toHaveBeenCalled(); // not in the entry snapshot
+    await runtime.fire('post-tool', postTool);
+    expect(added).toHaveBeenCalledTimes(1); // present on the next fire
+  });
+
+  it('concurrent fires each use their own entry snapshot', async () => {
+    const runtime = createHookRuntime();
+    runtime.register('post-tool', async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    const firstFire = runtime.fire('post-tool', postTool); // snapshots 1 handler
+    runtime.register('post-tool', vi.fn()); // registered after firstFire started
+    const secondFire = runtime.fire('post-tool', postTool); // snapshots 2 handlers
+    const [a, b] = await Promise.all([firstFire, secondFire]);
+    expect(a.handlersFired).toBe(1);
+    expect(b.handlersFired).toBe(2);
+  });
+
+  it('a handler that re-enters fire does not corrupt the outer result', async () => {
+    const runtime = createHookRuntime();
+    let inner: Awaited<ReturnType<typeof runtime.fire>> | undefined;
+    runtime.register('post-tool', async () => {
+      inner = await runtime.fire('stop', stop);
+    });
+    const outer = await runtime.fire('post-tool', postTool);
+    expect(outer.denied).toBe(false);
+    expect(outer.handlersFired).toBe(1);
+    expect(inner?.denied).toBe(false);
+  });
+});
+
+describe('hooks: security hardening (3-agent review)', () => {
+  it('sanitizes the tool field in the denied-by-hook record', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => {
+      throw new HookDenial('nope');
+    });
+    await runtime.fire('pre-tool', {
+      event: 'pre-tool',
+      tool: 'evil\x1b[31m\ntool',
+      args: null,
+    });
+    const denied = records.find((r) => r.kind === 'denied-by-hook');
+    expect(denied?.kind).toBe('denied-by-hook');
+    if (denied?.kind !== 'denied-by-hook') throw new Error('unreachable');
+    expect(denied.tool).not.toMatch(/[\x00-\x1F]/);
+    expect(denied.tool).toBe('evil [31m tool');
+  });
+
+  it('a throwing telemetry sink cannot break fire control flow', async () => {
+    const runtime = createHookRuntime({
+      onEvent: () => {
+        throw new Error('sink exploded');
+      },
+    });
+    const handler = vi.fn();
+    runtime.register('post-tool', handler);
+    const result = await runtime.fire('post-tool', postTool);
+    expect(result.denied).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('freezes the payload so a handler cannot swap a top-level field', async () => {
+    const runtime = createHookRuntime();
+    const payload: PreToolPayload = { event: 'pre-tool', tool: 'Read', args: { path: '/x' } };
+    runtime.register('pre-tool', (p) => {
+      // Handlers receive a frozen payload; a top-level reassignment is a no-op
+      // (silent in sloppy mode, throws in strict). Either way `tool` is intact.
+      try {
+        (p as { tool: string }).tool = 'Write';
+      } catch {
+        /* strict-mode TypeError on frozen object — also acceptable */
+      }
+    });
+    await runtime.fire('pre-tool', payload);
+    expect(payload.tool).toBe('Read');
+    expect(Object.isFrozen(payload)).toBe(true);
   });
 });
 
