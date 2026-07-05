@@ -24,7 +24,7 @@ export type ParseResult =
 // hooks/router/skills copies). Model output and warnings reach the user's
 // terminal; strip control chars so tool-poisoned text can't smuggle ANSI/OSC
 // escape sequences (newline/tab kept for readability).
-const TERMINAL_UNSAFE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u2028\u2029]/g;
+const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
@@ -55,7 +55,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
       if (arg === '--skills-dir') skillsDir = value;
       if (arg === '--db') dbPath = value;
       if (arg === '--max-turns') {
-        const parsed = Number.parseInt(value, 10);
+        const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
         if (!Number.isInteger(parsed) || parsed < 1) {
           return { ok: false, error: `--max-turns must be a positive integer. ${USAGE}` };
         }
@@ -125,7 +125,7 @@ export async function main(argv: string[]): Promise<number> {
   process.stdout.write(
     `\n[harness] model=${result.modelChoice.model} (rule=${result.modelChoice.rule_id}) ` +
       `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
-      `denied=${result.denied.length} memory=${result.memoryEntryId ?? 'none'}\n`,
+      `denied=${result.denied.length} memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`,
   );
 
   return result.resultSubtype === 'success' ? 0 : 1;

@@ -62,6 +62,7 @@ describe('parseRunArgs', () => {
   it('rejects a non-positive --max-turns', () => {
     expect(parseRunArgs(['run', 'hi', '--max-turns', '0']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', 'abc']).ok).toBe(false);
+    expect(parseRunArgs(['run', 'hi', '--max-turns', '5abc']).ok).toBe(false);
   });
 });
 
@@ -69,6 +70,7 @@ describe('sanitizeForTerminal', () => {
   it('strips ANSI/OSC escape introducers and C1 controls, keeps newlines and tabs', () => {
     expect(sanitizeForTerminal('a\u001b[31mred\u0007b')).toBe('a [31mred b');
     expect(sanitizeForTerminal('line1\nline2\tend')).toBe('line1\nline2\tend');
+    expect(sanitizeForTerminal('overwrite\rspoof')).toBe('overwrite spoof'); // CR enables line-rewrite spoofing
   });
 });
 
