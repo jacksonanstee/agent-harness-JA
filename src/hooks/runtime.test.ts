@@ -352,6 +352,24 @@ describe('hooks: security hardening (3-agent review)', () => {
     expect(denied.tool).toBe('evil [31m tool');
   });
 
+  it('a non-string tool on the deny path is coerced, not thrown (fail-closed symmetry)', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => {
+      throw new HookDenial('nope');
+    });
+    // This boundary distrusts payload typing; a non-string tool must still
+    // resolve to a deny result, not make fire() reject with a TypeError.
+    const result = await runtime.fire('pre-tool', {
+      event: 'pre-tool',
+      tool: 42 as unknown as string,
+      args: null,
+    });
+    expect(result.denied).toBe(true);
+    const denied = records.find((r) => r.kind === 'denied-by-hook');
+    if (denied?.kind !== 'denied-by-hook') throw new Error('unreachable');
+    expect(denied.tool).toBe('42');
+  });
+
   it('a throwing telemetry sink cannot break fire control flow', async () => {
     const runtime = createHookRuntime({
       onEvent: () => {

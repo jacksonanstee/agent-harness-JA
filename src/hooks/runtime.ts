@@ -139,9 +139,12 @@ export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
             kind: 'denied-by-hook',
             event: 'pre-tool',
             handlerIndex: index,
-            // Sanitized: for a real turn `tool` is model-requested and thus
-            // attacker-influenced; it reaches the log/terminal-adjacent sink.
-            tool: sanitize((payload as PreToolPayload).tool),
+            // Sanitized + String()-coerced: for a real turn `tool` is
+            // model-requested (attacker-influenced) and reaches the
+            // log/terminal-adjacent sink. This boundary distrusts payload
+            // typing, so coerce like reasonOf — a non-string tool must not make
+            // the deny path throw where the accept path resolves cleanly.
+            tool: sanitize(String((payload as PreToolPayload).tool)),
             reason,
           });
           return { event, handlersFired, errors, denied: true, deniedBy: index, reason, error: thrown };
