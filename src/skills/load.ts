@@ -25,6 +25,35 @@ true satisfies KeysMatch<keyof typeof skillSchema.properties, keyof Frontmatter>
 /** Refuse to read skill files larger than this (resource-exhaustion guard). */
 const MAX_FILE_BYTES = 1_000_000;
 
+// gray-matter picks its parse engine from a language tag on the opening
+// fence (`---js`, `---coffee`, ...). Its built-in `javascript` engine
+// `eval()`s the frontmatter body — arbitrary code execution from an
+// untrusted skill file, BEFORE schema validation ever runs. Two independent
+// guards close this:
+//   1. FENCE_LANGUAGE rejects any fence whose language is not empty/yaml/yml
+//      before matter() is called at all.
+//   2. SAFE_MATTER_OPTIONS replaces the `javascript`/`js` engines with ones
+//      that throw, so no eval happens even if guard (1) is ever bypassed.
+// Only YAML frontmatter is a valid skill (ADR-0006), so this loses nothing.
+const FENCE_LANGUAGE = /^﻿?---+([^\r\n]*)\r?\n/;
+
+function refuseNonYaml(): never {
+  throw new Error('non-YAML frontmatter engine is disabled');
+}
+
+const refuseEngine = { parse: refuseNonYaml, stringify: refuseNonYaml };
+
+const SAFE_MATTER_OPTIONS = {
+  engines: { javascript: refuseEngine, js: refuseEngine },
+} as const;
+
+function hasUnsafeFenceLanguage(raw: string): boolean {
+  const match = FENCE_LANGUAGE.exec(raw);
+  if (match === null) return false;
+  const language = (match[1] ?? '').trim();
+  return language !== '' && !/^ya?ml$/i.test(language);
+}
+
 // Keep in lockstep with CONTROL_CHARS in src/router/route.ts. Same
 // log-injection defence, more hostile sink: YAML parse errors embed raw
 // snippets of the offending file, so untrusted skill packs control bytes of
@@ -90,13 +119,19 @@ export function validate(file: string): ValidationResult {
     return fail(skillError(path, 'read', errorMessage(cause)));
   }
 
+  if (hasUnsafeFenceLanguage(raw)) {
+    return fail(
+      skillError(path, 'parse', 'frontmatter must be YAML; non-YAML fence language is refused'),
+    );
+  }
+
   let parsed: { data: unknown; content: string };
   try {
-    // The empty options object is load-bearing: gray-matter only caches
-    // (process-wide, keyed by content, never evicted) when called with NO
-    // options. Cached results also share one mutable `data` object across
-    // identical files.
-    parsed = matter(raw, {});
+    // SAFE_MATTER_OPTIONS neutralizes the js engine (see above). Passing any
+    // options object also disables gray-matter's process-wide, content-keyed,
+    // never-evicted parse cache, which additionally shares one mutable `data`
+    // object across identical files.
+    parsed = matter(raw, SAFE_MATTER_OPTIONS);
   } catch (cause: unknown) {
     return fail(skillError(path, 'parse', errorMessage(cause)));
   }

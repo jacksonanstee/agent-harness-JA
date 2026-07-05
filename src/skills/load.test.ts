@@ -104,6 +104,14 @@ describe('skills: validate — invalid files produce structured errors', () => {
     expect(error.message.length).toBeGreaterThan(0);
   });
 
+  it('refuses a `---js` fence without executing its body (RCE guard)', () => {
+    (globalThis as Record<string, unknown>).__SKILL_RCE_FIRED = false;
+    const error = expectError(invalid('js-engine-rce.md'));
+    expect((globalThis as Record<string, unknown>).__SKILL_RCE_FIRED).toBe(false);
+    expect(error.kind).toBe('parse');
+    expect(error.message).toMatch(/non-YAML|must be YAML/i);
+  });
+
   it('markdown with no frontmatter → schema error naming /name', () => {
     const error = expectError(invalid('no-frontmatter.md'));
     expect(error.kind).toBe('schema');
@@ -138,7 +146,7 @@ describe('skills: load', () => {
   it('collects one structured error per invalid file, loads nothing', () => {
     const result = load(join(FIXTURES, 'invalid'));
     expect(result.skills).toEqual([]);
-    expect(result.errors).toHaveLength(7);
+    expect(result.errors).toHaveLength(8);
     for (const error of result.errors) {
       expect(isAbsolute(error.file)).toBe(true);
       expect(error.message.length).toBeGreaterThan(0);
