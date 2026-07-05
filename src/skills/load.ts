@@ -40,7 +40,7 @@ const MAX_FILE_BYTES = 1_000_000;
 // on a long dash run (a ~1 MB dash file hung validate() for minutes). Exactly
 // three dashes is also gray-matter's real behavior — it early-returns when the
 // 4th char is another dash — so this is stricter-or-equal, never looser.
-const FENCE_LANGUAGE = /^﻿?---([^\r\n]*)(?:\r?\n|$)/;
+const FENCE_LANGUAGE = /^\uFEFF?---([^\r\n]*)(?:\r?\n|$)/;
 
 function refuseNonYaml(): never {
   throw new Error('non-YAML frontmatter engine is disabled');
