@@ -1,0 +1,2 @@
+This is a plain text file, not a Markdown skill file.
+The skills loader must ignore this file because it does not have a .md extension.
