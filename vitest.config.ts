@@ -12,6 +12,7 @@ export default defineConfig({
         // Type declarations only — no runtime code for v8 to observe.
         'src/skills/types.ts',
         'src/hooks/types.ts',
+        'src/memory/types.ts',
         'src/skills/__fixtures__/**',
         'src/**/*.test.ts',
       ],
