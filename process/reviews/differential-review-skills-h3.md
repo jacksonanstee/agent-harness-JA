@@ -191,3 +191,28 @@ regression test that rejects non-YAML frontmatter engines. F-2/F-3 are low/infor
 can follow.
 
 **Finding count:** 1 CRITICAL, 0 HIGH, 0 MEDIUM, 2 LOW, 1 INFO.
+
+---
+
+## Resolution addendum (2026-07-05, post-review)
+
+All blocking findings closed on the same branch; re-verified adversarially.
+
+- **F-1 (CRITICAL RCE, `---js` engine)** — FIXED in `f798c95`. Two independent guards:
+  a fence-language check refuses any frontmatter whose language is not empty/`yaml`/`yml`
+  before `matter()` runs, and the `javascript`/`js` engines are replaced with throwing
+  stubs (defense in depth). A dedicated re-verification pass ran 31 bypass probes
+  (case/whitespace/tab/CRLF/BOM/4-dash/other-engine variants) through the compiled
+  `dist/skills/load.js` with a dual sentinel — **zero executions**. It also confirmed the
+  guard regex and gray-matter's own language extraction cannot disagree in a way that
+  dispatches to `js`. Regression fixture `invalid/js-engine-rce.md` asserts a sentinel
+  never fires.
+- **New MEDIUM (ReDoS)** introduced by the F-1 guard regex (`---+` was quadratic on a long
+  dash run; ~14-min hang under the 1 MB cap) — FIXED in `c1a728e` by matching exactly `---`
+  (gray-matter's real delimiter). Near-cap dash file now resolves in single-digit ms;
+  regression test asserts `validate()` < 1 s.
+- **F-2 / F-3 (LOW/INFO)** — accepted as noted; no code change required for the static-pack
+  threat model.
+
+**Revised verdict: ✅ APPROVE.** 54 tests, skills 97.3% lines / 89.1% branch, RCE and ReDoS
+both empirically closed against the compiled output.
