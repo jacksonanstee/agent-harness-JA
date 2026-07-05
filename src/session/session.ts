@@ -113,9 +113,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         });
         if (fireResult.denied) deniedReason = fireResult.reason;
       } catch (error: unknown) {
-        // fire() itself failing must fail closed, not SDK-defined.
-        deniedReason =
-          error instanceof Error ? sanitizeText(error.message) : 'pre-tool hook failure';
+        // fire() itself failing must fail closed, not SDK-defined. The reason
+        // sent to the model is generic; the detail goes to warnings only.
+        warn(
+          `pre-tool fire failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+        );
+        deniedReason = 'pre-tool hook failure';
       }
       if (deniedReason !== null) {
         denied.push({ tool, reason: deniedReason });
@@ -131,16 +134,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     };
 
     const postToolCallback: SdkHookCallback = async (input) => {
-      const fireResult = await deps.hooks.fire('post-tool', {
-        event: 'post-tool',
-        tool: sanitizeText(input.tool_name ?? 'unknown'),
-        result: input.tool_output,
-        // Security layer (steps 10-11) lands in Week 2; until then these are null.
-        scan: null,
-        redactions: null,
-      });
-      for (const error of fireResult.errors) {
-        warn(`post-tool hook error: ${error.reason}`);
+      try {
+        const fireResult = await deps.hooks.fire('post-tool', {
+          event: 'post-tool',
+          tool: sanitizeText(input.tool_name ?? 'unknown'),
+          result: input.tool_output,
+          // Security layer (steps 10-11) lands in Week 2; until then these are null.
+          scan: null,
+          redactions: null,
+        });
+        for (const error of fireResult.errors) {
+          warn(`post-tool hook error: ${error.reason}`);
+        }
+      } catch (error: unknown) {
+        warn(
+          `post-tool fire failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+        );
       }
       return {};
     };
