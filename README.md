@@ -51,8 +51,8 @@ npx agent-harness-ja run
 # Run the eval suite (golden + red-team)
 npx agent-harness-ja eval
 
-# Inspect telemetry
-npx agent-harness-ja telemetry --since 1h
+# Export telemetry as JSONL (filter by --session / --type)
+npx agent-harness-ja telemetry export
 ```
 
 ---

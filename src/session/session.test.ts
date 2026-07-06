@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
+import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
 import { createSession } from './session.js';
 import type {
   QueryFn,
@@ -87,6 +88,22 @@ function fakeQuery(
     })();
   };
   return { query, captured };
+}
+
+interface FakeTelemetry {
+  events: TelemetryEventInput[];
+  record: (event: TelemetryEventInput) => { ok: true; value: TelemetryEvent };
+}
+
+function fakeTelemetry(): FakeTelemetry {
+  const events: TelemetryEventInput[] = [];
+  return {
+    events,
+    record: (event) => {
+      events.push(event);
+      return { ok: true, value: { ...event, id: 'evt-1', ts: event.ts ?? 1 } as TelemetryEvent };
+    },
+  };
 }
 
 function makeDeps(fake: FakeQuery, overrides: Partial<SessionDeps> = {}): SessionDeps {
@@ -343,6 +360,139 @@ describe('createSession', () => {
     expect(row?.staleAfter).not.toBeNull();
     const content = JSON.parse(row?.content ?? '{}') as { prompt: string };
     expect(content.prompt.length).toBeLessThanOrEqual(201); // 200 + ellipsis
+  });
+
+  it('records a turn-cost and per-tool tool-trace telemetry event with shared correlation ids', async () => {
+    const telemetry = fakeTelemetry();
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const session = createSession(makeDeps(fake, { telemetry }), {
+      skillsDir: '/nowhere',
+      generateId: () => 'harness-1',
+      turnId: 'turn-1',
+    });
+
+    await session.run('say hello');
+
+    expect(telemetry.events).toHaveLength(2);
+    const trace = telemetry.events.find((e) => e.type === 'tool-trace');
+    const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+    expect(trace).toBeDefined();
+    expect(cost).toBeDefined();
+    if (trace?.type !== 'tool-trace' || cost?.type !== 'turn-cost') return;
+    // Correlation: both events key on the harness session id + turn id.
+    expect(trace.sessionId).toBe('harness-1');
+    expect(trace.turnId).toBe('turn-1');
+    expect(cost.sessionId).toBe('harness-1');
+    expect(cost.turnId).toBe('turn-1');
+    expect(trace.payload.tool).toBe('Read');
+    expect(trace.payload.phase).toBe('post-tool');
+    expect(trace.payload.resultSummary).toContain('contents');
+    expect(cost.payload.costUsd).toBe(0.01);
+    expect(cost.payload.numTurns).toBe(1);
+    expect(cost.payload.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+    });
+    expect(cost.payload.sdkSessionId).toBe('sdk-123');
+    expect(cost.payload.resultSubtype).toBe('success');
+    expect(cost.payload.model).toBeTruthy();
+    expect(cost.payload.ruleId).toBeTruthy();
+  });
+
+  it('records a turn-cost event with null metrics on the error path, then rethrows', async () => {
+    const telemetry = fakeTelemetry();
+    const query: QueryFn = () =>
+      (async function* () {
+        yield INIT;
+        throw new Error('stream died');
+      })();
+    const session = createSession(
+      makeDeps({ query, captured: [] }, { telemetry }),
+      { skillsDir: '/nowhere' },
+    );
+
+    await expect(session.run('boom')).rejects.toThrow('stream died');
+
+    const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+    expect(cost).toBeDefined();
+    if (cost?.type !== 'turn-cost') return;
+    expect(cost.payload.costUsd).toBeNull();
+    expect(cost.payload.usage).toBeNull();
+    expect(cost.payload.resultSubtype).toBeNull();
+  });
+
+  it('warns and continues when telemetry record fails or throws', async () => {
+    const warnings: string[] = [];
+    const failing = {
+      record: () => ({ ok: false as const, error: { kind: 'db' as const, message: 'telemetry disk full' } }),
+    };
+    const fake = fakeQuery([INIT, RESULT]);
+    const session = createSession(makeDeps(fake, { telemetry: failing }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('hi');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings.some((w) => w.includes('telemetry disk full'))).toBe(true);
+
+    const throwing = {
+      record: () => {
+        throw new TypeError('bad telemetry input');
+      },
+    };
+    const warnings2: string[] = [];
+    const fake2 = fakeQuery([INIT, RESULT]);
+    const session2 = createSession(makeDeps(fake2, { telemetry: throwing }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings2.push(w),
+    });
+    const result2 = await session2.run('hi');
+    expect(result2.resultText).toBe('hello from claude');
+    expect(warnings2.some((w) => w.includes('bad telemetry input'))).toBe(true);
+  });
+
+  it('records a hook-error telemetry event when pre-tool fire() itself throws', async () => {
+    const telemetry = fakeTelemetry();
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'x' }]);
+    const brokenHooks = {
+      register: () => () => undefined,
+      fire: (event: string) => {
+        if (event === 'pre-tool') return Promise.reject(new Error('runtime exploded'));
+        return Promise.resolve({ event, handlersFired: 0, errors: [], denied: false });
+      },
+    };
+    const session = createSession(
+      makeDeps(fake, { telemetry, hooks: brokenHooks as unknown as SessionDeps['hooks'] }),
+      { skillsDir: '/nowhere' },
+    );
+
+    const result = await session.run('hi');
+
+    expect(result.denied).toHaveLength(1); // fail-closed deny still happens
+    const hookError = telemetry.events.find(
+      (e) => e.type === 'hook-event' && e.payload.kind === 'hook-error',
+    );
+    expect(hookError).toBeDefined();
+    if (hookError?.type === 'hook-event') {
+      expect(hookError.payload.event).toBe('pre-tool');
+      expect(hookError.payload.reason).toContain('runtime exploded');
+    }
+  });
+
+  it('summarizes non-string tool output and truncates long summaries', async () => {
+    const telemetry = fakeTelemetry();
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Read', input: {}, output: { big: 'x'.repeat(500) } },
+    ]);
+    const session = createSession(makeDeps(fake, { telemetry }), { skillsDir: '/nowhere' });
+    await session.run('hi');
+    const trace = telemetry.events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace recorded');
+    expect(trace.payload.resultSummary?.length).toBeLessThanOrEqual(201);
   });
 
   it('streams assistant text through onText', async () => {

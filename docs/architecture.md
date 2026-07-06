@@ -116,7 +116,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** durable storage of per-turn cost, cache hit/miss, tool traces, and hook events.
 - **Public API:** `record(event: TelemetryEvent)`, `query(filter: TelemetryFilter): TelemetryEvent[]`.
 - **Depends on:** `better-sqlite3`; schema migrations in `src/telemetry/migrations/`.
-- **Design notes:** Single-writer, append-heavy. See [ADR-0004](./decisions/0004-sqlite-for-telemetry.md).
+- **Design notes:** Single-writer, append-heavy. Single `telemetry_events` table (type discriminator + JSON payload + indexed `session_id`/`turn_id`/`ts`); the numbered-migration runner owns the shared-DB schema (memory's DDL is migration 001). Events correlate on harness-generated session/turn ids supplied by the composition root. Export via `agent-harness-ja telemetry export` (JSONL). See [ADR-0004](./decisions/0004-sqlite-for-telemetry.md) and [ADR-0011](./decisions/0011-telemetry-store-and-migrations.md).
 
 #### `harness/memory`
 

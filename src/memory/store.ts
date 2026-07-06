@@ -17,7 +17,13 @@ export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const MEMORY_TYPE_SET: ReadonlySet<string> = new Set(MEMORY_TYPES);
 
-const CREATE_TABLE = `
+/**
+ * Exported for the drift test in src/telemetry/migrations: this DDL is
+ * dual-owned — telemetry's migration 001 adopts it verbatim (ADR-0011 §3) and
+ * the two copies must stay byte-identical. Schema changes go through a new
+ * telemetry migration AND this constant.
+ */
+export const MEMORY_BASELINE_DDL = `
 CREATE TABLE IF NOT EXISTS memory_entries (
   id          TEXT PRIMARY KEY NOT NULL,
   type        TEXT NOT NULL CHECK (type IN ('user','feedback','project','reference')),
@@ -50,7 +56,7 @@ interface OpenMemoryDatabaseOptions {
 }
 
 export function ensureSchema(db: Database.Database): void {
-  db.exec(CREATE_TABLE);
+  db.exec(MEMORY_BASELINE_DDL);
 }
 
 export function openMemoryDatabase(opts: OpenMemoryDatabaseOptions = {}): Database.Database {
