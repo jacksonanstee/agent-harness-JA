@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { hookRecordToTelemetryInput, main, parseArgs, parseRunArgs, sanitizeForTerminal } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRunArgs, sanitizeForTerminal, SettingsLoadError } from './cli.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
@@ -269,5 +269,113 @@ describe('main (pre-SDK paths)', () => {
     } finally {
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
     }
+  });
+});
+
+describe('composeSecurity', () => {
+  const settingsPath = (dir: string): string => join(dir, '.harness', 'settings.json');
+
+  const filesystem = (files: Record<string, string>) => (path: string): string => {
+    const body = files[path];
+    if (body === undefined) {
+      const err = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    }
+    return body;
+  };
+
+  it('reads each settings file once and parses both keys from the same doc', () => {
+    const readPaths: string[] = [];
+    const files = filesystem({
+      [settingsPath('/home/u')]: JSON.stringify({
+        permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] },
+        sandbox: { paths: { allow: ['/safe'] } },
+      }),
+    });
+    const result = composeSecurity({
+      readFile: (p) => {
+        readPaths.push(p);
+        return files(p);
+      },
+      userDir: '/home/u',
+      projectDir: '/proj',
+    });
+    expect(readPaths.filter((p) => p === settingsPath('/home/u'))).toHaveLength(1);
+    expect(result.permissions.rules).toHaveLength(1);
+    expect(result.sandbox.paths?.allow).toEqual(['/safe']);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('malformed permissions OR sandbox keys throw a path-prefixed SettingsLoadError', () => {
+    const badPermissions = filesystem({
+      [settingsPath('/proj')]: JSON.stringify({ permissions: { rules: 'nope' } }),
+    });
+    expect(() =>
+      composeSecurity({ readFile: badPermissions, userDir: '/home/u', projectDir: '/proj' }),
+    ).toThrowError(SettingsLoadError);
+    expect(() =>
+      composeSecurity({ readFile: badPermissions, userDir: '/home/u', projectDir: '/proj' }),
+    ).toThrow(new RegExp(settingsPath('/proj').replace(/[/.]/g, '\\$&')));
+
+    const badSandbox = filesystem({
+      [settingsPath('/home/u')]: JSON.stringify({ sandbox: { paths: 'nope' } }),
+    });
+    expect(() =>
+      composeSecurity({ readFile: badSandbox, userDir: '/home/u', projectDir: '/proj' }),
+    ).toThrow(/sandbox\.paths/);
+
+    const badJson = filesystem({ [settingsPath('/home/u')]: '{oops' });
+    expect(() =>
+      composeSecurity({ readFile: badJson, userDir: '/home/u', projectDir: '/proj' }),
+    ).toThrow(/not valid JSON/);
+  });
+
+  it('missing files everywhere → open posture, no warnings', () => {
+    const result = composeSecurity({
+      readFile: filesystem({}),
+      userDir: '/home/u',
+      projectDir: '/proj',
+    });
+    expect(result.permissions.rules).toEqual([]);
+    expect(result.sandbox).toEqual({});
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('warns on ask-without-prompter and shell-runner allowlist entries', () => {
+    const result = composeSecurity({
+      readFile: filesystem({
+        [settingsPath('/proj')]: JSON.stringify({
+          permissions: { rules: [{ tool: 'Bash', decision: 'ask' }] },
+          sandbox: { commands: { allow: ['git', 'bash'] } },
+        }),
+      }),
+      userDir: '/home/u',
+      projectDir: '/proj',
+    });
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings[0]).toContain('ask');
+    expect(result.warnings[1]).toContain('bash');
+    expect(result.warnings[1]).toContain('always denied');
+  });
+
+  it('merges layers with S-3/S-4 semantics: sticky deny + sandbox intersection', () => {
+    const result = composeSecurity({
+      readFile: filesystem({
+        [settingsPath('/home/u')]: JSON.stringify({
+          permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] },
+          sandbox: { paths: { allow: ['/a', '/b'] } },
+        }),
+        [settingsPath('/proj')]: JSON.stringify({
+          permissions: { rules: [{ tool: 'Bash', decision: 'allow' }] },
+          sandbox: { paths: { allow: ['/b', '/c'] } },
+        }),
+      }),
+      userDir: '/home/u',
+      projectDir: '/proj',
+    });
+    expect(result.sandbox.paths?.allow).toEqual(['/b']);
+    const rules = result.permissions.rules ?? [];
+    expect(rules.map((r) => r.layer)).toEqual(['user', 'project']);
   });
 });

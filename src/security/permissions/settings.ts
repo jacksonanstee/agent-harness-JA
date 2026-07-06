@@ -106,7 +106,7 @@ export function loadSettingsFile(
     readFile,
     parsePermissionSettings,
     { rules: [] },
-    (message) => new PermissionSettingsError(message),
+    PermissionSettingsError,
   );
 }
 

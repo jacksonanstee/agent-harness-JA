@@ -69,6 +69,6 @@ export function loadSandboxSettingsFile(
     readFile,
     parseSandboxSettings,
     {},
-    (message) => new SandboxSettingsError(message),
+    SandboxSettingsError,
   );
 }

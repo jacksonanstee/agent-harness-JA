@@ -8,7 +8,7 @@ class FakeSettingsError extends Error {
   }
 }
 
-const wrap = (message: string): Error => new FakeSettingsError(message);
+const wrap = FakeSettingsError;
 const parseEcho = (doc: unknown): unknown => doc;
 
 const enoent = (): string => {

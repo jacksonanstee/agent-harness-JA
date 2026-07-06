@@ -14,9 +14,9 @@ export interface SandboxConfig {
 }
 
 export interface Sandbox {
-  /** True when the paths dimension is disabled. */
+  /** True if `path` is inside an allowlisted base, or the paths dimension is disabled. */
   allowPath(path: string): boolean;
-  /** True when the commands dimension is disabled. */
+  /** True if the command's first token is allowlisted (and no shell runner / metacharacter), or the commands dimension is disabled. */
   allowCommand(cmd: string): boolean;
   readonly pathsEnabled: boolean;
   readonly commandsEnabled: boolean;

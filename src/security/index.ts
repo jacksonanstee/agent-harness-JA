@@ -45,6 +45,7 @@ export {
   sandboxHook,
   SandboxSettingsError,
   SandboxViolation,
+  SHELL_RUNNER_BINARIES,
 } from './sandbox/index.js';
 export type { Sandbox, SandboxAllowlist, SandboxConfig } from './sandbox/index.js';
 export {

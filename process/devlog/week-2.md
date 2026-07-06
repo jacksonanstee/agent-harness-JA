@@ -158,3 +158,23 @@ Fifth Week-2 deliverable, off merged main (S-3 → `b70ca6f`).
 
 56 new tests (552 total). Next: docs/security-model.md (Week-2 close) + S-5
 LLM-judge seam decision.
+
+### Review round 1 (same day)
+
+The fleet earned its keep hardest yet — security review empirically verified
+two HIGHs in the first cut:
+1. **Tool-coverage gap**: sandbox and permissions each kept a private
+   four-tool table and assumed the other covered the rest — Glob/Grep/
+   NotebookEdit/MultiEdit bypassed BOTH gates (the exfiltration-shaped
+   tools). Fixed: ONE shared `src/internal/tool-targets.ts` table, pinned by
+   test; Glob/Grep missing-path gates the cwd per SDK contract.
+2. **Case-insensitive filesystem**: lexical compare on APFS let
+   `/ETC/passwd` dodge a `/etc/*` deny rule (verified live). Fixed:
+   `canonicalizePath` folds case on darwin/win32, both modules use it.
+Also: shell runners escalated warn→HARD DENY (basename blocklist, warn-only
+was security theater); command intersection now uses allowCommand's own
+identity grammar (bare `git` ≠ `./git`); `\` and `!` added to metachars;
+`wrapError` reflection probe → explicit errorClass param; cli settings
+wiring extracted to testable `composeSecurity()` (was untested, code-review
+HIGH); internal/ pinned as zero-dep leaf in eslint + layering test;
+stale opus-4-7 doc line fixed. 571 tests.

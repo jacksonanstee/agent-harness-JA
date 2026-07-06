@@ -24,6 +24,7 @@ import {
   sandboxHook,
   SandboxSettingsError,
   scan,
+  SHELL_RUNNER_BINARIES,
 } from './security/index.js';
 import type { EvaluatorOptions, SandboxConfig } from './security/index.js';
 import { loadJsonSettings } from './internal/settings.js';
@@ -68,11 +69,88 @@ export function sanitizeForTerminal(text: string): string {
 }
 
 /** Path-prefixed settings failures from the composition root's combined loader. */
-class SettingsLoadError extends Error {
+export class SettingsLoadError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SettingsLoadError';
   }
+}
+
+export interface SecurityComposition {
+  permissions: EvaluatorOptions;
+  sandbox: SandboxConfig;
+  /** Startup notices for the operator (prompter gaps, risky allowlists). */
+  warnings: string[];
+}
+
+export interface ComposeSecurityDeps {
+  readFile: (path: string) => string;
+  userDir: string;
+  projectDir: string;
+}
+
+/**
+ * Loads and merges both security settings layers. Each file is read ONCE and
+ * its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
+ * ADR-0015). Module parse errors are re-tagged SettingsLoadError so the
+ * shared loader path-prefixes them and main() has one failure type to map to
+ * exit 2. Extracted from main() so the composition logic is unit-testable
+ * without an SDK or API key.
+ */
+export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
+  const layers = [
+    join(deps.userDir, '.harness', 'settings.json'),
+    join(deps.projectDir, '.harness', 'settings.json'),
+  ].map((path) =>
+    loadJsonSettings(
+      path,
+      deps.readFile,
+      (doc) => {
+        try {
+          return {
+            permissions: parsePermissionSettings(doc),
+            sandbox: parseSandboxSettings(doc),
+          };
+        } catch (error: unknown) {
+          if (
+            error instanceof PermissionSettingsError ||
+            error instanceof SandboxSettingsError
+          ) {
+            throw new SettingsLoadError(error.message);
+          }
+          throw error;
+        }
+      },
+      { permissions: { rules: [] }, sandbox: {} },
+      SettingsLoadError,
+    ),
+  );
+  const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
+  const permissions = mergeLayers(user.permissions, project.permissions);
+  const sandbox = mergeSandboxLayers(user.sandbox, project.sandbox);
+
+  const warnings: string[] = [];
+  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
+  // to deny — fail closed, but tell the settings author (ADR-0014 §4).
+  if (
+    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
+    permissions.defaultDecision === 'ask'
+  ) {
+    warnings.push(
+      "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
+    );
+  }
+  // Shell runners are DENIED by the sandbox regardless of the allowlist
+  // (SHELL_RUNNER_BINARIES blocklist); surface the conflict at startup.
+  const blocked = (sandbox.commands?.allow ?? []).filter((entry) =>
+    SHELL_RUNNER_BINARIES.includes(entry),
+  );
+  if (blocked.length > 0) {
+    warnings.push(
+      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners defeat first-token enforcement and are always denied (ADR-0015 §3)`,
+    );
+  }
+  return { permissions, sandbox, warnings };
 }
 
 const USAGE =
@@ -254,54 +332,25 @@ export async function main(argv: string[]): Promise<number> {
 
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
 
-  // Security settings layers: user under project. Each file is read ONCE and
-  // its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
-  // ADR-0015). A present-but-malformed file aborts the run before any tool
-  // executes — fail loud, never fail open.
-  let permissions: EvaluatorOptions;
-  let sandboxConfig: SandboxConfig;
+  // Security settings composition (permissions ADR-0014, sandbox ADR-0015).
+  // A present-but-malformed file aborts the run before any tool executes —
+  // fail loud, never fail open.
+  let security: SecurityComposition;
   try {
-    const layers = [
-      join(homedir(), '.harness', 'settings.json'),
-      join(process.cwd(), '.harness', 'settings.json'),
-    ].map((path) =>
-      loadJsonSettings(
-        path,
-        (p) => readFileSync(p, 'utf8'),
-        (doc) => {
-          try {
-            return {
-              permissions: parsePermissionSettings(doc),
-              sandbox: parseSandboxSettings(doc),
-            };
-          } catch (error: unknown) {
-            // Re-tag module errors so the shared loader path-prefixes them.
-            if (
-              error instanceof PermissionSettingsError ||
-              error instanceof SandboxSettingsError
-            ) {
-              throw new SettingsLoadError(error.message);
-            }
-            throw error;
-          }
-        },
-        { permissions: { rules: [] }, sandbox: {} },
-        (message) => new SettingsLoadError(message),
-      ),
-    );
-    const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
-    permissions = mergeLayers(user.permissions, project.permissions);
-    sandboxConfig = mergeSandboxLayers(user.sandbox, project.sandbox);
+    security = composeSecurity({
+      readFile: (p) => readFileSync(p, 'utf8'),
+      userDir: homedir(),
+      projectDir: process.cwd(),
+    });
   } catch (error: unknown) {
-    if (
-      error instanceof SettingsLoadError ||
-      error instanceof PermissionSettingsError ||
-      error instanceof SandboxSettingsError
-    ) {
+    if (error instanceof SettingsLoadError) {
       process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
       return 2;
     }
     throw error;
+  }
+  for (const warning of security.warnings) {
+    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
   }
 
   const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
@@ -334,30 +383,11 @@ export async function main(argv: string[]): Promise<number> {
       }
     },
   });
-  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
-  // to deny — fail closed, but warn so a settings author isn't surprised.
-  if (
-    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
-    permissions.defaultDecision === 'ask'
-  ) {
-    process.stderr.write(
-      "warning: settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)\n",
-    );
-  }
-  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
-  // Sandbox is the backstop AFTER permissions: deny outcome is identical
+  // Permissions first, sandbox as the backstop: deny outcome is identical
   // (runtime denies on first throw), but rule-attributed permission reasons
   // are more actionable, so they get first say (ADR-0015 §4).
-  const DANGEROUS_BINARIES = ['sh', 'bash', 'zsh', 'env', 'xargs'];
-  const risky = (sandboxConfig.commands?.allow ?? []).filter((entry) =>
-    DANGEROUS_BINARIES.includes(entry),
-  );
-  if (risky.length > 0) {
-    process.stderr.write(
-      `warning: sandbox command allowlist includes ${risky.join(', ')} — these defeat first-token enforcement (ADR-0015 §3)\n`,
-    );
-  }
-  hooks.register('pre-tool', sandboxHook(createSandbox(sandboxConfig)));
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 
   const session = createSession(
     {

@@ -32,6 +32,28 @@ export default tseslint.config(
       ],
     },
   },
+  // src/internal is the ZERO-DEP shared leaf (sanitize, settings mechanics,
+  // tool-target table): every other domain may import it, it imports nothing.
+  {
+    files: ['src/internal/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/router/*', '**/router',
+            '**/skills/*', '**/skills',
+            '**/hooks/*', '**/hooks',
+            '**/memory/*', '**/memory',
+            '**/telemetry/*', '**/telemetry',
+            '**/security/*', '**/security',
+            '**/session/*', '**/session',
+            '**/cli', '**/cli.js',
+          ],
+        },
+      ],
+    },
+  },
   // Telemetry and hooks are peer leaf modules: hooks feeds telemetry through an
   // injected sink adapter in the composition root (cli), never via imports.
   {

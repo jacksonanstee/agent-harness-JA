@@ -13,17 +13,19 @@ export type ReadFile = (path: string) => string;
  *
  * - Missing file (ENOENT) → `empty` (a settings file is optional).
  * - Unreadable file (any other fs error) → propagated unwrapped.
- * - Invalid JSON → `wrapError` with a path-prefixed message (fail loud at
- *   startup, before any tool runs — never fail open on a security config).
- * - `parse` errors of the same class `wrapError` produces are rethrown
+ * - Invalid JSON → a new `errorClass` with a path-prefixed message (fail
+ *   loud at startup, before any tool runs — never fail open on a security
+ *   config).
+ * - `parse` errors that are `instanceof errorClass` are rethrown
  *   path-prefixed; anything else (programmer bugs) propagates unwrapped.
+ *   The class is an explicit parameter — a typed contract, not reflection.
  */
 export function loadJsonSettings<T>(
   path: string,
   readFile: ReadFile,
   parse: (doc: unknown) => T,
   empty: T,
-  wrapError: (message: string) => Error,
+  errorClass: new (message: string) => Error,
 ): T {
   let body: string;
   try {
@@ -39,14 +41,13 @@ export function loadJsonSettings<T>(
     doc = JSON.parse(body);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw wrapError(`${path} is not valid JSON: ${detail}`);
+    throw new errorClass(`${path} is not valid JSON: ${detail}`);
   }
-  const settingsErrorClass = wrapError('').constructor as new (message: string) => Error;
   try {
     return parse(doc);
   } catch (error: unknown) {
-    if (error instanceof settingsErrorClass) {
-      throw wrapError(`${path}: ${error.message}`);
+    if (error instanceof errorClass) {
+      throw new errorClass(`${path}: ${error.message}`);
     }
     throw error;
   }

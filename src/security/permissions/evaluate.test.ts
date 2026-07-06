@@ -200,6 +200,36 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('Write', { file_path: '/anywhere/x' }).decision).toBe('deny');
   });
 
+  it.runIf(process.platform === 'darwin' || process.platform === 'win32')(
+    'a path deny rule cannot be dodged by case variation on case-insensitive platforms',
+    () => {
+      // Review finding: /ETC/passwd is the same file as /etc/passwd on APFS,
+      // but lexical compare let it dodge the deny rule → defaultDecision allow.
+      const evaluator = createPermissionEvaluator({
+        rules: [rule({ tool: 'Write', match: '/etc/*', decision: 'deny' })],
+      });
+      expect(evaluator.evaluate('Write', { file_path: '/ETC/passwd' }).decision).toBe('deny');
+      expect(evaluator.evaluate('Write', { file_path: '/tmp/../ETC/passwd' }).decision).toBe(
+        'deny',
+      );
+    },
+  );
+
+  it('match rules gate the full path-taking tool surface via the shared table', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: '*', match: '/etc/*', decision: 'deny' }),
+      ],
+    });
+    expect(evaluator.evaluate('Glob', { pattern: '*', path: '/etc/cron.d' }).decision).toBe(
+      'deny',
+    );
+    expect(
+      evaluator.evaluate('NotebookEdit', { notebook_path: '/etc/x.ipynb' }).decision,
+    ).toBe('deny');
+    expect(evaluator.evaluate('Grep', { pattern: 'x', path: '/home/ok' }).decision).toBe('allow');
+  });
+
   it('prefixes default-decision reasons with permission: for grep-ability', () => {
     const evaluator = createPermissionEvaluator({ defaultDecision: 'deny' });
     expect(evaluator.evaluate('Bash', {}).reason).toMatch(/^permission: default deny/);
