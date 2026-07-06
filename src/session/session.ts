@@ -125,8 +125,20 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     function stringifyForScan(output: unknown): string {
       if (typeof output === 'string') return output;
+      // Cycle-safe: a tool returning a live object with a circular reference
+      // must not collapse to "[object Object]" and hide its payload from the
+      // scanner. Drop repeated references rather than throwing.
+      const seen = new WeakSet<object>();
       try {
-        return JSON.stringify(output) ?? '';
+        return (
+          JSON.stringify(output, (_key, value: unknown) => {
+            if (typeof value === 'object' && value !== null) {
+              if (seen.has(value)) return '[Circular]';
+              seen.add(value);
+            }
+            return value;
+          }) ?? ''
+        );
       } catch {
         return String(output);
       }

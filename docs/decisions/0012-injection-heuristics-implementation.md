@@ -34,15 +34,25 @@ building it.
    then escalates per `judge: off|suspicious|always`, calling the SDK directly
    via the injected judge. Keeping the primitive sync means hot-path callers
    pay zero async cost; ADR-0005's "pipeline" lives in the wrapper.
-5. **Strip-and-rescan for hidden Unicode.** Detect Unicode tag chars
-   (U+E0000–E007F; ≥1 = high, essentially no legit use) and zero-width runs
-   (≥3 chars = medium; a lone ZWJ is legitimate in emoji/Indic text), then
-   strip both and re-scan with the text rules. A rule that fires only
-   post-strip is reported alongside the carrier rule — smuggling proven. These
-   two detectors live in the scan pipeline (they need occurrence counting), not
-   the rule table, but share the id/confidence contract. **No NFKC in v1** —
-   compatibility normalization can *create* matches and needs its own
-   false-positive analysis; deferred.
+5. **Strip-and-rescan for character-insertion smuggling.** Two detectors
+   *report* hidden Unicode: tag chars (U+E0000–E007F; ≥1 = high, no legit use)
+   and zero-width runs (≥3 chars = medium; a lone ZWJ is legitimate in
+   emoji/Indic text). Separately, the re-scan **trigger** fires on *any*
+   smuggling character — zero-width, combining marks (U+0300–036F), variation
+   selectors (U+FE00–FE0F, U+E0100–E01EF), bidi format/override + isolate
+   controls (U+202A–202E, U+2066–2069), and tag chars — because two
+   interleaved characters are enough to defeat the plaintext rules while the
+   rendered text is unchanged (3-agent security review, HIGH). The trigger is
+   decoupled from the reportable `zero-width-run` hit so lowering the evasion
+   floor doesn't inflate false positives. Text is stripped of all smuggling
+   chars and re-scanned; a rule firing only post-strip is reported (dedup is by
+   id **and** excerpt, so the smuggled evidence excerpt survives). Detectors
+   live in the pipeline (they need occurrence counting), not the rule table,
+   but share the id/confidence contract. **Deferred:** NFKC normalization
+   (can *create* matches — needs its own FP analysis) and homoglyph/confusable
+   mapping (e.g. Cyrillic `о` for Latin `o`) — a large, high-FP table that is
+   the S-5 semantic judge's job, not the heuristic stage's. Both are recorded
+   as known evasions.
 6. **Blob thresholds, both medium (`ask`, never `block`).** Base64 run ≥60
    chars (≈45 decoded bytes — above hashes/JWT headers/short tokens); hex ≥80
    chars. Legit tool outputs (images, lockfiles, certs, digests) contain long
@@ -53,15 +63,22 @@ building it.
    enforced by a guard test running each rule against ~120 KB pathological
    inputs with a <100 ms bound. `safeMatch` wraps each rule in try/catch so one
    malformed rule can't crash `scan()` (router precedent).
-8. **Excerpts** are stripped of hidden Unicode, control-char-sanitized
+8. **Excerpts** are stripped of all smuggling chars *including bidi
+   controls* (Trojan-Source / CVE-2021-42574 — a bidi override in a log line
+   can visually reorder adjacent text), then control-char-sanitized
    (`src/internal/sanitize.ts`), truncated (120 chars), deduped, and capped
-   (10) — they reach logs/telemetry and must not carry escapes.
+   (10). `rule_ids` is **not** capped by the excerpt budget — under-reporting
+   which rules fired would mislead audit/telemetry consumers.
 9. **Session wiring observes only.** The scanner runs on the **full** tool
    output (not the truncated telemetry summary) and its `ScanResult` feeds the
    post-tool hook's `scan` field (architecture step 10). Block/ask verdicts
    warn; the run continues. **Enforcement (`on_block` redact/drop/error) is
    deliberately NOT in S-1** — it composes with S-2 redaction and lands with
-   the secret scanner. No config-file parsing yet (composition-root work).
+   the secret scanner. No config-file parsing yet (composition-root work). **S-1 satisfies S-1 as
+   *scanned + observed*, not *gated*:** the malicious output still reaches the
+   model context (post-tool fires after the result exists). Enforcement/gating
+   arrives with S-2. Circular/non-serializable tool output is scanned via a
+   cycle-safe stringifier so it can't silently bypass the scan.
 
 ## Amends
 

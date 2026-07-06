@@ -7,7 +7,6 @@ export type {
   InjectionRule,
   InjectionScanner,
   RuleFamily,
-  ScanOptions,
   ScannerOptions,
   ScanResult,
   Verdict,

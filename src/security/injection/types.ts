@@ -36,9 +36,6 @@ export interface ScanResult {
   suspicious: boolean;
 }
 
-/** Reserved for per-call options (e.g. rule suppression); empty in S-1. */
-export type ScanOptions = Record<string, never>;
-
 /**
  * S-5 seam (ADR-0012): an injected async judge that re-evaluates suspicious
  * text. Typed now so the S-5 wrapper is additive; unused in S-1.
@@ -56,5 +53,5 @@ export interface ScannerOptions {
 }
 
 export interface InjectionScanner {
-  scan(text: string, opts?: ScanOptions): ScanResult;
+  scan(text: string): ScanResult;
 }

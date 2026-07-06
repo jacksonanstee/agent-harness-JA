@@ -77,6 +77,8 @@ export default tseslint.config(
             '**/memory',
             '**/telemetry/*',
             '**/telemetry',
+            '**/eval/*',
+            '**/eval',
           ],
         },
       ],

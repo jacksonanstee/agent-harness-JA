@@ -11,7 +11,6 @@ export type {
   InjectionScanner,
   RedTeamCase,
   RuleFamily,
-  ScanOptions,
   ScannerOptions,
   ScanResult,
   Verdict,
