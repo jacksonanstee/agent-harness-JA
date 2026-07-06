@@ -9,6 +9,7 @@ import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route } from './router/index.js';
 import { createSession } from './session/index.js';
 import type { QueryFn } from './session/index.js';
+import { scan } from './security/index.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
@@ -267,6 +268,7 @@ export async function main(argv: string[]): Promise<number> {
       loadSkills,
       route,
       telemetry,
+      scanInjection: (text) => scan(text),
     },
     {
       skillsDir,

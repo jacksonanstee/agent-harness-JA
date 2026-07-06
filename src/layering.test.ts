@@ -38,4 +38,28 @@ describe('eslint layering rules', () => {
     );
     expect(violations).toEqual([]);
   });
+
+  it('blocks the security layer importing a harness module (router)', async () => {
+    const violations = await lintViolations(
+      'src/security/injection/bad-import.ts',
+      "import { route } from '../../router/index.js';\nroute;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('allows the security layer importing the shared internal leaf', async () => {
+    const violations = await lintViolations(
+      'src/security/injection/good-import.ts',
+      "import { sanitizeControlChars } from '../../internal/sanitize.js';\nsanitizeControlChars;\n",
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('blocks the security layer importing the eval layer (upward violation)', async () => {
+    const violations = await lintViolations(
+      'src/security/injection/bad-import.ts',
+      "import { runCorpus } from '../../eval/index.js';\nrunCorpus;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
 });

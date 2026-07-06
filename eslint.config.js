@@ -52,4 +52,36 @@ export default tseslint.config(
       ],
     },
   },
+  // Security sits BELOW the harness layer (eval → harness → security → SDK):
+  // it must not import any harness module or the orchestrator/CLI. The LLM
+  // judge (S-5) calls the SDK directly via an injected dependency. Security
+  // may import src/internal/ (zero-dep shared leaf).
+  {
+    files: ['src/security/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/session/*',
+            '**/session',
+            '**/cli',
+            '**/cli.js',
+            '**/router/*',
+            '**/router',
+            '**/skills/*',
+            '**/skills',
+            '**/hooks/*',
+            '**/hooks',
+            '**/memory/*',
+            '**/memory',
+            '**/telemetry/*',
+            '**/telemetry',
+            '**/eval/*',
+            '**/eval',
+          ],
+        },
+      ],
+    },
+  },
 );
