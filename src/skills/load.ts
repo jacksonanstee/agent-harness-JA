@@ -40,7 +40,7 @@ const MAX_FILE_BYTES = 1_000_000;
 // on a long dash run (a ~1 MB dash file hung validate() for minutes). Exactly
 // three dashes is also gray-matter's real behavior — it early-returns when the
 // 4th char is another dash — so this is stricter-or-equal, never looser.
-const FENCE_LANGUAGE = /^﻿?---([^\r\n]*)(?:\r?\n|$)/;
+const FENCE_LANGUAGE = /^\uFEFF?---([^\r\n]*)(?:\r?\n|$)/;
 
 function refuseNonYaml(): never {
   throw new Error('non-YAML frontmatter engine is disabled');
@@ -156,6 +156,100 @@ function fail(error: SkillError): ValidationResult {
   return { ok: false, error };
 }
 
+/**
+ * Refuse to descend past this many directory levels (resource-exhaustion
+ * guard): an untrusted pack shipping thousands of nested directories would
+ * otherwise overflow the call stack before the containment gate could act.
+ */
+const MAX_SCAN_DEPTH = 64;
+
+/**
+ * Collect .md files under `root` with a manual walk instead of
+ * readdirSync({recursive: true}): whether recursive readdir descends into
+ * symlinked directories differs across Node versions (Node 20 does not,
+ * Node 25 does), so relying on it makes the symlink containment gate
+ * version-dependent. Walking ourselves gives one behavior everywhere: any
+ * symlink is resolved at the point it is encountered and refused if its real
+ * path escapes the skills root; symlinks resolving inside the root are
+ * followed normally.
+ */
+function scanMarkdownFiles(
+  root: string,
+  realRoot: string,
+): { files: string[]; errors: SkillError[] } {
+  const files: string[] = [];
+  const errors: SkillError[] = [];
+  // Guard against symlink cycles that stay inside the root (e.g.
+  // pack/sub/loop -> pack/sub): each directory is visited once by real path.
+  // The parent's real path is threaded through the walk so a plain (non-
+  // symlink) subdirectory's real path is a cheap join, not a realpath call.
+  const visitedDirs = new Set<string>([realRoot]);
+  const walk = (currentDir: string, currentRealDir: string, depth: number): void => {
+    if (depth > MAX_SCAN_DEPTH) {
+      errors.push(
+        skillError(
+          currentDir,
+          'read',
+          `refusing to scan: exceeds maximum directory depth of ${MAX_SCAN_DEPTH}`,
+        ),
+      );
+      return;
+    }
+    let entries;
+    try {
+      // Ordinal comparator, not localeCompare: locale-aware order varies with
+      // the host's ICU data, and this walk exists to be host-independent.
+      entries = readdirSync(currentDir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+      );
+    } catch (cause: unknown) {
+      // e.g. EACCES on a subdirectory mid-scan: environmental, not programmer
+      // error — surface it, don't crash the whole load.
+      errors.push(skillError(currentDir, 'read', errorMessage(cause)));
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(currentDir, entry.name);
+      let realPath = join(currentRealDir, entry.name);
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        // Containment gate: a skill pack shipping a symlink could otherwise
+        // exfiltrate arbitrary .md files into the agent's context.
+        try {
+          realPath = realpathSync(path);
+        } catch (cause: unknown) {
+          errors.push(skillError(path, 'read', errorMessage(cause)));
+          continue;
+        }
+        if (!realPath.startsWith(realRoot + sep)) {
+          errors.push(
+            skillError(path, 'read', 'refusing to load: resolves outside the skills directory'),
+          );
+          continue;
+        }
+        try {
+          const stat = statSync(path);
+          isDir = stat.isDirectory();
+          isFile = stat.isFile();
+        } catch (cause: unknown) {
+          errors.push(skillError(path, 'read', errorMessage(cause)));
+          continue;
+        }
+      }
+      if (isDir) {
+        if (visitedDirs.has(realPath)) continue;
+        visitedDirs.add(realPath);
+        walk(path, realPath, depth + 1);
+      } else if (isFile && entry.name.endsWith('.md')) {
+        files.push(path);
+      }
+    }
+  };
+  walk(root, realRoot, 0);
+  return { files, errors };
+}
+
 export function load(dir: string): LoadResult {
   if (typeof dir !== 'string' || dir.length === 0) {
     throw new TypeError(`dir must be a non-empty string, got ${String(dir)}`);
@@ -178,41 +272,10 @@ export function load(dir: string): LoadResult {
     };
   }
 
-  let files: string[];
-  try {
-    files = readdirSync(root, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
-      .map((entry) => join(entry.parentPath, entry.name))
-      .sort();
-  } catch (cause: unknown) {
-    // e.g. EACCES on a subdirectory mid-scan: environmental, not programmer
-    // error — surface it, don't crash the whole load.
-    return {
-      skills: [],
-      errors: [skillError(root, 'read', errorMessage(cause))],
-    };
-  }
+  const { files, errors } = scanMarkdownFiles(root, realRoot);
 
   const skills: Skill[] = [];
-  const errors: SkillError[] = [];
   for (const file of files) {
-    // Containment gate: Node's recursive readdir DOES descend into symlinked
-    // directories (verified on Node 25), so a skill pack shipping a dir
-    // symlink could otherwise exfiltrate arbitrary .md files into the agent's
-    // context. Only load files whose real path stays under the skills root.
-    let real: string;
-    try {
-      real = realpathSync(file);
-    } catch (cause: unknown) {
-      errors.push(skillError(file, 'read', errorMessage(cause)));
-      continue;
-    }
-    if (!real.startsWith(realRoot + sep)) {
-      errors.push(
-        skillError(file, 'read', 'refusing to load: resolves outside the skills directory'),
-      );
-      continue;
-    }
     const result = validate(file);
     if (result.ok) {
       skills.push(result.value);
