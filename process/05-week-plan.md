@@ -58,7 +58,7 @@ Build the four core harness modules. SDK integration last.
 
 The most security-sensitive work in the project. Bias toward conservative defaults.
 
-- [ ] **Telemetry module** — SQLite schema, migration runner, per-turn cost + cache + tool-trace events. Export to JSONL.
+- [x] **Telemetry module** — SQLite schema, migration runner, per-turn cost + cache + tool-trace events. Export to JSONL. *(2026-07-06, ADR-0011)*
 - [ ] **Injection scanner** (S-1) — heuristic pass with confidence-scored rules.
 - [ ] **LLM-judge** (S-5) — optional second-stage scanner for suspicious cases. Off by default.
 - [ ] **Secret scanner** (S-2) — ≥20 patterns (API keys, tokens, private keys). Redact + log.

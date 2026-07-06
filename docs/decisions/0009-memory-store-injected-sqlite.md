@@ -175,6 +175,7 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 ## Revisit if
 
 - Telemetry's numbered-migration runner lands — migrate memory's DDL into it and drop construction-time `ensureSchema` (or make it a registered migration).
+  - **Status 2026-07-06 (ADR-0011):** runner landed; memory's DDL adopted verbatim as migration 001. `ensureSchema` deliberately **retained** — `createMemoryStore(db)` on an arbitrary injected connection stays self-sufficient; both paths are idempotent. Keep the DDL byte-identical in both sites.
 - A real decay/eviction policy is needed (half-life scoring, TTL sweeps) beyond retrieval-time `staleAfter` filtering.
 - Store size makes tag/text search slow — add FTS5 or a `tags` join table / JSON1 index.
 - A `MemoryError.message` starts embedding untrusted `key`/`content` — memory becomes the 4th `CONTROL_CHARS` consumer; extract to `src/internal/`.
