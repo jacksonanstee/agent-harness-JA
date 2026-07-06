@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import type {
   Evaluation,
   EvaluatorOptions,
@@ -27,22 +29,29 @@ export function matchesGlob(pattern: string, value: string): boolean {
 }
 
 /** Tools whose canonical match target is a well-known string arg. */
-const MATCH_FIELDS: Readonly<Record<string, string>> = {
-  Bash: 'command',
-  Read: 'file_path',
-  Write: 'file_path',
-  Edit: 'file_path',
+const MATCH_FIELDS: Readonly<Record<string, { field: string; isPath: boolean }>> = {
+  Bash: { field: 'command', isPath: false },
+  Read: { field: 'file_path', isPath: true },
+  Write: { field: 'file_path', isPath: true },
+  Edit: { field: 'file_path', isPath: true },
 };
 
 /**
- * Canonical string a rule's `match` glob is tested against. Falls back to the
- * JSON of the args so match rules stay usable on arbitrary tools.
+ * Canonical string a rule's `match` glob is tested against. File paths are
+ * resolved to absolute canonical form first (collapsing `.`/`..`, anchoring
+ * relative paths at cwd) so `/etc/*` cannot be dodged with
+ * `/tmp/../etc/passwd` and an allow-prefix cannot be escaped with `..`
+ * segments. Falls back to the JSON of the args for unknown tools — a
+ * caller-shaped surface, so match rules on arbitrary tools are best-effort
+ * only (ADR-0014 §1).
  */
 export function extractMatchTarget(tool: string, args: unknown): string {
-  const field = MATCH_FIELDS[tool];
-  if (field !== undefined && typeof args === 'object' && args !== null) {
-    const value = (args as Record<string, unknown>)[field];
-    if (typeof value === 'string') return value;
+  const spec = MATCH_FIELDS[tool];
+  if (spec !== undefined && typeof args === 'object' && args !== null) {
+    const value = (args as Record<string, unknown>)[spec.field];
+    if (typeof value === 'string') {
+      return spec.isPath ? resolve(value) : value;
+    }
   }
   try {
     return JSON.stringify(args) ?? '';
@@ -53,10 +62,14 @@ export function extractMatchTarget(tool: string, args: unknown): string {
   }
 }
 
-/** 2 = tool + match, 1 = named tool, 0 = wildcard tool. */
+/**
+ * Lexicographic (named tool, has match): an exact tool name always beats a
+ * wildcard tool, even when the wildcard rule carries a `match` — a
+ * `{tool:'*', match}` rule must never outrank `{tool:'Bash'}`.
+ */
 function specificity(rule: LayeredRule): number {
-  if (rule.match !== undefined) return 2;
-  return rule.tool.endsWith('*') ? 0 : 1;
+  const toolRank = rule.tool.endsWith('*') ? 0 : 2;
+  return toolRank + (rule.match === undefined ? 0 : 1);
 }
 
 function describeRule(rule: LayeredRule, index: number): string {
@@ -64,25 +77,57 @@ function describeRule(rule: LayeredRule, index: number): string {
   return `${rule.decision} ${scope} [rule ${index}, ${rule.layer}]`;
 }
 
+interface Winner {
+  rule: LayeredRule;
+  index: number;
+}
+
+/**
+ * Specificity-then-severity winner among one layer's matching rules. Within a
+ * layer the author trusts themselves, so a more specific allow may carve out
+ * their own broader deny.
+ */
+function layerWinner(rules: readonly LayeredRule[], tool: string, target: string): Winner | null {
+  let winner: Winner | null = null;
+  for (const [index, rule] of rules.entries()) {
+    if (!matchesGlob(rule.tool, tool)) continue;
+    if (rule.match !== undefined && !matchesGlob(rule.match, target)) continue;
+    if (
+      winner === null ||
+      specificity(rule) > specificity(winner.rule) ||
+      (specificity(rule) === specificity(winner.rule) &&
+        SEVERITY[rule.decision] > SEVERITY[winner.rule.decision])
+    ) {
+      winner = { rule, index };
+    }
+  }
+  return winner;
+}
+
 export function createPermissionEvaluator(opts: EvaluatorOptions = {}): PermissionEvaluator {
   const rules = opts.rules ?? [];
   const defaultDecision = opts.defaultDecision ?? 'allow';
+  // Rule indexes are positions in the combined list, but the winner is
+  // resolved PER LAYER and then combined by MAX SEVERITY across layers: a
+  // project layer can tighten the user's policy but can never loosen it, no
+  // matter how specific its rules are (ADR-0014 §5 — sticky deny is
+  // cross-layer, specificity is intra-layer only).
+  const userRules = rules.filter((rule) => rule.layer === 'user');
+  const projectRules = rules.filter((rule) => rule.layer === 'project');
+  const indexOfRule = new Map(rules.map((rule, index) => [rule, index]));
 
   return {
     evaluate(tool: string, args: unknown): Evaluation {
       const target = extractMatchTarget(tool, args);
-      let winner: { rule: LayeredRule; index: number } | null = null;
+      const winners = [
+        layerWinner(userRules, tool, target),
+        layerWinner(projectRules, tool, target),
+      ].filter((winner): winner is Winner => winner !== null);
 
-      for (const [index, rule] of rules.entries()) {
-        if (!matchesGlob(rule.tool, tool)) continue;
-        if (rule.match !== undefined && !matchesGlob(rule.match, target)) continue;
-        if (
-          winner === null ||
-          specificity(rule) > specificity(winner.rule) ||
-          (specificity(rule) === specificity(winner.rule) &&
-            SEVERITY[rule.decision] > SEVERITY[winner.rule.decision])
-        ) {
-          winner = { rule, index };
+      let winner: Winner | null = null;
+      for (const candidate of winners) {
+        if (winner === null || SEVERITY[candidate.rule.decision] > SEVERITY[winner.rule.decision]) {
+          winner = candidate;
         }
       }
 
@@ -90,13 +135,14 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
         return {
           decision: defaultDecision,
           ruleIndex: null,
-          reason: `default ${defaultDecision} (no matching rule)`,
+          reason: `permission: default ${defaultDecision} (no matching rule)`,
         };
       }
+      const index = indexOfRule.get(winner.rule) ?? winner.index;
       return {
         decision: winner.rule.decision,
-        ruleIndex: winner.index,
-        reason: `permission: ${describeRule(winner.rule, winner.index)}`,
+        ruleIndex: index,
+        reason: `permission: ${describeRule(winner.rule, index)}`,
       };
     },
   };

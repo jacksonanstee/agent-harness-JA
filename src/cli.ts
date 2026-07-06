@@ -20,6 +20,7 @@ import {
   redact,
   scan,
 } from './security/index.js';
+import type { EvaluatorOptions } from './security/index.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
@@ -242,7 +243,7 @@ export async function main(argv: string[]): Promise<number> {
   // S-3 permission layers: user settings under project settings, sticky deny
   // (ADR-0014). A present-but-malformed file aborts the run before any tool
   // executes — fail loud, never fail open.
-  let permissions;
+  let permissions: EvaluatorOptions;
   try {
     permissions = mergeLayers(
       loadSettingsFile(join(homedir(), '.harness', 'settings.json'), (p) =>
@@ -290,6 +291,16 @@ export async function main(argv: string[]): Promise<number> {
       }
     },
   });
+  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
+  // to deny — fail closed, but warn so a settings author isn't surprised.
+  if (
+    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
+    permissions.defaultDecision === 'ask'
+  ) {
+    process.stderr.write(
+      "warning: settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)\n",
+    );
+  }
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
 
   const session = createSession(

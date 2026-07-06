@@ -120,3 +120,15 @@ Fourth Week-2 deliverable, off merged main (S-2 → `2acbbbb`).
   Bash never executes, allowed Read still runs.
 
 42 new tests (486 total). Next: S-4 sandbox, then docs/security-model.md.
+
+### Review round 1 (same day)
+
+3-agent fleet found a real CRITICAL in the first cut: combined-list
+specificity let a project-layer `{tool:'Bash', match:'*', allow}` out-specific
+a user-layer blanket deny — a cloned repo's settings file could defeat the
+user's global policy. Fixed: winners resolve PER LAYER, then combine by MAX
+severity (project tightens, never loosens; specificity is intra-layer only).
+Also fixed: file-path canonicalisation (`../` traversal dodged deny rules and
+escaped allow prefixes), exact-tool-beats-wildcard specificity tuple,
+`permission:` prefix on default reasons, 1000-rule cap, dead `'inline'` layer
+dropped, ask-without-prompter startup warning. 493 tests.

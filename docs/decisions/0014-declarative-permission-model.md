@@ -13,11 +13,11 @@ The enforcement channel already exists: the hook runtime denies a tool call when
 
 ### 1. Minimal rule grammar
 
-A rule is `{ tool, match?, decision }`. `tool` is an exact name or a trailing-`*` prefix glob (`'Bash'`, `'mcp__*'`, `'*'`). `match` is an optional prefix-glob tested against a canonical string extracted from the args: `args.command` for Bash, `args.file_path` for Read/Write/Edit, else the JSON of the args. A `*` anywhere but the end is a literal. The matcher is ~10 lines and has no regex, so there is nothing to ReDoS and nothing to mis-parse. Deep path/command allowlisting (canonicalisation, traversal, symlinks) is deliberately **not** attempted here — that is S-4's job, and doing it half-way in a string glob would create false confidence.
+A rule is `{ tool, match?, decision }`. `tool` is an exact name or a trailing-`*` prefix glob (`'Bash'`, `'mcp__*'`, `'*'`). `match` is an optional prefix-glob tested against a canonical string extracted from the args: `args.command` for Bash, `args.file_path` for Read/Write/Edit, else the JSON of the args. A `*` anywhere but the end is a literal. The matcher is ~10 lines and has no regex, so there is nothing to ReDoS and nothing to mis-parse. File paths are canonicalised (`path.resolve`) before matching, so `/etc/*` catches `/tmp/../etc/passwd` and an allow-prefix cannot be escaped with `..` segments. Beyond that, deep command/path allowlisting (symlinks, shell metacharacters — `match: 'rm *'` does not stop `sh -c "rm …"`) is deliberately **not** attempted here — that is S-4's job, and doing it half-way in a string glob would create false confidence. The JSON-stringify fallback for unknown tools is caller-shaped and best-effort only.
 
-### 2. Specificity-then-severity precedence
+### 2. Specificity-then-severity precedence — within a layer
 
-Among matching rules: a `match` rule beats a tool-only rule beats a `tool: '*'` rule; at equal specificity, `deny > ask > allow`. Conflicting rules therefore fail closed. Rule order never matters, which makes merged multi-layer rule lists safe to reason about.
+Among one layer's matching rules, specificity wins first, severity breaks ties. Specificity is lexicographic on (named tool, has match): exact tool + match > exact tool > wildcard tool + match > wildcard tool — so `{tool:'*', match:'…'}` can never outrank `{tool:'Bash'}`. At equal specificity, `deny > ask > allow`: conflicting rules fail closed. Rule order never matters. Specificity carve-outs apply *only within a layer* — the author of a file trusts themselves, so their own more specific allow may carve out their own broader deny. Cross-layer combination is §5's job and ignores specificity entirely.
 
 ### 3. `defaultDecision` knob, default `'allow'`
 
@@ -27,9 +27,9 @@ Tools no rule matches get `defaultDecision` (default `'allow'`). A conservative-
 
 `ask` resolves through an injected `Prompter` (`(req) => Promise<boolean>`). No prompter configured, a prompter that throws, and a prompter that rejects all deny. The CLI does not yet wire a TTY prompter; the seam is fully unit-tested with fakes. Wiring an interactive prompter is deferred until the CLI grows an interactive mode.
 
-### 5. Layer merge with sticky deny
+### 5. Layer merge: per-layer winners combined by max severity
 
-Two layers: user `~/.harness/settings.json`, then project `<cwd>/.harness/settings.json`. Rules concatenate (user first, tagged with their layer) and evaluate under §2 — so a user-layer `deny` survives a project-layer `allow` of equal specificity. A project can tighten but not loosen the user's policy. `defaultDecision` is scalar: project overrides user. File shape is `{ "permissions": { "defaultDecision"?, "rules": [] } }`, leaving the file open for future settings keys (unknown siblings ignored).
+Two layers: user `~/.harness/settings.json`, then project `<cwd>/.harness/settings.json`. Each layer resolves its own winner under §2; the final decision is the **most severe** of the layer winners. A project layer can therefore tighten the user's policy but can never loosen it — *regardless of specificity*. This matters because project settings are attacker-influenced input (a cloned repo ships its own `.harness/settings.json`): with naive combined-list evaluation, `{tool:'Bash', match:'*', decision:'allow'}` in a project file would out-specific a user's blanket Bash deny and silently defeat it. Found by security review of the first cut; the per-layer/max-severity combination closes it and is regression-tested. `defaultDecision` is scalar and less dangerous (it only applies when *no* rule matches): project overrides user. File shape is `{ "permissions": { "defaultDecision"?, "rules": [] } }`, leaving the file open for future settings keys (unknown siblings ignored). Rule lists are capped at 1000 entries per file.
 
 ### 6. Malformed settings fail loud at startup
 

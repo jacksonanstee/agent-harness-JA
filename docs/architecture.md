@@ -183,7 +183,7 @@ The sequence below traces what happens when the user sends a message to a harnes
 7. hooks.fire('pre-tool')                                [harness]
    │
    ▼
-8. permissions.check(tool, args)                         [security]
+8. permissions.evaluate(tool, args)                      [security]
    → block / ask / allow logged
    │
    ▼

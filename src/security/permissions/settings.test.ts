@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createPermissionEvaluator } from './evaluate.js';
 import {
   loadSettingsFile,
+  MAX_RULES,
   mergeLayers,
   parsePermissionSettings,
   PermissionSettingsError,
@@ -46,6 +47,21 @@ describe('parsePermissionSettings', () => {
     ['bad defaultDecision', { permissions: { defaultDecision: 'yes', rules: [] } }],
   ])('throws PermissionSettingsError on %s', (_name, doc) => {
     expect(() => parsePermissionSettings(doc)).toThrowError(PermissionSettingsError);
+  });
+});
+
+describe('parsePermissionSettings rule cap', () => {
+  it('rejects a rules list over MAX_RULES (attacker-influenced project file)', () => {
+    const rules = Array.from({ length: MAX_RULES + 1 }, () => ({
+      tool: 'Bash',
+      decision: 'deny',
+    }));
+    expect(() => parsePermissionSettings({ permissions: { rules } })).toThrowError(
+      PermissionSettingsError,
+    );
+    expect(() =>
+      parsePermissionSettings({ permissions: { rules: rules.slice(0, MAX_RULES) } }),
+    ).not.toThrow();
   });
 });
 

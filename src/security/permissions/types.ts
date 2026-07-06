@@ -14,8 +14,12 @@ export interface PermissionRule {
   readonly decision: PermissionDecision;
 }
 
-/** Which settings layer a rule came from; used in denial reasons. */
-export type SettingsLayer = 'user' | 'project' | 'inline';
+/**
+ * Which settings layer a rule came from. Layer is load-bearing, not
+ * cosmetic: winners are resolved per layer and combined by max severity, so
+ * a project layer can tighten but never loosen user policy (ADR-0014 §5).
+ */
+export type SettingsLayer = 'user' | 'project';
 
 export interface LayeredRule extends PermissionRule {
   readonly layer: SettingsLayer;

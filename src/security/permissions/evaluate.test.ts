@@ -106,6 +106,77 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('Bash', {}).decision).toBe('deny');
   });
 
+  it('CROSS-LAYER: a more specific project allow cannot defeat a user tool-only deny', () => {
+    // Attack from the security review: a cloned repo ships
+    // {tool:'Bash', match:'*', decision:'allow'} to outrank the user's
+    // blanket Bash deny on specificity. Layers combine by max severity, so
+    // the user deny must still win.
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: 'Bash', decision: 'deny', layer: 'user' }),
+        rule({ tool: 'Bash', match: '*', decision: 'allow', layer: 'project' }),
+      ],
+    });
+    const result = evaluator.evaluate('Bash', { command: 'curl evil.example' });
+    expect(result.decision).toBe('deny');
+    expect(result.reason).toContain('user');
+  });
+
+  it('CROSS-LAYER: project can tighten (deny) what the user allows', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: 'Bash', decision: 'allow', layer: 'user' }),
+        rule({ tool: 'Bash', match: 'rm *', decision: 'deny', layer: 'project' }),
+      ],
+    });
+    expect(evaluator.evaluate('Bash', { command: 'rm -rf /' }).decision).toBe('deny');
+    expect(evaluator.evaluate('Bash', { command: 'ls' }).decision).toBe('allow');
+  });
+
+  it('INTRA-LAYER: a more specific allow may carve out the same layer\'s broader deny', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: 'Bash', decision: 'deny', layer: 'user' }),
+        rule({ tool: 'Bash', match: 'npm *', decision: 'allow', layer: 'user' }),
+      ],
+    });
+    expect(evaluator.evaluate('Bash', { command: 'npm test' }).decision).toBe('allow');
+    expect(evaluator.evaluate('Bash', { command: 'ls' }).decision).toBe('deny');
+  });
+
+  it('an exact tool rule beats a wildcard-tool rule even when the wildcard carries a match', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: '*', match: '*', decision: 'allow' }),
+        rule({ tool: 'Bash', decision: 'deny' }),
+      ],
+    });
+    expect(evaluator.evaluate('Bash', { command: 'ls' }).decision).toBe('deny');
+  });
+
+  it('canonicalizes file paths: traversal cannot dodge a deny or escape an allow prefix', () => {
+    const denyEtc = createPermissionEvaluator({
+      rules: [rule({ tool: 'Write', match: '/etc/*', decision: 'deny' })],
+    });
+    expect(denyEtc.evaluate('Write', { file_path: '/tmp/../etc/passwd' }).decision).toBe('deny');
+
+    const sandboxed = createPermissionEvaluator({
+      defaultDecision: 'deny',
+      rules: [rule({ tool: 'Write', match: '/safe/project/*', decision: 'allow' })],
+    });
+    expect(
+      sandboxed.evaluate('Write', { file_path: '/safe/project/../../etc/passwd' }).decision,
+    ).toBe('deny');
+    expect(sandboxed.evaluate('Write', { file_path: '/safe/project/file.txt' }).decision).toBe(
+      'allow',
+    );
+  });
+
+  it('prefixes default-decision reasons with permission: for grep-ability', () => {
+    const evaluator = createPermissionEvaluator({ defaultDecision: 'deny' });
+    expect(evaluator.evaluate('Bash', {}).reason).toMatch(/^permission: default deny/);
+  });
+
   it('user-layer deny survives project-layer allow (sticky deny)', () => {
     const evaluator = createPermissionEvaluator({
       rules: [

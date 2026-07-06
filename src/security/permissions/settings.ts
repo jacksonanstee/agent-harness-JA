@@ -20,6 +20,14 @@ export class PermissionSettingsError extends Error {
 
 const DECISIONS: readonly PermissionDecision[] = ['allow', 'ask', 'deny'];
 
+/**
+ * Upper bound per settings file. Project settings are attacker-influenced
+ * input (a cloned repo ships its own .harness/settings.json); the cap keeps
+ * per-call evaluation cost bounded. Far above any plausible hand-written
+ * policy.
+ */
+export const MAX_RULES = 1000;
+
 function isDecision(value: unknown): value is PermissionDecision {
   return typeof value === 'string' && (DECISIONS as readonly string[]).includes(value);
 }
@@ -69,6 +77,11 @@ export function parsePermissionSettings(doc: unknown): PermissionSettings {
   const ruleList = rules === undefined ? [] : rules;
   if (!Array.isArray(ruleList)) {
     throw new PermissionSettingsError('permissions.rules must be an array');
+  }
+  if (ruleList.length > MAX_RULES) {
+    throw new PermissionSettingsError(
+      `permissions.rules has ${ruleList.length} entries; the maximum is ${MAX_RULES}`,
+    );
   }
   const parsed = ruleList.map((entry, index) => parseRule(entry, index));
   return defaultDecision === undefined
