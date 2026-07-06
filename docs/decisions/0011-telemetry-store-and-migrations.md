@@ -100,10 +100,12 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
 ## Revisit if
 
 - Retention policy: `telemetry_events` has **no TTL/purge** (memory's session
-  summaries decay after 30 days). Tool-result summaries (≤200 chars, sanitized
-  but not secret-redacted) persist indefinitely. Decide TTL/purge and/or rely
-  on the S-2 secret scanner (this week) redacting tool output before it
-  reaches telemetry.
+  summaries decay after 30 days). Tool-result summaries persist indefinitely.
+  - **Status 2026-07-06 (ADR-0013):** the secret-exposure half of this is
+    CLOSED across BOTH retained sinks — S-2 redacts tool output before
+    telemetry AND redacts `prompt`/`resultText` before the memory session
+    summary (fail-closed to a sentinel on redactor error). A general TTL/purge
+    for non-secret content remains open.
 - A second telemetry writer process appears — ADR-0004's single-writer
   constraint (`SQLITE_BUSY`) becomes real; add busy_timeout/queueing.
 - Payload querying needs SQL-side predicates — promote fields to columns via a

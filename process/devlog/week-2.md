@@ -71,5 +71,30 @@ Heuristic-only prompt-injection scanner; S-5 LLM-judge is a typed seam.
 
 90 new tests (301 total); scan.ts 100% line, rules.ts 100%, security 90%+.
 
-Next: S-2 secret scanner (also resolves the telemetry retention finding — redact
-tool output before it reaches telemetry).
+## 2026-07-06 — S-2 secret scanner + redaction shipped (ADR-0013)
+
+Third Week-2 deliverable, off merged main (S-1 → `7e240a1`).
+
+- `src/security/secrets`: `redact(text): {redacted, findings}` over 25
+  gitleaks/trufflehog-derived rules; `[REDACTED:<rule_id>]` format. `high`
+  structural rules + 3 entropy-gated `heuristic` rules (aws-secret, twilio,
+  generic-keyword) to cut false positives.
+- **Leak-safe findings**: `SecretFinding` = rule_id + offsets + length, never a
+  byte of the secret (property test: findings JSON contains no ≥8-char slice of
+  any planted secret). Overlap resolution (longest span wins), redaction never
+  capped, idempotent, ReDoS-guarded.
+- 25-case secret corpus + 10 benign FP guards (git SHA, UUID, sk- in prose,
+  AKIA mid-word, low-entropy placeholders): ≥20 distinct redactions, 0 false positives.
+- **Session**: redaction runs on tool OUTPUT *before* the telemetry record —
+  **closes the ADR-0011 retention finding** (secrets never reach the retained
+  store; fail-closed to `[REDACTION FAILED]` on redactor error) — and on tool
+  INPUT (pre-tool). Findings fill the post-tool + new pre-tool hook `redactions`
+  slot.
+- **Observe-only** (SDK has no rewrite channel — model still sees raw, same as
+  S-1 gating). One combined model-facing-enforcement follow-up logged in the
+  week plan.
+
+135 new tests (444 total); secrets module 99% line.
+
+Next: S-3 permission model (allow/ask/deny) + S-4 sandbox boundaries, then
+docs/security-model.md.

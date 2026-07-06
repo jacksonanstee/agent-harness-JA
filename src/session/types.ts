@@ -3,7 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { ScanResult } from '../security/index.js';
+import type { RedactResult, ScanResult } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -108,6 +108,13 @@ export interface SessionDeps {
    * abort. Enforcement (redact/drop) composes with S-2, not here.
    */
   scanInjection?: (text: string) => ScanResult;
+  /**
+   * Optional secret redactor (S-2). Runs on tool inputs (pre-tool) and outputs
+   * (pre-telemetry, so secrets never reach the telemetry store); findings feed
+   * the hook `redactions` field. Failures warn, never abort; on failure the
+   * telemetry text is fail-closed to a sentinel, never the raw output.
+   */
+  redactSecrets?: (text: string) => RedactResult;
 }
 
 export interface SessionConfig {

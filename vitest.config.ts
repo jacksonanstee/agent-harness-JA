@@ -15,6 +15,7 @@ export default defineConfig({
         'src/memory/types.ts',
         'src/telemetry/types.ts',
         'src/security/injection/types.ts',
+        'src/security/secrets/types.ts',
         'src/skills/__fixtures__/**',
         'src/**/*.test.ts',
       ],

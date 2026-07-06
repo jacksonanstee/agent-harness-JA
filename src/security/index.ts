@@ -15,3 +15,18 @@ export type {
   ScanResult,
   Verdict,
 } from './injection/index.js';
+export {
+  createSecretRedactor,
+  redact,
+  DEFAULT_SECRET_RULES,
+  SECRET_CORPUS,
+} from './secrets/index.js';
+export type {
+  RedactResult,
+  RedactorOptions,
+  SecretCase,
+  SecretFinding,
+  SecretPrecision,
+  SecretRedactor,
+  SecretRule,
+} from './secrets/index.js';
