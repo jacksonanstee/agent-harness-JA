@@ -83,16 +83,17 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 #### `security/sandbox`
 
-- **Owns:** path and command allowlists for file and bash tools.
-- **Public API:** `allowPath(path: string): boolean`, `allowCommand(cmd: string): boolean`.
-- **Depends on:** nothing in this repo; pure functions over config.
+- **Owns:** path and command allowlists for file and bash tools, enforced as a pre-tool gate (deny before the SDK executes — a policy boundary, not OS isolation).
+- **Public API:** `createSandbox(config): Sandbox` with `allowPath(path): boolean` / `allowCommand(cmd): boolean`; `sandboxHook(sandbox)` (pre-tool handler throwing `SandboxViolation`); `mergeSandboxLayers` / `parseSandboxSettings`.
+- **Depends on:** `internal/settings` (shared loader mechanics); otherwise pure functions over config.
+- **Design notes:** Dimensions enabled by key presence in `.harness/settings.json`; layers merge by **intersection** (project can only tighten). Paths: lexical `resolve` both sides + boundary-safe prefix; missing target field on a gated tool → deny (fail closed). Commands: shell metacharacters deny outright, else exact argv[0] match; bounds *which program starts*, not what it does — non-goals documented. Shipped ([ADR-0015](./decisions/0015-sandbox-pre-tool-gate.md)).
 
 ### Harness layer
 
 #### `harness/router`
 
 - **Owns:** model selection given a task descriptor.
-- **Public API:** `route(descriptor: TaskDescriptor): ModelChoice` where `ModelChoice = { model: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7', rule_id: string, reason: string }`.
+- **Public API:** `route(descriptor: TaskDescriptor): ModelChoice` where `ModelChoice = { model: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-8', rule_id: string, reason: string }`.
 - **Depends on:** routing-table config; no other modules.
 - **Design notes:** Task descriptor includes `shape` (review / build / research / lookup), `sensitivity` (low / medium / high), and `expected_tokens`. Routing is deterministic given config. Locked in [ADR-0007](./decisions/0007-task-descriptor-schema.md).
 

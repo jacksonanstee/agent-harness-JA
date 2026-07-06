@@ -13,14 +13,21 @@ import { createSession } from './session/index.js';
 import type { QueryFn } from './session/index.js';
 import {
   createPermissionEvaluator,
-  loadSettingsFile,
+  createSandbox,
   mergeLayers,
+  mergeSandboxLayers,
+  parsePermissionSettings,
+  parseSandboxSettings,
   PermissionSettingsError,
   permissionHook,
   redact,
+  sandboxHook,
+  SandboxSettingsError,
   scan,
+  SHELL_RUNNER_BINARIES,
 } from './security/index.js';
-import type { EvaluatorOptions } from './security/index.js';
+import type { EvaluatorOptions, SandboxConfig } from './security/index.js';
+import { loadJsonSettings } from './internal/settings.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
@@ -59,6 +66,91 @@ const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
+}
+
+/** Path-prefixed settings failures from the composition root's combined loader. */
+export class SettingsLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SettingsLoadError';
+  }
+}
+
+export interface SecurityComposition {
+  permissions: EvaluatorOptions;
+  sandbox: SandboxConfig;
+  /** Startup notices for the operator (prompter gaps, risky allowlists). */
+  warnings: string[];
+}
+
+export interface ComposeSecurityDeps {
+  readFile: (path: string) => string;
+  userDir: string;
+  projectDir: string;
+}
+
+/**
+ * Loads and merges both security settings layers. Each file is read ONCE and
+ * its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
+ * ADR-0015). Module parse errors are re-tagged SettingsLoadError so the
+ * shared loader path-prefixes them and main() has one failure type to map to
+ * exit 2. Extracted from main() so the composition logic is unit-testable
+ * without an SDK or API key.
+ */
+export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
+  const layers = [
+    join(deps.userDir, '.harness', 'settings.json'),
+    join(deps.projectDir, '.harness', 'settings.json'),
+  ].map((path) =>
+    loadJsonSettings(
+      path,
+      deps.readFile,
+      (doc) => {
+        try {
+          return {
+            permissions: parsePermissionSettings(doc),
+            sandbox: parseSandboxSettings(doc),
+          };
+        } catch (error: unknown) {
+          if (
+            error instanceof PermissionSettingsError ||
+            error instanceof SandboxSettingsError
+          ) {
+            throw new SettingsLoadError(error.message);
+          }
+          throw error;
+        }
+      },
+      { permissions: { rules: [] }, sandbox: {} },
+      SettingsLoadError,
+    ),
+  );
+  const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
+  const permissions = mergeLayers(user.permissions, project.permissions);
+  const sandbox = mergeSandboxLayers(user.sandbox, project.sandbox);
+
+  const warnings: string[] = [];
+  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
+  // to deny — fail closed, but tell the settings author (ADR-0014 §4).
+  if (
+    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
+    permissions.defaultDecision === 'ask'
+  ) {
+    warnings.push(
+      "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
+    );
+  }
+  // Shell runners are DENIED by the sandbox regardless of the allowlist
+  // (SHELL_RUNNER_BINARIES blocklist); surface the conflict at startup.
+  const blocked = (sandbox.commands?.allow ?? []).filter((entry) =>
+    SHELL_RUNNER_BINARIES.includes(entry),
+  );
+  if (blocked.length > 0) {
+    warnings.push(
+      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners defeat first-token enforcement and are always denied (ADR-0015 §3)`,
+    );
+  }
+  return { permissions, sandbox, warnings };
 }
 
 const USAGE =
@@ -240,25 +332,25 @@ export async function main(argv: string[]): Promise<number> {
 
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
 
-  // S-3 permission layers: user settings under project settings, sticky deny
-  // (ADR-0014). A present-but-malformed file aborts the run before any tool
-  // executes — fail loud, never fail open.
-  let permissions: EvaluatorOptions;
+  // Security settings composition (permissions ADR-0014, sandbox ADR-0015).
+  // A present-but-malformed file aborts the run before any tool executes —
+  // fail loud, never fail open.
+  let security: SecurityComposition;
   try {
-    permissions = mergeLayers(
-      loadSettingsFile(join(homedir(), '.harness', 'settings.json'), (p) =>
-        readFileSync(p, 'utf8'),
-      ),
-      loadSettingsFile(join(process.cwd(), '.harness', 'settings.json'), (p) =>
-        readFileSync(p, 'utf8'),
-      ),
-    );
+    security = composeSecurity({
+      readFile: (p) => readFileSync(p, 'utf8'),
+      userDir: homedir(),
+      projectDir: process.cwd(),
+    });
   } catch (error: unknown) {
-    if (error instanceof PermissionSettingsError) {
+    if (error instanceof SettingsLoadError) {
       process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
       return 2;
     }
     throw error;
+  }
+  for (const warning of security.warnings) {
+    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
   }
 
   const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
@@ -291,17 +383,11 @@ export async function main(argv: string[]): Promise<number> {
       }
     },
   });
-  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
-  // to deny — fail closed, but warn so a settings author isn't surprised.
-  if (
-    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
-    permissions.defaultDecision === 'ask'
-  ) {
-    process.stderr.write(
-      "warning: settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)\n",
-    );
-  }
-  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
+  // Permissions first, sandbox as the backstop: deny outcome is identical
+  // (runtime denies on first throw), but rule-attributed permission reasons
+  // are more actionable, so they get first say (ADR-0015 §4).
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 
   const session = createSession(
     {

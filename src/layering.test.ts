@@ -39,6 +39,20 @@ describe('eslint layering rules', () => {
     expect(violations).toEqual([]);
   });
 
+  it('blocks the internal leaf importing ANY sibling domain (zero-dep guarantee)', async () => {
+    // internal is the shared leaf both security modules rely on (settings
+    // mechanics, tool-target table); an import in the other direction would
+    // invert the leaf relationship silently.
+    for (const [name, statement] of [
+      ['security', "import { scan } from '../security/index.js';\nscan;\n"],
+      ['hooks', "import { createHookRuntime } from '../hooks/index.js';\ncreateHookRuntime;\n"],
+      ['telemetry', "import { createTelemetryStore } from '../telemetry/index.js';\ncreateTelemetryStore;\n"],
+    ] as const) {
+      const violations = await lintViolations('src/internal/bad-import.ts', statement);
+      expect(violations.length, `internal importing ${name} must be blocked`).toBeGreaterThan(0);
+    }
+  });
+
   it('blocks the security layer importing a harness module (router)', async () => {
     const violations = await lintViolations(
       'src/security/injection/bad-import.ts',

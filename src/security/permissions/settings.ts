@@ -1,3 +1,4 @@
+import { loadJsonSettings } from '../../internal/settings.js';
 import type {
   EvaluatorOptions,
   LayeredRule,
@@ -89,37 +90,24 @@ export function parsePermissionSettings(doc: unknown): PermissionSettings {
     : { defaultDecision, rules: parsed };
 }
 
-export type ReadFile = (path: string) => string;
+export type { ReadFile } from '../../internal/settings.js';
 
 /**
  * Loads one settings layer. Missing file (ENOENT) → empty layer; a file that
  * exists but is unreadable or invalid throws (fail loud at startup).
+ * Mechanics live in the shared internal loader (ADR-0015).
  */
-export function loadSettingsFile(path: string, readFile: ReadFile): PermissionSettings {
-  let body: string;
-  try {
-    body = readFile(path);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { rules: [] };
-    }
-    throw error;
-  }
-  let doc: unknown;
-  try {
-    doc = JSON.parse(body);
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new PermissionSettingsError(`${path} is not valid JSON: ${detail}`);
-  }
-  try {
-    return parsePermissionSettings(doc);
-  } catch (error: unknown) {
-    if (error instanceof PermissionSettingsError) {
-      throw new PermissionSettingsError(`${path}: ${error.message}`);
-    }
-    throw error;
-  }
+export function loadSettingsFile(
+  path: string,
+  readFile: (path: string) => string,
+): PermissionSettings {
+  return loadJsonSettings(
+    path,
+    readFile,
+    parsePermissionSettings,
+    { rules: [] },
+    PermissionSettingsError,
+  );
 }
 
 /**

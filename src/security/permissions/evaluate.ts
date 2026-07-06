@@ -1,5 +1,6 @@
-import { resolve, sep } from 'node:path';
+import { sep } from 'node:path';
 
+import { canonicalizePath, TOOL_TARGET_FIELDS } from '../../internal/tool-targets.js';
 import type {
   Evaluation,
   EvaluatorOptions,
@@ -28,29 +29,40 @@ export function matchesGlob(pattern: string, value: string): boolean {
   return pattern === value;
 }
 
-/** Tools whose canonical match target is a well-known string arg. */
-const MATCH_FIELDS: Readonly<Record<string, { field: string; isPath: boolean }>> = {
-  Bash: { field: 'command', isPath: false },
-  Read: { field: 'file_path', isPath: true },
-  Write: { field: 'file_path', isPath: true },
-  Edit: { field: 'file_path', isPath: true },
-};
+/**
+ * Path-target variant of matchesGlob with inclusive directory boundaries: a
+ * `dir/*` pattern matches the bare `dir` too, mirroring the sandbox's
+ * `isUnder`. Without this a `{match:'/secrets/*'}` deny rule would miss
+ * `Glob(path='/secrets')`, which still enumerates the whole directory
+ * (verify-pass finding). `pattern` is already canonicalised.
+ */
+export function matchesPathGlob(pattern: string, value: string): boolean {
+  if (pattern.endsWith(sep + '*')) {
+    const base = pattern.slice(0, -2); // drop trailing sep + '*'
+    return value === base || value.startsWith(base + sep);
+  }
+  return matchesGlob(pattern, value);
+}
 
 /**
- * Canonical string a rule's `match` glob is tested against. File paths are
- * resolved to absolute canonical form first (collapsing `.`/`..`, anchoring
- * relative paths at cwd) so `/etc/*` cannot be dodged with
- * `/tmp/../etc/passwd` and an allow-prefix cannot be escaped with `..`
- * segments. Falls back to the JSON of the args for unknown tools — a
- * caller-shaped surface, so match rules on arbitrary tools are best-effort
- * only (ADR-0014 §1).
+ * Canonical string a rule's `match` glob is tested against. The tool→field
+ * table is shared with the sandbox (src/internal/tool-targets.ts — review
+ * finding: two hand-copied tables drifted and Glob/Grep/NotebookEdit/
+ * MultiEdit bypassed both gates). File paths are canonicalised (lexical
+ * resolve + case folding on case-insensitive platforms) so `/etc/*` cannot
+ * be dodged with `/tmp/../etc/passwd` OR `/ETC/passwd` on APFS. A missing
+ * path on Glob/Grep means cwd per the SDK contract. Falls back to the JSON
+ * of the args for unknown tools — a caller-shaped surface, so match rules
+ * on arbitrary tools are best-effort only (ADR-0014 §1).
  */
 export function extractMatchTarget(tool: string, args: unknown): string {
-  const spec = MATCH_FIELDS[tool];
+  const spec = TOOL_TARGET_FIELDS[tool];
   if (spec !== undefined && typeof args === 'object' && args !== null) {
-    const value = (args as Record<string, unknown>)[spec.field];
+    const raw = (args as Record<string, unknown>)[spec.field];
+    const value =
+      raw === undefined && spec.missingMeansCwd === true ? process.cwd() : raw;
     if (typeof value === 'string') {
-      return spec.isPath ? resolve(value) : value;
+      return spec.kind === 'path' ? canonicalizePath(value) : value;
     }
   }
   try {
@@ -75,9 +87,9 @@ export function canonicalizePathPattern(pattern: string): string {
   if (pattern.endsWith('*')) {
     const prefix = pattern.slice(0, -1);
     const keepSep = prefix.endsWith('/') || prefix.endsWith(sep);
-    return `${resolve(prefix)}${keepSep ? sep : ''}*`;
+    return `${canonicalizePath(prefix)}${keepSep ? sep : ''}*`;
   }
-  return resolve(pattern);
+  return canonicalizePath(pattern);
 }
 
 /**
@@ -115,8 +127,9 @@ function layerWinner(
   for (const [index, rule] of rules.entries()) {
     if (!matchesGlob(rule.tool, tool)) continue;
     if (rule.match !== undefined) {
-      const pattern = targetIsPath ? canonicalizePathPattern(rule.match) : rule.match;
-      if (!matchesGlob(pattern, target)) continue;
+      if (targetIsPath) {
+        if (!matchesPathGlob(canonicalizePathPattern(rule.match), target)) continue;
+      } else if (!matchesGlob(rule.match, target)) continue;
     }
     if (
       winner === null ||
@@ -145,7 +158,7 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
   return {
     evaluate(tool: string, args: unknown): Evaluation {
       const target = extractMatchTarget(tool, args);
-      const targetIsPath = MATCH_FIELDS[tool]?.isPath ?? false;
+      const targetIsPath = TOOL_TARGET_FIELDS[tool]?.kind === 'path';
       const winners = [
         layerWinner(userRules, tool, target, targetIsPath),
         layerWinner(projectRules, tool, target, targetIsPath),

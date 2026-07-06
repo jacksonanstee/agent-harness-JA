@@ -7,9 +7,13 @@ import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js'
 import type { RedactResult, ScanResult } from '../security/index.js';
 import {
   createPermissionEvaluator,
+  createSandbox,
   mergeLayers,
+  mergeSandboxLayers,
   parsePermissionSettings,
+  parseSandboxSettings,
   permissionHook,
+  sandboxHook,
 } from '../security/index.js';
 import { createSession } from './session.js';
 import type {
@@ -211,6 +215,40 @@ describe('createSession', () => {
     ]);
     expect(result.denied[0]?.reason).toContain('project');
     expect(postFired).toEqual(['Read']); // denied Bash never ran; allowed Read did
+  });
+
+  it('S-4: sandbox blocks out-of-allowlist paths and commands end-to-end; they never execute', async () => {
+    // Real settings-shaped config through parse → merge → sandbox → hook.
+    const project = parseSandboxSettings({
+      sandbox: {
+        paths: { allow: ['/safe'] },
+        commands: { allow: ['git'] },
+      },
+    });
+    const sandbox = createSandbox(mergeSandboxLayers({}, project));
+
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'rm -rf /' }, output: 'never' },
+      { tool: 'Read', input: { file_path: '/etc/passwd' }, output: 'never' },
+      { tool: 'Read', input: { file_path: '/safe/notes.md' }, output: 'contents' },
+      { tool: 'Bash', input: { command: 'git status' }, output: 'clean' },
+    ]);
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', sandboxHook(sandbox));
+    const postFired: string[] = [];
+    hooks.register('post-tool', (payload) => {
+      postFired.push(payload.tool);
+    });
+    const session = createSession(makeDeps(fake, { hooks }), { skillsDir: '/nowhere' });
+
+    const result = await session.run('do things');
+
+    expect(result.denied).toEqual([
+      { tool: 'Bash', reason: expect.stringContaining('sandbox') },
+      { tool: 'Read', reason: expect.stringContaining('sandbox') },
+    ]);
+    // Blocked path and blocked command never ran; allowed calls did.
+    expect(postFired).toEqual(['Read', 'Bash']);
   });
 
   it('injects loaded skill names into the system prompt and surfaces load errors as warnings', async () => {

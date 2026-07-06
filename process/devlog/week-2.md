@@ -132,3 +132,60 @@ Also fixed: file-path canonicalisation (`../` traversal dodged deny rules and
 escaped allow prefixes), exact-tool-beats-wildcard specificity tuple,
 `permission:` prefix on default reasons, 1000-rule cap, dead `'inline'` layer
 dropped, ask-without-prompter startup warning. 493 tests.
+
+## 2026-07-06 — S-4 sandbox boundaries (ADR-0015)
+
+Fifth Week-2 deliverable, off merged main (S-3 → `b70ca6f`).
+
+- `src/security/sandbox`: pre-tool gate (NOT OS isolation — no executor in
+  the harness; the ADR says so plainly and lists what a string gate cannot
+  stop). `createSandbox` matches the architecture-reserved
+  `allowPath`/`allowCommand` API; `sandboxHook` throws its own
+  `SandboxViolation` (peer-leaf rule, same as S-3).
+- **Layers merge by INTERSECTION** — the allowlist analogue of sticky deny;
+  concatenation would let a cloned repo grant itself `/`.
+- Paths: lexical resolve both sides + boundary-safe prefix (`/allowed` ≠
+  `/allowed-extra`); present-but-empty list denies all; missing target field
+  on a gated tool denies (refuse to guess). Symlink escape = documented
+  limitation, not half-solved.
+- Commands: shell metacharacters deny outright; else exact argv[0]; bare
+  names never match absolute paths. CLI warns if sh/bash/zsh/env/xargs are
+  allowlisted. Claim: bounds which program starts, not what it does.
+- **All three deferred S-3 findings closed**: loader hoisted to
+  `src/internal/settings.ts` (permissions tests pass unmodified = proof),
+  path-base parity documented (both resolve vs process.cwd()), command
+  bypass class honestly scoped.
+
+56 new tests (552 total). Next: docs/security-model.md (Week-2 close) + S-5
+LLM-judge seam decision.
+
+### Review round 1 (same day)
+
+The fleet earned its keep hardest yet — security review empirically verified
+two HIGHs in the first cut:
+1. **Tool-coverage gap**: sandbox and permissions each kept a private
+   four-tool table and assumed the other covered the rest — Glob/Grep/
+   NotebookEdit/MultiEdit bypassed BOTH gates (the exfiltration-shaped
+   tools). Fixed: ONE shared `src/internal/tool-targets.ts` table, pinned by
+   test; Glob/Grep missing-path gates the cwd per SDK contract.
+2. **Case-insensitive filesystem**: lexical compare on APFS let
+   `/ETC/passwd` dodge a `/etc/*` deny rule (verified live). Fixed:
+   `canonicalizePath` folds case on darwin/win32, both modules use it.
+Also: shell runners escalated warn→HARD DENY (basename blocklist, warn-only
+was security theater); command intersection now uses allowCommand's own
+identity grammar (bare `git` ≠ `./git`); `\` and `!` added to metachars;
+`wrapError` reflection probe → explicit errorClass param; cli settings
+wiring extracted to testable `composeSecurity()` (was untested, code-review
+HIGH); internal/ pinned as zero-dep leaf in eslint + layering test;
+stale opus-4-7 doc line fixed. 571 tests.
+
+### Review round 2 (verify pass)
+
+All five round-1 fixes verified correct empirically (571 green). Verify pass
+surfaced ONE new MEDIUM-HIGH it had itself unblocked: wiring Glob/Grep into
+the shared table exposed a pre-existing directory-boundary gap — a
+`{match:'/secrets/*'}` deny missed `Glob(path='/secrets')` (bare dir), which
+still lists the whole directory. Fixed with `matchesPathGlob` (inclusive
+`dir/*` boundary mirroring the sandbox's isUnder) + regression test.
+Interpreter-as-wrapper and POSIX-basename notes were pre-existing,
+admin-gated, documented non-goals — comment scoped, no code change. 572 tests.
