@@ -41,7 +41,7 @@ Pipeline:
 2. **LLM-judge pass (off by default).** Triggered when:
    - The heuristic pass produces a "suspicious-but-not-confident" verdict, OR
    - The user has enabled `judge: always` in config.
-3. **Verdict.** One of `pass`, `block`, `ask`. Block and ask events are logged with the offending content excerpt and rule ID.
+3. **Verdict.** One of `pass`, `block`, `ask`. Block and ask events are logged with the offending content excerpts and rule IDs. *(Amended by [ADR-0012](./0012-injection-heuristics-implementation.md): the shipped API returns plural `rule_ids[]`/`excerpts[]` — one input can trip several rules. Heuristic stage implemented; LLM-judge is a typed seam, not yet built.)*
 
 Configuration:
 

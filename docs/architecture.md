@@ -63,7 +63,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `security/injection-scanner`
 
 - **Owns:** detection of prompt-injection patterns in arbitrary text.
-- **Public API:** `scan(text: string, opts?: ScanOptions): ScanResult` where `ScanResult = { verdict: 'pass' | 'block' | 'ask', rule_ids: string[], excerpts: string[] }`.
+- **Public API:** `scan(text: string): ScanResult` where `ScanResult = { verdict: 'pass' | 'block' | 'ask', rule_ids: string[], excerpts: string[], suspicious: boolean }` (`suspicious` = medium-only hits, the S-5 judge trigger). Heuristic stage shipped ([ADR-0012](./decisions/0012-injection-heuristics-implementation.md)); LLM-judge (S-5) is a typed seam.
 - **Depends on:** `security/rules` (rule registry), optionally `router` for the LLM-judge stage (injected, not imported, to preserve layer direction).
 - **Design notes:** Heuristic-first; LLM judge is off by default. See [ADR-0005](./decisions/0005-injection-scanner-hybrid.md).
 

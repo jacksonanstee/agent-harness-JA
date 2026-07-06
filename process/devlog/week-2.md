@@ -48,4 +48,28 @@ proven by negative lint fixtures). Deferred with rationale: telemetry retention
 policy (no TTL — ADR-0011 Revisit-if, pairs with S-2 redaction), memory's
 `DEFAULT_DB_PATH` naming, CLI flag-value parsing hardening.
 
-Next: S-1 injection scanner.
+## 2026-07-06 — S-1 injection scanner shipped (ADR-0012)
+
+Second Week-2 deliverable, off merged main (telemetry PR #11 → `7b2ef9f`).
+Heuristic-only prompt-injection scanner; S-5 LLM-judge is a typed seam.
+
+- `src/security/injection`: sync `scan(text): ScanResult {verdict pass|block|ask,
+  rule_ids[], excerpts[], suspicious}` over 15 regex rules across 5 families.
+  Confidence-gated (high→block, medium→ask), evaluates all rules, hidden-unicode
+  strip-and-rescan (tag chars + zero-width runs), per-rule `safeMatch` isolation.
+- **ReDoS policy**: linear-time patterns + guard test (<100ms on ~120KB
+  pathological input, every rule).
+- **Starter red-team corpus** (30 cases, adoptable by Week-3 `src/eval/corpus/`):
+  test asserts ≥90% detection, **≥10 blocks (Week-2 checkpoint met)**, 0 benign
+  false-positive blocks.
+- **Session wiring**: `SessionDeps.scanInjection` runs on the FULL tool output,
+  result feeds the post-tool hook `scan` field (architecture step 10, replacing
+  the `scan: null` placeholder); warns on block/ask, never aborts. Enforcement
+  (redact/drop) deliberately deferred to compose with S-2.
+- **Layering**: `src/security/**` forbidden from importing any harness module
+  (below-harness layer), proven by `src/layering.test.ts`.
+
+90 new tests (301 total); scan.ts 100% line, rules.ts 100%, security 90%+.
+
+Next: S-2 secret scanner (also resolves the telemetry retention finding — redact
+tool output before it reaches telemetry).
