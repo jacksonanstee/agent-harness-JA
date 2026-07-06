@@ -172,6 +172,34 @@ describe('createPermissionEvaluator', () => {
     );
   });
 
+  it('relative-path match patterns still fire against resolved targets', () => {
+    // Regression from the verify pass: canonicalising only the target made
+    // relative deny patterns silently fail open.
+    const evaluator = createPermissionEvaluator({
+      rules: [rule({ tool: 'Write', match: 'secrets/*', decision: 'deny' })],
+    });
+    expect(evaluator.evaluate('Write', { file_path: 'secrets/prod.key' }).decision).toBe('deny');
+    expect(
+      evaluator.evaluate('Write', { file_path: `${process.cwd()}/secrets/prod.key` }).decision,
+    ).toBe('deny');
+    expect(evaluator.evaluate('Write', { file_path: 'public/readme.md' }).decision).toBe('allow');
+  });
+
+  it('pattern canonicalisation preserves the trailing separator: /etc/* cannot match /etcetera', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [rule({ tool: 'Write', match: '/etc/*', decision: 'deny' })],
+    });
+    expect(evaluator.evaluate('Write', { file_path: '/etcetera/file' }).decision).toBe('allow');
+    expect(evaluator.evaluate('Write', { file_path: '/etc/hosts' }).decision).toBe('deny');
+  });
+
+  it('a bare * match pattern still matches any path', () => {
+    const evaluator = createPermissionEvaluator({
+      rules: [rule({ tool: 'Write', match: '*', decision: 'deny' })],
+    });
+    expect(evaluator.evaluate('Write', { file_path: '/anywhere/x' }).decision).toBe('deny');
+  });
+
   it('prefixes default-decision reasons with permission: for grep-ability', () => {
     const evaluator = createPermissionEvaluator({ defaultDecision: 'deny' });
     expect(evaluator.evaluate('Bash', {}).reason).toMatch(/^permission: default deny/);

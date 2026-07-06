@@ -13,7 +13,7 @@ The enforcement channel already exists: the hook runtime denies a tool call when
 
 ### 1. Minimal rule grammar
 
-A rule is `{ tool, match?, decision }`. `tool` is an exact name or a trailing-`*` prefix glob (`'Bash'`, `'mcp__*'`, `'*'`). `match` is an optional prefix-glob tested against a canonical string extracted from the args: `args.command` for Bash, `args.file_path` for Read/Write/Edit, else the JSON of the args. A `*` anywhere but the end is a literal. The matcher is ~10 lines and has no regex, so there is nothing to ReDoS and nothing to mis-parse. File paths are canonicalised (`path.resolve`) before matching, so `/etc/*` catches `/tmp/../etc/passwd` and an allow-prefix cannot be escaped with `..` segments. Beyond that, deep command/path allowlisting (symlinks, shell metacharacters — `match: 'rm *'` does not stop `sh -c "rm …"`) is deliberately **not** attempted here — that is S-4's job, and doing it half-way in a string glob would create false confidence. The JSON-stringify fallback for unknown tools is caller-shaped and best-effort only.
+A rule is `{ tool, match?, decision }`. `tool` is an exact name or a trailing-`*` prefix glob (`'Bash'`, `'mcp__*'`, `'*'`). `match` is an optional prefix-glob tested against a canonical string extracted from the args: `args.command` for Bash, `args.file_path` for Read/Write/Edit, else the JSON of the args. A `*` anywhere but the end is a literal. The matcher is ~10 lines and has no regex, so there is nothing to ReDoS and nothing to mis-parse. File paths are canonicalised (`path.resolve`) on **both sides** before matching — the target, so `/etc/*` catches `/tmp/../etc/passwd` and an allow-prefix cannot be escaped with `..` segments; and the pattern, so a relative `secrets/*` deny still fires (one-sided canonicalisation was a fail-open regression caught by the review verify pass). Trailing separators are preserved when rebuilding patterns, so `/etc/*` cannot false-match `/etcetera`. Both resolve against the harness `process.cwd()`; when S-4 lands a tool executor, its path base must match (tracked in Revisit if). Beyond that, deep command/path allowlisting (symlinks, shell metacharacters — `match: 'rm *'` does not stop `sh -c "rm …"`) is deliberately **not** attempted here — that is S-4's job, and doing it half-way in a string glob would create false confidence. The JSON-stringify fallback for unknown tools is caller-shaped and best-effort only.
 
 ### 2. Specificity-then-severity precedence — within a layer
 
@@ -67,6 +67,7 @@ Permission denials flow through the existing `denied-by-hook` telemetry record; 
 
 ## Revisit if
 
+- S-4 lands a tool executor: verify its file-path resolution base matches the evaluator's `process.cwd()` — divergence would let the permission check and the actual file access disagree.
 - S-4 lands a real sandbox: `match` may then shrink to tool-name-only rules, with argument policy owned by S-4.
 - The CLI grows an interactive mode: wire a TTY prompter and consider flipping the recommended default to `ask`.
 - The eval layer needs permission-denial metrics: split the telemetry kind (§8).

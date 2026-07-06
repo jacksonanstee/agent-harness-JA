@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 import type {
   Evaluation,
@@ -63,6 +63,24 @@ export function extractMatchTarget(tool: string, args: unknown): string {
 }
 
 /**
+ * Canonicalizes a `match` pattern for path-target tools so a relative
+ * pattern like `secrets/*` still fires against the resolved absolute target
+ * (fail-open regression caught by the review verify pass). Trailing
+ * separator semantics are preserved: resolve() drops a trailing '/', so
+ * `/etc/*` is rebuilt as `/etc/` + `*` and cannot false-match `/etcetera`.
+ * A bare `*` stays `*`.
+ */
+export function canonicalizePathPattern(pattern: string): string {
+  if (pattern === '*') return pattern;
+  if (pattern.endsWith('*')) {
+    const prefix = pattern.slice(0, -1);
+    const keepSep = prefix.endsWith('/') || prefix.endsWith(sep);
+    return `${resolve(prefix)}${keepSep ? sep : ''}*`;
+  }
+  return resolve(pattern);
+}
+
+/**
  * Lexicographic (named tool, has match): an exact tool name always beats a
  * wildcard tool, even when the wildcard rule carries a `match` — a
  * `{tool:'*', match}` rule must never outrank `{tool:'Bash'}`.
@@ -87,11 +105,19 @@ interface Winner {
  * layer the author trusts themselves, so a more specific allow may carve out
  * their own broader deny.
  */
-function layerWinner(rules: readonly LayeredRule[], tool: string, target: string): Winner | null {
+function layerWinner(
+  rules: readonly LayeredRule[],
+  tool: string,
+  target: string,
+  targetIsPath: boolean,
+): Winner | null {
   let winner: Winner | null = null;
   for (const [index, rule] of rules.entries()) {
     if (!matchesGlob(rule.tool, tool)) continue;
-    if (rule.match !== undefined && !matchesGlob(rule.match, target)) continue;
+    if (rule.match !== undefined) {
+      const pattern = targetIsPath ? canonicalizePathPattern(rule.match) : rule.match;
+      if (!matchesGlob(pattern, target)) continue;
+    }
     if (
       winner === null ||
       specificity(rule) > specificity(winner.rule) ||
@@ -119,9 +145,10 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
   return {
     evaluate(tool: string, args: unknown): Evaluation {
       const target = extractMatchTarget(tool, args);
+      const targetIsPath = MATCH_FIELDS[tool]?.isPath ?? false;
       const winners = [
-        layerWinner(userRules, tool, target),
-        layerWinner(projectRules, tool, target),
+        layerWinner(userRules, tool, target, targetIsPath),
+        layerWinner(projectRules, tool, target, targetIsPath),
       ].filter((winner): winner is Winner => winner !== null);
 
       let winner: Winner | null = null;
