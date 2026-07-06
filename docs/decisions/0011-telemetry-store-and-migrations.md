@@ -81,13 +81,34 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
    through a sink constructed before the session runs; ids must be shared, so
    the composition root owns them.
 
+## Review amendments (2026-07-06, 3-agent gate)
+
+- **`ToolTracePayload.ok` dropped before merge:** the SDK's PostToolUse input
+  does not surface tool success/failure, so a hardcoded `ok: true` asserted
+  something false into a persisted surface. Re-add only when derivable.
+- **Drift guards added:** memory DDL ↔ migration 001 byte-identity test and a
+  CHECK-constraint ↔ `TELEMETRY_EVENT_TYPES` re-derivation test
+  (`src/telemetry/migrations/ddl-drift.test.ts`); layering rules proven by
+  `src/layering.test.ts` (negative lint fixtures via the ESLint API).
+- **Session `turnId` fallback uses an independent `randomUUID()`,** not
+  `generateId` — a constant-closure `generateId` (as the CLI injects) must not
+  collapse turnId onto sessionId.
+- **Pre-tool `fire()`-throw now leaves a telemetry trace** (`hook-error`
+  event recorded by session), closing the one failure path the hook sink
+  cannot see.
+
 ## Revisit if
 
+- Retention policy: `telemetry_events` has **no TTL/purge** (memory's session
+  summaries decay after 30 days). Tool-result summaries (≤200 chars, sanitized
+  but not secret-redacted) persist indefinitely. Decide TTL/purge and/or rely
+  on the S-2 secret scanner (this week) redacting tool output before it
+  reaches telemetry.
 - A second telemetry writer process appears — ADR-0004's single-writer
   constraint (`SQLITE_BUSY`) becomes real; add busy_timeout/queueing.
 - Payload querying needs SQL-side predicates — promote fields to columns via a
   new migration or add JSON1 indexes.
 - OTLP export is requested — extend the export subcommand (ADR-0004 mitigation).
-- Memory's `ensureSchema` and migration 001 drift — they are kept byte-identical
-  by convention; a schema change to `memory_entries` must go through a new
-  migration and update both sites.
+- Memory's `ensureSchema` and migration 001 drift — byte-identity is enforced
+  by `ddl-drift.test.ts`; a schema change to `memory_entries` must go through a
+  new migration and update both sites.

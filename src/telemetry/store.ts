@@ -75,7 +75,9 @@ function isTurnUsage(value: unknown): value is TurnUsage {
   return (
     isObject(value) &&
     typeof value.inputTokens === 'number' &&
+    Number.isFinite(value.inputTokens) &&
     typeof value.outputTokens === 'number' &&
+    Number.isFinite(value.outputTokens) &&
     isFiniteOrNull(value.cacheCreationInputTokens) &&
     isFiniteOrNull(value.cacheReadInputTokens)
   );
@@ -99,7 +101,6 @@ function isToolTracePayload(value: unknown): value is ToolTracePayload {
     isObject(value) &&
     typeof value.tool === 'string' &&
     value.phase === 'post-tool' &&
-    typeof value.ok === 'boolean' &&
     isStringOrNull(value.resultSummary)
   );
 }

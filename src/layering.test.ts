@@ -1,0 +1,41 @@
+import { describe, expect, it } from 'vitest';
+
+// Proves the no-restricted-imports layering rules in eslint.config.js
+// actually fire (review finding F1): architecture.md treats a layering
+// violation as a build failure, so the guarantee must be tested, not assumed.
+
+async function lintViolations(filePath: string, code: string): Promise<string[]> {
+  const { loadESLint } = await import('eslint');
+  const ESLint = await loadESLint(); // flat config is the default in ESLint 9
+  const eslint = new ESLint({ cwd: process.cwd() });
+  const [result] = await eslint.lintText(code, { filePath });
+  return (result?.messages ?? [])
+    .filter((m) => m.ruleId === 'no-restricted-imports')
+    .map((m) => m.message);
+}
+
+describe('eslint layering rules', () => {
+  it('blocks a leaf module importing the session orchestrator', async () => {
+    const violations = await lintViolations(
+      'src/telemetry/bad-import.ts',
+      "import { createSession } from '../session/index.js';\ncreateSession;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('blocks telemetry importing hooks (peer-leaf rule)', async () => {
+    const violations = await lintViolations(
+      'src/telemetry/bad-import.ts',
+      "import { createHookRuntime } from '../hooks/index.js';\ncreateHookRuntime;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('allows telemetry importing the shared internal leaf', async () => {
+    const violations = await lintViolations(
+      'src/telemetry/good-import.ts',
+      "import { sanitizeControlChars } from '../internal/sanitize.js';\nsanitizeControlChars;\n",
+    );
+    expect(violations).toEqual([]);
+  });
+});

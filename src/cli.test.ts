@@ -200,7 +200,7 @@ describe('main (telemetry export)', () => {
       sessionId: 's2',
       turnId: 't2',
       ts: 200,
-      payload: { tool: 'Read', phase: 'post-tool', ok: true, resultSummary: 'x' },
+      payload: { tool: 'Read', phase: 'post-tool', resultSummary: 'x' },
     });
     db.close();
     return path;

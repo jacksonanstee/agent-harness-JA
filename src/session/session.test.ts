@@ -455,6 +455,34 @@ describe('createSession', () => {
     expect(warnings2.some((w) => w.includes('bad telemetry input'))).toBe(true);
   });
 
+  it('records a hook-error telemetry event when pre-tool fire() itself throws', async () => {
+    const telemetry = fakeTelemetry();
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'x' }]);
+    const brokenHooks = {
+      register: () => () => undefined,
+      fire: (event: string) => {
+        if (event === 'pre-tool') return Promise.reject(new Error('runtime exploded'));
+        return Promise.resolve({ event, handlersFired: 0, errors: [], denied: false });
+      },
+    };
+    const session = createSession(
+      makeDeps(fake, { telemetry, hooks: brokenHooks as unknown as SessionDeps['hooks'] }),
+      { skillsDir: '/nowhere' },
+    );
+
+    const result = await session.run('hi');
+
+    expect(result.denied).toHaveLength(1); // fail-closed deny still happens
+    const hookError = telemetry.events.find(
+      (e) => e.type === 'hook-event' && e.payload.kind === 'hook-error',
+    );
+    expect(hookError).toBeDefined();
+    if (hookError?.type === 'hook-event') {
+      expect(hookError.payload.event).toBe('pre-tool');
+      expect(hookError.payload.reason).toContain('runtime exploded');
+    }
+  });
+
   it('summarizes non-string tool output and truncates long summaries', async () => {
     const telemetry = fakeTelemetry();
     const fake = fakeQuery([INIT, RESULT], [

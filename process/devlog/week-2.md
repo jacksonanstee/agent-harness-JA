@@ -35,4 +35,17 @@ committed the substrate but left the schema open; ADR-0011 records the design:
 Verified from `dist/` against the live Week-1 smoke DB: migrations applied
 cleanly over the pre-existing `memory_entries` table.
 
+### Review gate (same day)
+
+3-agent review (code / security / architecture, all on Fable): **0 CRITICAL,
+0 HIGH**. Fixed before merge: hardcoded `ok: true` in tool-trace dropped
+(asserted something false — SDK doesn't surface tool outcome), pre-tool
+`fire()`-throw path now leaves a telemetry trace, session `turnId` fallback
+decoupled from `generateId` (constant-closure collapse risk), token counts
+finite-checked, plus three drift guards (memory-DDL↔migration-001 byte
+identity, CHECK↔`TELEMETRY_EVENT_TYPES` re-derivation, eslint layering rules
+proven by negative lint fixtures). Deferred with rationale: telemetry retention
+policy (no TTL — ADR-0011 Revisit-if, pairs with S-2 redaction), memory's
+`DEFAULT_DB_PATH` naming, CLI flag-value parsing hardening.
+
 Next: S-1 injection scanner.

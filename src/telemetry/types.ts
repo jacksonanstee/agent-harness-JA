@@ -19,10 +19,14 @@ export interface TurnCostPayload {
   resultSubtype: string | null;
 }
 
+/**
+ * No success/failure flag: the SDK's PostToolUse input does not surface tool
+ * outcome, and a hardcoded value would assert something false into a
+ * persisted, exported surface. Add one only when it can be derived truthfully.
+ */
 export interface ToolTracePayload {
   tool: string;
   phase: 'post-tool';
-  ok: boolean;
   resultSummary: string | null;
 }
 

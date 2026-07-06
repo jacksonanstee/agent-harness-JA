@@ -48,7 +48,7 @@ const TOOL_TRACE: TelemetryEventInput = {
   type: 'tool-trace',
   sessionId: 's1',
   turnId: 't1',
-  payload: { tool: 'Read', phase: 'post-tool', ok: true, resultSummary: 'file contents…' },
+  payload: { tool: 'Read', phase: 'post-tool', resultSummary: 'file contents…' },
 };
 
 const HOOK_EVENT: TelemetryEventInput = {

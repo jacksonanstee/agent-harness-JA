@@ -90,7 +90,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     const harnessSessionId = generateId();
-    const turnId = config.turnId ?? generateId();
+    // Fallback deliberately does NOT reuse generateId: a caller injecting a
+    // constant generateId (as the CLI does) would otherwise collapse
+    // turnId === sessionId and destroy trace correlation.
+    const turnId = config.turnId ?? randomUUID();
     let sdkSessionId: string | null = null;
     const denied: DeniedToolCall[] = [];
 
@@ -134,9 +137,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       } catch (error: unknown) {
         // fire() itself failing must fail closed, not SDK-defined. The reason
         // sent to the model is generic; the detail goes to warnings only.
-        warn(
-          `pre-tool fire failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
-        );
+        const detail = error instanceof Error ? sanitizeText(error.message) : 'unknown';
+        warn(`pre-tool fire failed: ${detail}`);
+        // The hook sink never saw this failure (it lives inside fire()), so
+        // record it here — every failure path leaves a telemetry trace.
+        recordTelemetry({
+          type: 'hook-event',
+          sessionId: harnessSessionId,
+          turnId,
+          payload: { kind: 'hook-error', event: 'pre-tool', reason: `fire failed: ${detail}` },
+        });
         deniedReason = 'pre-tool hook failure';
       }
       if (deniedReason !== null) {
@@ -160,7 +170,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         payload: {
           tool: sanitizeText(input.tool_name ?? 'unknown'),
           phase: 'post-tool',
-          ok: true,
           resultSummary: summarizeToolOutput(input.tool_output),
         },
       });
