@@ -34,7 +34,11 @@ const SHELL_METACHARACTERS = [
  * shell or a run-anything wrapper makes argv[0] analysis meaningless, so
  * these are DENIED even when an allowlist names them (review escalation —
  * the previous warn-only stance was security theater for a bypass class the
- * ADR itself names). Compared by basename, so `/bin/sh` is caught too.
+ * ADR itself names). Compared by POSIX basename, so `/bin/sh` is caught too
+ * (Windows-style `\` paths are already denied by the metacharacter check).
+ * Scope: shells and generic exec wrappers only — language interpreters
+ * (`node -e`, `python -c`) remain a documented, admin-gated non-goal
+ * (ADR-0015 §3), NOT covered here.
  */
 export const SHELL_RUNNER_BINARIES: readonly string[] = [
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'fish', 'env', 'xargs',

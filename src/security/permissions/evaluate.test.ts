@@ -230,6 +230,22 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('Grep', { pattern: 'x', path: '/home/ok' }).decision).toBe('allow');
   });
 
+  it('a dir/* path deny rule also matches the bare directory (inclusive boundary)', () => {
+    // Verify-pass finding: {tool:'Glob', match:'/secrets/*'} missed
+    // Glob(path='/secrets'), which still enumerates the whole directory.
+    const evaluator = createPermissionEvaluator({
+      rules: [rule({ tool: 'Glob', match: '/secrets/*', decision: 'deny' })],
+    });
+    expect(evaluator.evaluate('Glob', { pattern: '*', path: '/secrets' }).decision).toBe('deny');
+    expect(evaluator.evaluate('Glob', { pattern: '*', path: '/secrets/sub' }).decision).toBe(
+      'deny',
+    );
+    // Boundary safety preserved: the sibling dir is not the protected one.
+    expect(evaluator.evaluate('Glob', { pattern: '*', path: '/secrets-public' }).decision).toBe(
+      'allow',
+    );
+  });
+
   it('prefixes default-decision reasons with permission: for grep-ability', () => {
     const evaluator = createPermissionEvaluator({ defaultDecision: 'deny' });
     expect(evaluator.evaluate('Bash', {}).reason).toMatch(/^permission: default deny/);

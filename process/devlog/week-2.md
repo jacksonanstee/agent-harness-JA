@@ -178,3 +178,14 @@ identity grammar (bare `git` ≠ `./git`); `\` and `!` added to metachars;
 wiring extracted to testable `composeSecurity()` (was untested, code-review
 HIGH); internal/ pinned as zero-dep leaf in eslint + layering test;
 stale opus-4-7 doc line fixed. 571 tests.
+
+### Review round 2 (verify pass)
+
+All five round-1 fixes verified correct empirically (571 green). Verify pass
+surfaced ONE new MEDIUM-HIGH it had itself unblocked: wiring Glob/Grep into
+the shared table exposed a pre-existing directory-boundary gap — a
+`{match:'/secrets/*'}` deny missed `Glob(path='/secrets')` (bare dir), which
+still lists the whole directory. Fixed with `matchesPathGlob` (inclusive
+`dir/*` boundary mirroring the sandbox's isUnder) + regression test.
+Interpreter-as-wrapper and POSIX-basename notes were pre-existing,
+admin-gated, documented non-goals — comment scoped, no code change. 572 tests.

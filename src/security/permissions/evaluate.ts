@@ -30,6 +30,21 @@ export function matchesGlob(pattern: string, value: string): boolean {
 }
 
 /**
+ * Path-target variant of matchesGlob with inclusive directory boundaries: a
+ * `dir/*` pattern matches the bare `dir` too, mirroring the sandbox's
+ * `isUnder`. Without this a `{match:'/secrets/*'}` deny rule would miss
+ * `Glob(path='/secrets')`, which still enumerates the whole directory
+ * (verify-pass finding). `pattern` is already canonicalised.
+ */
+export function matchesPathGlob(pattern: string, value: string): boolean {
+  if (pattern.endsWith(sep + '*')) {
+    const base = pattern.slice(0, -2); // drop trailing sep + '*'
+    return value === base || value.startsWith(base + sep);
+  }
+  return matchesGlob(pattern, value);
+}
+
+/**
  * Canonical string a rule's `match` glob is tested against. The tool→field
  * table is shared with the sandbox (src/internal/tool-targets.ts — review
  * finding: two hand-copied tables drifted and Glob/Grep/NotebookEdit/
@@ -112,8 +127,9 @@ function layerWinner(
   for (const [index, rule] of rules.entries()) {
     if (!matchesGlob(rule.tool, tool)) continue;
     if (rule.match !== undefined) {
-      const pattern = targetIsPath ? canonicalizePathPattern(rule.match) : rule.match;
-      if (!matchesGlob(pattern, target)) continue;
+      if (targetIsPath) {
+        if (!matchesPathGlob(canonicalizePathPattern(rule.match), target)) continue;
+      } else if (!matchesGlob(rule.match, target)) continue;
     }
     if (
       winner === null ||
