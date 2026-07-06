@@ -63,7 +63,7 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 - [ ] **LLM-judge** (S-5) — optional second-stage scanner for suspicious cases. Off by default.
 - [x] **Secret scanner** (S-2) — ≥20 patterns (API keys, tokens, private keys). Redact + log. *(2026-07-06, ADR-0013; 25 rules)*
 - [x] **Permission model** (S-3) — allow / ask / deny, inheritable from settings files. *(2026-07-06, ADR-0014)*
-- [ ] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash.
+- [x] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash. *(2026-07-06, ADR-0015)*
 - [ ] `docs/security-model.md` — STRIDE-style threat model, anchored to the modules built this week.
 
 > **Follow-up (deferred, cross-cutting):** model-facing enforcement — S-1 injection block/drop AND S-2 output redaction that the *model* sees — both need an SDK result-rewrite channel or a tool-wrapping layer the current PostToolUse hook lacks. Tracked as one item (ADR-0012 §9, ADR-0013 §9).

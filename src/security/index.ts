@@ -38,6 +38,16 @@ export type {
   SettingsLayer,
 } from './permissions/index.js';
 export {
+  createSandbox,
+  loadSandboxSettingsFile,
+  mergeSandboxLayers,
+  parseSandboxSettings,
+  sandboxHook,
+  SandboxSettingsError,
+  SandboxViolation,
+} from './sandbox/index.js';
+export type { Sandbox, SandboxAllowlist, SandboxConfig } from './sandbox/index.js';
+export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,

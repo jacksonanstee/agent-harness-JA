@@ -132,3 +132,29 @@ Also fixed: file-path canonicalisation (`../` traversal dodged deny rules and
 escaped allow prefixes), exact-tool-beats-wildcard specificity tuple,
 `permission:` prefix on default reasons, 1000-rule cap, dead `'inline'` layer
 dropped, ask-without-prompter startup warning. 493 tests.
+
+## 2026-07-06 — S-4 sandbox boundaries (ADR-0015)
+
+Fifth Week-2 deliverable, off merged main (S-3 → `b70ca6f`).
+
+- `src/security/sandbox`: pre-tool gate (NOT OS isolation — no executor in
+  the harness; the ADR says so plainly and lists what a string gate cannot
+  stop). `createSandbox` matches the architecture-reserved
+  `allowPath`/`allowCommand` API; `sandboxHook` throws its own
+  `SandboxViolation` (peer-leaf rule, same as S-3).
+- **Layers merge by INTERSECTION** — the allowlist analogue of sticky deny;
+  concatenation would let a cloned repo grant itself `/`.
+- Paths: lexical resolve both sides + boundary-safe prefix (`/allowed` ≠
+  `/allowed-extra`); present-but-empty list denies all; missing target field
+  on a gated tool denies (refuse to guess). Symlink escape = documented
+  limitation, not half-solved.
+- Commands: shell metacharacters deny outright; else exact argv[0]; bare
+  names never match absolute paths. CLI warns if sh/bash/zsh/env/xargs are
+  allowlisted. Claim: bounds which program starts, not what it does.
+- **All three deferred S-3 findings closed**: loader hoisted to
+  `src/internal/settings.ts` (permissions tests pass unmodified = proof),
+  path-base parity documented (both resolve vs process.cwd()), command
+  bypass class honestly scoped.
+
+56 new tests (552 total). Next: docs/security-model.md (Week-2 close) + S-5
+LLM-judge seam decision.

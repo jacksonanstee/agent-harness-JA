@@ -13,14 +13,20 @@ import { createSession } from './session/index.js';
 import type { QueryFn } from './session/index.js';
 import {
   createPermissionEvaluator,
-  loadSettingsFile,
+  createSandbox,
   mergeLayers,
+  mergeSandboxLayers,
+  parsePermissionSettings,
+  parseSandboxSettings,
   PermissionSettingsError,
   permissionHook,
   redact,
+  sandboxHook,
+  SandboxSettingsError,
   scan,
 } from './security/index.js';
-import type { EvaluatorOptions } from './security/index.js';
+import type { EvaluatorOptions, SandboxConfig } from './security/index.js';
+import { loadJsonSettings } from './internal/settings.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
@@ -59,6 +65,14 @@ const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
+}
+
+/** Path-prefixed settings failures from the composition root's combined loader. */
+class SettingsLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SettingsLoadError';
+  }
 }
 
 const USAGE =
@@ -240,21 +254,50 @@ export async function main(argv: string[]): Promise<number> {
 
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
 
-  // S-3 permission layers: user settings under project settings, sticky deny
-  // (ADR-0014). A present-but-malformed file aborts the run before any tool
+  // Security settings layers: user under project. Each file is read ONCE and
+  // its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
+  // ADR-0015). A present-but-malformed file aborts the run before any tool
   // executes — fail loud, never fail open.
   let permissions: EvaluatorOptions;
+  let sandboxConfig: SandboxConfig;
   try {
-    permissions = mergeLayers(
-      loadSettingsFile(join(homedir(), '.harness', 'settings.json'), (p) =>
-        readFileSync(p, 'utf8'),
-      ),
-      loadSettingsFile(join(process.cwd(), '.harness', 'settings.json'), (p) =>
-        readFileSync(p, 'utf8'),
+    const layers = [
+      join(homedir(), '.harness', 'settings.json'),
+      join(process.cwd(), '.harness', 'settings.json'),
+    ].map((path) =>
+      loadJsonSettings(
+        path,
+        (p) => readFileSync(p, 'utf8'),
+        (doc) => {
+          try {
+            return {
+              permissions: parsePermissionSettings(doc),
+              sandbox: parseSandboxSettings(doc),
+            };
+          } catch (error: unknown) {
+            // Re-tag module errors so the shared loader path-prefixes them.
+            if (
+              error instanceof PermissionSettingsError ||
+              error instanceof SandboxSettingsError
+            ) {
+              throw new SettingsLoadError(error.message);
+            }
+            throw error;
+          }
+        },
+        { permissions: { rules: [] }, sandbox: {} },
+        (message) => new SettingsLoadError(message),
       ),
     );
+    const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
+    permissions = mergeLayers(user.permissions, project.permissions);
+    sandboxConfig = mergeSandboxLayers(user.sandbox, project.sandbox);
   } catch (error: unknown) {
-    if (error instanceof PermissionSettingsError) {
+    if (
+      error instanceof SettingsLoadError ||
+      error instanceof PermissionSettingsError ||
+      error instanceof SandboxSettingsError
+    ) {
       process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
       return 2;
     }
@@ -302,6 +345,19 @@ export async function main(argv: string[]): Promise<number> {
     );
   }
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
+  // Sandbox is the backstop AFTER permissions: deny outcome is identical
+  // (runtime denies on first throw), but rule-attributed permission reasons
+  // are more actionable, so they get first say (ADR-0015 §4).
+  const DANGEROUS_BINARIES = ['sh', 'bash', 'zsh', 'env', 'xargs'];
+  const risky = (sandboxConfig.commands?.allow ?? []).filter((entry) =>
+    DANGEROUS_BINARIES.includes(entry),
+  );
+  if (risky.length > 0) {
+    process.stderr.write(
+      `warning: sandbox command allowlist includes ${risky.join(', ')} — these defeat first-token enforcement (ADR-0015 §3)\n`,
+    );
+  }
+  hooks.register('pre-tool', sandboxHook(createSandbox(sandboxConfig)));
 
   const session = createSession(
     {
