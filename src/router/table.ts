@@ -4,7 +4,7 @@ export const DEFAULT_ROUTING_TABLE: readonly RoutingRule[] = [
   {
     id: 'sensitivity-high',
     match: (d) => d.sensitivity === 'high',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     reason: 'sensitivity=high → opus',
   },
   {
@@ -16,7 +16,7 @@ export const DEFAULT_ROUTING_TABLE: readonly RoutingRule[] = [
   {
     id: 'shape-research',
     match: (d) => d.shape === 'research',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     reason: 'shape=research → opus',
   },
   {
@@ -35,6 +35,6 @@ export const DEFAULT_ROUTING_TABLE: readonly RoutingRule[] = [
 
 /** Implicit last rule. Catches large-context or unclassified work and escalates to opus. */
 export const FALLTHROUGH_RULE_ID = 'fallthrough' as const;
-export const FALLTHROUGH_MODEL = 'claude-opus-4-7' as const;
+export const FALLTHROUGH_MODEL = 'claude-opus-4-8' as const;
 export const FALLTHROUGH_REASON =
   'fallthrough → opus (large context or unclassified)';
