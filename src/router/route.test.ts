@@ -22,7 +22,7 @@ describe('router: default table — shape routing', () => {
 
   it('routes research to opus', () => {
     const c = route({ ...base, shape: 'research' });
-    expect(c.model).toBe('claude-opus-4-7');
+    expect(c.model).toBe('claude-opus-4-8');
     expect(c.rule_id).toBe('shape-research');
   });
 
@@ -44,13 +44,13 @@ describe('router: default table — shape routing', () => {
       sensitivity: 'medium',
       expected_tokens: 100_000,
     });
-    expect(c.model).toBe('claude-opus-4-7');
+    expect(c.model).toBe('claude-opus-4-8');
     expect(c.rule_id).toBe('fallthrough');
   });
 
   it('escalates large review to opus via fallthrough', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 50_000 });
-    expect(c.model).toBe('claude-opus-4-7');
+    expect(c.model).toBe('claude-opus-4-8');
     expect(c.rule_id).toBe('fallthrough');
   });
 });
@@ -60,7 +60,7 @@ describe('router: high sensitivity beats every shape', () => {
   for (const shape of shapes) {
     it(`high + ${shape} → opus`, () => {
       const c = route({ ...base, shape, sensitivity: 'high' });
-      expect(c.model).toBe('claude-opus-4-7');
+      expect(c.model).toBe('claude-opus-4-8');
       expect(c.rule_id).toBe('sensitivity-high');
     });
   }
@@ -75,7 +75,7 @@ describe('router: token threshold boundaries', () => {
 
   it('review at exactly 20_000 tokens → fallthrough opus', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 20_000 });
-    expect(c.model).toBe('claude-opus-4-7');
+    expect(c.model).toBe('claude-opus-4-8');
     expect(c.rule_id).toBe('fallthrough');
   });
 
@@ -88,7 +88,7 @@ describe('router: token threshold boundaries', () => {
   it('build at exactly 50_000 tokens → fallthrough opus', () => {
     expect(
       route({ ...base, shape: 'build', expected_tokens: 50_000 }).model,
-    ).toBe('claude-opus-4-7');
+    ).toBe('claude-opus-4-8');
   });
 });
 
@@ -142,7 +142,7 @@ describe('router: custom table', () => {
 
   it('falls through to opus when no custom rule matches', () => {
     const c = createRouter({ table: [] }).route(base);
-    expect(c.model).toBe('claude-opus-4-7');
+    expect(c.model).toBe('claude-opus-4-8');
     expect(c.rule_id).toBe('fallthrough');
   });
 
