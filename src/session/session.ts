@@ -123,6 +123,37 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
+    function stringifyForScan(output: unknown): string {
+      if (typeof output === 'string') return output;
+      try {
+        return JSON.stringify(output) ?? '';
+      } catch {
+        return String(output);
+      }
+    }
+
+    // Scans the full tool output; returns the ScanResult (structural — the
+    // hook payload types it `unknown` to avoid a hooks→security import) or
+    // null when no scanner is injected. Never throws into the hot path.
+    function runInjectionScan(tool: string, output: unknown): unknown {
+      if (deps.scanInjection === undefined) return null;
+      try {
+        const result = deps.scanInjection(stringifyForScan(output));
+        if (result.verdict !== 'pass') {
+          warn(
+            `injection scan ${result.verdict} on ${tool} output ` +
+              `(rules: ${result.rule_ids.map(sanitizeText).join(', ')})`,
+          );
+        }
+        return result;
+      } catch (error: unknown) {
+        warn(
+          `injection scan failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+        );
+        return null;
+      }
+    }
+
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
     const preToolCallback: SdkHookCallback = async (input) => {
       const tool = sanitizeText(input.tool_name ?? 'unknown');
@@ -163,23 +194,30 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     };
 
     const postToolCallback: SdkHookCallback = async (input) => {
+      const toolName = sanitizeText(input.tool_name ?? 'unknown');
       recordTelemetry({
         type: 'tool-trace',
         sessionId: harnessSessionId,
         turnId,
         payload: {
-          tool: sanitizeText(input.tool_name ?? 'unknown'),
+          tool: toolName,
           phase: 'post-tool',
           resultSummary: summarizeToolOutput(input.tool_output),
         },
       });
+
+      // Step 10: prompt-injection scan of the FULL tool output (not the
+      // truncated summary) before it is surfaced to the agent. S-1 observes +
+      // warns; enforcement (redact/drop) composes with S-2 and is deliberately
+      // not applied here (ADR-0012). Redactions (step 11, S-2) remain null.
+      const scan = runInjectionScan(toolName, input.tool_output);
+
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
-          tool: sanitizeText(input.tool_name ?? 'unknown'),
+          tool: toolName,
           result: input.tool_output,
-          // Security layer (steps 10-11) lands in Week 2; until then these are null.
-          scan: null,
+          scan,
           redactions: null,
         });
         for (const error of fireResult.errors) {

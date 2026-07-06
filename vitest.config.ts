@@ -14,6 +14,7 @@ export default defineConfig({
         'src/hooks/types.ts',
         'src/memory/types.ts',
         'src/telemetry/types.ts',
+        'src/security/injection/types.ts',
         'src/skills/__fixtures__/**',
         'src/**/*.test.ts',
       ],

@@ -3,6 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
+import type { ScanResult } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -101,6 +102,12 @@ export interface SessionDeps {
   route: (descriptor: TaskDescriptor) => ModelChoice;
   /** Optional durable metrics sink (ADR-0011). Failures warn, never abort. */
   telemetry?: Pick<TelemetryStore, 'record'>;
+  /**
+   * Optional prompt-injection scanner (S-1). Runs on each tool output; the
+   * result feeds the post-tool hook's `scan` field. Failures warn, never
+   * abort. Enforcement (redact/drop) composes with S-2, not here.
+   */
+  scanInjection?: (text: string) => ScanResult;
 }
 
 export interface SessionConfig {
