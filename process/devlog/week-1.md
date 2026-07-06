@@ -94,3 +94,28 @@ Final: 87 tests (unit + per-event integration asserting payload shape, ordering,
 - `eslint` config still missing; `npm audit` dev-only `vitest@1.6` chain still deferred.
 - **The Week 1 date re-date is still owed** — this is now the fourth module landing on 2026-07-05 under a header that says "2026-05-18 → 2026-05-24." Deferred again, but it's overdue for its own honest pass before Week 2.
 - Sanitizer is now copied in three modules (router, skills, hooks). Rule-of-three is hit, but extraction needs relaxing hooks' "depends on nothing" first — tracked as a Revisit-if in ADR-0008, deliberately not scope-crept into H-4.
+
+## H-5 memory store (2026-07-05, same session as H-3/H-4)
+
+Fifth and final Week-1 harness module. Router → skills → hooks → **memory** done; only H-1 (SDK wiring) + CI remain in Week 1. H-5 was the designated first-cut (SHOULD), but it landed, so the Week-1 checkpoint's "≥1 memory entry persisted" clause is satisfiable for real.
+
+### ADR-0009 first — and it was genuinely needed
+
+ADR-0004 picks SQLite for *telemetry* — I checked whether it also covered memory, and it doesn't (title/context/related-requirements are telemetry-only, H-5 unlisted). So ADR-0009 reuses ADR-0004's `better-sqlite3` substrate but owns the memory-specific decisions. The load-bearing one is the same seam hooks hit: architecture.md says memory "depends on telemetry's SQLite connection," but telemetry is a Week-2 module that doesn't exist yet. Resolved identically to ADR-0008's injected sink — **memory takes an injected `better-sqlite3` connection** (`createMemoryStore(db)`) and never imports telemetry; a small `openMemoryDatabase()` helper opens/ensures the shared DB for CLI/test/H-1 use. Memory owns only its `memory_entries` table via idempotent `CREATE TABLE IF NOT EXISTS`; telemetry's future migration runner adopts it later.
+
+Step 0 was de-risking the native dep: `better-sqlite3` is a native module and this machine is on Node 25, so I smoke-tested that the prebuilt binary loads before building on it (it did — no fallback to `node:sqlite` needed).
+
+### The module
+
+`write` is upsert-by-id with **full-replace (PUT) semantics** (the write *is* the stored row), returning a tagged `WriteResult`. `read(filter?)` stays bare `MemoryEntry[]` per the locked signature — a query over our own table has no domain failure mode, only programmer error (throws) or catastrophic IO (throws), so tagging it would be worse ergonomics. `delete(filter)` is a bounded superset (empty filter throws, to prevent a table wipe). Retrieval-by-type is indexed; `staleAfter` gives retrieval-time decay filtering; tags are JSON-encoded; all SQL is bound-parameterized.
+
+### Review gate
+
+Same gate (3-agent → differential), all on Fable this time. **Security came back clean** — SQL injection, connection-lifecycle/use-after-close, and `tags` prototype-pollution were all *empirically* probed against the compiled `dist/` and closed. **Architecture** ruled all three self-declared spec deviations (`MemoryInput` refining `MemoryEntry`, `delete` beyond the 2-method surface, write-tagged/read-bare) sound and well-justified. **Code review** found two MAJORs worth fixing: the upsert silently wiped `key`/`tags` on a partial update (fixed by making full-replace explicit + tested rather than silent), and `entry.key`/`filter.key`/`filter.tag` skipped the runtime validation every sibling field got. Plus the real MINOR I'd predicted — `read({tag, limit})` applied the SQL `LIMIT` *before* the JS tag post-filter and under-returned; now the limit caps matches after filtering. All fixed + regression-tested.
+
+Final: 123 tests, `store.ts` 98.3% line / 92.8% branch, real cross-connection on-disk persistence proven.
+
+### Noted, carried
+
+- The Week-1 header date (`2026-05-18 → 2026-05-24`) is now *five* modules stale. It genuinely needs the honest re-date pass before Week 2 — flagged for the fourth time, still owed.
+- eslint config still absent. `CONTROL_CHARS` sanitizer: memory deliberately did **not** become the fourth consumer (parameterized SQL, no untrusted content in error messages), so the `src/internal/` extraction stays deferred as ADR-0008 planned.
