@@ -10,6 +10,7 @@ import type {
   PreToolPayload,
   Unsubscribe,
 } from './types.js';
+import { sanitizeControlChars as sanitize } from '../internal/sanitize.js';
 
 export const HOOK_EVENTS = [
   'pre-tool',
@@ -35,15 +36,6 @@ export class HookDenial extends Error {
   }
 }
 
-// Keep in lockstep with CONTROL_CHARS in src/router/route.ts and
-// src/skills/load.ts. Handler messages reach the (log/terminal-adjacent) sink,
-// so strip control + Unicode line/paragraph separators to prevent log
-// injection. Copied rather than imported: hooks depends on nothing (ADR-0008).
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-function sanitize(text: string): string {
-  return text.replace(CONTROL_CHARS, ' ');
-}
 
 function reasonOf(thrown: unknown): string {
   return sanitize(thrown instanceof Error ? thrown.message : String(thrown));

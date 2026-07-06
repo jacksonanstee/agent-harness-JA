@@ -16,6 +16,7 @@ import type {
   SessionDeps,
   SessionResult,
 } from './types.js';
+import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
 
 const DEFAULT_DESCRIPTOR: TaskDescriptor = {
   shape: 'build',
@@ -29,16 +30,6 @@ const SUMMARY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Cap on prompt/result text persisted in the session summary. */
 const SUMMARY_TEXT_LIMIT = 200;
 
-// Keep in lockstep with CONTROL_CHARS in src/hooks/runtime.ts,
-// src/router/route.ts, and src/skills/load.ts (copied, not imported — same
-// zero-dependency rationale as ADR-0008). Strips control chars + Unicode line
-// separators so tool names / reasons / persisted text can't carry terminal
-// escapes or log injection.
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-function sanitizeText(value: string): string {
-  return value.replace(CONTROL_CHARS, ' ');
-}
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;

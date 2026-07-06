@@ -40,10 +40,9 @@ export type ParseResult =
   | { ok: true; value: CliArgs }
   | { ok: false; error: string };
 
-// Keep in lockstep with CONTROL_CHARS in src/session/session.ts (and the
-// hooks/router/skills copies). Model output and warnings reach the user's
-// terminal; strip control chars so tool-poisoned text can't smuggle ANSI/OSC
-// escape sequences (newline/tab kept for readability).
+// Deliberately separate from src/internal/sanitize.ts: model output and
+// warnings reach the user's terminal, where newline/tab are kept for
+// readability while ANSI/OSC escape introducers and C1 controls are stripped.
 const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 export function sanitizeForTerminal(text: string): string {

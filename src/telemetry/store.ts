@@ -16,6 +16,7 @@ import type {
   TurnCostPayload,
   TurnUsage,
 } from './types.js';
+import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
 
 export const TELEMETRY_EVENT_TYPES = ['turn-cost', 'tool-trace', 'hook-event'] as const satisfies readonly TelemetryEventType[];
 export const DEFAULT_DB_PATH = './.harness/telemetry.db';
@@ -23,17 +24,6 @@ export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
 const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-error', 'hook-fired']);
 
-// Keep in lockstep with CONTROL_CHARS in src/hooks/runtime.ts,
-// src/router/route.ts, src/skills/load.ts, and src/session/session.ts (copied,
-// not imported — same zero-dependency rationale as ADR-0008). Telemetry echoes
-// attacker-influenced strings (tool names, hook reasons, tool-result
-// summaries) back out via `telemetry export`, so strip control chars +
-// Unicode line separators on write.
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-function sanitizeText(value: string): string {
-  return value.replace(CONTROL_CHARS, ' ');
-}
 
 const INSERT_SQL = `
 INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)

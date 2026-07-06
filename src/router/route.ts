@@ -11,6 +11,7 @@ import {
   type RoutingRule,
   type TaskDescriptor,
 } from './types.js';
+import { sanitizeControlChars as sanitizeReason } from '../internal/sanitize.js';
 
 export interface RouterOptions {
   table?: readonly RoutingRule[];
@@ -75,8 +76,3 @@ function safeMatch(rule: RoutingRule, d: TaskDescriptor): boolean {
   }
 }
 
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-function sanitizeReason(reason: string): string {
-  return reason.replace(CONTROL_CHARS, ' ');
-}

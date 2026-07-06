@@ -9,6 +9,7 @@ import type {
   SkillError,
   ValidationResult,
 } from './types.js';
+import { sanitizeControlChars as sanitize } from '../internal/sanitize.js';
 
 const ajv = new Ajv2020({ allErrors: true });
 const validateFrontmatter = ajv.compile(skillSchema);
@@ -59,15 +60,6 @@ function hasUnsafeFenceLanguage(raw: string): boolean {
   return language !== '' && !/^ya?ml$/i.test(language);
 }
 
-// Keep in lockstep with CONTROL_CHARS in src/router/route.ts. Same
-// log-injection defence, more hostile sink: YAML parse errors embed raw
-// snippets of the offending file, so untrusted skill packs control bytes of
-// every SkillError message (ANSI escapes, fake log lines) unless stripped.
-const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-function sanitize(text: string): string {
-  return text.replace(CONTROL_CHARS, ' ');
-}
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
