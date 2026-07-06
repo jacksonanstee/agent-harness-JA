@@ -215,3 +215,14 @@ the router's model table names a previous-generation model lineup, the
 skills loader has four low-severity review findings (ordering nuance,
 diamond-symlink dedup, partial-EACCES test, file-count cap), and issue #2
 item 4 (README warning) stays parked for Week 4.
+
+### Checkpoint run (2026-07-06, evening — Week 1 formally closed)
+
+`node dist/cli.js run "Say hello and list one file in the current directory"`
+against the live API: assistant responded (shaped by a loaded hello-world
+skill), hooks fired with zero denials, router chose `claude-sonnet-4-6` via
+`shape-build-small`, 3 turns, $0.1068, and a `session-<id>` memory row
+persisted to `.harness/telemetry.db`. A bonus proof en route: an earlier run
+with an invalid API key wrote its *error-path* memory entry — the
+failure-path persistence added in the H-1 review round, observed working in
+the wild. Week 1 checkpoint: **pass**. Week 2 is open.
