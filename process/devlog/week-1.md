@@ -152,3 +152,66 @@ rather than per-line pragmas.
 
 15 new tests (8 session, 7 CLI arg parsing); suite now 138 across 6 files,
 typecheck and lint clean.
+
+## Week 1 close (2026-07-06 — six weeks after the planned Sunday)
+
+The "Sunday close" placeholder above was written for 2026-05-24 and never
+filled. Closing the week now, honestly dated.
+
+### Post-merge fix: the containment gate was Node-version-dependent
+
+Before the merge, PR #6's CI came back red on Node 20 only. The H-3
+symlink-escape test relied on `readdirSync({recursive: true})` descending
+into symlinked directories — which Node 25 does and Node 20 does not
+(verified empirically, not from docs). On Node 20 the escaping file was
+never enumerated, so the gate had nothing to refuse and the test's expected
+error never appeared. The fix replaced recursive readdir with a manual walk
+that resolves every symlink at the point it is encountered, refuses any
+resolving outside the skills root, and dedupes directory visits by real
+path (my own first cut had an infinite-recursion bug on in-root symlink
+cycles — caught by self-review before commit). A follow-up hardening commit
+extracted `scanMarkdownFiles()` and added a 64-level depth cap after review
+flagged stack-exhaustion DoS. Two lessons: (1) "verified on Node X" in a
+comment is a smell — behavior notes belong in tests that CI runs on every
+supported version; (2) the CI matrix earned its keep on its first weekend.
+
+### What shipped
+
+All six checklist items: router (H-2), skills loader (H-3), hook runtime
+(H-4), memory store (H-5), SDK wiring (H-1), and CI (lint → typecheck →
+test on Node 20/22). 148 tests. Five ADRs written *before* their modules
+(0007–0010 plus the 0006 amendment). Every module went through the
+3-agent → differential review gate, and the gate caught real defects every
+single time — an RCE-class frontmatter eval, a symlink exfiltration vector,
+a type-checker blind spot in hook dispatch, a silent-data-wipe upsert, and
+the Node-version dependence above.
+
+### What slipped
+
+The calendar, badly: six weeks of stall between H-2 (2026-05-20) and the
+rest (2026-07-05/06). The plan file's timeline table now carries planned
+vs actual columns and re-dated Weeks 2–4 rather than pretending otherwise.
+One merge-mechanics stumble at the end: squash-merging the memory PR
+deleted the base branch of the stacked SDK PR before GitHub retargeted it,
+which auto-closed it unrecoverably — it landed as a fresh PR (#7) after a
+rebase. Rule for next time: retarget the child PR to main *before* merging
+the base.
+
+### What I learned
+
+The review-gate pattern is the portfolio differentiator working as
+designed: five modules, five rounds of real findings, zero of them found
+by me on the first pass. The injected-seam pattern (hooks' sink, memory's
+connection, session's `query`) kept every module unit-testable without the
+network and resolved three "depends on a module that doesn't exist yet"
+knots the same way.
+
+### What changes for Week 2
+
+Nothing structural. The remaining checkpoint clause — the live E2E smoke —
+needs an `ANTHROPIC_API_KEY` on this machine; it runs before Week 2 code
+starts. Known debt carried forward, tracked as issues rather than memory:
+the router's model table names a previous-generation model lineup, the
+skills loader has four low-severity review findings (ordering nuance,
+diamond-symlink dedup, partial-EACCES test, file-count cap), and issue #2
+item 4 (README warning) stays parked for Week 4.

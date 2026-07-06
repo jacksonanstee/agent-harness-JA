@@ -13,13 +13,15 @@
 
 ## Timeline
 
-| Week | Dates | Theme |
-|---|---|---|
-| 0 | 2026-05-14 → 2026-05-17 | Foundation: docs done, repo public |
-| 1 | 2026-05-18 → 2026-05-24 | Harness layer |
-| 2 | 2026-05-25 → 2026-05-31 | Security layer + telemetry |
-| 3 | 2026-06-01 → 2026-06-07 | Eval layer |
-| 4 | 2026-06-08 → 2026-06-14 | Docs polish + launch |
+| Week | Planned dates | Actual | Theme |
+|---|---|---|---|
+| 0 | 2026-05-14 → 2026-05-17 | as planned | Foundation: docs done, repo public |
+| 1 | 2026-05-18 → 2026-05-24 | 2026-05-18 → 2026-07-06 ¹ | Harness layer |
+| 2 | 2026-05-25 → 2026-05-31 | re-dated: 2026-07-06 → 2026-07-12 | Security layer + telemetry |
+| 3 | 2026-06-01 → 2026-06-07 | re-dated: 2026-07-13 → 2026-07-19 | Eval layer |
+| 4 | 2026-06-08 → 2026-06-14 | re-dated: 2026-07-20 → 2026-07-26 | Docs polish + launch |
+
+¹ Week 1 stalled for six weeks after H-2 landed (2026-05-20) and resumed 2026-07-05; the remaining four modules + CI landed 2026-07-05/06. The slip and its causes are logged in [devlog/week-1.md](./devlog/week-1.md), per the slippage protocol below. Original planned dates stay visible in this table — re-dating by overwriting would be exactly the "retrospective tidy-up" this file promises not to do.
 
 ## Week 0 — Foundation (2026-05-14 → 2026-05-17)
 
@@ -39,7 +41,7 @@ This is the current week. Most of it is already complete.
 
 **Checkpoint:** Repo is public. A stranger can clone it, read the docs, and understand what is being built and why — without reading any code.
 
-## Week 1 — Harness layer (2026-05-18 → 2026-05-24)
+## Week 1 — Harness layer (planned 2026-05-18 → 2026-05-24; actual close 2026-07-06)
 
 Build the four core harness modules. SDK integration last.
 
@@ -52,7 +54,7 @@ Build the four core harness modules. SDK integration last.
 
 **Checkpoint:** `npx agent-harness-ja run` executes a hello-world agent with at least one skill loaded, at least one hook firing, and at least one memory entry persisted. All four modules have ≥70% test coverage.
 
-## Week 2 — Security layer + telemetry (2026-05-25 → 2026-05-31)
+## Week 2 — Security layer + telemetry (planned 2026-05-25 → 2026-05-31; re-dated 2026-07-06 → 2026-07-12)
 
 The most security-sensitive work in the project. Bias toward conservative defaults.
 
@@ -66,7 +68,7 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 
 **Checkpoint:** A test agent with `security` enabled blocks ≥10 deliberately-malicious inputs from a starter red-team set. No regressions on the harness-layer test suite. `docs/security-model.md` reads as a senior engineer's threat analysis, not a checklist.
 
-## Week 3 — Eval layer (2026-06-01 → 2026-06-07)
+## Week 3 — Eval layer (planned 2026-06-01 → 2026-06-07; re-dated 2026-07-13 → 2026-07-19)
 
 Where this project earns its differentiation. Most portfolio repos skip eval entirely.
 
@@ -78,7 +80,7 @@ Where this project earns its differentiation. Most portfolio repos skip eval ent
 
 **Checkpoint:** `npx agent-harness-ja eval` produces a Markdown scorecard. Red-team pass rate is ≥90% with default security on; falls to <50% with security off (proves the security layer is doing real work). CI runs eval on every PR.
 
-## Week 4 — Docs polish + launch (2026-06-08 → 2026-06-14)
+## Week 4 — Docs polish + launch (planned 2026-06-08 → 2026-06-14; re-dated 2026-07-20 → 2026-07-26)
 
 The work that turns a working repo into a portfolio piece.
 
