@@ -62,7 +62,7 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 - [x] **Injection scanner** (S-1) — heuristic pass with confidence-scored rules. *(2026-07-06, ADR-0012)*
 - [ ] **LLM-judge** (S-5) — optional second-stage scanner for suspicious cases. Off by default.
 - [x] **Secret scanner** (S-2) — ≥20 patterns (API keys, tokens, private keys). Redact + log. *(2026-07-06, ADR-0013; 25 rules)*
-- [ ] **Permission model** (S-3) — allow / ask / deny, inheritable from settings files.
+- [x] **Permission model** (S-3) — allow / ask / deny, inheritable from settings files. *(2026-07-06, ADR-0014)*
 - [ ] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash.
 - [ ] `docs/security-model.md` — STRIDE-style threat model, anchored to the modules built this week.
 

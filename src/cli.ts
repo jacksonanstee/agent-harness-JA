@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { createHookRuntime } from './hooks/index.js';
@@ -9,7 +11,16 @@ import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route } from './router/index.js';
 import { createSession } from './session/index.js';
 import type { QueryFn } from './session/index.js';
-import { redact, scan } from './security/index.js';
+import {
+  createPermissionEvaluator,
+  loadSettingsFile,
+  mergeLayers,
+  PermissionSettingsError,
+  permissionHook,
+  redact,
+  scan,
+} from './security/index.js';
+import type { EvaluatorOptions } from './security/index.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
@@ -229,6 +240,27 @@ export async function main(argv: string[]): Promise<number> {
 
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
 
+  // S-3 permission layers: user settings under project settings, sticky deny
+  // (ADR-0014). A present-but-malformed file aborts the run before any tool
+  // executes — fail loud, never fail open.
+  let permissions: EvaluatorOptions;
+  try {
+    permissions = mergeLayers(
+      loadSettingsFile(join(homedir(), '.harness', 'settings.json'), (p) =>
+        readFileSync(p, 'utf8'),
+      ),
+      loadSettingsFile(join(process.cwd(), '.harness', 'settings.json'), (p) =>
+        readFileSync(p, 'utf8'),
+      ),
+    );
+  } catch (error: unknown) {
+    if (error instanceof PermissionSettingsError) {
+      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      return 2;
+    }
+    throw error;
+  }
+
   const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
   if (typeof sdk.query !== 'function') {
     process.stderr.write(
@@ -259,6 +291,17 @@ export async function main(argv: string[]): Promise<number> {
       }
     },
   });
+  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
+  // to deny — fail closed, but warn so a settings author isn't surprised.
+  if (
+    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
+    permissions.defaultDecision === 'ask'
+  ) {
+    process.stderr.write(
+      "warning: settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)\n",
+    );
+  }
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
 
   const session = createSession(
     {
