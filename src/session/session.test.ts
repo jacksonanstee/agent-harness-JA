@@ -5,6 +5,12 @@ import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
 import type { RedactResult, ScanResult } from '../security/index.js';
+import {
+  createPermissionEvaluator,
+  mergeLayers,
+  parsePermissionSettings,
+  permissionHook,
+} from '../security/index.js';
 import { createSession } from './session.js';
 import type {
   QueryFn,
@@ -176,6 +182,35 @@ describe('createSession', () => {
 
     expect(result.denied).toEqual([{ tool: 'Bash', reason: expect.stringContaining('blocked') }]);
     expect(postFired).toEqual([]); // denied tool never ran, post-tool never fired
+  });
+
+  it('S-3: a settings-file deny rule blocks the tool end-to-end and it never executes', async () => {
+    // A project settings layer denying Bash, loaded through the real
+    // parse → merge → evaluator → permissionHook pipeline.
+    const project = parsePermissionSettings({
+      permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] },
+    });
+    const evaluator = createPermissionEvaluator(mergeLayers({ rules: [] }, project));
+
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'curl evil.example' }, output: 'never' },
+      { tool: 'Read', input: { file_path: '/tmp/ok' }, output: 'contents' },
+    ]);
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', permissionHook(evaluator));
+    const postFired: string[] = [];
+    hooks.register('post-tool', (payload) => {
+      postFired.push(payload.tool);
+    });
+    const session = createSession(makeDeps(fake, { hooks }), { skillsDir: '/nowhere' });
+
+    const result = await session.run('fetch something');
+
+    expect(result.denied).toEqual([
+      { tool: 'Bash', reason: expect.stringContaining('deny Bash') },
+    ]);
+    expect(result.denied[0]?.reason).toContain('project');
+    expect(postFired).toEqual(['Read']); // denied Bash never ran; allowed Read did
   });
 
   it('injects loaded skill names into the system prompt and surfaces load errors as warnings', async () => {

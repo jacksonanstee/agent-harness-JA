@@ -98,3 +98,25 @@ Third Week-2 deliverable, off merged main (S-1 → `7e240a1`).
 
 Next: S-3 permission model (allow/ask/deny) + S-4 sandbox boundaries, then
 docs/security-model.md.
+
+## 2026-07-06 — S-3 permission model (ADR-0014)
+
+Fourth Week-2 deliverable, off merged main (S-2 → `2acbbbb`).
+
+- `src/security/permissions`: `{tool, match?, decision}` rules with
+  trailing-`*` prefix globs only (no regex — nothing to ReDoS). Precedence =
+  specificity (match > tool > wildcard) then severity (deny > ask > allow):
+  order-independent, conflicts fail closed.
+- **Settings inheritance**: user `~/.harness/settings.json` under project
+  `./.harness/settings.json`; rules concatenate so a user deny survives a
+  project allow (sticky deny). Missing file = empty layer; malformed file =
+  crash at startup before any tool runs (fail loud, never open).
+- **'ask' fails closed**: injected Prompter seam; no prompter / throw / reject
+  all deny. TTY prompter deferred until the CLI grows interactive mode.
+- **Layering held**: first cut imported HookDenial from hooks — lint's
+  peer-leaf rule caught it. Fix: security throws its own `PermissionDenied`;
+  the runtime denies on *any* pre-tool throw, so same contract, no import.
+- Integration test drives parse → merge → evaluate → hook → SDK deny: denied
+  Bash never executes, allowed Read still runs.
+
+42 new tests (486 total). Next: S-4 sandbox, then docs/security-model.md.

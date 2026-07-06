@@ -16,6 +16,28 @@ export type {
   Verdict,
 } from './injection/index.js';
 export {
+  createPermissionEvaluator,
+  PermissionDenied,
+  loadSettingsFile,
+  mergeLayers,
+  parsePermissionSettings,
+  PermissionSettingsError,
+  permissionHook,
+} from './permissions/index.js';
+export type {
+  Evaluation,
+  EvaluatorOptions,
+  LayeredRule,
+  PermissionDecision,
+  PermissionEvaluator,
+  PermissionRule,
+  PermissionSettings,
+  PreToolLike,
+  Prompter,
+  PromptRequest,
+  SettingsLayer,
+} from './permissions/index.js';
+export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
