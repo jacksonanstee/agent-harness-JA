@@ -260,6 +260,22 @@ describe('skills: load', () => {
       expect(result.errors).toEqual([]);
     });
 
+    it('directory nesting past the depth cap → read error naming the cap, shallow skills still load', () => {
+      const skillsDir = join(tmp, 'deep-pack');
+      mkdirSync(skillsDir, { recursive: true });
+      writeFileSync(
+        join(skillsDir, 'shallow.md'),
+        '---\nname: shallow-skill\ndescription: fine\nversion: 1.0.0\n---\nok\n',
+      );
+      // 65 nested levels puts the deepest directory past MAX_SCAN_DEPTH (64).
+      const deep = join(skillsDir, ...Array.from({ length: 65 }, (_, i) => `d${i}`));
+      mkdirSync(deep, { recursive: true });
+      const result = load(skillsDir);
+      expect(result.skills.map((s) => s.name)).toEqual(['shallow-skill']);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.message).toMatch(/maximum directory depth of 64/);
+    });
+
     it('file above the size cap → read error naming the cap', () => {
       const big = join(tmp, 'big.md');
       writeFileSync(big, `---\nname: big\n---\n${'x'.repeat(1_000_001)}`);
