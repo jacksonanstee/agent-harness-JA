@@ -156,35 +156,27 @@ function fail(error: SkillError): ValidationResult {
   return { ok: false, error };
 }
 
-export function load(dir: string): LoadResult {
-  if (typeof dir !== 'string' || dir.length === 0) {
-    throw new TypeError(`dir must be a non-empty string, got ${String(dir)}`);
-  }
-  const root = resolve(dir);
+/**
+ * Refuse to descend past this many directory levels (resource-exhaustion
+ * guard): an untrusted pack shipping thousands of nested directories would
+ * otherwise overflow the call stack before the containment gate could act.
+ */
+const MAX_SCAN_DEPTH = 64;
 
-  let realRoot: string;
-  try {
-    if (!statSync(root).isDirectory()) {
-      return {
-        skills: [],
-        errors: [skillError(root, 'read', `not a directory: ${root}`)],
-      };
-    }
-    realRoot = realpathSync(root);
-  } catch (cause: unknown) {
-    return {
-      skills: [],
-      errors: [skillError(root, 'read', errorMessage(cause))],
-    };
-  }
-
-  // Manual walk instead of readdirSync({recursive: true}): whether recursive
-  // readdir descends into symlinked directories differs across Node versions
-  // (Node 20 does not, Node 25 does), so relying on it makes the containment
-  // gate version-dependent. Walking ourselves gives one behavior everywhere:
-  // any symlink is resolved at the point it is encountered and refused if its
-  // real path escapes the skills root; symlinks resolving inside the root are
-  // followed normally.
+/**
+ * Collect .md files under `root` with a manual walk instead of
+ * readdirSync({recursive: true}): whether recursive readdir descends into
+ * symlinked directories differs across Node versions (Node 20 does not,
+ * Node 25 does), so relying on it makes the symlink containment gate
+ * version-dependent. Walking ourselves gives one behavior everywhere: any
+ * symlink is resolved at the point it is encountered and refused if its real
+ * path escapes the skills root; symlinks resolving inside the root are
+ * followed normally.
+ */
+function scanMarkdownFiles(
+  root: string,
+  realRoot: string,
+): { files: string[]; errors: SkillError[] } {
   const files: string[] = [];
   const errors: SkillError[] = [];
   // Guard against symlink cycles that stay inside the root (e.g.
@@ -192,7 +184,17 @@ export function load(dir: string): LoadResult {
   // The parent's real path is threaded through the walk so a plain (non-
   // symlink) subdirectory's real path is a cheap join, not a realpath call.
   const visitedDirs = new Set<string>([realRoot]);
-  const walk = (currentDir: string, currentRealDir: string): void => {
+  const walk = (currentDir: string, currentRealDir: string, depth: number): void => {
+    if (depth > MAX_SCAN_DEPTH) {
+      errors.push(
+        skillError(
+          currentDir,
+          'read',
+          `refusing to scan: exceeds maximum directory depth of ${MAX_SCAN_DEPTH}`,
+        ),
+      );
+      return;
+    }
     let entries;
     try {
       // Ordinal comparator, not localeCompare: locale-aware order varies with
@@ -238,13 +240,39 @@ export function load(dir: string): LoadResult {
       if (isDir) {
         if (visitedDirs.has(realPath)) continue;
         visitedDirs.add(realPath);
-        walk(path, realPath);
+        walk(path, realPath, depth + 1);
       } else if (isFile && entry.name.endsWith('.md')) {
         files.push(path);
       }
     }
   };
-  walk(root, realRoot);
+  walk(root, realRoot, 0);
+  return { files, errors };
+}
+
+export function load(dir: string): LoadResult {
+  if (typeof dir !== 'string' || dir.length === 0) {
+    throw new TypeError(`dir must be a non-empty string, got ${String(dir)}`);
+  }
+  const root = resolve(dir);
+
+  let realRoot: string;
+  try {
+    if (!statSync(root).isDirectory()) {
+      return {
+        skills: [],
+        errors: [skillError(root, 'read', `not a directory: ${root}`)],
+      };
+    }
+    realRoot = realpathSync(root);
+  } catch (cause: unknown) {
+    return {
+      skills: [],
+      errors: [skillError(root, 'read', errorMessage(cause))],
+    };
+  }
+
+  const { files, errors } = scanMarkdownFiles(root, realRoot);
 
   const skills: Skill[] = [];
   for (const file of files) {
