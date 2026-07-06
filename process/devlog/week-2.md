@@ -31,7 +31,7 @@ committed the substrate but left the schema open; ADR-0011 records the design:
   replaced five copies (separate commit). cli's `TERMINAL_UNSAFE` stays its own
   charset (keeps newline/tab).
 
-45 new tests (193 total). Telemetry coverage 95% lines / 92% branch.
+51 new tests across the branch (199 total after the review-fix commit). Telemetry coverage 95% lines / 92% branch.
 Verified from `dist/` against the live Week-1 smoke DB: migrations applied
 cleanly over the pre-existing `memory_entries` table.
 

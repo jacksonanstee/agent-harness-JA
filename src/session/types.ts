@@ -117,8 +117,9 @@ export interface SessionConfig {
   generateId?: () => string;
   /**
    * Turn-scoped telemetry correlation id. The composition root (cli) supplies
-   * it so hook-sink events and session events share one id; defaults to a
-   * fresh id from `generateId`.
+   * it so hook-sink events and session events share one id; defaults to an
+   * independent randomUUID (never `generateId` — a constant-closure
+   * generateId must not collapse turnId onto the session id).
    */
   turnId?: string;
 }
