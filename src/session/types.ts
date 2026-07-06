@@ -2,6 +2,7 @@ import type { ModelChoice, TaskDescriptor } from '../router/index.js';
 import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hooks/index.js';
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
+import type { TelemetryStore } from '../telemetry/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -98,6 +99,8 @@ export interface SessionDeps {
   memory: MemoryStore;
   loadSkills: (dir: string) => LoadResult;
   route: (descriptor: TaskDescriptor) => ModelChoice;
+  /** Optional durable metrics sink (ADR-0011). Failures warn, never abort. */
+  telemetry?: Pick<TelemetryStore, 'record'>;
 }
 
 export interface SessionConfig {
@@ -112,6 +115,12 @@ export interface SessionConfig {
   now?: () => number;
   /** Injected id source for the harness-side session id. */
   generateId?: () => string;
+  /**
+   * Turn-scoped telemetry correlation id. The composition root (cli) supplies
+   * it so hook-sink events and session events share one id; defaults to a
+   * fresh id from `generateId`.
+   */
+  turnId?: string;
 }
 
 export interface DeniedToolCall {

@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { main, parseRunArgs, sanitizeForTerminal } from './cli.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { hookRecordToTelemetryInput, main, parseArgs, parseRunArgs, sanitizeForTerminal } from './cli.js';
+import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
+import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
+import type { TelemetryEvent } from './telemetry/index.js';
 
 describe('parseRunArgs', () => {
   it('parses a bare run command with defaults', () => {
@@ -30,7 +37,7 @@ describe('parseRunArgs', () => {
       '3',
     ]);
     expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
+    if (parsed.ok && parsed.value.command === 'run') {
       expect(parsed.value.skillsDir).toBe('/tmp/skills');
       expect(parsed.value.dbPath).toBe('/tmp/mem.db');
       expect(parsed.value.maxTurns).toBe(3);
@@ -71,6 +78,181 @@ describe('sanitizeForTerminal', () => {
     expect(sanitizeForTerminal('a\u001b[31mred\u0007b')).toBe('a [31mred b');
     expect(sanitizeForTerminal('line1\nline2\tend')).toBe('line1\nline2\tend');
     expect(sanitizeForTerminal('overwrite\rspoof')).toBe('overwrite spoof'); // CR enables line-rewrite spoofing
+  });
+});
+
+describe('parseArgs (telemetry export)', () => {
+  it('parses telemetry export with defaults', () => {
+    const parsed = parseArgs(['telemetry', 'export']);
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        command: 'telemetry-export',
+        dbPath: DEFAULT_DB_PATH,
+        out: null,
+        sessionId: null,
+        type: null,
+      },
+    });
+  });
+
+  it('parses all export flags', () => {
+    const parsed = parseArgs([
+      'telemetry',
+      'export',
+      '--db',
+      '/tmp/t.db',
+      '--out',
+      '/tmp/out.jsonl',
+      '--session',
+      's1',
+      '--type',
+      'turn-cost',
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok && parsed.value.command === 'telemetry-export') {
+      expect(parsed.value.dbPath).toBe('/tmp/t.db');
+      expect(parsed.value.out).toBe('/tmp/out.jsonl');
+      expect(parsed.value.sessionId).toBe('s1');
+      expect(parsed.value.type).toBe('turn-cost');
+    }
+  });
+
+  it('rejects an invalid --type, unknown subcommand, and unknown flags', () => {
+    expect(parseArgs(['telemetry', 'export', '--type', 'bogus']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'import']).ok).toBe(false);
+    expect(parseArgs(['telemetry']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', '--verbose']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', '--db']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', 'extra']).ok).toBe(false);
+  });
+
+  it('still routes run through the union', () => {
+    const parsed = parseArgs(['run', 'hi']);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.command).toBe('run');
+  });
+});
+
+describe('hookRecordToTelemetryInput', () => {
+  const ids = { sessionId: 'harness-1', turnId: 'turn-1' };
+
+  it('maps all three HookEventRecord kinds', () => {
+    const denied: HookEventRecord = {
+      kind: 'denied-by-hook',
+      event: 'pre-tool',
+      handlerIndex: 2,
+      tool: 'Bash',
+      reason: 'blocked',
+    };
+    const errored: HookEventRecord = {
+      kind: 'hook-error',
+      event: 'post-tool',
+      handlerIndex: 0,
+      reason: 'observer broke',
+    };
+    const fired: HookEventRecord = { kind: 'hook-fired', event: 'stop', handlersFired: 3 };
+
+    expect(hookRecordToTelemetryInput(denied, ids)).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: { kind: 'denied-by-hook', event: 'pre-tool', tool: 'Bash', reason: 'blocked', handlerIndex: 2 },
+    });
+    expect(hookRecordToTelemetryInput(errored, ids)).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: { kind: 'hook-error', event: 'post-tool', reason: 'observer broke', handlerIndex: 0 },
+    });
+    expect(hookRecordToTelemetryInput(fired, ids)).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: { kind: 'hook-fired', event: 'stop', handlersFired: 3 },
+    });
+  });
+});
+
+describe('main (telemetry export)', () => {
+  let tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
+    tmpDirs = [];
+    vi.restoreAllMocks();
+  });
+
+  function seededDb(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    const store = createTelemetryStore(db);
+    store.record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: { kind: 'hook-fired', event: 'session-start', handlersFired: 0 },
+    });
+    store.record({
+      type: 'tool-trace',
+      sessionId: 's2',
+      turnId: 't2',
+      ts: 200,
+      payload: { tool: 'Read', phase: 'post-tool', ok: true, resultSummary: 'x' },
+    });
+    db.close();
+    return path;
+  }
+
+  it('writes JSONL to stdout by default', async () => {
+    const path = seededDb();
+    const chunks: string[] = [];
+    const spy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      });
+    const code = await main(['telemetry', 'export', '--db', path]);
+    spy.mockRestore();
+    expect(code).toBe(0);
+    const lines = chunks.join('').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    const events = lines.map((l) => JSON.parse(l) as TelemetryEvent);
+    expect(events.map((e) => e.type)).toEqual(['hook-event', 'tool-trace']);
+  });
+
+  it('filters by --session and --type and writes to --out', async () => {
+    const path = seededDb();
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-out-'));
+    tmpDirs.push(dir);
+    const out = join(dir, 'events.jsonl');
+    const code = await main(['telemetry', 'export', '--db', path, '--session', 's2', '--out', out]);
+    expect(code).toBe(0);
+    const lines = readFileSync(out, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect((JSON.parse(lines[0] ?? '{}') as TelemetryEvent).sessionId).toBe('s2');
+
+    const code2 = await main(['telemetry', 'export', '--db', path, '--type', 'hook-event', '--out', out]);
+    expect(code2).toBe(0);
+    const lines2 = readFileSync(out, 'utf8').trim().split('\n');
+    expect(lines2).toHaveLength(1);
+    expect((JSON.parse(lines2[0] ?? '{}') as TelemetryEvent).type).toBe('hook-event');
+  });
+
+  it('does not require ANTHROPIC_API_KEY', async () => {
+    const path = seededDb();
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      spy.mockRestore();
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
   });
 });
 

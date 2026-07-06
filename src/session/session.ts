@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { TaskDescriptor } from '../router/index.js';
 import type { Skill } from '../skills/index.js';
+import type { TelemetryEventInput } from '../telemetry/index.js';
 import type {
   DeniedToolCall,
   SdkAssistantMessage,
@@ -98,8 +99,35 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     const harnessSessionId = generateId();
+    const turnId = config.turnId ?? generateId();
     let sdkSessionId: string | null = null;
     const denied: DeniedToolCall[] = [];
+
+    // Telemetry is observability, never control flow: a failing or throwing
+    // recorder downgrades to a warning and the run continues.
+    function recordTelemetry(event: TelemetryEventInput): void {
+      if (deps.telemetry === undefined) return;
+      try {
+        const result = deps.telemetry.record(event);
+        if (!result.ok) {
+          warn(`telemetry record failed: ${sanitizeText(result.error.message)}`);
+        }
+      } catch (error: unknown) {
+        warn(
+          `telemetry record threw: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+        );
+      }
+    }
+
+    function summarizeToolOutput(output: unknown): string | null {
+      if (output === undefined || output === null) return null;
+      if (typeof output === 'string') return truncate(output);
+      try {
+        return truncate(JSON.stringify(output));
+      } catch {
+        return truncate(String(output));
+      }
+    }
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
     const preToolCallback: SdkHookCallback = async (input) => {
@@ -134,6 +162,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     };
 
     const postToolCallback: SdkHookCallback = async (input) => {
+      recordTelemetry({
+        type: 'tool-trace',
+        sessionId: harnessSessionId,
+        turnId,
+        payload: {
+          tool: sanitizeText(input.tool_name ?? 'unknown'),
+          phase: 'post-tool',
+          ok: true,
+          resultSummary: summarizeToolOutput(input.tool_output),
+        },
+      });
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
@@ -219,10 +258,36 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     const sessionId = sdkSessionId ?? harnessSessionId;
 
+    // Durable metrics (ADR-0004/0011): one turn-cost event per run, on the
+    // error path too so failed runs leave a costed trace. Keyed on the harness
+    // session id so hook-sink events correlate; the SDK id rides in the payload.
+    recordTelemetry({
+      type: 'turn-cost',
+      sessionId: harnessSessionId,
+      turnId,
+      payload: {
+        model: modelChoice.model,
+        ruleId: modelChoice.rule_id,
+        costUsd,
+        numTurns,
+        usage:
+          usage === null
+            ? null
+            : {
+                inputTokens: usage.input_tokens,
+                outputTokens: usage.output_tokens,
+                cacheCreationInputTokens: usage.cache_creation_input_tokens ?? null,
+                cacheReadInputTokens: usage.cache_read_input_tokens ?? null,
+              },
+        sdkSessionId,
+        resultSubtype,
+      },
+    });
+
     // Week-1 checkpoint: persist at least one memory entry per session — on
     // the error path too, so failed runs leave a trace. Content is truncated
-    // and control-char-sanitized; cost/usage metrics belong to the Week-2
-    // telemetry module (ADR-0004), not memory, so they are not persisted here.
+    // and control-char-sanitized; cost/usage metrics live in telemetry
+    // (ADR-0004), not memory, so they are not persisted here.
     let memoryEntryId: string | null = null;
     const writeResult = deps.memory.write({
       id: `session-${sessionId}`,

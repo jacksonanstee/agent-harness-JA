@@ -17,11 +17,31 @@ export default tseslint.config(
   // Dependency direction (docs/architecture.md): leaf harness modules must not
   // import the orchestrator (session) or the CLI. Extend as layers land.
   {
-    files: ['src/router/**', 'src/skills/**', 'src/hooks/**', 'src/memory/**'],
+    files: ['src/router/**', 'src/skills/**', 'src/hooks/**', 'src/memory/**', 'src/telemetry/**'],
     rules: {
       'no-restricted-imports': [
         'error',
         { patterns: ['**/session/*', '**/session', '**/cli', '**/cli.js'] },
+      ],
+    },
+  },
+  // Telemetry and hooks are peer leaf modules: hooks feeds telemetry through an
+  // injected sink adapter in the composition root (cli), never via imports.
+  {
+    files: ['src/telemetry/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/session/*',
+            '**/session',
+            '**/cli',
+            '**/cli.js',
+            '**/hooks/*',
+            '**/hooks',
+          ],
+        },
       ],
     },
   },
