@@ -4,7 +4,7 @@ import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
-import type { ScanResult } from '../security/index.js';
+import type { RedactResult, ScanResult } from '../security/index.js';
 import { createSession } from './session.js';
 import type {
   QueryFn,
@@ -563,6 +563,141 @@ describe('createSession', () => {
     const result = await session.run('hi');
     expect(result.resultText).toBe('hello from claude');
     expect(warnings.some((w) => w.includes('injection scan failed'))).toBe(true);
+  });
+
+  it('redacts secrets from tool output BEFORE it reaches telemetry', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: `key ${secret}` }]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const redactSecrets = (text: string): RedactResult => ({
+      redacted: text.replace(secret, '[REDACTED:aws-access-key-id]'),
+      findings: text.includes(secret)
+        ? [{ rule_id: 'aws-access-key-id', start: 4, end: 4 + secret.length, length: secret.length }]
+        : [],
+    });
+    const session = createSession(makeDeps(fake, { telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+    });
+    await session.run('hi');
+
+    const trace = events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
+    expect(trace.payload.resultSummary).toContain('[REDACTED:aws-access-key-id]');
+    expect(trace.payload.resultSummary).not.toContain(secret);
+  });
+
+  it('passes secret findings to the post-tool hook redactions field', async () => {
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'AKIA' + 'IOSFODNN7EXAMPLE' }]);
+    let seenRedactions: unknown = 'unset';
+    const hooks = createHookRuntime();
+    hooks.register('post-tool', (payload) => {
+      seenRedactions = payload.redactions;
+    });
+    const redactSecrets = (): RedactResult => ({
+      redacted: '[REDACTED:aws-access-key-id]',
+      findings: [{ rule_id: 'aws-access-key-id', start: 0, end: 20, length: 20 }],
+    });
+    const session = createSession(makeDeps(fake, { hooks, redactSecrets }), { skillsDir: '/nowhere' });
+    await session.run('hi');
+    expect(Array.isArray(seenRedactions)).toBe(true);
+    expect((seenRedactions as { rule_id: string }[])[0]?.rule_id).toBe('aws-access-key-id');
+  });
+
+  it('scans tool inputs for secrets and warns', async () => {
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'curl -H "token: ghp_x"' }, output: 'ok' },
+    ]);
+    const warnings: string[] = [];
+    const scanned: string[] = [];
+    const redactSecrets = (text: string): RedactResult => {
+      scanned.push(text);
+      return text.includes('command')
+        ? { redacted: text, findings: [{ rule_id: 'github-pat', start: 0, end: 4, length: 4 }] }
+        : { redacted: text, findings: [] };
+    };
+    const session = createSession(makeDeps(fake, { redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    await session.run('hi');
+    // The pre-tool input was scanned (the args object stringified).
+    expect(scanned.some((t) => t.includes('command'))).toBe(true);
+    expect(warnings.some((w) => w.includes('secrets redacted in Bash'))).toBe(true);
+  });
+
+  it('fail-closes telemetry to a sentinel when the redactor throws', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: secret }]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const warnings: string[] = [];
+    const redactSecrets = (): RedactResult => {
+      throw new Error('redactor exploded');
+    };
+    const session = createSession(makeDeps(fake, { telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('hi');
+    expect(result.resultText).toBe('hello from claude');
+    const trace = events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
+    expect(trace.payload.resultSummary).toBe('[REDACTION FAILED]');
+    expect(trace.payload.resultSummary).not.toContain(secret);
+    expect(warnings.some((w) => w.includes('secret redaction failed'))).toBe(true);
+  });
+
+  it('records raw output in telemetry when no redactor is injected (unchanged behavior)', async () => {
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'plain output' }]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const session = createSession(makeDeps(fake, { telemetry }), { skillsDir: '/nowhere' });
+    await session.run('hi');
+    const trace = events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
+    expect(trace.payload.resultSummary).toBe('plain output');
+  });
+
+  it('redacts secrets from prompt and resultText before the memory write', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([
+      INIT,
+      {
+        type: 'result',
+        subtype: 'success',
+        result: `the key is ${secret}`,
+        session_id: 'sdk-123',
+        num_turns: 1,
+        total_cost_usd: 0,
+      },
+    ]);
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const redactSecrets = (text: string): RedactResult => ({
+      redacted: text.replaceAll(secret, '[REDACTED:aws-access-key-id]'),
+      findings: [],
+    });
+    const session = createSession(makeDeps(fake, { memory, redactSecrets }), { skillsDir: '/nowhere' });
+    await session.run(`please handle ${secret} now`);
+
+    const content = memory.read({})[0]?.content ?? '';
+    expect(content).not.toContain(secret);
+    expect(content).toContain('[REDACTED:aws-access-key-id]');
   });
 
   it('streams assistant text through onText', async () => {

@@ -10,7 +10,7 @@ import type {
   StopPayload,
 } from './index.js';
 
-const preTool: PreToolPayload = { event: 'pre-tool', tool: 'Read', args: { path: '/x' } };
+const preTool: PreToolPayload = { event: 'pre-tool', tool: 'Read', args: { path: '/x' }, redactions: null };
 const postTool: PostToolPayload = {
   event: 'post-tool',
   tool: 'Read',
@@ -132,7 +132,7 @@ describe('hooks: integration — payload shape + ordering per event', () => {
   it('pre-tool handler receives the locked payload shape', async () => {
     const runtime = createHookRuntime();
     runtime.register('pre-tool', (p) => {
-      expect(p).toEqual({ event: 'pre-tool', tool: 'Read', args: { path: '/x' } });
+      expect(p).toEqual({ event: 'pre-tool', tool: 'Read', args: { path: '/x' }, redactions: null });
     });
     expect((await runtime.fire('pre-tool', preTool)).denied).toBe(false);
   });
@@ -343,6 +343,7 @@ describe('hooks: security hardening (3-agent review)', () => {
       event: 'pre-tool',
       tool: 'evil\x1b[31m\ntool',
       args: null,
+      redactions: null,
     });
     const denied = records.find((r) => r.kind === 'denied-by-hook');
     expect(denied?.kind).toBe('denied-by-hook');
@@ -362,6 +363,7 @@ describe('hooks: security hardening (3-agent review)', () => {
       event: 'pre-tool',
       tool: 42 as unknown as string,
       args: null,
+      redactions: null,
     });
     expect(result.denied).toBe(true);
     const denied = records.find((r) => r.kind === 'denied-by-hook');
@@ -384,7 +386,7 @@ describe('hooks: security hardening (3-agent review)', () => {
 
   it('freezes the payload so a handler cannot swap a top-level field', async () => {
     const runtime = createHookRuntime();
-    const payload: PreToolPayload = { event: 'pre-tool', tool: 'Read', args: { path: '/x' } };
+    const payload: PreToolPayload = { event: 'pre-tool', tool: 'Read', args: { path: '/x' }, redactions: null };
     runtime.register('pre-tool', (p) => {
       // Handlers receive a frozen payload; a top-level reassignment is a no-op
       // (silent in sloppy mode, throws in strict). Either way `tool` is intact.

@@ -30,6 +30,9 @@ const SUMMARY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Cap on prompt/result text persisted in the session summary. */
 const SUMMARY_TEXT_LIMIT = 200;
 
+/** Telemetry sentinel when the secret redactor throws (fail-closed — never raw). */
+const REDACTION_FAILED = '[REDACTION FAILED]';
+
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;
@@ -113,16 +116,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
-    function summarizeToolOutput(output: unknown): string | null {
-      if (output === undefined || output === null) return null;
-      if (typeof output === 'string') return truncate(output);
-      try {
-        return truncate(JSON.stringify(output));
-      } catch {
-        return truncate(String(output));
-      }
-    }
-
     function stringifyForScan(output: unknown): string {
       if (typeof output === 'string') return output;
       // Cycle-safe: a tool returning a live object with a circular reference
@@ -141,6 +134,48 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         );
       } catch {
         return String(output);
+      }
+    }
+
+    // Redacts secrets from already-stringified tool text. Returns the redacted
+    // text + findings, or null when no redactor is injected (nothing to do).
+    // On redactor failure the text is fail-closed to a sentinel so a raw
+    // secret can never reach a downstream sink (telemetry/logs); findings are
+    // structural (hook payload types them `unknown`, no hooks→security import).
+    // Stringifies internally (symmetry with runInjectionScan) so callers never
+    // double-stringify. Returns null when no redactor is injected (nothing to
+    // do → caller uses the raw text); `{redacted: REDACTION_FAILED,
+    // findings: null}` when the redactor throws — distinct states that
+    // deliberately both surface as `redactions: null` on the hook payload
+    // (which is typed `unknown`, so richer signalling isn't available there).
+    function runSecretRedaction(
+      tool: string,
+      output: unknown,
+    ): { redacted: string; findings: unknown } | null {
+      if (deps.redactSecrets === undefined) return null;
+      try {
+        const result = deps.redactSecrets(stringifyForScan(output));
+        if (result.findings.length > 0) {
+          warn(`secrets redacted in ${tool} (${result.findings.length} finding(s))`);
+        }
+        return { redacted: result.redacted, findings: result.findings };
+      } catch (error: unknown) {
+        warn(
+          `secret redaction failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+        );
+        return { redacted: REDACTION_FAILED, findings: null };
+      }
+    }
+
+    // Redacts a plain string for a persistent sink (memory summary). Fail-
+    // closed: on redactor error it returns the REDACTION_FAILED sentinel so a
+    // secret can never persist. Absent redactor → raw (nothing configured).
+    function redactForPersistence(value: string | null): string | null {
+      if (value === null || deps.redactSecrets === undefined) return value;
+      try {
+        return deps.redactSecrets(value).redacted;
+      } catch {
+        return REDACTION_FAILED;
       }
     }
 
@@ -169,12 +204,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
     const preToolCallback: SdkHookCallback = async (input) => {
       const tool = sanitizeText(input.tool_name ?? 'unknown');
+      // Step 11 (inputs): scan tool arguments for secrets. Observe-only — the
+      // tool still receives the raw input (the SDK gives no rewrite channel);
+      // findings ride the hook payload and warn. `input` may carry a secret an
+      // attacker-influenced prior tool result told the model to pass along.
+      const inputRedaction = runSecretRedaction(tool, input.tool_input);
+
       let deniedReason: string | null = null;
       try {
         const fireResult = await deps.hooks.fire('pre-tool', {
           event: 'pre-tool',
           tool,
           args: input.tool_input,
+          redactions: inputRedaction?.findings ?? null,
         });
         if (fireResult.denied) deniedReason = fireResult.reason;
       } catch (error: unknown) {
@@ -207,6 +249,21 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     const postToolCallback: SdkHookCallback = async (input) => {
       const toolName = sanitizeText(input.tool_name ?? 'unknown');
+
+      // Step 10: prompt-injection scan of the FULL raw tool output before it is
+      // surfaced to the agent. S-1 observes + warns; model-facing enforcement
+      // is deferred (ADR-0012/0013 — no SDK rewrite channel).
+      const scan = runInjectionScan(toolName, input.tool_output);
+
+      // Step 11: redact secrets. This runs BEFORE telemetry so a secret in the
+      // tool output never reaches the (indefinitely-retained) telemetry store
+      // (ADR-0011 retention finding). Telemetry sees the redacted text; on
+      // redactor failure it sees a sentinel, never the raw output.
+      const hasOutput = input.tool_output !== undefined && input.tool_output !== null;
+      const redaction = hasOutput ? runSecretRedaction(toolName, input.tool_output) : null;
+      const telemetryText = hasOutput
+        ? (redaction?.redacted ?? stringifyForScan(input.tool_output))
+        : null;
       recordTelemetry({
         type: 'tool-trace',
         sessionId: harnessSessionId,
@@ -214,15 +271,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         payload: {
           tool: toolName,
           phase: 'post-tool',
-          resultSummary: summarizeToolOutput(input.tool_output),
+          resultSummary: telemetryText === null ? null : truncate(telemetryText),
         },
       });
-
-      // Step 10: prompt-injection scan of the FULL tool output (not the
-      // truncated summary) before it is surfaced to the agent. S-1 observes +
-      // warns; enforcement (redact/drop) composes with S-2 and is deliberately
-      // not applied here (ADR-0012). Redactions (step 11, S-2) remain null.
-      const scan = runInjectionScan(toolName, input.tool_output);
 
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
@@ -230,7 +281,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           tool: toolName,
           result: input.tool_output,
           scan,
-          redactions: null,
+          redactions: redaction?.findings ?? null,
         });
         for (const error of fireResult.errors) {
           warn(`post-tool hook error: ${error.reason}`);
@@ -338,6 +389,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // the error path too, so failed runs leave a trace. Content is truncated
     // and control-char-sanitized; cost/usage metrics live in telemetry
     // (ADR-0004), not memory, so they are not persisted here.
+    //
+    // Redact secrets BEFORE truncation: memory is a second retained sink (30d
+    // TTL), and because S-2 is observe-only the model can echo a tool-read
+    // secret into `resultText`, or the user can paste one into `prompt`
+    // (ADR-0013). Redact-then-truncate so a marker, not a secret fragment,
+    // survives the cut.
     let memoryEntryId: string | null = null;
     const writeResult = deps.memory.write({
       id: `session-${sessionId}`,
@@ -346,11 +403,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       tags: ['session'],
       staleAfter: now() + SUMMARY_TTL_MS,
       content: JSON.stringify({
-        prompt: truncate(prompt),
+        prompt: truncate(redactForPersistence(prompt)),
         model: modelChoice.model,
         rule_id: modelChoice.rule_id,
         resultSubtype,
-        resultText: truncate(resultText),
+        resultText: truncate(redactForPersistence(resultText)),
         denied,
         failed: streamError !== null,
       }),

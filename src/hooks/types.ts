@@ -4,15 +4,24 @@ export interface PreToolPayload {
   event: 'pre-tool';
   tool: string;
   args: unknown;
+  /** Owned by security/secrets-scanner; typed `unknown` to avoid a hooks→security import. */
+  redactions: unknown;
 }
 
 export interface PostToolPayload {
   event: 'post-tool';
   tool: string;
+  /**
+   * The RAW tool result — NOT redacted (hooks may need the real content to
+   * act, and injection detection needs raw text). A post-tool handler MUST NOT
+   * persist or forward `result`/`scan` to an external/retained sink without
+   * redacting first: unlike telemetry (which S-2 redacts), this field and
+   * `scan.excerpts` can carry secret bytes. See ADR-0013 §9.
+   */
   result: unknown;
-  /** Owned by security/injection-scanner; typed `unknown` to avoid a hooks→security import. */
+  /** Owned by security/injection-scanner; typed `unknown` to avoid a hooks→security import. Excerpts are raw — see `result`. */
   scan: unknown;
-  /** Owned by security/secrets-scanner; typed `unknown` for the same reason. */
+  /** Owned by security/secrets-scanner; typed `unknown` for the same reason. Leak-safe (offsets only). */
   redactions: unknown;
 }
 
