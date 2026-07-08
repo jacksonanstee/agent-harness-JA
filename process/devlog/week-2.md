@@ -189,3 +189,46 @@ still lists the whole directory. Fixed with `matchesPathGlob` (inclusive
 `dir/*` boundary mirroring the sandbox's isUnder) + regression test.
 Interpreter-as-wrapper and POSIX-basename notes were pre-existing,
 admin-gated, documented non-goals — comment scoped, no code change. 572 tests.
+
+## 2026-07-08 — Week-2 close: security-model.md + ADR-0016
+
+Docs-only branch (`docs/week2-security-model`) closing the last two Week-2
+checkboxes.
+
+- `docs/security-model.md`: STRIDE threat model anchored to shipped code and
+  live-verified review incidents (dual-table gap, `/ETC/passwd` case-fold),
+  explicit attacker model (malicious cloned repo IS in scope; malicious
+  operator/OS is not), 7-row residual-risk table. The load-bearing honesty is
+  R-4: pre-tool denies are enforced, but S-1/S-2 are observe-only — the model
+  still sees flagged/unredacted output until an SDK result-rewrite channel
+  exists.
+- ADR-0016: S-5 judge design locked, implementation deferred. Key decision:
+  the judge may only TIGHTEN verdicts (never downgrade a heuristic block) —
+  one-way composition converts "the judge is injectable" into bounded false
+  positives. Escalation off|suspicious|always rides the existing
+  `suspicious` flag; judge failure fails closed to the heuristic verdict.
+  Defer trigger = Week-3 corpus pass rate <90%. Resolves architecture open
+  question #1.
+- Touches: week-plan boxes checked, architecture.md cross-link + OQ#1
+  resolved. 572 tests still green (docs-only proof).
+
+### Review round (2026-07-08, 3-agent on the docs)
+
+Fleet caught real problems in the threat model itself:
+- **defaultDecision widening channel (security HIGH, verified):**
+  `mergeLayers` lets a project settings file override a hardened user
+  `defaultDecision: deny` back to `allow` (intentional per ADR-0014 §5, but
+  the doc's "sticky deny closes widening by construction" claim didn't scope
+  it). Doc now scopes sticky deny to rule-vs-rule and tracks this as R-8.
+- **R-3+R-4 kill-chain (security HIGH):** injection-observe-only + ungated
+  WebFetch compose into a full exfil path; residual risks now analysed as a
+  chain, not independently.
+- **Judge attribution gap (architect HIGH):** ADR-0016 now specifies the
+  composed ScanResult (judge-* synthetic rule ids, excerpts pass through,
+  suspicious=false post-escalation) and pins the Week-3 CI gate to the
+  deterministic heuristic arm.
+- Fact fixes: [REDACTION FAILED] lives in session wiring not redact.ts;
+  corpus is 31 cases not 30; 15 regex rules span 4 families (hidden-unicode
+  = 2 pipeline detectors → 17 detectors / 5 families); stale architecture.md
+  "optionally router" judge dependency corrected; R-9 (SDK tool-surface
+  drift) added; snapshot numbers date-stamped.
