@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalizeCommand,
   createPermissionEvaluator,
   matchesGlob,
   PermissionDenied,
@@ -306,5 +307,77 @@ describe('permissionHook', () => {
       throw new Error('tty gone');
     });
     await expect(rejecting(preTool('Bash', {}))).rejects.toThrowError(PermissionDenied);
+  });
+});
+
+describe('command match normalization (Week-2 milestone differential F-1)', () => {
+  const denyRm = () =>
+    createPermissionEvaluator({
+      rules: [rule({ tool: 'Bash', match: 'rm *', decision: 'deny' })],
+    });
+
+  it('leading whitespace cannot dodge a command deny rule', () => {
+    expect(denyRm().evaluate('Bash', { command: ' rm -rf /tmp/x' }).decision).toBe('deny');
+  });
+
+  it('tab separators cannot dodge a command deny rule', () => {
+    expect(denyRm().evaluate('Bash', { command: 'rm\t-rf\t/tmp/x' }).decision).toBe('deny');
+  });
+
+  it('case cannot dodge a command deny rule on case-insensitive platforms', () => {
+    const decision = denyRm().evaluate('Bash', { command: 'RM -rf /tmp/x' }).decision;
+    const expected = process.platform === 'darwin' || process.platform === 'win32' ? 'deny' : 'allow';
+    expect(decision).toBe(expected);
+  });
+
+  it('still matches the plain form and non-matching commands stay allowed', () => {
+    expect(denyRm().evaluate('Bash', { command: 'rm -rf /tmp/x' }).decision).toBe('deny');
+    expect(denyRm().evaluate('Bash', { command: 'ls -la' }).decision).toBe('allow');
+  });
+});
+
+describe('canonicalizeCommand (platform-independent via injected flag)', () => {
+  it('trims and collapses whitespace runs regardless of platform', () => {
+    expect(canonicalizeCommand(' rm\t-rf\t x ', false)).toBe('rm -rf x');
+    expect(canonicalizeCommand(' rm\t-rf\t x ', true)).toBe('rm -rf x');
+  });
+
+  it('folds argv0 case ONLY when case-insensitive — the deny-bypass fix runs on every CI platform', () => {
+    expect(canonicalizeCommand('RM -rf /tmp/x', true)).toBe('rm -rf /tmp/x');
+    expect(canonicalizeCommand('RM -rf /tmp/x', false)).toBe('RM -rf /tmp/x');
+    expect(canonicalizeCommand('GIT', true)).toBe('git');
+  });
+
+  it('never folds arguments — an allow rule is not widened to case-variants of URLs/flags', () => {
+    expect(canonicalizeCommand('curl https://API.Example.com/Health', true)).toBe(
+      'curl https://API.Example.com/Health',
+    );
+  });
+
+  it('handles degenerate inputs: empty, whitespace-only, bare *', () => {
+    expect(canonicalizeCommand('', true)).toBe('');
+    expect(canonicalizeCommand('   \t ', true)).toBe('');
+    expect(canonicalizeCommand('*', true)).toBe('*');
+  });
+
+  it('folds NBSP/unicode whitespace into the separator (fails toward deny, never a bypass)', () => {
+    expect(canonicalizeCommand('rm -rf x', false)).toBe('rm -rf x');
+  });
+});
+
+describe('allow rules are not widened by command normalization', () => {
+  it('argv0-only fold keeps an allow rule scoped to the exact argument case', () => {
+    const evaluator = createPermissionEvaluator({
+      defaultDecision: 'deny',
+      rules: [
+        rule({ tool: 'Bash', match: 'curl https://api.example.com/health*', decision: 'allow' }),
+      ],
+    });
+    expect(
+      evaluator.evaluate('Bash', { command: 'curl https://api.example.com/health' }).decision,
+    ).toBe('allow');
+    expect(
+      evaluator.evaluate('Bash', { command: 'curl https://API.EXAMPLE.COM/OTHER' }).decision,
+    ).toBe('deny');
   });
 });

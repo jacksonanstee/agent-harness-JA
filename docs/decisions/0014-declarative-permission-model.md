@@ -55,7 +55,7 @@ Permission denials flow through the existing `denied-by-hook` telemetry record; 
 ### Negative / accepted
 
 - Default-allow means the module protects nothing until a settings file exists. Accepted: documented hardening is one line, and breaking every existing flow by default is worse (§3).
-- `match` on Bash is a prefix glob over the raw command string — trivially bypassable (`cd /; rm ...`), and `Bash(rm *)` misses `sudo rm`. Accepted and documented: argument-level enforcement is S-4's sandbox, not this grammar.
+- `match` on Bash is a prefix glob over the command string — trivially bypassable at the semantic level (`cd /; rm ...`), and `Bash(rm *)` misses `sudo rm`. Accepted and documented: argument-level enforcement is S-4's sandbox, not this grammar. *(Amended 2026-07-08, Week-2 milestone differential review F-1: "raw string" was too raw — leading/tab whitespace and case on case-insensitive platforms dodged deny rules. Both sides of a command match now go through `canonicalizeCommand` — trim, collapse whitespace runs, and case-fold **argv0 only** on darwin/win32 (the filesystem rationale covers which program resolves, not its arguments — folding the whole string would have widened allow rules to case-variants of URLs/flags, caught in the fix's own review round). The semantic bypass class above is unchanged.)*
 - No per-rule audit of which layer *file* a rule came from beyond the user/project tag.
 
 ## Alternatives considered

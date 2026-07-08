@@ -1,6 +1,10 @@
 import { sep } from 'node:path';
 
-import { canonicalizePath, TOOL_TARGET_FIELDS } from '../../internal/tool-targets.js';
+import {
+  CASE_INSENSITIVE_PLATFORM,
+  canonicalizePath,
+  TOOL_TARGET_FIELDS,
+} from '../../internal/tool-targets.js';
 import type {
   Evaluation,
   EvaluatorOptions,
@@ -55,6 +59,29 @@ export function matchesPathGlob(pattern: string, value: string): boolean {
  * of the args for unknown tools — a caller-shaped surface, so match rules
  * on arbitrary tools are best-effort only (ADR-0014 §1).
  */
+/**
+ * Normalizes a command string for rule matching: trims, collapses runs of
+ * whitespace (a tab is the same separator as a space to a shell), and folds
+ * case on the argv0 token ONLY, on case-insensitive platforms (where `RM`
+ * executes /bin/rm — the same bypass class canonicalizePath closes for
+ * paths; Week-2 milestone differential review F-1). The fold deliberately
+ * stops at the first space: the filesystem rationale covers which *program*
+ * resolves, not its arguments — folding the whole string would WIDEN allow
+ * rules to case-variants of URLs/flags/literals the author never permitted
+ * (review round on the F-1 fix). Match *patterns* for command targets go
+ * through the same function so both sides share one identity grammar.
+ */
+export function canonicalizeCommand(
+  value: string,
+  caseInsensitive: boolean = CASE_INSENSITIVE_PLATFORM,
+): string {
+  const collapsed = value.trim().replace(/\s+/g, ' ');
+  if (!caseInsensitive || collapsed === '') return collapsed;
+  const sepIndex = collapsed.indexOf(' ');
+  if (sepIndex === -1) return collapsed.toLowerCase();
+  return collapsed.slice(0, sepIndex).toLowerCase() + collapsed.slice(sepIndex);
+}
+
 export function extractMatchTarget(tool: string, args: unknown): string {
   const spec = TOOL_TARGET_FIELDS[tool];
   if (spec !== undefined && typeof args === 'object' && args !== null) {
@@ -62,7 +89,9 @@ export function extractMatchTarget(tool: string, args: unknown): string {
     const value =
       raw === undefined && spec.missingMeansCwd === true ? process.cwd() : raw;
     if (typeof value === 'string') {
-      return spec.kind === 'path' ? canonicalizePath(value) : value;
+      if (spec.kind === 'path') return canonicalizePath(value);
+      if (spec.kind === 'command') return canonicalizeCommand(value);
+      return value;
     }
   }
   try {
@@ -121,14 +150,16 @@ function layerWinner(
   rules: readonly LayeredRule[],
   tool: string,
   target: string,
-  targetIsPath: boolean,
+  targetKind: 'path' | 'command' | undefined,
 ): Winner | null {
   let winner: Winner | null = null;
   for (const [index, rule] of rules.entries()) {
     if (!matchesGlob(rule.tool, tool)) continue;
     if (rule.match !== undefined) {
-      if (targetIsPath) {
+      if (targetKind === 'path') {
         if (!matchesPathGlob(canonicalizePathPattern(rule.match), target)) continue;
+      } else if (targetKind === 'command') {
+        if (!matchesGlob(canonicalizeCommand(rule.match), target)) continue;
       } else if (!matchesGlob(rule.match, target)) continue;
     }
     if (
@@ -158,10 +189,10 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
   return {
     evaluate(tool: string, args: unknown): Evaluation {
       const target = extractMatchTarget(tool, args);
-      const targetIsPath = TOOL_TARGET_FIELDS[tool]?.kind === 'path';
+      const targetKind = TOOL_TARGET_FIELDS[tool]?.kind;
       const winners = [
-        layerWinner(userRules, tool, target, targetIsPath),
-        layerWinner(projectRules, tool, target, targetIsPath),
+        layerWinner(userRules, tool, target, targetKind),
+        layerWinner(projectRules, tool, target, targetKind),
       ].filter((winner): winner is Winner => winner !== null);
 
       let winner: Winner | null = null;
