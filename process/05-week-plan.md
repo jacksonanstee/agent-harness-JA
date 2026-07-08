@@ -60,11 +60,11 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 
 - [x] **Telemetry module** — SQLite schema, migration runner, per-turn cost + cache + tool-trace events. Export to JSONL. *(2026-07-06, ADR-0011)*
 - [x] **Injection scanner** (S-1) — heuristic pass with confidence-scored rules. *(2026-07-06, ADR-0012)*
-- [ ] **LLM-judge** (S-5) — optional second-stage scanner for suspicious cases. Off by default.
+- [x] **LLM-judge** (S-5) — design locked (ADR-0016: tighten-only `scanWithJudge` contract); implementation deferred to the Week-3 <90% red-team trigger. *(2026-07-08)*
 - [x] **Secret scanner** (S-2) — ≥20 patterns (API keys, tokens, private keys). Redact + log. *(2026-07-06, ADR-0013; 25 rules)*
 - [x] **Permission model** (S-3) — allow / ask / deny, inheritable from settings files. *(2026-07-06, ADR-0014)*
 - [x] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash. *(2026-07-06, ADR-0015)*
-- [ ] `docs/security-model.md` — STRIDE-style threat model, anchored to the modules built this week.
+- [x] `docs/security-model.md` — STRIDE-style threat model, anchored to the modules built this week. *(2026-07-08)*
 
 > **Follow-up (deferred, cross-cutting):** model-facing enforcement — S-1 injection block/drop AND S-2 output redaction that the *model* sees — both need an SDK result-rewrite channel or a tool-wrapping layer the current PostToolUse hook lacks. Tracked as one item (ADR-0012 §9, ADR-0013 §9).
 
