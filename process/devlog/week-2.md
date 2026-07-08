@@ -232,3 +232,36 @@ Fleet caught real problems in the threat model itself:
   = 2 pipeline detectors → 17 detectors / 5 families); stale architecture.md
   "optionally router" judge dependency corrected; R-9 (SDK tool-surface
   drift) added; snapshot numbers date-stamped.
+
+## 2026-07-08 — Week-2 milestone differential review + F-1 fix
+
+PR #16 merged (`f5ae09b`). Mandatory whole-branch differential review ran on
+the full Week-2 range (`4d196e1..f5ae09b`): **APPROVE-WITH-NITS**, report at
+`process/reviews/differential-review-week2-milestone.md`. The seam trace
+(gate ordering, deny channels, redact-before-persist across all sinks) came
+back clean; one real cross-PR finding:
+
+- **F-1 (MEDIUM, confirmed live):** S-3 permission command matches ran on
+  the raw string while S-4's sandbox normalizes — `Bash(rm *)` deny dodged
+  by leading space, tab separator, or `RM` on APFS. The exact class the
+  range fixed for paths, missed for `kind:'command'` targets because each
+  PR's review saw only its own module. Fixed on
+  `fix/permission-command-normalization`: `canonicalizeCommand` (trim,
+  collapse whitespace, case-fold) applied to BOTH target and pattern sides;
+  ADR-0014 amended; regression tests TDD red→green.
+
+  The fix's own 3-agent review round then caught the first cut folding the
+  WHOLE string — which would have widened allow rules to case-variants of
+  URLs/flags (the dangerous direction). Final design: **argv0-only fold**.
+  Same round surfaced the sibling gap: the sandbox's "unconditional"
+  shell-runner blocklist was case-dodgeable (`SH -c` on APFS) — blocklist
+  basename now folds on darwin/win32, and the path-shaped allowlist compare
+  + entryKey command identity moved from raw resolve() to canonicalizePath
+  (entryKey's doc demands grammar parity; tighten-only for intersection).
+  Also: canonicalizeCommand exported on the barrel (parity with
+  canonicalizePathPattern), platform-injected unit tests so the case branch
+  runs on ubuntu CI (the platform-conditional test alone never exercised the
+  fix there), ADR-0015 amended. 584 tests.
+- F-2 (LOW, deferred): memory summary persists `denied[]` reasons without
+  redaction — safe with current hooks, fragile against future custom hooks.
+- F-3 (LOW): ADR-0014 normalization contract — closed by the amendment.

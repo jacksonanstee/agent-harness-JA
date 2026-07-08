@@ -1,6 +1,10 @@
-import { basename, resolve, sep } from 'node:path';
+import { basename, sep } from 'node:path';
 
-import { canonicalizePath, TOOL_TARGET_FIELDS } from '../../internal/tool-targets.js';
+import {
+  CASE_INSENSITIVE_PLATFORM,
+  canonicalizePath,
+  TOOL_TARGET_FIELDS,
+} from '../../internal/tool-targets.js';
 import type { Sandbox, SandboxAllowlist, SandboxConfig } from './types.js';
 
 /**
@@ -86,11 +90,21 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
       // Static blocklist beats the allowlist: shells and run-anything
       // wrappers defeat first-token analysis no matter what settings say.
-      if (SHELL_RUNNER_BINARIES.includes(basename(argv0))) return false;
+      // The basename is case-folded on case-insensitive platforms — `SH -c`
+      // resolves the same binary as `sh -c` on APFS/NTFS, and a blocklist
+      // documented as unconditional must not be dodgeable by case (the F-1
+      // bypass class one gate over; Week-2 milestone review follow-up).
+      const runnerName = CASE_INSENSITIVE_PLATFORM
+        ? basename(argv0).toLowerCase()
+        : basename(argv0);
+      if (SHELL_RUNNER_BINARIES.includes(runnerName)) return false;
+      // Bare names fold like the blocklist: PATH lookup resolves `GIT` and
+      // `git` to the same binary on case-insensitive platforms.
+      const argv0Name = CASE_INSENSITIVE_PLATFORM ? argv0.toLowerCase() : argv0;
       return commandEntries.some((entry) =>
         isPathShaped(entry)
-          ? isPathShaped(argv0) && resolve(entry) === resolve(argv0)
-          : entry === argv0,
+          ? isPathShaped(argv0) && canonicalizePath(entry) === canonicalizePath(argv0)
+          : (CASE_INSENSITIVE_PLATFORM ? entry.toLowerCase() : entry) === argv0Name,
       );
     },
   };
@@ -103,7 +117,8 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
  */
 function entryKey(entry: string, kind: 'path' | 'command'): string {
   if (kind === 'path') return canonicalizePath(entry);
-  return isPathShaped(entry) ? `p:${resolve(entry)}` : `b:${entry}`;
+  if (isPathShaped(entry)) return `p:${canonicalizePath(entry)}`;
+  return `b:${CASE_INSENSITIVE_PLATFORM ? entry.toLowerCase() : entry}`;
 }
 
 function intersectDimension(

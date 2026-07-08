@@ -243,3 +243,29 @@ describe('sandboxHook', () => {
     await expect(pathsOnly(preTool('Bash', { command: 'rm -rf /' }))).resolves.toBeUndefined();
   });
 });
+
+describe('shell-runner blocklist is case-proof (Week-2 milestone review follow-up)', () => {
+  it('case-varied shell runners never pass, even when a shell is allowlisted', () => {
+    const sandbox = createSandbox({ commands: { allow: ['sh', 'git'] } });
+    // darwin/win32: 'SH' case-folds into the blocklist; elsewhere 'SH' is a
+    // different binary that is simply not allowlisted — denied either way.
+    expect(sandbox.allowCommand('SH -c "rm -rf /"')).toBe(false);
+    expect(sandbox.allowCommand('sh -c "rm -rf /"')).toBe(false);
+  });
+
+  it('path-shaped allowlist compare uses canonicalizePath (case-folds with the path gate)', () => {
+    const sandbox = createSandbox({ commands: { allow: ['/usr/bin/git'] } });
+    const folded = process.platform === 'darwin' || process.platform === 'win32';
+    expect(sandbox.allowCommand('/usr/bin/git status')).toBe(true);
+    expect(sandbox.allowCommand('/USR/BIN/GIT status')).toBe(folded);
+  });
+});
+
+describe('bare-name allowlist folds with the same grammar (verify-pass LOW)', () => {
+  it('a bare entry matches case-variant invocations on case-insensitive platforms', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    const folded = process.platform === 'darwin' || process.platform === 'win32';
+    expect(sandbox.allowCommand('git status')).toBe(true);
+    expect(sandbox.allowCommand('GIT status')).toBe(folded);
+  });
+});

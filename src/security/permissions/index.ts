@@ -1,4 +1,5 @@
 export {
+  canonicalizeCommand,
   canonicalizePathPattern,
   createPermissionEvaluator,
   extractMatchTarget,
