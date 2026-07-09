@@ -182,7 +182,10 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       };
     } catch (cause: unknown) {
       const row = failRow(task.id, 'oracle-error', errorMessage(cause));
-      return { row: { ...row, volatile }, model: null };
+      // The session ran (its cost is already in `volatile`/totalCostUsd)
+      // even though the oracle threw — keep the model it used so
+      // meta.models and totalCostUsd stay consistent.
+      return { row: { ...row, volatile }, model: result.modelChoice.model };
     }
   };
 
