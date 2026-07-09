@@ -1,0 +1,4 @@
+---
+id: beta
+---
+Say beta.

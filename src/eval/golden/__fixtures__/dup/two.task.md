@@ -1,0 +1,4 @@
+---
+id: same-id
+---
+Body.
