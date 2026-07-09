@@ -492,13 +492,31 @@ async function runEval(args: EvalArgs): Promise<number> {
       throw error;
     }
 
-    process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
-
-    mkdirSync(EVAL_OUT_DIR, { recursive: true });
-    refuseSymlinkedDir(EVAL_OUT_DIR); // re-check after mkdir (TOCTOU narrowing)
-    const outPath = join(EVAL_OUT_DIR, scorecardFilename(Date.now()));
-    writeFileSync(outPath, toCanonicalJson(scorecard));
+    // Write the JSON scorecard BEFORE anything hits stdout: a symlink planted
+    // between the pre-flight check and here must still honor the exit-2
+    // contract (ADR-0017 decision #4 — exit 2 means no scorecard produced).
+    // Once the markdown below reaches stdout that contract can no longer be
+    // kept, so every failure in this block must be handled here, not left to
+    // bubble to the generic top-level handler.
+    let outPath: string;
+    try {
+      mkdirSync(EVAL_OUT_DIR, { recursive: true });
+      // Re-checks only the leaf path (EVAL_OUT_DIR); it narrows the TOCTOU
+      // window opened by mkdir but does not close it — an in-process oracle
+      // can write anywhere regardless (security-model R-10).
+      refuseSymlinkedDir(EVAL_OUT_DIR);
+      outPath = join(EVAL_OUT_DIR, scorecardFilename(Date.now()));
+      writeFileSync(outPath, toCanonicalJson(scorecard));
+    } catch (error: unknown) {
+      if (error instanceof EvalUsageError) {
+        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+        return 2;
+      }
+      throw error;
+    }
     process.stderr.write(`scorecard written to ${outPath}\n`);
+
+    process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
 
     return scorecard.totals.failed === 0 ? 0 : 1;
   } finally {
