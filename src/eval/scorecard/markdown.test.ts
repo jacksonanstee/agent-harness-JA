@@ -83,6 +83,17 @@ describe('toMarkdown', () => {
     expect((tableLine as string).length).toBeLessThan(250);
   });
 
+  it('does not bisect a surrogate pair at the cell truncation boundary', () => {
+    // 119 'a' puts the emoji's high surrogate exactly at the 120-char cut.
+    const long = { ...failRow, reason: 'a'.repeat(119) + '😀tail' };
+    const md = toMarkdown(makeCard([long]));
+    const hasLoneSurrogate = [...md].some((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code >= 0xd800 && code <= 0xdfff;
+    });
+    expect(hasLoneSurrogate).toBe(false);
+  });
+
   it('lists only non-zero failure kinds in the totals', () => {
     const md = toMarkdown(makeCard([passRow, failRow]));
     expect(md).toContain('oracle-fail: 1');

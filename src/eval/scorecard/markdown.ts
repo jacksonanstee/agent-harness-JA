@@ -1,3 +1,4 @@
+import { truncateWellFormed } from './sanitize.js';
 import type { Scorecard, ScorecardRow } from './types.js';
 import { FAILURE_KINDS } from './types.js';
 
@@ -6,9 +7,7 @@ const MAX_CELL_LENGTH = 120;
 
 function escapeCell(text: string): string {
   const oneLine = text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
-  return oneLine.length > MAX_CELL_LENGTH
-    ? `${oneLine.slice(0, MAX_CELL_LENGTH)}…`
-    : oneLine;
+  return truncateWellFormed(oneLine, MAX_CELL_LENGTH);
 }
 
 function money(value: number): string {

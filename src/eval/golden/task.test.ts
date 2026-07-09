@@ -121,6 +121,40 @@ describe('parseTaskFile', () => {
     expect(result.message).toMatch(/skillsDir/);
   });
 
+  it('never bisects a surrogate pair in a fallback row id at the 64-char cut', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-surrogate-id-'));
+    // 63 chars + an astral emoji = 65 code units: schema-invalid (too long),
+    // so the row is keyed by the fallback id, cut at 64.
+    writeFileSync(
+      join(taskDir, 'long-id.task.md'),
+      ['---', `id: ${'a'.repeat(63)}😀`, '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    const result = parseTaskFile(join(taskDir, 'long-id.task.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const hasLoneSurrogate = [...result.rowId].some((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code >= 0xd800 && code <= 0xdfff;
+    });
+    expect(hasLoneSurrogate).toBe(false);
+  });
+
+  it('fail-closes when skillsDir cannot be resolved for containment (symlink cycle)', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-eloop-'));
+    writeFileSync(
+      join(taskDir, 'eloop.task.md'),
+      ['---', 'id: eloop', '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    // A self-referential symlink makes realpath throw ELOOP — neither ENOENT
+    // nor a resolvable path, so containment must refuse, not silently skip.
+    symlinkSync(join(taskDir, 'skills'), join(taskDir, 'skills'));
+
+    const result = parseTaskFile(join(taskDir, 'eloop.task.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/could not be resolved/);
+  });
+
   it('accepts a skillsDir symlink that resolves inside the task directory', () => {
     const taskDir = mkdtempSync(join(tmpdir(), 'task-symlink-inside-'));
     mkdirSync(join(taskDir, 'real-skills'));

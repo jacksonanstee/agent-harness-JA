@@ -10,6 +10,7 @@ import {
   SAFE_MATTER_OPTIONS,
 } from '../../internal/frontmatter.js';
 import { sanitizeControlChars as sanitize } from '../../internal/sanitize.js';
+import { stripBidi, truncateWellFormed } from '../scorecard/index.js';
 
 const ajv = new Ajv2020({ allErrors: true });
 const validateFrontmatter = ajv.compile(taskSchema);
@@ -58,7 +59,7 @@ function errorMessage(cause: unknown): string {
 function fallbackRowId(data: unknown, path: string): string {
   if (data !== null && typeof data === 'object') {
     const id = (data as { id?: unknown }).id;
-    if (typeof id === 'string' && id.length > 0) return sanitize(id).slice(0, 64);
+    if (typeof id === 'string' && id.length > 0) return truncateWellFormed(sanitize(id), 64);
   }
   return basename(path);
 }
@@ -101,12 +102,19 @@ function containSkillsDir(skillsDir: string, taskFileDir: string): string | unde
   let realSkillsDir: string;
   try {
     realSkillsDir = realpathSync(skillsDir);
-  } catch {
-    // Doesn't exist (yet): nothing to walk, so nothing can escape via a
-    // symlink target. src/skills/load.ts's load() already treats a missing
-    // directory as a non-fatal empty load (a warning, not a crash or scan),
-    // so deferring the real-path check here doesn't reopen the gap.
-    return undefined;
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      // Doesn't exist (yet): nothing to walk, so nothing can escape via a
+      // symlink target. src/skills/load.ts's load() already treats a missing
+      // directory as a non-fatal empty load (a warning, not a crash or scan),
+      // so deferring the real-path check here doesn't reopen the gap.
+      return undefined;
+    }
+    // EACCES, ELOOP, anything else: containment can't be proven, so refuse
+    // rather than silently skipping the re-check. load() would fail on the
+    // same path anyway; this keeps the guard itself fail-closed.
+    return `skillsDir could not be resolved for containment (${code ?? 'unknown error'})`;
   }
   const realTaskDir = realpathSync(taskFileDir);
   if (realSkillsDir !== realTaskDir && !realSkillsDir.startsWith(realTaskDir + sep)) {
@@ -120,9 +128,14 @@ export function parseTaskFile(file: string): TaskParseResult {
     throw new TypeError(`file must be a non-empty string, got ${String(file)}`);
   }
   const path = resolve(file);
+  // rowId is bidi-stripped HERE, before assertUniqueIds ever sees it: a
+  // fallback id is a hostile-repo-controllable filename/frontmatter string,
+  // and cleaning after the uniqueness check would let two bidi-distinct
+  // names alias to one cleaned id in the final scorecard. The message needs
+  // no bidi strip — it only reaches sinks through cleanForScorecard.
   const fail = (rowId: string, message: string): TaskParseResult => ({
     ok: false,
-    rowId: sanitize(rowId),
+    rowId: stripBidi(sanitize(rowId)),
     message: sanitize(message),
   });
 

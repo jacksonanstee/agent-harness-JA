@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { createGoldenRunner, EvalUsageError, toCanonicalJson, toMarkdown } from './eval/index.js';
-import type { TaskSessionConfig } from './eval/index.js';
+import type { Scorecard, TaskSessionConfig } from './eval/index.js';
 import { createHookRuntime } from './hooks/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
@@ -338,6 +338,33 @@ export function refuseSymlinkedDir(path: string): void {
   }
 }
 
+/**
+ * Write the canonical scorecard under outDir. Every failure maps to a message,
+ * never a throw: a failed write means no scorecard was produced, which the
+ * caller must surface as exit 2 (ADR-0017 decision #4) — bubbling to the
+ * generic exit-1 handler would report it on the code reserved for "ran, at
+ * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
+ * committed at the output path), EACCES, and ENOSPC all end here too.
+ */
+export function writeScorecard(
+  scorecard: Scorecard,
+  outDir: string,
+  nowMs: number = Date.now(),
+): { ok: true; path: string } | { ok: false; message: string } {
+  try {
+    mkdirSync(outDir, { recursive: true });
+    // Re-checks only the leaf path (outDir); it narrows the TOCTOU window
+    // opened by mkdir but does not close it — an in-process oracle can write
+    // anywhere regardless (security-model R-10).
+    refuseSymlinkedDir(outDir);
+    const path = join(outDir, scorecardFilename(nowMs));
+    writeFileSync(path, toCanonicalJson(scorecard));
+    return { ok: true, path };
+  } catch (error: unknown) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function readPackageVersion(): string {
   try {
     const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
@@ -496,25 +523,13 @@ async function runEval(args: EvalArgs): Promise<number> {
     // between the pre-flight check and here must still honor the exit-2
     // contract (ADR-0017 decision #4 — exit 2 means no scorecard produced).
     // Once the markdown below reaches stdout that contract can no longer be
-    // kept, so every failure in this block must be handled here, not left to
-    // bubble to the generic top-level handler.
-    let outPath: string;
-    try {
-      mkdirSync(EVAL_OUT_DIR, { recursive: true });
-      // Re-checks only the leaf path (EVAL_OUT_DIR); it narrows the TOCTOU
-      // window opened by mkdir but does not close it — an in-process oracle
-      // can write anywhere regardless (security-model R-10).
-      refuseSymlinkedDir(EVAL_OUT_DIR);
-      outPath = join(EVAL_OUT_DIR, scorecardFilename(Date.now()));
-      writeFileSync(outPath, toCanonicalJson(scorecard));
-    } catch (error: unknown) {
-      if (error instanceof EvalUsageError) {
-        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
-        return 2;
-      }
-      throw error;
+    // kept, so writeScorecard maps every failure to a message, none bubble.
+    const written = writeScorecard(scorecard, EVAL_OUT_DIR);
+    if (!written.ok) {
+      process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+      return 2;
     }
-    process.stderr.write(`scorecard written to ${outPath}\n`);
+    process.stderr.write(`scorecard written to ${written.path}\n`);
 
     process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
 

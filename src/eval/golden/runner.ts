@@ -121,6 +121,10 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   const harnessVersion = deps.harnessVersion ?? '0.0.0-unknown';
   const clean = (text: string): string => cleanForScorecard(text, deps.redactSecrets);
 
+  // id is NOT run through clean(): redacting a schema-valid id would corrupt
+  // it, and every id reaching here is already safe — parse-failure ids are
+  // bidi-stripped at parse time (before the uniqueness check), success-path
+  // ids are regex-pinned by the schema.
   const failRow = (id: string, kind: FailureKind, reason: string): ScorecardRow => ({
     id,
     pass: false,

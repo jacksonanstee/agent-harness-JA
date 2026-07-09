@@ -4,8 +4,9 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { EvalUsageError } from './eval/index.js';
+import type { Scorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
@@ -449,6 +450,62 @@ describe('scorecardFilename', () => {
     // brief's literal 1783307565678 actually decodes to 2026-07-06, not
     // 2026-07-09 — see task-9-report.md for the verification command).
     expect(scorecardFilename(1783566765678)).toBe('scorecard-2026-07-09T03-12-45Z.json');
+  });
+});
+
+describe('writeScorecard', () => {
+  const scorecard: Scorecard = {
+    schemaVersion: 1,
+    meta: {
+      createdAt: '2026-07-09T03:12:45.000Z',
+      harnessVersion: '0.1.0-test',
+      taskDir: '/tmp/tasks',
+      models: [],
+    },
+    rows: [],
+    totals: {
+      tasks: 0,
+      passed: 0,
+      failed: 0,
+      byFailureKind: {
+        'task-parse': 0,
+        'oracle-load': 0,
+        'session-error': 0,
+        'oracle-error': 0,
+        'oracle-fail': 0,
+      },
+      passRate: 0,
+      totalCostUsd: 0,
+      unpricedTasks: 0,
+    },
+  };
+
+  it('creates the dir and writes canonical JSON at the timestamped path', () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'eval-write-')), 'eval');
+    const result = writeScorecard(scorecard, out, 1783566765678);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.path).toBe(join(out, 'scorecard-2026-07-09T03-12-45Z.json'));
+    expect(readFileSync(result.path, 'utf8')).toContain('"schemaVersion"');
+  });
+
+  it('maps a non-symlink obstacle (regular file at the out dir) to a message, never a throw', () => {
+    // The exit-2 contract says "no scorecard produced ⇒ exit 2" for EVERY
+    // write failure, not just symlink refusals (E-1 differential review, F-3).
+    const out = join(mkdtempSync(join(tmpdir(), 'eval-write-')), 'eval');
+    writeFileSync(out, 'a regular file where the dir should be');
+    const result = writeScorecard(scorecard, out);
+    expect(result.ok).toBe(false);
+  });
+
+  it('maps a symlinked out dir to a message (attacker-directed write)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-write-'));
+    mkdirSync(join(dir, 'real'));
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    const result = writeScorecard(scorecard, join(dir, 'link'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/symlink/);
   });
 });
 

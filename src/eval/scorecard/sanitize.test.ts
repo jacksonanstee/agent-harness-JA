@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanForScorecard, MAX_REASON_LENGTH } from './sanitize.js';
+import { cleanForScorecard, MAX_REASON_LENGTH, truncateWellFormed } from './sanitize.js';
 
 describe('cleanForScorecard', () => {
   it('passes plain text through', () => {
@@ -57,5 +57,16 @@ describe('cleanForScorecard', () => {
     const clean = cleanForScorecard(exact);
     expect(clean).toBe(exact);
     expect(clean.endsWith('…')).toBe(false);
+  });
+});
+
+describe('truncateWellFormed', () => {
+  it('returns strings at or under the cap untouched', () => {
+    expect(truncateWellFormed('abc', 5)).toBe('abc');
+    expect(truncateWellFormed('abcde', 5)).toBe('abcde');
+  });
+
+  it('cuts one earlier when a high surrogate sits at the boundary', () => {
+    expect(truncateWellFormed('aaaa\u{1F600}', 5)).toBe('aaaa…');
   });
 });

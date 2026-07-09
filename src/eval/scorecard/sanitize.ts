@@ -28,18 +28,33 @@ export function cleanForScorecard(
       return '[REDACTION FAILED]';
     }
   }
-  out = sanitizeControlChars(out).replace(BIDI_CONTROLS, ' ');
+  out = stripBidi(sanitizeControlChars(out));
+  return truncateWellFormed(out, MAX_REASON_LENGTH);
+}
 
-  if (out.length <= MAX_REASON_LENGTH) {
-    return out;
-  }
+/**
+ * Bidi stripping alone, for text that must NOT go through the full
+ * cleanForScorecard pipeline: row ids are cleaned at parse time, before the
+ * duplicate-id check (so bidi-distinct hostile filenames collide loudly,
+ * pre-spend, instead of aliasing in the final scorecard) and are never
+ * secret-redacted (a schema-valid id must survive verbatim).
+ */
+export function stripBidi(text: string): string {
+  return text.replace(BIDI_CONTROLS, ' ');
+}
 
-  let cutLength = MAX_REASON_LENGTH;
-  // Never bisect a surrogate pair: if a high surrogate (0xD800–0xDBFF) is at the
-  // truncation boundary, cut one earlier to preserve the pair.
-  const charAtBoundary = out.charCodeAt(MAX_REASON_LENGTH - 1);
-  if (charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff) {
-    cutLength = MAX_REASON_LENGTH - 1;
+/**
+ * Truncate to at most `max` chars plus an ellipsis, never bisecting a
+ * surrogate pair: if a high surrogate (0xD800–0xDBFF) sits at the truncation
+ * boundary, cut one earlier so the output stays well-formed. Every truncation
+ * of scorecard text must go through this — a naive slice at ANY boundary
+ * (not just this module's cap) can emit a lone surrogate.
+ */
+export function truncateWellFormed(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
   }
-  return `${out.slice(0, cutLength)}…`;
+  const charAtBoundary = text.charCodeAt(max - 1);
+  const cutLength = charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff ? max - 1 : max;
+  return `${text.slice(0, cutLength)}…`;
 }

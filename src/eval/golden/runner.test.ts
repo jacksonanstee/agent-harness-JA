@@ -1,3 +1,5 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -192,6 +194,63 @@ describe('createGoldenRunner rows', () => {
     const scorecard = await runner.run(fixtures('run'));
     const alpha = scorecard.rows.find((r) => r.id === 'alpha');
     expect(alpha?.reason).toBe('leaked [REDACTED]');
+  });
+
+  it('strips bidi controls from a failed-parse row id (hostile filename)', async () => {
+    // A failed parse keys the row by the file's basename, which a hostile
+    // repo can lace with an RLO; the id flows to progress lines, the
+    // markdown table, and the JSON artifact. Stripping happens at parse
+    // time, before the uniqueness check (E-1 differential review, F-1).
+    const dir = mkdtempSync(join(tmpdir(), 'golden-bidi-'));
+    writeFileSync(
+      join(dir, 'payroll\u202Edm.task.md'),
+      ['---', 'maxTurns: 2', '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    const row = scorecard.rows[0];
+    expect(row?.failureKind).toBe('task-parse');
+    expect(row?.id).toContain('payroll');
+    expect(row?.id).not.toContain('\u202E');
+  });
+
+  it('fails loudly, pre-spend, when two bidi-distinct hostile filenames alias to one id', async () => {
+    // RLO and LRM both strip to a space: if cleaning ran AFTER the
+    // uniqueness check, these two files would silently share a row id in
+    // the final scorecard. Cleaning at parse time turns that into the
+    // duplicate-id run-level error instead.
+    const dir = mkdtempSync(join(tmpdir(), 'golden-bidi-dup-'));
+    const broken = ['---', 'maxTurns: 2', '---', '', 'Reply with pong.', ''].join('\n');
+    writeFileSync(join(dir, 'a\u202E.task.md'), broken);
+    writeFileSync(join(dir, 'a\u200E.task.md'), broken);
+    const calls: TaskSessionConfig[] = [];
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      now: fakeNow(),
+    });
+    await expect(runner.run(dir)).rejects.toThrow(/duplicate task id/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('never redacts a schema-valid id, even one shaped like a secret', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-secret-id-'));
+    const id = `sk-${'a'.repeat(48)}`; // matches the openai-legacy-key rule shape
+    writeFileSync(
+      join(dir, 'secret-shaped.task.md'),
+      ['---', `id: ${id}`, '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      loadOracle: () => Promise.reject(new Error('no such oracle')),
+      redactSecrets: (t) => ({ redacted: t.replace(/sk-[a-z0-9]+/g, '[REDACTED]'), findings: [] }),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(scorecard.rows[0]?.failureKind).toBe('oracle-load');
+    expect(scorecard.rows[0]?.id).toBe(id);
   });
 
   it('emits progress lines: discovery first, then one per task', async () => {
