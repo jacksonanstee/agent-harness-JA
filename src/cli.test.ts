@@ -1,10 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRunArgs, sanitizeForTerminal, SettingsLoadError } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { EvalUsageError } from './eval/index.js';
+import type { Scorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
@@ -270,6 +272,39 @@ describe('main (pre-SDK paths)', () => {
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
     }
   });
+
+  it('returns 2 for eval when ANTHROPIC_API_KEY is unset', async () => {
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(await main(['eval'])).toBe(2);
+    } finally {
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
+  });
+
+  // The symlinked-.harness refusal cannot be driven through main() here:
+  // lstatSync('.harness') resolves relative to the OS-level cwd, and
+  // process.chdir() throws ERR_WORKER_UNSUPPORTED_OPERATION under vitest's
+  // threads pool. The branch is covered directly by the refuseSymlinkedDir
+  // unit tests above; runEval calls it verbatim.
+  it('returns 2 for eval when project settings are malformed (SettingsLoadError)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-cwd-'));
+    mkdirSync(join(dir, '.harness'));
+    writeFileSync(join(dir, '.harness', 'settings.json'), '{ not json');
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    // composeSecurity derives the project layer from process.cwd() and reads
+    // the resulting absolute path, so spying cwd() suffices — no chdir needed.
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    try {
+      expect(await main(['eval', './tasks'])).toBe(2);
+    } finally {
+      cwdSpy.mockRestore();
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+      else delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
 });
 
 describe('composeSecurity', () => {
@@ -377,5 +412,114 @@ describe('composeSecurity', () => {
     expect(result.sandbox.paths?.allow).toEqual(['/b']);
     const rules = result.permissions.rules ?? [];
     expect(rules.map((r) => r.layer)).toEqual(['user', 'project']);
+  });
+});
+
+describe('parseEvalArgs', () => {
+  it('defaults taskDir to ./eval/golden (README quick-start contract)', () => {
+    const result = parseEvalArgs([]);
+    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './eval/golden' } });
+  });
+
+  it('accepts a positional task directory', () => {
+    const result = parseEvalArgs(['./my-tasks']);
+    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './my-tasks' } });
+  });
+
+  it('rejects unknown flags (no --max-tasks in v1)', () => {
+    const result = parseEvalArgs(['--max-tasks', '5']);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects extra positional arguments', () => {
+    const result = parseEvalArgs(['a', 'b']);
+    expect(result.ok).toBe(false);
+  });
+
+  it('is reachable through parseArgs', () => {
+    const result = parseArgs(['eval', './tasks']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.command).toBe('eval');
+  });
+});
+
+describe('scorecardFilename', () => {
+  it('is filesystem-safe: no colons, second precision, Z-suffixed', () => {
+    // 2026-07-09T03:12:45.678Z (epoch re-derived from the ISO string; the
+    // brief's literal 1783307565678 actually decodes to 2026-07-06, not
+    // 2026-07-09 — see task-9-report.md for the verification command).
+    expect(scorecardFilename(1783566765678)).toBe('scorecard-2026-07-09T03-12-45Z.json');
+  });
+});
+
+describe('writeScorecard', () => {
+  const scorecard: Scorecard = {
+    schemaVersion: 1,
+    meta: {
+      createdAt: '2026-07-09T03:12:45.000Z',
+      harnessVersion: '0.1.0-test',
+      taskDir: '/tmp/tasks',
+      models: [],
+    },
+    rows: [],
+    totals: {
+      tasks: 0,
+      passed: 0,
+      failed: 0,
+      byFailureKind: {
+        'task-parse': 0,
+        'oracle-load': 0,
+        'session-error': 0,
+        'oracle-error': 0,
+        'oracle-fail': 0,
+      },
+      passRate: 0,
+      totalCostUsd: 0,
+      unpricedTasks: 0,
+    },
+  };
+
+  it('creates the dir and writes canonical JSON at the timestamped path', () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'eval-write-')), 'eval');
+    const result = writeScorecard(scorecard, out, 1783566765678);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.path).toBe(join(out, 'scorecard-2026-07-09T03-12-45Z.json'));
+    expect(readFileSync(result.path, 'utf8')).toContain('"schemaVersion"');
+  });
+
+  it('maps a non-symlink obstacle (regular file at the out dir) to a message, never a throw', () => {
+    // The exit-2 contract says "no scorecard produced ⇒ exit 2" for EVERY
+    // write failure, not just symlink refusals (E-1 differential review, F-3).
+    const out = join(mkdtempSync(join(tmpdir(), 'eval-write-')), 'eval');
+    writeFileSync(out, 'a regular file where the dir should be');
+    const result = writeScorecard(scorecard, out);
+    expect(result.ok).toBe(false);
+  });
+
+  it('maps a symlinked out dir to a message (attacker-directed write)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-write-'));
+    mkdirSync(join(dir, 'real'));
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    const result = writeScorecard(scorecard, join(dir, 'link'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/symlink/);
+  });
+});
+
+describe('refuseSymlinkedDir', () => {
+  it('passes a real directory and a missing path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-out-'));
+    expect(() => refuseSymlinkedDir(dir)).not.toThrow();
+    expect(() => refuseSymlinkedDir(join(dir, 'missing'))).not.toThrow();
+  });
+
+  it('refuses a symlinked directory (attacker-directed write)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-out-'));
+    mkdirSync(join(dir, 'real'));
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    expect(() => refuseSymlinkedDir(join(dir, 'link'))).toThrow(EvalUsageError);
   });
 });

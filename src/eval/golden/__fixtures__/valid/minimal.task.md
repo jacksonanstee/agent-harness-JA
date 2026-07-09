@@ -1,0 +1,4 @@
+---
+id: minimal
+---
+Just answer.
