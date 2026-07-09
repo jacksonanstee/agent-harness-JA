@@ -1,0 +1,159 @@
+import { readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import matter from 'gray-matter';
+import taskSchema from './schema.json' with { type: 'json' };
+import type { TaskDescriptor } from '../../router/index.js';
+import {
+  hasUnsafeFenceLanguage,
+  MAX_FILE_BYTES,
+  SAFE_MATTER_OPTIONS,
+} from '../../internal/frontmatter.js';
+import { sanitizeControlChars as sanitize } from '../../internal/sanitize.js';
+
+const ajv = new Ajv2020({ allErrors: true });
+const validateFrontmatter = ajv.compile(taskSchema);
+
+export const DEFAULT_MAX_TURNS = 10;
+
+interface TaskFrontmatter {
+  id: string;
+  descriptor?: TaskDescriptor;
+  maxTurns?: number;
+  skillsDir?: string;
+}
+
+// Compile-time parity guard between schema.json and TaskFrontmatter keys
+// (same pattern as src/skills/load.ts). Enum VALUES are runtime-guarded by
+// the schema/router lockstep test — JSON imports widen literal values.
+type KeysMatch<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+true satisfies KeysMatch<keyof typeof taskSchema.properties, keyof TaskFrontmatter>;
+
+export interface GoldenTask {
+  id: string;
+  /** The Markdown body below the frontmatter, trimmed. */
+  prompt: string;
+  descriptor?: TaskDescriptor;
+  maxTurns: number;
+  /** Resolved absolute; default `<task file dir>/skills` (spec decision #25). */
+  skillsDir: string;
+  /** Absolute path of the source file. */
+  path: string;
+  /** Sibling `<name>.oracle.mjs`, derived — existence checked at load time. */
+  oraclePath: string;
+}
+
+export type TaskParseResult =
+  | { ok: true; value: GoldenTask }
+  | { ok: false; rowId: string; message: string };
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Row key for a failed parse (spec: arbiter condition 1): the frontmatter id
+ * when one is extractable, else the file's basename — stable either way.
+ */
+function fallbackRowId(data: unknown, path: string): string {
+  if (data !== null && typeof data === 'object') {
+    const id = (data as { id?: unknown }).id;
+    if (typeof id === 'string' && id.length > 0) return sanitize(id).slice(0, 64);
+  }
+  return basename(path);
+}
+
+// Second copy of the skills loader's failingField pattern; extract to
+// src/internal on a third consumer (the settings.ts / frontmatter.ts rule).
+function failingField(): string | undefined {
+  const errors = validateFrontmatter.errors ?? [];
+  const unknownKey = errors.find((e) => e.keyword === 'additionalProperties');
+  if (unknownKey) {
+    const extra = (unknownKey.params as { additionalProperty: string }).additionalProperty;
+    return `${unknownKey.instancePath}/${extra}`;
+  }
+  const first = errors[0];
+  if (!first) return undefined;
+  if (first.keyword === 'required') {
+    const missing = (first.params as { missingProperty: string }).missingProperty;
+    return `${first.instancePath}/${missing}`;
+  }
+  return first.instancePath || undefined;
+}
+
+export function parseTaskFile(file: string): TaskParseResult {
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new TypeError(`file must be a non-empty string, got ${String(file)}`);
+  }
+  const path = resolve(file);
+  const fail = (rowId: string, message: string): TaskParseResult => ({
+    ok: false,
+    rowId: sanitize(rowId),
+    message: sanitize(message),
+  });
+
+  let raw: string;
+  try {
+    const { size } = statSync(path);
+    if (size > MAX_FILE_BYTES) {
+      return fail(basename(path), `task file exceeds ${MAX_FILE_BYTES} bytes (got ${size})`);
+    }
+    raw = readFileSync(path, 'utf8');
+  } catch (cause: unknown) {
+    return fail(basename(path), errorMessage(cause));
+  }
+
+  if (hasUnsafeFenceLanguage(raw)) {
+    return fail(
+      basename(path),
+      'frontmatter must be YAML; non-YAML fence language is refused',
+    );
+  }
+
+  let parsed: { data: unknown; content: string };
+  try {
+    parsed = matter(raw, SAFE_MATTER_OPTIONS);
+  } catch (cause: unknown) {
+    return fail(basename(path), errorMessage(cause));
+  }
+
+  if (!validateFrontmatter(parsed.data)) {
+    const field = failingField();
+    const detail = ajv.errorsText(validateFrontmatter.errors);
+    return fail(
+      fallbackRowId(parsed.data, path),
+      field === undefined ? detail : `${field}: ${detail}`,
+    );
+  }
+
+  // Safe: just validated against the schema whose keys the compile-time
+  // guard pins to this type; descriptor enums are pinned by the lockstep
+  // test. The `as unknown as` (not a plain `as`) is required because ajv's
+  // `compile<T>` infers T structurally from taskSchema against
+  // `JSONSchemaType<T>`; since descriptor.properties.{shape,sensitivity} use
+  // `enum` without a `type`, that inference collapses to a synthetic
+  // `{ [x: string]: {} }` (not `unknown`), which TS then refuses to cast
+  // directly to TaskFrontmatter as an insufficient-overlap error. Routing
+  // through `unknown` is the same idiom src/skills/load.ts's schema (no bare
+  // `enum` fields) doesn't need.
+  const frontmatter = parsed.data as unknown as TaskFrontmatter;
+
+  const prompt = parsed.content.trim();
+  if (prompt === '') {
+    return fail(frontmatter.id, 'task body (the prompt) is empty');
+  }
+
+  const taskFileDir = dirname(path);
+  return {
+    ok: true,
+    value: {
+      id: frontmatter.id,
+      prompt,
+      ...(frontmatter.descriptor !== undefined && { descriptor: frontmatter.descriptor }),
+      maxTurns: frontmatter.maxTurns ?? DEFAULT_MAX_TURNS,
+      skillsDir: resolve(taskFileDir, frontmatter.skillsDir ?? 'skills'),
+      path,
+      oraclePath: join(taskFileDir, `${basename(path, '.task.md')}.oracle.mjs`),
+    },
+  };
+}
