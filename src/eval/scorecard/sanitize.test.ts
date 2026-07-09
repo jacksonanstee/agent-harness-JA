@@ -35,4 +35,20 @@ describe('cleanForScorecard', () => {
     expect(clean.length).toBe(MAX_REASON_LENGTH + 1); // 500 chars + ellipsis
     expect(clean.endsWith('…')).toBe(true);
   });
+
+  it('does not bisect a surrogate pair at the truncation boundary', () => {
+    // 499 'a' + 2 emojis (4 code units) = 503 total.
+    // When truncated at 500, without protection would bisect the first emoji.
+    const long = 'a'.repeat(499) + '😀😀';
+    const clean = cleanForScorecard(long);
+    expect(clean.isWellFormed()).toBe(true);
+    expect(clean.endsWith('…')).toBe(true);
+  });
+
+  it('returns a string exactly at MAX_REASON_LENGTH untouched', () => {
+    const exact = 'a'.repeat(MAX_REASON_LENGTH);
+    const clean = cleanForScorecard(exact);
+    expect(clean).toBe(exact);
+    expect(clean.endsWith('…')).toBe(false);
+  });
 });

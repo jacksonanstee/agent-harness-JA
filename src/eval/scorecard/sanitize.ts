@@ -29,5 +29,17 @@ export function cleanForScorecard(
     }
   }
   out = sanitizeControlChars(out).replace(BIDI_CONTROLS, ' ');
-  return out.length > MAX_REASON_LENGTH ? `${out.slice(0, MAX_REASON_LENGTH)}…` : out;
+
+  if (out.length <= MAX_REASON_LENGTH) {
+    return out;
+  }
+
+  let cutLength = MAX_REASON_LENGTH;
+  // Never bisect a surrogate pair: if a high surrogate (0xD800–0xDBFF) is at the
+  // truncation boundary, cut one earlier to preserve the pair.
+  const charAtBoundary = out.charCodeAt(MAX_REASON_LENGTH - 1);
+  if (charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff) {
+    cutLength = MAX_REASON_LENGTH - 1;
+  }
+  return `${out.slice(0, cutLength)}…`;
 }
