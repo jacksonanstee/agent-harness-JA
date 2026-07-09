@@ -66,8 +66,12 @@ it around a session-shaped runner.
    — is `rows[]` sorted by id, each row
    `{ id, pass, failureKind, reason }` with
    `failureKind: null | 'task-parse' | 'oracle-load' | 'session-error' |
-   'oracle-error' | 'oracle-fail'`. The **volatile partition** — informational,
-   never diffed — is per-row `{ costUsd, numTurns, durationMs, resultSubtype }`
+   'oracle-error' | 'oracle-fail'`. `reason` is diffable only for producers
+   whose reasons are themselves deterministic (the red-team arm); golden
+   reasons derive from live model/SDK output, so a golden baseline diff must
+   compare `{ id, pass, failureKind }` only. The **volatile partition** —
+   informational, never diffed — is per-row
+   `{ costUsd, numTurns, durationMs, resultSubtype }`
    plus `meta` (created-at, harness version, model choices).
    `toCanonicalJson(scorecard)` sorts object keys and rows by id and ends with
    a trailing newline (byte-stable given identical inputs); `toMarkdown`
@@ -238,3 +242,18 @@ as specified except for four points that surfaced during implementation:
 - `failingField()` gets a third copy site (skills loader, golden task parser,
   plus one more) — extract it to `src/internal`, per the project's
   two-copies-is-a-pattern rule for hoisting shared guards.
+- E-2 needs new failure kinds — parameterize the scorecard kind set instead
+  of widening the shared `FAILURE_KINDS` enum (deferred from the E-1 review's
+  architecture pass, finding H1).
+- A second runner composition appears (beyond the golden runner) — make
+  `redactSecrets` a required dep, or an explicit `'none'` opt-out, so omitting
+  it becomes a type error instead of a silent no-redaction default (deferred
+  from the E-1 review, finding M1).
+- `run`/`eval` session wiring drifts apart — extract a shared task-session
+  factory inside the composition root (`src/cli.ts`) rather than letting the
+  two call sites diverge (deferred from the E-1 review, finding M2).
+- The layering rules keep growing — move to a table-driven (layer × forbidden
+  target) matrix in `src/layering.test.ts`; note that flat-config
+  `no-restricted-imports` blocks override rather than merge across config
+  objects, which is pre-existing behavior worth documenting explicitly at
+  that point (deferred from the E-1 review, finding M4).

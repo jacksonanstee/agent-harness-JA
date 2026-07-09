@@ -1,9 +1,13 @@
 /**
  * Scorecard schema (spec 2026-07-08 E-1, ADR-0017). The DETERMINISTIC
  * partition — rows sorted by id, each {id, pass, failureKind, reason} — is
- * the only part a future baseline diff (E-3) may compare. Everything under
- * `volatile` and `meta` is informational and never diffed: golden scorecards
- * come from live model runs and are not re-derivable byte-for-byte.
+ * the only part a future baseline diff (E-3) may compare. `reason` is only
+ * safely diffable for producers whose reasons are themselves deterministic
+ * (the red-team arm); golden-runner reasons derive from live model/SDK
+ * output, so a golden baseline diff must compare {id, pass, failureKind}
+ * only. Everything under `volatile` and `meta` is informational and never
+ * diffed: golden scorecards come from live model runs and are not
+ * re-derivable byte-for-byte.
  */
 
 export const FAILURE_KINDS = [
