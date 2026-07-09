@@ -41,7 +41,14 @@ describe('cleanForScorecard', () => {
     // When truncated at 500, without protection would bisect the first emoji.
     const long = 'a'.repeat(499) + '😀😀';
     const clean = cleanForScorecard(long);
-    expect(clean.isWellFormed()).toBe(true);
+    // Spreading a string iterates by code point, so a lone surrogate left
+    // behind by a bisected pair surfaces as its own single-char element in
+    // the D800-DFFF range.
+    const hasLoneSurrogate = [...clean].some((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code >= 0xd800 && code <= 0xdfff;
+    });
+    expect(hasLoneSurrogate).toBe(false);
     expect(clean.endsWith('…')).toBe(true);
   });
 
