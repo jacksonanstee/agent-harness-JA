@@ -176,25 +176,6 @@ as specified except for four points that surfaced during implementation:
    semantic change. `src/skills/load.ts`'s schema has no bare `enum` fields
    and doesn't need the double cast.
 
-## Revisit if
-
-- A settings fingerprint is needed in `meta` once scorecards must be compared
-  across differing security postures (v1 documents the variance but does not
-  encode it).
-- A `--max-tasks` or spend-budget flag is needed once golden suites grow
-  large enough that sequential execution plus pre-flight count is
-  insufficient mitigation.
-- The SDK grows an abort channel on `QueryFn` — implement per-task
-  wall-clock timeout support then.
-- Partial-scorecard-on-SIGINT semantics become worth building, in step with
-  E-3 (there is no consumer for a partial scorecard until a baseline exists
-  to compare it against).
-- Side-effect oracles are needed — extend the oracle contract with a
-  workspace handle beyond `SessionResult` at that point.
-- `failingField()` gets a third copy site (skills loader, golden task parser,
-  plus one more) — extract it to `src/internal`, per the project's
-  two-copies-is-a-pattern rule for hoisting shared guards.
-
 ## Consequences
 
 ### Positive
@@ -234,3 +215,22 @@ as specified except for four points that surfaced during implementation:
    broken oracle that returns a truthy non-boolean must never silently pass
    every task it judges; the strict boolean check turns that failure mode
    into an explicit `oracle-error` row instead.
+
+## Revisit if
+
+- A settings fingerprint is needed in `meta` once scorecards must be compared
+  across differing security postures (v1 documents the variance but does not
+  encode it).
+- A `--max-tasks` or spend-budget flag is needed once golden suites grow
+  large enough that sequential execution plus pre-flight count is
+  insufficient mitigation.
+- The SDK grows an abort channel on `QueryFn` — implement per-task
+  wall-clock timeout support then.
+- Partial-scorecard-on-SIGINT semantics become worth building, in step with
+  E-3 (there is no consumer for a partial scorecard until a baseline exists
+  to compare it against).
+- Side-effect oracles are needed — extend the oracle contract with a
+  workspace handle beyond `SessionResult` at that point.
+- `failingField()` gets a third copy site (skills loader, golden task parser,
+  plus one more) — extract it to `src/internal`, per the project's
+  two-copies-is-a-pattern rule for hoisting shared guards.
