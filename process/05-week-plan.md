@@ -74,13 +74,13 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 
 Where this project earns its differentiation. Most portfolio repos skip eval entirely.
 
-- [ ] **Golden task runner** (E-1) — Markdown task definitions, oracle functions, scorecard output.
+- [x] **Golden task runner** (E-1) — Markdown task definitions, oracle functions, scorecard output.
 - [ ] **Red-team corpus** (E-2) — ≥50 cases across direct injection, indirect injection, jailbreak, exfil. Each with a pass/fail oracle. Sources cited (Greshake, Willison, OWASP LLM Top 10).
 - [ ] **Regression detection** (E-3) — SQL diff between latest and baseline scorecards. CI fails on regression.
 - [ ] **Adversarial verification** (E-4) — second-pass model challenges primary output. Pluggable adversary model.
 - [ ] `docs/eval-methodology.md` — how scoring works, what counts as a regression, how to author new cases.
 
-**Checkpoint:** `npx agent-harness-ja eval` produces a Markdown scorecard. Red-team pass rate is ≥90% with default security on; falls to <50% with security off (proves the security layer is doing real work). CI runs eval on every PR.
+**Checkpoint:** `npx agent-harness-ja eval` produces a Markdown scorecard. Red-team pass rate is ≥90% with default security on; falls to <50% with security off (proves the security layer is doing real work). CI runs eval on every PR (the deterministic red-team arm only — golden eval needs a live key and executes repo oracle code, so it never runs in per-PR CI; ADR-0016 §7, ADR-0017).
 
 ## Week 4 — Docs polish + launch (planned 2026-06-08 → 2026-06-14; re-dated 2026-07-20 → 2026-07-26)
 

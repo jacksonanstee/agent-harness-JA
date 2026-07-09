@@ -137,18 +137,25 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 ### Eval layer
 
+#### `eval/scorecard`
+
+- **Owns:** producer-agnostic scoring machinery — the scorecard schema (deterministic vs volatile partitions), canonical JSON, Markdown rendering, row-text sanitization.
+- **Public API:** `toCanonicalJson(scorecard): string`; `toMarkdown(scorecard): string`; `cleanForScorecard(text, redactSecrets?): string`; the `Scorecard` / `ScorecardRow` / `FailureKind` types.
+- **Depends on:** `internal/sanitize`; security types only.
+- **Design notes:** Only the deterministic partition (`{id, pass, failureKind, reason}`, rows sorted by id) may ever be baseline-diffed (E-3); cost/turns/duration and `meta` are volatile and informational ([ADR-0017](./decisions/0017-golden-runner.md)).
+
 #### `eval/golden`
 
 - **Owns:** running a set of golden tasks and scoring them.
-- **Public API:** `run(taskDir: string, opts?: RunOptions): Scorecard`.
-- **Depends on:** the full harness — runs real agents through it.
-- **Design notes:** Each task is Markdown frontmatter + body + an oracle function (TypeScript module exported from the task file's sibling).
+- **Public API:** `createGoldenRunner(deps)`; `runner.run(taskDir: string, opts?): Promise<Scorecard>`.
+- **Depends on:** the full harness — runs real agents through it; `eval/scorecard` for output.
+- **Design notes:** Each task is Markdown frontmatter + body (the prompt) with a sibling `<name>.oracle.mjs` module (JSDoc-typed via the exported `OracleFn`). Oracles judge the `SessionResult` self-report; per-task failures become rows with a `failureKind`; failure reasons are redacted and truncated before entering the scorecard. Shipped ([ADR-0017](./decisions/0017-golden-runner.md)).
 
 #### `eval/red-team`
 
 - **Owns:** the ≥50-case adversarial corpus and per-case pass/fail evaluation.
 - **Public API:** `run(corpusDir: string, opts?: RunOptions): RedTeamScorecard`.
-- **Depends on:** `eval/golden` for the underlying scoring machinery; `security/injection-scanner` for verdict comparison.
+- **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison.
 - **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil. Each case includes a `source` field citing the public research it draws from.
 
 #### `eval/adversarial-verifier`
@@ -235,7 +242,7 @@ Configuration is fully optional — every module ships sensible defaults. The st
 
 - All public APIs return tagged results (`{ ok: true, value } | { ok: false, error }`) rather than throwing, except for programmer errors (invalid arguments, contract violations) which throw. Aggregate/batch operations may instead return an un-tagged result carrying both successes and per-item errors (e.g. `LoadResult { skills, errors }`) — partial failure is not a failure of the operation itself; see the ADR-0006 amendment.
 - Hook handlers that throw deny tool execution and record a `denied-by-hook` telemetry event.
-- The eval layer treats any uncaught exception in a task as a hard fail and reports the stack in the scorecard.
+- The eval layer treats any uncaught per-task exception as a failed row with a `failureKind` (infra flakes distinguishable from capability regressions) and reports a redacted, truncated failure reason in the scorecard — never a raw stack.
 
 ### Logging vs telemetry
 

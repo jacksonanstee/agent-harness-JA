@@ -48,7 +48,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # Run the agent
 npx agent-harness-ja run
 
-# Run the eval suite (golden + red-team)
+# Run the golden eval suite (red-team corpus lands in E-2)
 npx agent-harness-ja eval
 
 # Export telemetry as JSONL (filter by --session / --type)

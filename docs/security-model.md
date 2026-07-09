@@ -35,6 +35,13 @@ possible (S-1/S-2 are observe-only in v1 — see §6, residual risk R-4).
 - **A malicious or compromised cloned repository**, including its
   `.harness/settings.json`. Project-level config is attacker-influenced input:
   a repo you just cloned must not be able to widen what the agent may touch.
+  **The `eval` command is a documented exception to "config only, never
+  execution":** running `agent-harness-ja eval` against a cloned repo
+  dynamically imports and executes that repo's oracle modules in-process
+  (ADR-0017, R-10) — for the eval command specifically, cloning a malicious
+  repo and running eval **is** code execution, and the harness says so at
+  runtime (a stderr warning before the first oracle import) rather than
+  pretending a gate exists.
 - **Secret-bearing output.** Tool results that happen to contain credentials,
   which must not be persisted or emitted by the harness.
 - **Jailbreak/manipulation text** in any scanned channel, including
@@ -210,6 +217,7 @@ R-1/R-2 rather than half-solved.
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
 | R-8 | Project `defaultDecision` overrides the user's — a cloned repo can flip a hardened `deny` default back to `allow` for everything outside the user's explicit rules | High (for hardened users) | ADR-0014 §5 chose scalar-override deliberately; sticky deny still wins wherever a user rule exists | ADR-0014 §5 |
 | R-9 | SDK tool-surface drift: a new path/command-taking SDK tool absent from `tool-targets.ts` is ungated by both gates | Medium | The pin test catches accidental table edits, not SDK additions; the tool set is manually curated | ADR-0015 §2, §5 Tampering |
+| R-10 | Golden-eval oracles are arbitrary in-process code from the (in-scope) cloned repo, executed with no gate | High (targeted) | Eval is operator-invoked with a runtime stderr warning; golden eval never runs in per-PR CI (a fork PR plus a CI key secret is an exfiltration primitive) — the every-PR gate is E-3's keyless deterministic arm | ADR-0017 |
 
 The single most important honest statement in this document is **R-4**: in
 v1, a malicious tool result that the scanner flags still reaches the model,
