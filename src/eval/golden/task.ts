@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import matter from 'gray-matter';
 import taskSchema from './schema.json' with { type: 'json' };
@@ -144,6 +144,14 @@ export function parseTaskFile(file: string): TaskParseResult {
   }
 
   const taskFileDir = dirname(path);
+  const skillsDir = resolve(taskFileDir, frontmatter.skillsDir ?? 'skills');
+  if (skillsDir !== taskFileDir && !skillsDir.startsWith(taskFileDir + sep)) {
+    return fail(
+      frontmatter.id,
+      `skillsDir must stay within the task directory (got ${skillsDir})`,
+    );
+  }
+
   return {
     ok: true,
     value: {
@@ -151,7 +159,7 @@ export function parseTaskFile(file: string): TaskParseResult {
       prompt,
       ...(frontmatter.descriptor !== undefined && { descriptor: frontmatter.descriptor }),
       maxTurns: frontmatter.maxTurns ?? DEFAULT_MAX_TURNS,
-      skillsDir: resolve(taskFileDir, frontmatter.skillsDir ?? 'skills'),
+      skillsDir,
       path,
       oraclePath: join(taskFileDir, `${basename(path, '.task.md')}.oracle.mjs`),
     },

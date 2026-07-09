@@ -78,6 +78,31 @@ describe('parseTaskFile', () => {
     if (result.ok) return;
     expect(result.rowId).toBe('does-not-exist.task.md');
   });
+
+  it('rejects an absolute skillsDir that escapes the task directory', () => {
+    const result = parseTaskFile(invalid('abs-skills-dir.task.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.rowId).toBe('abs-skills-dir');
+    expect(result.message).toMatch(/skillsDir/);
+  });
+
+  it('rejects a traversal skillsDir that escapes the task directory', () => {
+    const result = parseTaskFile(invalid('traversal-skills-dir.task.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.rowId).toBe('traversal-skills-dir');
+    expect(result.message).toMatch(/skillsDir/);
+  });
+
+  it('accepts a benign nested relative skillsDir that stays within the task directory', () => {
+    const result = parseTaskFile(valid('nested-skills-dir.task.md'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.skillsDir).toBe(
+      resolve(join(here, '__fixtures__', 'valid', 'nested', 'skills')),
+    );
+  });
 });
 
 describe('schema/router lockstep', () => {

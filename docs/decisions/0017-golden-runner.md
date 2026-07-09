@@ -33,7 +33,11 @@ it around a session-shaped runner.
    invalid descriptor becomes a `task-parse` row rather than a mid-session
    `TypeError` misclassified as a session crash), `maxTurns` (optional
    integer ≥ 1, default 10), `skillsDir` (optional, resolved relative to the
-   task file's directory, default `<taskDir>/skills`). Parsing hoists the
+   task file's directory, default `<taskDir>/skills`; containment is
+   enforced after resolution — an absolute path or a `..` traversal that
+   would resolve outside the task file's directory is a `task-parse` row,
+   not a silently-honored path, so a task file cannot point the skills
+   loader at an arbitrary directory). Parsing hoists the
    skills loader's guards (`SAFE_MATTER_OPTIONS`, the fence-language guard,
    `MAX_FILE_BYTES`) into `src/internal/frontmatter.ts`, consumed by both
    skills and eval — task files carry the same anti-code-execution posture as
