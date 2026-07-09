@@ -217,6 +217,13 @@ as specified except for four points that surfaced during implementation:
   handle ships.
 - SIGINT during a run loses that run's spend. Accepted because nothing
   consumes a partial scorecard yet.
+- The skillsDir containment guarantee is parse-time only: tasks are all
+  parsed (and contained) up front, but `skills/load.ts` does not re-validate
+  root containment when each task later loads its skills, so a root swapped
+  to an escaping symlink between parse and load would be walked. The only
+  in-process actors able to win that race are an oracle (already arbitrary
+  code — R-10) or sandbox/permission-gated model writes, so this adds no
+  privilege beyond documented residuals (E-1 differential review, F-4).
 
 ## Alternatives considered
 
