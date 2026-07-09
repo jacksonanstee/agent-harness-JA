@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { createGoldenRunner, EvalUsageError, toCanonicalJson, toMarkdown } from './eval/index.js';
+import type { TaskSessionConfig } from './eval/index.js';
 import { createHookRuntime } from './hooks/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
@@ -53,7 +55,12 @@ export interface TelemetryExportArgs {
   type: TelemetryEventType | null;
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs;
+export interface EvalArgs {
+  command: 'eval';
+  taskDir: string;
+}
+
+export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -155,13 +162,33 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 
 const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
+  '       agent-harness-ja eval [taskDir]\n' +
   '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]';
 
 export function parseArgs(argv: string[]): ParseResult {
   if (argv[0] === 'telemetry') {
     return parseTelemetryArgs(argv.slice(1));
   }
+  if (argv[0] === 'eval') {
+    return parseEvalArgs(argv.slice(1));
+  }
   return parseRunArgs(argv);
+}
+
+export function parseEvalArgs(argv: string[]): ParseResult {
+  let taskDir = './eval/golden';
+  let positionalSeen = false;
+  for (const arg of argv) {
+    if (arg.startsWith('--')) {
+      return { ok: false, error: `Unknown flag '${arg}'. ${USAGE}` };
+    }
+    if (positionalSeen) {
+      return { ok: false, error: `Unexpected extra argument '${arg}'. ${USAGE}` };
+    }
+    taskDir = arg;
+    positionalSeen = true;
+  }
+  return { ok: true, value: { command: 'eval', taskDir } };
 }
 
 function parseTelemetryArgs(argv: string[]): ParseResult {
@@ -288,6 +315,39 @@ export function hookRecordToTelemetryInput(
   };
 }
 
+/** Filesystem-safe scorecard timestamp (spec: arbiter condition 2 — no colons). */
+export function scorecardFilename(nowMs: number): string {
+  const stamp = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-');
+  return `scorecard-${stamp}.json`;
+}
+
+/**
+ * A malicious repo must not redirect the scorecard write (spec decision #21):
+ * refuse a symlink at the output-dir path. Missing is fine (we mkdir it).
+ */
+export function refuseSymlinkedDir(path: string): void {
+  let isSymlink: boolean;
+  try {
+    isSymlink = lstatSync(path).isSymbolicLink();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (isSymlink) {
+    throw new EvalUsageError(`refusing to write scorecards: ${path} is a symlink`);
+  }
+}
+
+function readPackageVersion(): string {
+  try {
+    const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : '0.0.0-unknown';
+  } catch {
+    return '0.0.0-unknown';
+  }
+}
+
 function runTelemetryExport(args: TelemetryExportArgs): number {
   const db = openTelemetryDatabase({ path: args.dbPath });
   try {
@@ -312,6 +372,140 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
   }
 }
 
+const EVAL_OUT_DIR = join('.harness', 'eval');
+
+async function runEval(args: EvalArgs): Promise<number> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    process.stderr.write('ANTHROPIC_API_KEY is not set. Export it before running eval.\n');
+    return 2;
+  }
+
+  let security: SecurityComposition;
+  try {
+    security = composeSecurity({
+      readFile: (p) => readFileSync(p, 'utf8'),
+      userDir: homedir(),
+      projectDir: process.cwd(),
+    });
+  } catch (error: unknown) {
+    if (error instanceof SettingsLoadError) {
+      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      return 2;
+    }
+    throw error;
+  }
+  for (const warning of security.warnings) {
+    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
+  }
+
+  // Pre-flight, before any spend: the write path must be trustworthy.
+  try {
+    refuseSymlinkedDir('.harness');
+    refuseSymlinkedDir(EVAL_OUT_DIR);
+  } catch (error: unknown) {
+    if (error instanceof EvalUsageError) {
+      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      return 2;
+    }
+    throw error;
+  }
+
+  const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
+  if (typeof sdk.query !== 'function') {
+    process.stderr.write(
+      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
+    );
+    return 2;
+  }
+  const query = sdk.query as QueryFn;
+
+  // Oracle execution is arbitrary in-process code from the task directory
+  // (docs/security-model.md R-10) — say so before the first import.
+  process.stderr.write(
+    'warning: golden-eval oracles are arbitrary code from the task directory, executed in-process — only run eval on repos you trust (security-model R-10)\n',
+  );
+
+  // In-memory DB per eval run: never contaminates the operator's real
+  // .harness/telemetry.db (spec decision #15).
+  const db = openTelemetryDatabase({ path: ':memory:' });
+  try {
+    const telemetry = createTelemetryStore(db);
+    const memory = createMemoryStore(db);
+
+    const createTaskSession = (config: TaskSessionConfig) => {
+      const sessionId = randomUUID();
+      const turnId = randomUUID();
+      const hooks = createHookRuntime({
+        onEvent: (record) => {
+          const result = telemetry.record(
+            hookRecordToTelemetryInput(record, { sessionId, turnId }),
+          );
+          if (!result.ok) {
+            process.stderr.write(
+              `warning: telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+            );
+          }
+        },
+      });
+      hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+      hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+      return createSession(
+        {
+          query,
+          hooks,
+          memory,
+          loadSkills,
+          route,
+          telemetry,
+          scanInjection: (text) => scan(text),
+          redactSecrets: (text) => redact(text),
+        },
+        {
+          skillsDir: config.skillsDir,
+          maxTurns: config.maxTurns,
+          ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
+          generateId: () => sessionId,
+          turnId,
+          // No onText: eval's stdout is the scorecard, nothing else.
+          onWarning: (message) =>
+            process.stderr.write(`warning: ${sanitizeForTerminal(message)}\n`),
+        },
+      );
+    };
+
+    const runner = createGoldenRunner({
+      createTaskSession,
+      redactSecrets: (text) => redact(text),
+      harnessVersion: readPackageVersion(),
+    });
+
+    let scorecard;
+    try {
+      scorecard = await runner.run(args.taskDir, {
+        onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(line)}\n`),
+      });
+    } catch (error: unknown) {
+      if (error instanceof EvalUsageError) {
+        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+        return 2;
+      }
+      throw error;
+    }
+
+    process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
+
+    mkdirSync(EVAL_OUT_DIR, { recursive: true });
+    refuseSymlinkedDir(EVAL_OUT_DIR); // re-check after mkdir (TOCTOU narrowing)
+    const outPath = join(EVAL_OUT_DIR, scorecardFilename(Date.now()));
+    writeFileSync(outPath, toCanonicalJson(scorecard));
+    process.stderr.write(`scorecard written to ${outPath}\n`);
+
+    return scorecard.totals.failed === 0 ? 0 : 1;
+  } finally {
+    db.close();
+  }
+}
+
 export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
@@ -321,6 +515,10 @@ export async function main(argv: string[]): Promise<number> {
 
   if (parsed.value.command === 'telemetry-export') {
     return runTelemetryExport(parsed.value);
+  }
+
+  if (parsed.value.command === 'eval') {
+    return runEval(parsed.value);
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {

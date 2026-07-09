@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRunArgs, sanitizeForTerminal, SettingsLoadError } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError } from './cli.js';
+import { EvalUsageError } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
@@ -377,5 +378,58 @@ describe('composeSecurity', () => {
     expect(result.sandbox.paths?.allow).toEqual(['/b']);
     const rules = result.permissions.rules ?? [];
     expect(rules.map((r) => r.layer)).toEqual(['user', 'project']);
+  });
+});
+
+describe('parseEvalArgs', () => {
+  it('defaults taskDir to ./eval/golden (README quick-start contract)', () => {
+    const result = parseEvalArgs([]);
+    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './eval/golden' } });
+  });
+
+  it('accepts a positional task directory', () => {
+    const result = parseEvalArgs(['./my-tasks']);
+    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './my-tasks' } });
+  });
+
+  it('rejects unknown flags (no --max-tasks in v1)', () => {
+    const result = parseEvalArgs(['--max-tasks', '5']);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects extra positional arguments', () => {
+    const result = parseEvalArgs(['a', 'b']);
+    expect(result.ok).toBe(false);
+  });
+
+  it('is reachable through parseArgs', () => {
+    const result = parseArgs(['eval', './tasks']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.command).toBe('eval');
+  });
+});
+
+describe('scorecardFilename', () => {
+  it('is filesystem-safe: no colons, second precision, Z-suffixed', () => {
+    // 2026-07-09T03:12:45.678Z (epoch re-derived from the ISO string; the
+    // brief's literal 1783307565678 actually decodes to 2026-07-06, not
+    // 2026-07-09 — see task-9-report.md for the verification command).
+    expect(scorecardFilename(1783566765678)).toBe('scorecard-2026-07-09T03-12-45Z.json');
+  });
+});
+
+describe('refuseSymlinkedDir', () => {
+  it('passes a real directory and a missing path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-out-'));
+    expect(() => refuseSymlinkedDir(dir)).not.toThrow();
+    expect(() => refuseSymlinkedDir(join(dir, 'missing'))).not.toThrow();
+  });
+
+  it('refuses a symlinked directory (attacker-directed write)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-out-'));
+    mkdirSync(join(dir, 'real'));
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    expect(() => refuseSymlinkedDir(join(dir, 'link'))).toThrow(EvalUsageError);
   });
 });
