@@ -131,4 +131,12 @@ export default tseslint.config(
       ],
     },
   },
+  // Eval sits directly under the composition root: cli.ts imports eval, so
+  // eval importing the CLI back would be a real ESM cycle.
+  {
+    files: ['src/eval/**'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: ['**/cli', '**/cli.js'] }],
+    },
+  },
 );

@@ -108,4 +108,12 @@ describe('eslint layering rules', () => {
     );
     expect(violations).toEqual([]);
   });
+
+  it('blocks eval importing the CLI composition root', async () => {
+    const violations = await lintViolations(
+      'src/eval/golden/bad-cli-import.ts',
+      "import { main } from '../../cli.js';\nmain;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
 });
