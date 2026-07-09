@@ -76,4 +76,36 @@ describe('eslint layering rules', () => {
     );
     expect(violations.length).toBeGreaterThan(0);
   });
+
+  it('blocks a leaf module importing the eval layer via a NESTED path (globstar)', async () => {
+    const violations = await lintViolations(
+      'src/telemetry/bad-import.ts',
+      "import { createGoldenRunner } from '../eval/golden/runner.js';\ncreateGoldenRunner;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('blocks the session orchestrator importing eval', async () => {
+    const violations = await lintViolations(
+      'src/session/bad-import.ts',
+      "import { createGoldenRunner } from '../eval/golden/runner.js';\ncreateGoldenRunner;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('blocks security importing eval via a nested path', async () => {
+    const violations = await lintViolations(
+      'src/security/injection/bad-import.ts',
+      "import { toCanonicalJson } from '../../eval/scorecard/canonical.js';\ntoCanonicalJson;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('allows eval importing session and security (top of the dependency order)', async () => {
+    const violations = await lintViolations(
+      'src/eval/golden/good-import.ts',
+      "import { createSession } from '../../session/index.js';\nimport { redact } from '../../security/index.js';\ncreateSession;\nredact;\n",
+    );
+    expect(violations).toEqual([]);
+  });
 });

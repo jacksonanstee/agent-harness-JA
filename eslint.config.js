@@ -28,7 +28,16 @@ export default tseslint.config(
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: ['**/session/*', '**/session', '**/cli', '**/cli.js'] },
+        {
+          patterns: [
+            '**/session/*',
+            '**/session',
+            '**/cli',
+            '**/cli.js',
+            '**/eval/**',
+            '**/eval',
+          ],
+        },
       ],
     },
   },
@@ -49,6 +58,7 @@ export default tseslint.config(
             '**/security/*', '**/security',
             '**/session/*', '**/session',
             '**/cli', '**/cli.js',
+            '**/eval/**', '**/eval',
           ],
         },
       ],
@@ -69,6 +79,8 @@ export default tseslint.config(
             '**/cli.js',
             '**/hooks/*',
             '**/hooks',
+            '**/eval/**',
+            '**/eval',
           ],
         },
       ],
@@ -99,10 +111,23 @@ export default tseslint.config(
             '**/memory',
             '**/telemetry/*',
             '**/telemetry',
-            '**/eval/*',
+            '**/eval/**',
             '**/eval',
           ],
         },
+      ],
+    },
+  },
+  // Session is the harness orchestrator: below eval, above the leaves. It
+  // must not import the eval layer (which drives IT) or the CLI. The CLI
+  // (src/cli.ts) is the composition root and is deliberately exempt from all
+  // layering blocks — it wires every layer together.
+  {
+    files: ['src/session/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: ['**/eval/**', '**/eval', '**/cli', '**/cli.js'] },
       ],
     },
   },
