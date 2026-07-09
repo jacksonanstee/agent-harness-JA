@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -269,6 +269,39 @@ describe('main (pre-SDK paths)', () => {
       expect(await main(['run', 'hello'])).toBe(2);
     } finally {
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
+  });
+
+  it('returns 2 for eval when ANTHROPIC_API_KEY is unset', async () => {
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(await main(['eval'])).toBe(2);
+    } finally {
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
+  });
+
+  // The symlinked-.harness refusal cannot be driven through main() here:
+  // lstatSync('.harness') resolves relative to the OS-level cwd, and
+  // process.chdir() throws ERR_WORKER_UNSUPPORTED_OPERATION under vitest's
+  // threads pool. The branch is covered directly by the refuseSymlinkedDir
+  // unit tests above; runEval calls it verbatim.
+  it('returns 2 for eval when project settings are malformed (SettingsLoadError)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-cwd-'));
+    mkdirSync(join(dir, '.harness'));
+    writeFileSync(join(dir, '.harness', 'settings.json'), '{ not json');
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    // composeSecurity derives the project layer from process.cwd() and reads
+    // the resulting absolute path, so spying cwd() suffices — no chdir needed.
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    try {
+      expect(await main(['eval', './tasks'])).toBe(2);
+    } finally {
+      cwdSpy.mockRestore();
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+      else delete process.env.ANTHROPIC_API_KEY;
     }
   });
 });
