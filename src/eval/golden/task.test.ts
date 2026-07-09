@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -102,6 +104,34 @@ describe('parseTaskFile', () => {
     expect(result.value.skillsDir).toBe(
       resolve(join(here, '__fixtures__', 'valid', 'nested', 'skills')),
     );
+  });
+
+  it('rejects a skillsDir that is a symlink escaping the task directory', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-symlink-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'task-symlink-target-'));
+    writeFileSync(
+      join(taskDir, 'symlink-escape.task.md'),
+      ['---', 'id: symlink-escape', '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    symlinkSync(outsideDir, join(taskDir, 'skills'));
+
+    const result = parseTaskFile(join(taskDir, 'symlink-escape.task.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/skillsDir/);
+  });
+
+  it('accepts a skillsDir symlink that resolves inside the task directory', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-symlink-inside-'));
+    mkdirSync(join(taskDir, 'real-skills'));
+    writeFileSync(
+      join(taskDir, 'symlink-inside.task.md'),
+      ['---', 'id: symlink-inside', '---', '', 'Reply with pong.', ''].join('\n'),
+    );
+    symlinkSync(join(taskDir, 'real-skills'), join(taskDir, 'skills'));
+
+    const result = parseTaskFile(join(taskDir, 'symlink-inside.task.md'));
+    expect(result.ok).toBe(true);
   });
 });
 

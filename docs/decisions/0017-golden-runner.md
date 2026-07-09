@@ -34,10 +34,22 @@ it around a session-shaped runner.
    `TypeError` misclassified as a session crash), `maxTurns` (optional
    integer ≥ 1, default 10), `skillsDir` (optional, resolved relative to the
    task file's directory, default `<taskDir>/skills`; containment is
-   enforced after resolution — an absolute path or a `..` traversal that
-   would resolve outside the task file's directory is a `task-parse` row,
-   not a silently-honored path, so a task file cannot point the skills
-   loader at an arbitrary directory). Parsing hoists the
+   enforced in two stages after resolution. First, a lexical check — an
+   absolute path or a `..` traversal that would resolve outside the task
+   file's directory is a `task-parse` row, not a silently-honored path.
+   Second, a realpath-based re-check: the lexical check alone is bypassable
+   by a repo-committed symlink at the accepted path whose *target* escapes
+   the task directory (e.g. `skills -> /etc`), since `src/skills/load.ts`'s
+   `load()` calls `realpathSync` on the root and walks the target, not the
+   lexical path. Both `skillsDir` and the task file's directory are
+   realpath'd before the second comparison — the task directory itself may
+   legitimately sit behind a symlink (e.g. macOS `/tmp` -> `/private/tmp`)
+   — and a symlink whose target resolves *inside* the task directory
+   remains allowed. A `skillsDir` that does not yet exist skips the
+   real-path re-check (nothing to walk yet); `load()` already treats a
+   missing directory as a non-fatal, empty load. So a task file cannot
+   point the skills loader — lexically or via a committed symlink — at an
+   arbitrary directory). Parsing hoists the
    skills loader's guards (`SAFE_MATTER_OPTIONS`, the fence-language guard,
    `MAX_FILE_BYTES`) into `src/internal/frontmatter.ts`, consumed by both
    skills and eval — task files carry the same anti-code-execution posture as

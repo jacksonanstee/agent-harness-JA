@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import matter from 'gray-matter';
@@ -81,6 +81,40 @@ function failingField(): string | undefined {
   return first.instancePath || undefined;
 }
 
+/**
+ * Two-stage containment: a cheap lexical check (catches absolute paths and
+ * `..` traversal with a clear message, no filesystem access) followed by a
+ * realpath-based re-check that closes the gap the lexical check can't see —
+ * a repo-committed symlink at the accepted lexical path whose TARGET escapes
+ * the task directory. Without this, src/skills/load.ts's `load()` calls
+ * `realpathSync(root)` and walks the symlink's target directly (e.g.
+ * `skills -> /etc`), scanning and injecting arbitrary files into the system
+ * prompt from pure repo data. Both sides are realpath'd, not just skillsDir,
+ * because taskFileDir itself may legitimately sit behind a symlink (e.g.
+ * macOS `/tmp` -> `/private/tmp`) — comparing a real path against a lexical
+ * one would false-reject that case.
+ */
+function containSkillsDir(skillsDir: string, taskFileDir: string): string | undefined {
+  if (skillsDir !== taskFileDir && !skillsDir.startsWith(taskFileDir + sep)) {
+    return `skillsDir must stay within the task directory (got ${skillsDir})`;
+  }
+  let realSkillsDir: string;
+  try {
+    realSkillsDir = realpathSync(skillsDir);
+  } catch {
+    // Doesn't exist (yet): nothing to walk, so nothing can escape via a
+    // symlink target. src/skills/load.ts's load() already treats a missing
+    // directory as a non-fatal empty load (a warning, not a crash or scan),
+    // so deferring the real-path check here doesn't reopen the gap.
+    return undefined;
+  }
+  const realTaskDir = realpathSync(taskFileDir);
+  if (realSkillsDir !== realTaskDir && !realSkillsDir.startsWith(realTaskDir + sep)) {
+    return `skillsDir must stay within the task directory (symlink escapes to ${realSkillsDir})`;
+  }
+  return undefined;
+}
+
 export function parseTaskFile(file: string): TaskParseResult {
   if (typeof file !== 'string' || file.length === 0) {
     throw new TypeError(`file must be a non-empty string, got ${String(file)}`);
@@ -145,11 +179,9 @@ export function parseTaskFile(file: string): TaskParseResult {
 
   const taskFileDir = dirname(path);
   const skillsDir = resolve(taskFileDir, frontmatter.skillsDir ?? 'skills');
-  if (skillsDir !== taskFileDir && !skillsDir.startsWith(taskFileDir + sep)) {
-    return fail(
-      frontmatter.id,
-      `skillsDir must stay within the task directory (got ${skillsDir})`,
-    );
+  const containmentError = containSkillsDir(skillsDir, taskFileDir);
+  if (containmentError !== undefined) {
+    return fail(frontmatter.id, containmentError);
   }
 
   return {
