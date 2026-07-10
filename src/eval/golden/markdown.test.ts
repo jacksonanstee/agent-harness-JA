@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { toMarkdown } from './markdown.js';
-import type { Scorecard, ScorecardRow } from './types.js';
+import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
 
-function makeCard(rows: ScorecardRow[], overrides?: {
+function makeCard(rows: GoldenRow[], overrides?: {
   totalCostUsd?: number;
   unpricedTasks?: number;
-}): Scorecard {
+}): GoldenScorecard {
   const passed = rows.filter((r) => r.pass).length;
   return {
     schemaVersion: 1,
+    producer: 'golden',
     meta: {
       createdAt: '2026-07-09T00:00:00.000Z',
       harnessVersion: '0.1.0-pre',
@@ -17,7 +18,7 @@ function makeCard(rows: ScorecardRow[], overrides?: {
     },
     rows,
     totals: {
-      tasks: rows.length,
+      total: rows.length,
       passed,
       failed: rows.length - passed,
       byFailureKind: {
@@ -34,7 +35,7 @@ function makeCard(rows: ScorecardRow[], overrides?: {
   };
 }
 
-const passRow: ScorecardRow = {
+const passRow: GoldenRow = {
   id: 'hello-world',
   pass: true,
   failureKind: null,
@@ -42,7 +43,7 @@ const passRow: ScorecardRow = {
   volatile: { costUsd: 0.05, numTurns: 3, durationMs: 8200, resultSubtype: 'success' },
 };
 
-const failRow: ScorecardRow = {
+const failRow: GoldenRow = {
   id: 'broken-task',
   pass: false,
   failureKind: 'oracle-fail',

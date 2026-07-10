@@ -1,20 +1,12 @@
-import { truncateWellFormed } from './sanitize.js';
-import type { Scorecard, ScorecardRow } from './types.js';
-import { FAILURE_KINDS } from './types.js';
-
-/** Table cells stay one short line; full detail lives only in the JSON. */
-const MAX_CELL_LENGTH = 120;
-
-function escapeCell(text: string): string {
-  const oneLine = text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
-  return truncateWellFormed(oneLine, MAX_CELL_LENGTH);
-}
+import { escapeCell } from '../scorecard/index.js';
+import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
+import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
 
 function money(value: number): string {
   return `$${value.toFixed(4)}`;
 }
 
-function rowLine(row: ScorecardRow): string {
+function rowLine(row: GoldenRow): string {
   const result = row.pass ? 'pass' : 'FAIL';
   const kind = row.failureKind ?? '—';
   const reason = row.reason === null ? '—' : escapeCell(row.reason);
@@ -28,7 +20,7 @@ function rowLine(row: ScorecardRow): string {
 }
 
 /** Totals first (spec decision #20), then the per-task table. */
-export function toMarkdown(scorecard: Scorecard): string {
+export function toMarkdown(scorecard: GoldenScorecard): string {
   const { totals, meta } = scorecard;
   const pct = (totals.passRate * 100).toFixed(1);
   const cost =
@@ -40,11 +32,11 @@ export function toMarkdown(scorecard: Scorecard): string {
   const lines = [
     '# Golden eval scorecard',
     '',
-    `- **Tasks:** ${totals.tasks} — ${totals.passed} passed / ${totals.failed} failed (pass rate ${pct}%)`,
+    `- **Tasks:** ${totals.total} — ${totals.passed} passed / ${totals.failed} failed (pass rate ${pct}%)`,
     `- **Cost:** ${cost}`,
     `- **Created:** ${meta.createdAt} · harness v${meta.harnessVersion}`,
   ];
-  const kinds = FAILURE_KINDS.filter((kind) => totals.byFailureKind[kind] > 0)
+  const kinds = GOLDEN_FAILURE_KINDS.filter((kind) => totals.byFailureKind[kind] > 0)
     .map((kind) => `${kind}: ${totals.byFailureKind[kind]}`)
     .join(', ');
   if (kinds !== '') lines.push(`- **Failures by kind:** ${kinds}`);

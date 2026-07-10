@@ -13,8 +13,8 @@ const BIDI_CONTROLS = /[‪-‮⁦-⁩‎‏؜]/g;
 /**
  * Every string entering a scorecard row goes through this: redact (fail-closed
  * to a sentinel — spec decision #1), strip control/bidi chars, truncate.
- * The field allowlist is structural (ScorecardRow has no raw-output field);
- * this guards the fields that do exist.
+ * The field allowlist is structural (the scorecard row types — GoldenRow /
+ * RedteamRow — carry no raw-output field); this guards the fields that exist.
  */
 export function cleanForScorecard(
   text: string,
@@ -41,6 +41,14 @@ export function cleanForScorecard(
  */
 export function stripBidi(text: string): string {
   return text.replace(BIDI_CONTROLS, ' ');
+}
+
+/** One-line, markdown-cell-safe: strip newlines, escape pipes, well-formed
+ *  truncate. Shared by every producer's renderer so an escaping fix lands
+ *  once — the redteam table is adversarial-by-design (decision log CG6). */
+export function escapeCell(text: string, max = 120): string {
+  const oneLine = text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+  return truncateWellFormed(oneLine, max);
 }
 
 /**

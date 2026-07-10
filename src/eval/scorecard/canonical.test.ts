@@ -1,41 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { toCanonicalJson } from './canonical.js';
-import type { Scorecard, ScorecardRow } from './types.js';
 
-function row(id: string, pass: boolean): ScorecardRow {
+// toCanonicalJson is producer-agnostic (generic over any {rows: {id}[]}
+// shape), so its tests use a local minimal fixture rather than a real
+// producer's scorecard shape — scorecard/ must not import golden/ or
+// redteam/ (layering debt discharged alongside the renderer move, E-2).
+interface FixtureRow {
+  id: string;
+  pass: boolean;
+  failureKind: string | null;
+  reason: string | null;
+}
+
+interface FixtureScorecard {
+  schemaVersion: 1;
+  producer: string;
+  meta: { createdAt: string };
+  rows: FixtureRow[];
+  totals: { total: number; passed: number; failed: number };
+}
+
+function row(id: string, pass: boolean): FixtureRow {
   return {
     id,
     pass,
     failureKind: pass ? null : 'oracle-fail',
     reason: pass ? null : 'expected pong',
-    volatile: { costUsd: 0.05, numTurns: 3, durationMs: 1200, resultSubtype: 'success' },
   };
 }
 
-function card(rows: ScorecardRow[]): Scorecard {
+function card(rows: FixtureRow[]): FixtureScorecard {
   return {
     schemaVersion: 1,
-    meta: {
-      createdAt: '2026-07-09T00:00:00.000Z',
-      harnessVersion: '0.1.0-pre',
-      taskDir: '/tmp/tasks',
-      models: ['claude-sonnet-4-6'],
-    },
+    producer: 'test-fixture',
+    meta: { createdAt: '2026-07-09T00:00:00.000Z' },
     rows,
     totals: {
-      tasks: rows.length,
+      total: rows.length,
       passed: rows.filter((r) => r.pass).length,
       failed: rows.filter((r) => !r.pass).length,
-      byFailureKind: {
-        'task-parse': 0,
-        'oracle-load': 0,
-        'session-error': 0,
-        'oracle-error': 0,
-        'oracle-fail': rows.filter((r) => !r.pass).length,
-      },
-      passRate: rows.filter((r) => r.pass).length / rows.length,
-      totalCostUsd: 0.05 * rows.length,
-      unpricedTasks: 0,
     },
   };
 }
@@ -68,7 +71,7 @@ describe('toCanonicalJson', () => {
 
   it('round-trips through JSON.parse', () => {
     const original = card([row('a', true)]);
-    const parsed = JSON.parse(toCanonicalJson(original)) as Scorecard;
+    const parsed = JSON.parse(toCanonicalJson(original)) as FixtureScorecard;
     expect(parsed.rows).toEqual(original.rows);
     expect(parsed.totals).toEqual(original.totals);
   });

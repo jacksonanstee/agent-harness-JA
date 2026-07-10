@@ -3,13 +3,14 @@ import { join, resolve } from 'node:path';
 import type { TaskDescriptor } from '../../router/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
+import { cleanForScorecard, computeByFailureKind } from '../scorecard/index.js';
 import type {
-  FailureKind,
-  Scorecard,
-  ScorecardRow,
-  ScorecardTotals,
-} from '../scorecard/index.js';
-import { cleanForScorecard, FAILURE_KINDS } from '../scorecard/index.js';
+  GoldenFailureKind,
+  GoldenRow,
+  GoldenScorecard,
+  GoldenTotals,
+} from './scorecard-shape.js';
+import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
 import type { LoadOracleFn } from './oracle.js';
 import { loadOracle as defaultLoadOracle, validateVerdict } from './oracle.js';
 import type { TaskParseResult } from './task.js';
@@ -47,14 +48,14 @@ export interface RunOptions {
 }
 
 export interface GoldenRunner {
-  run(taskDir: string, opts?: RunOptions): Promise<Scorecard>;
+  run(taskDir: string, opts?: RunOptions): Promise<GoldenScorecard>;
 }
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function emptyVolatile(): ScorecardRow['volatile'] {
+function emptyVolatile(): GoldenRow['volatile'] {
   return { costUsd: null, numTurns: null, durationMs: null, resultSubtype: null };
 }
 
@@ -92,17 +93,14 @@ function assertUniqueIds(parses: TaskParseResult[]): void {
   }
 }
 
-function computeTotals(rows: ScorecardRow[]): ScorecardTotals {
-  const byFailureKind = Object.fromEntries(
-    FAILURE_KINDS.map((kind) => [kind, rows.filter((r) => r.failureKind === kind).length]),
-  ) as Record<FailureKind, number>;
+function computeTotals(rows: GoldenRow[]): GoldenTotals {
   const passed = rows.filter((r) => r.pass).length;
   const priced = rows.filter((r) => r.volatile.costUsd !== null);
   return {
-    tasks: rows.length,
+    total: rows.length,
     passed,
     failed: rows.length - passed,
-    byFailureKind,
+    byFailureKind: computeByFailureKind(rows, GOLDEN_FAILURE_KINDS),
     passRate: passed / rows.length,
     totalCostUsd: priced.reduce((sum, r) => sum + (r.volatile.costUsd ?? 0), 0),
     unpricedTasks: rows.length - priced.length,
@@ -111,7 +109,7 @@ function computeTotals(rows: ScorecardRow[]): ScorecardTotals {
 
 /** A scored row, paired with the model that produced it (null if no session ran/succeeded). */
 interface ScoredRow {
-  row: ScorecardRow;
+  row: GoldenRow;
   model: string | null;
 }
 
@@ -125,7 +123,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   // it, and every id reaching here is already safe — parse-failure ids are
   // bidi-stripped at parse time (before the uniqueness check), success-path
   // ids are regex-pinned by the schema.
-  const failRow = (id: string, kind: FailureKind, reason: string): ScorecardRow => ({
+  const failRow = (id: string, kind: GoldenFailureKind, reason: string): GoldenRow => ({
     id,
     pass: false,
     failureKind: kind,
@@ -194,7 +192,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   };
 
   return {
-    async run(taskDir: string, opts: RunOptions = {}): Promise<Scorecard> {
+    async run(taskDir: string, opts: RunOptions = {}): Promise<GoldenScorecard> {
       if (typeof taskDir !== 'string' || taskDir.length === 0) {
         throw new EvalUsageError('taskDir must be a non-empty string');
       }
@@ -206,7 +204,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         `discovered ${parses.length} task${parses.length === 1 ? '' : 's'} in ${root}`,
       );
 
-      const rows: ScorecardRow[] = [];
+      const rows: GoldenRow[] = [];
       const models = new Set<string>();
       const createdAt = new Date(now()).toISOString();
       for (const [index, parse] of parses.entries()) {
@@ -222,6 +220,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       const sorted = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       return {
         schemaVersion: 1,
+        producer: 'golden',
         meta: { createdAt, harnessVersion, taskDir: root, models: [...models].sort() },
         rows: sorted,
         totals: computeTotals(sorted),
