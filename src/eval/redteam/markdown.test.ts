@@ -41,7 +41,7 @@ describe('toRedteamMarkdown', () => {
     expect(md).not.toMatch(/\bFAIL\b/);
   });
   it('escapes the id field (image-beacon guard, defense in depth)', () => {
-    const evil = { ...card, rows: [{ ...card.rows[0], id: 'x-|pipe' }] };
+    const evil = { ...card, rows: [{ ...card.rows[0]!, id: 'x-|pipe' }] };
     expect(toRedteamMarkdown(evil)).toContain('x-\\|pipe');
   });
 });

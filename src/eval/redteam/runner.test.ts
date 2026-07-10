@@ -19,10 +19,10 @@ describe('runRedteam (security-on arm)', () => {
 
   it('marks missed / false-block, leaves detected & ok clean', () => {
     const byId = Object.fromEntries(sc.rows.map((r) => [r.id, r]));
-    expect(byId['m-block'].failureKind).toBeNull();
-    expect(byId['m-miss'].failureKind).toBe('missed');
-    expect(byId['b-ok'].failureKind).toBeNull();
-    expect(byId['b-block'].failureKind).toBe('false-block');
+    expect(byId['m-block']?.failureKind).toBeNull();
+    expect(byId['m-miss']?.failureKind).toBe('missed');
+    expect(byId['b-ok']?.failureKind).toBeNull();
+    expect(byId['b-block']?.failureKind).toBe('false-block');
   });
   it('gate field falseBlockCount counts only benign->block', () => {
     expect(sc.totals.falseBlockCount).toBe(1);
@@ -32,7 +32,7 @@ describe('runRedteam (security-on arm)', () => {
     expect(sc.totals.detected).toBe(1); // m-block detected, m-miss missed
   });
   it('rows are deterministic — no cost/turns volatile', () => {
-    expect('volatile' in sc.rows[0]).toBe(false);
+    expect('volatile' in sc.rows[0]!).toBe(false);
   });
   it('producer discriminator + schemaVersion', () => {
     expect(sc.producer).toBe('redteam');
@@ -69,12 +69,12 @@ describe('runRedteam (ask verdict)', () => {
   const byId = Object.fromEntries(sc.rows.map((r) => [r.id, r]));
 
   it('malicious + ask is detected: failureKind null, pass true', () => {
-    expect(byId['m-ask'].failureKind).toBeNull();
-    expect(byId['m-ask'].pass).toBe(true);
+    expect(byId['m-ask']?.failureKind).toBeNull();
+    expect(byId['m-ask']?.pass).toBe(true);
   });
   it('benign + ask is a tolerated soft flag: false-flag, pass true', () => {
-    expect(byId['b-ask'].failureKind).toBe('false-flag');
-    expect(byId['b-ask'].pass).toBe(true);
+    expect(byId['b-ask']?.failureKind).toBe('false-flag');
+    expect(byId['b-ask']?.pass).toBe(true);
   });
   it('benign + ask does not count toward falseBlockCount', () => {
     expect(sc.totals.falseBlockCount).toBe(0);
