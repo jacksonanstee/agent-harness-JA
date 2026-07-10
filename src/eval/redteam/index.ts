@@ -6,6 +6,8 @@ export type {
   RedteamScorecard,
   RedteamTotals,
 } from './runner.js';
+export { normalizeForBaseline } from './baseline.js';
+export type { BaselineMeta, BaselineScorecard } from './baseline.js';
 export { toRedteamMarkdown } from './markdown.js';
 export { CORPUS } from './corpus.js';
 export { CATEGORIES, REDTEAM_ARM_LABEL } from './types.js';
