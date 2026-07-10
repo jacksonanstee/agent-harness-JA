@@ -9,6 +9,7 @@ import {
   CORPUS,
   createGoldenRunner,
   EvalUsageError,
+  REDTEAM_ARM_LABEL,
   runRedteam,
   toCanonicalJson,
   toMarkdown,
@@ -603,7 +604,7 @@ export function redteamExitCode(scorecard: RedteamScorecard): number {
  */
 function runRedteamCommand(args: RedteamArgs): number {
   const scorecard = runRedteam(CORPUS, scan, {
-    armLabel: 'security-on',
+    armLabel: REDTEAM_ARM_LABEL,
     harnessVersion: readPackageVersion(),
   });
 
