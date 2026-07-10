@@ -85,3 +85,58 @@ Deferred with named triggers (ADR-0017 Revisit-if): FailureKind
 parameterization before E-2 widens it, `redactSecrets` as a required
 dep, shared run/eval session factory, table-driven layering matrix.
 Next: E-2 red-team corpus.
+
+## 2026-07-10 — E-2 red-team corpus (design → SDD → merge, one session)
+
+Design-first through the multi-agent panel again, then an external
+Gemini adversarial pass, then executed via subagent-driven development
+(9 TDD tasks, a spec+quality review after each, a whole-branch
+differential-review gate at the end). Merged as PR #20 (`066687d`).
+
+The load-bearing decision surfaced in review, not up front. My first
+design gated CI on ≥90% detection — but that is the exact number
+ADR-0016 §6 reads to decide whether to build the LLM judge. Gate on it
+and an honest new attack the scanner misses can't merge until it's
+curated away, so the corpus could never measure the scanner's real
+ceiling. The two purposes point the same number in opposite directions.
+So the gate enforces one hard invariant — `falseBlockCount === 0`, no
+benign input ever blocked — and detection is *reported*, measured at
+37/40 = 92.5%, stated plainly rather than lowered to pass. E-3 adds the
+no-regression clause; until then the gate is thin by design, documented
+as a time-boxed window in ADR-0018.
+
+Security posture the panel shaped: scorecard rows carry *outcomes, never
+payload text*. A row is `{id, category, verdict, expected, failureKind,
+reason}` with `reason` a fixed enumerated string, so a committed
+red-team payload (a Greshake exfil beacon, a DAN prompt) never reaches
+the rendered markdown or the canonical JSON — no live image-beacon
+markup in a GitHub-rendered artifact, and no trip of the repo's own
+secret-scan hook. Corpus payloads are defanged (fragment-assembled
+credential shapes, non-resolving `.example`/`.invalid` domains). The 51
+cases wrap the 31-case S-1 starter corpus through a family→category map
+and add ~20 new indirect/jailbreak/exfil cases; every `expected` verdict
+was calibrated from live `scan()` output, never guessed. Three cases are
+honest known-misses — realistic attacks with no trigger tokens — and
+they expose that the scanner has no jailbreak-persona rule, a finding
+that feeds the S-5 decision.
+
+The scorecard refactor (ADR-0017 H1) split the golden-specific scorecard
+into a producer-agnostic core (`ScorecardRowCore<K>`, a `producer`
+discriminator, a shared `byFailureKind` helper) with per-producer
+renderers; golden's renderer moved out of the core. The whole-branch
+gate verified no golden regression and caught two ADR claims worded
+stronger than the code enforced (the id guard was test-only; the count
+helper could silently NaN) — the fix made the code match the claims: a
+runtime id validator and a hardened counter.
+
+CI then caught what local checks didn't. Every subagent verified with
+bare `tsc --noEmit`, which excludes test files; CI runs `npm run
+typecheck` (`+ tsc -p tsconfig.test.json`), which strict-checks them
+under `noUncheckedIndexedAccess`. Latent strict-null errors in the test
+files passed every local gate and only failed in CI. Lesson recorded:
+the verification command a subagent runs must be the project's real gate
+script, never a looser proxy. Fixed, both legs green, 706 tests.
+
+Next: E-3 deterministic regression gate — it diffs this scorecard's
+`producer: redteam` canonical JSON and fails CI on drift, converting
+E-2's thin gate into a real one.
