@@ -4,11 +4,13 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
-import { EvalUsageError } from './eval/index.js';
-import type { GoldenScorecard } from './eval/index.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRedteamArgs, parseRunArgs, redteamExitCode, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { CORPUS, EvalUsageError, runRedteam } from './eval/index.js';
+import type { CorpusCase, GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
+import { scan } from './security/index.js';
+import type { ScanResult } from './security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
 import type { TelemetryEvent } from './telemetry/index.js';
 
@@ -441,6 +443,118 @@ describe('parseEvalArgs', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.command).toBe('eval');
+  });
+});
+
+describe('parseRedteamArgs', () => {
+  it('defaults out to the shared eval scorecard directory', () => {
+    const result = parseRedteamArgs([]);
+    expect(result).toEqual({ ok: true, value: { command: 'redteam', out: join('.harness', 'eval') } });
+  });
+
+  it('accepts --out <dir>', () => {
+    const result = parseRedteamArgs(['--out', '/tmp/redteam-out']);
+    expect(result).toEqual({ ok: true, value: { command: 'redteam', out: '/tmp/redteam-out' } });
+  });
+
+  it('rejects --out with no value', () => {
+    const result = parseRedteamArgs(['--out']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('--out');
+  });
+
+  it('rejects unknown flags and extra positionals', () => {
+    expect(parseRedteamArgs(['--bogus']).ok).toBe(false);
+    expect(parseRedteamArgs(['extra']).ok).toBe(false);
+  });
+
+  it('is reachable through parseArgs', () => {
+    const result = parseArgs(['redteam']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.command).toBe('redteam');
+  });
+});
+
+describe('redteamExitCode', () => {
+  it('returns 1 when a stub scanner false-blocks a benign case', () => {
+    const cases: CorpusCase[] = [
+      { id: 'benign-01', category: 'benign', text: 'benign-case', expected: 'pass' },
+    ];
+    const stubScan = (): ScanResult => ({
+      verdict: 'block',
+      rule_ids: [],
+      excerpts: [],
+      suspicious: false,
+    });
+    const scorecard = runRedteam(cases, stubScan, { armLabel: 'security-on' });
+    expect(scorecard.totals.falseBlockCount).toBe(1);
+    expect(redteamExitCode(scorecard)).toBe(1);
+  });
+
+  it('returns 0 on the real corpus with the real scanner (gate passes today)', () => {
+    const scorecard = runRedteam(CORPUS, scan, { armLabel: 'security-on' });
+    expect(scorecard.totals.falseBlockCount).toBe(0);
+    expect(redteamExitCode(scorecard)).toBe(0);
+  });
+});
+
+describe('main (redteam)', () => {
+  it('does not require ANTHROPIC_API_KEY', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'redteam-out-'));
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(['redteam', '--out', out]);
+      expect(code).toBe(0);
+      const stdoutText = stdoutSpy.mock.calls.map((c) => String(c[0])).join('');
+      const stderrText = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(stdoutText).not.toContain('ANTHROPIC_API_KEY');
+      expect(stderrText).not.toContain('ANTHROPIC_API_KEY');
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  it('exits 0, prints a Gate: PASS markdown summary, and writes the scorecard on the real corpus', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'redteam-out-'));
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(['redteam', '--out', out]);
+      expect(code).toBe(0);
+      const stdoutText = stdoutSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(stdoutText).toContain('Gate: PASS');
+      const stderrText = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      const writtenPath = /scorecard written to (.+)$/m.exec(stderrText)?.[1]?.trim();
+      expect(writtenPath).toBeDefined();
+      if (writtenPath !== undefined) {
+        expect(readFileSync(writtenPath, 'utf8')).toContain('"producer": "redteam"');
+      }
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 2 on a write failure (a regular file sits where the out dir should be) — reuses writeScorecard\'s failure precedent', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'redteam-out-'));
+    const out = join(parent, 'blocked');
+    writeFileSync(out, 'a regular file where the dir should be');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(['redteam', '--out', out]);
+      expect(code).toBe(2);
+    } finally {
+      stderrSpy.mockRestore();
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
 

@@ -7,3 +7,6 @@ export type {
   RedteamTotals,
 } from './runner.js';
 export { toRedteamMarkdown } from './markdown.js';
+export { CORPUS } from './corpus.js';
+export { CATEGORIES } from './types.js';
+export type { Category, CorpusCase } from './types.js';

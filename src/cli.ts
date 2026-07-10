@@ -5,8 +5,16 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { createGoldenRunner, EvalUsageError, toCanonicalJson, toMarkdown } from './eval/index.js';
-import type { GoldenScorecard, TaskSessionConfig } from './eval/index.js';
+import {
+  CORPUS,
+  createGoldenRunner,
+  EvalUsageError,
+  runRedteam,
+  toCanonicalJson,
+  toMarkdown,
+  toRedteamMarkdown,
+} from './eval/index.js';
+import type { RedteamScorecard, TaskSessionConfig } from './eval/index.js';
 import { createHookRuntime } from './hooks/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
@@ -60,7 +68,12 @@ export interface EvalArgs {
   taskDir: string;
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs;
+export interface RedteamArgs {
+  command: 'redteam';
+  out: string;
+}
+
+export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -160,9 +173,14 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   return { permissions, sandbox, warnings };
 }
 
+/** Default scorecard output directory, shared by eval and redteam (both are
+ *  scorecard producers writing through the same `writeScorecard` helper). */
+const EVAL_OUT_DIR = join('.harness', 'eval');
+
 const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
   '       agent-harness-ja eval [taskDir]\n' +
+  '       agent-harness-ja redteam [--out <dir>]\n' +
   '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]';
 
 export function parseArgs(argv: string[]): ParseResult {
@@ -171,6 +189,9 @@ export function parseArgs(argv: string[]): ParseResult {
   }
   if (argv[0] === 'eval') {
     return parseEvalArgs(argv.slice(1));
+  }
+  if (argv[0] === 'redteam') {
+    return parseRedteamArgs(argv.slice(1));
   }
   return parseRunArgs(argv);
 }
@@ -189,6 +210,26 @@ export function parseEvalArgs(argv: string[]): ParseResult {
     positionalSeen = true;
   }
   return { ok: true, value: { command: 'eval', taskDir } };
+}
+
+/** No positionals; `--out` overrides the shared scorecard directory. */
+export function parseRedteamArgs(argv: string[]): ParseResult {
+  let out = EVAL_OUT_DIR;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === undefined) break;
+    if (arg === '--out') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return { ok: false, error: `Missing value for --out. ${USAGE}` };
+      }
+      out = value;
+      i += 1;
+    } else {
+      return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
+    }
+  }
+  return { ok: true, value: { command: 'redteam', out } };
 }
 
 function parseTelemetryArgs(argv: string[]): ParseResult {
@@ -345,9 +386,13 @@ export function refuseSymlinkedDir(path: string): void {
  * generic exit-1 handler would report it on the code reserved for "ran, at
  * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
  * committed at the output path), EACCES, and ENOSPC all end here too.
+ *
+ * Generic over any scorecard envelope (golden, redteam, ...): the same
+ * constraint `toCanonicalJson` requires, so every scorecard producer writes
+ * through this one helper instead of duplicating it.
  */
-export function writeScorecard(
-  scorecard: GoldenScorecard,
+export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }>(
+  scorecard: T,
   outDir: string,
   nowMs: number = Date.now(),
 ): { ok: true; path: string } | { ok: false; message: string } {
@@ -398,8 +443,6 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     db.close();
   }
 }
-
-const EVAL_OUT_DIR = join('.harness', 'eval');
 
 async function runEval(args: EvalArgs): Promise<number> {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -539,6 +582,43 @@ async function runEval(args: EvalArgs): Promise<number> {
   }
 }
 
+/**
+ * Gate is `totals.falseBlockCount`, not overall pass/fail: a keyless redteam
+ * run over the corpus is expected to have `missed`/`false-flag` rows today
+ * (S-1's known-missed cases), and those must not fail the CLI gate — only a
+ * regression that blocks a real user (a false-block) does (decision log CG11).
+ */
+export function redteamExitCode(scorecard: RedteamScorecard): number {
+  return scorecard.totals.falseBlockCount > 0 ? 1 : 0;
+}
+
+/**
+ * Keyless: the corpus is compiled in and the security-on scanner is pure,
+ * in-process code — no repo code executes, so there is no R-10 warning here
+ * (unlike eval's oracle execution). Runs ONLY the security-on arm; the
+ * security-off arm is a guaranteed-zero null-scanner baseline the renderer
+ * already labels at render time (decision log CG11) — running and storing it
+ * here would be a stored tautology. JSON is written before anything reaches
+ * stdout, mirroring eval's exit-2 contract (ADR-0017 decision #4).
+ */
+function runRedteamCommand(args: RedteamArgs): number {
+  const scorecard = runRedteam(CORPUS, scan, {
+    armLabel: 'security-on',
+    harnessVersion: readPackageVersion(),
+  });
+
+  const written = writeScorecard(scorecard, args.out);
+  if (!written.ok) {
+    process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+    return 2;
+  }
+  process.stderr.write(`scorecard written to ${written.path}\n`);
+
+  process.stdout.write(sanitizeForTerminal(toRedteamMarkdown(scorecard)));
+
+  return redteamExitCode(scorecard);
+}
+
 export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
@@ -552,6 +632,10 @@ export async function main(argv: string[]): Promise<number> {
 
   if (parsed.value.command === 'eval') {
     return runEval(parsed.value);
+  }
+
+  if (parsed.value.command === 'redteam') {
+    return runRedteamCommand(parsed.value);
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
