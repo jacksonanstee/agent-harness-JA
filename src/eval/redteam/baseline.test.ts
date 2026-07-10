@@ -340,6 +340,33 @@ describe('classifyDrift', () => {
     ]);
   });
 
+  // The remaining three benign-order pairs (ask->block, block->pass,
+  // block->ask), closing out the full BENIGN_ORDER matrix so a future
+  // refactor that inverts a direction can't slip past an incomplete suite.
+  it('benign ask -> block is a regression', () => {
+    const before = makeRow('case-9b', 'benign', 'ask', 'pass');
+    const after = makeRow('case-9b', 'benign', 'block', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-9b', detail: 'verdict weakened: ask → block' },
+    ]);
+  });
+
+  it('benign block -> pass is an improvement', () => {
+    const before = makeRow('case-9c', 'benign', 'block', 'pass');
+    const after = makeRow('case-9c', 'benign', 'pass', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-9c', detail: 'verdict strengthened: block → pass' },
+    ]);
+  });
+
+  it('benign block -> ask is an improvement', () => {
+    const before = makeRow('case-9d', 'benign', 'block', 'pass');
+    const after = makeRow('case-9d', 'benign', 'ask', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-9d', detail: 'verdict strengthened: block → ask' },
+    ]);
+  });
+
   it('same verdict, expected changed, is a recalibration', () => {
     const before: RedteamRow = {
       id: 'case-10', category: 'direct', verdict: 'block', expected: 'block',
@@ -382,6 +409,18 @@ describe('classifyDrift', () => {
     ]);
   });
 
+  it('category direct -> benign (cross-class, the reverse direction), is a recalibration (NOT regression)', () => {
+    const before = makeRow('case-13b', 'direct', 'block', 'block');
+    const after = makeRow('case-13b', 'benign', 'pass', 'pass');
+    expect(pair(before, after)).toEqual([
+      {
+        kind: 'recalibration',
+        id: 'case-13b',
+        detail: 'category crossed the benign/malicious boundary (direct → benign) — direction is a human judgment (ADR-0018 d8)',
+      },
+    ]);
+  });
+
   it('removed id is a regression with a rename hint', () => {
     const baseline = makeScorecard([makeRow('case-14', 'direct', 'block', 'block')]);
     const freshSc = makeScorecard([]);
@@ -402,10 +441,23 @@ describe('classifyDrift', () => {
     ]);
   });
 
+  it('added id (a passing row) is a new-case labelled "passing"', () => {
+    const baseline = makeScorecard([]);
+    const freshSc = makeScorecard([makeRow('case-15b', 'direct', 'block', 'block')]);
+    expect(classifyDrift(baseline, freshSc)).toEqual([
+      { kind: 'new-case', id: 'case-15b', detail: 'new case (passing)' },
+    ]);
+  });
+
+  // Rows are rebuilt as fresh (value-equal, not reference-equal) objects on
+  // each side: diffRows compares fields by `!==`, so a shared object
+  // reference would make `before[k] !== after[k]` trivially false for every
+  // field regardless of whether the comparison logic is correct, masking a
+  // mutation or equality bug. Cloning proves the no-op path holds by value.
   it('armLabel changed with identical rows is a single envelope finding', () => {
-    const rows = [makeRow('case-16', 'direct', 'block', 'block')];
-    const baseline = makeScorecard(rows, { armLabel: 'security-on' });
-    const freshSc = makeScorecard(rows, { armLabel: 'security-off' });
+    const row = makeRow('case-16', 'direct', 'block', 'block');
+    const baseline = makeScorecard([{ ...row }], { armLabel: 'security-on' });
+    const freshSc = makeScorecard([{ ...row }], { armLabel: 'security-off' });
     expect(classifyDrift(baseline, freshSc)).toEqual([
       { kind: 'envelope', id: null, detail: expect.any(String) },
     ]);
@@ -413,8 +465,8 @@ describe('classifyDrift', () => {
 
   it('identical scorecards produce no findings', () => {
     const rows = [makeRow('case-17', 'direct', 'block', 'block'), makeRow('case-18', 'benign', 'pass', 'pass')];
-    const baseline = makeScorecard(rows);
-    const freshSc = makeScorecard([...rows]);
+    const baseline = makeScorecard(rows.map((r) => ({ ...r })));
+    const freshSc = makeScorecard(rows.map((r) => ({ ...r })));
     expect(classifyDrift(baseline, freshSc)).toEqual([]);
   });
 });
@@ -437,6 +489,16 @@ describe('totalsMismatchDetail', () => {
     const scorecard = makeScorecard(rows);
     const mutated: BaselineScorecard = { ...scorecard, meta: { ...scorecard.meta, corpusSize: scorecard.meta.corpusSize + 1 } };
     expect(totalsMismatchDetail(mutated)).toMatch(/corpusSize/);
+  });
+
+  it('flags a byFailureKind entry that disagrees with the rows', () => {
+    const rows = [makeRow('t-6', 'direct', 'pass', 'block'), makeRow('t-7', 'benign', 'block', 'pass')];
+    const scorecard = makeScorecard(rows);
+    const mutated: BaselineScorecard = {
+      ...scorecard,
+      totals: { ...scorecard.totals, byFailureKind: { ...scorecard.totals.byFailureKind, missed: scorecard.totals.byFailureKind.missed + 1 } },
+    };
+    expect(totalsMismatchDetail(mutated)).toMatch(/byFailureKind\.missed/);
   });
 });
 
