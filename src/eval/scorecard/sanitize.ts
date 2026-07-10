@@ -43,6 +43,14 @@ export function stripBidi(text: string): string {
   return text.replace(BIDI_CONTROLS, ' ');
 }
 
+/** One-line, markdown-cell-safe: strip newlines, escape pipes, well-formed
+ *  truncate. Shared by every producer's renderer so an escaping fix lands
+ *  once — the redteam table is adversarial-by-design (decision log CG6). */
+export function escapeCell(text: string, max = 120): string {
+  const oneLine = text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+  return truncateWellFormed(oneLine, max);
+}
+
 /**
  * Truncate to at most `max` chars plus an ellipsis, never bisecting a
  * surrogate pair: if a high surrogate (0xD800–0xDBFF) sits at the truncation

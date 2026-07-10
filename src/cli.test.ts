@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { EvalUsageError } from './eval/index.js';
-import type { Scorecard } from './eval/index.js';
+import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
@@ -454,8 +454,9 @@ describe('scorecardFilename', () => {
 });
 
 describe('writeScorecard', () => {
-  const scorecard: Scorecard = {
+  const scorecard: GoldenScorecard = {
     schemaVersion: 1,
+    producer: 'golden',
     meta: {
       createdAt: '2026-07-09T03:12:45.000Z',
       harnessVersion: '0.1.0-test',
@@ -464,7 +465,7 @@ describe('writeScorecard', () => {
     },
     rows: [],
     totals: {
-      tasks: 0,
+      total: 0,
       passed: 0,
       failed: 0,
       byFailureKind: {

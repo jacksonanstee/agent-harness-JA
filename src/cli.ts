@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { createGoldenRunner, EvalUsageError, toCanonicalJson, toMarkdown } from './eval/index.js';
-import type { Scorecard, TaskSessionConfig } from './eval/index.js';
+import type { GoldenScorecard, TaskSessionConfig } from './eval/index.js';
 import { createHookRuntime } from './hooks/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
@@ -347,7 +347,7 @@ export function refuseSymlinkedDir(path: string): void {
  * committed at the output path), EACCES, and ENOSPC all end here too.
  */
 export function writeScorecard(
-  scorecard: Scorecard,
+  scorecard: GoldenScorecard,
   outDir: string,
   nowMs: number = Date.now(),
 ): { ok: true; path: string } | { ok: false; message: string } {

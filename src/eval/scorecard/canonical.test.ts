@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { toCanonicalJson } from './canonical.js';
-import type { Scorecard, ScorecardRow } from './types.js';
+import type { GoldenRow, GoldenScorecard } from '../golden/scorecard-shape.js';
 
-function row(id: string, pass: boolean): ScorecardRow {
+function row(id: string, pass: boolean): GoldenRow {
   return {
     id,
     pass,
@@ -12,9 +12,10 @@ function row(id: string, pass: boolean): ScorecardRow {
   };
 }
 
-function card(rows: ScorecardRow[]): Scorecard {
+function card(rows: GoldenRow[]): GoldenScorecard {
   return {
     schemaVersion: 1,
+    producer: 'golden',
     meta: {
       createdAt: '2026-07-09T00:00:00.000Z',
       harnessVersion: '0.1.0-pre',
@@ -23,7 +24,7 @@ function card(rows: ScorecardRow[]): Scorecard {
     },
     rows,
     totals: {
-      tasks: rows.length,
+      total: rows.length,
       passed: rows.filter((r) => r.pass).length,
       failed: rows.filter((r) => !r.pass).length,
       byFailureKind: {
@@ -68,7 +69,7 @@ describe('toCanonicalJson', () => {
 
   it('round-trips through JSON.parse', () => {
     const original = card([row('a', true)]);
-    const parsed = JSON.parse(toCanonicalJson(original)) as Scorecard;
+    const parsed = JSON.parse(toCanonicalJson(original)) as GoldenScorecard;
     expect(parsed.rows).toEqual(original.rows);
     expect(parsed.totals).toEqual(original.totals);
   });

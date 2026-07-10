@@ -98,7 +98,7 @@ describe('createGoldenRunner rows', () => {
     expect(broken?.volatile.costUsd).toBeNull();
 
     expect(scorecard.totals).toEqual({
-      tasks: 3,
+      total: 3,
       passed: 1,
       failed: 2,
       byFailureKind: {
