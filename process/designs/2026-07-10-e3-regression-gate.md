@@ -163,10 +163,18 @@ The drift report is plain text (readable in raw GitHub Actions logs),
 ids-only, terminal-sanitized. Four elements are **pinned as stable
 contract** (tests assert them; prose around them may evolve):
 
-1. A machine-readable line, always printed:
-   `GATE_FAILURE=<none|false-block|drift|false-block+drift|internal>` —
-   ADR-0018 decision 7 already warns exit codes are meaning-bearing;
-   this keeps the two exit-1 causes scriptable without parsing prose.
+1. A machine-readable line
+   `GATE_FAILURE=<none|false-block|drift|false-block+drift|internal>`,
+   printed on every run that reaches gate evaluation — i.e. the corpus ran
+   and the absolute-gate/backstop/compare checks executed. Usage and
+   baseline-load failures (bad flag; missing/oversized/symlinked/
+   malformed/schema-mismatched baseline) exit 2 **without** the line —
+   their typed error message is the signal; `internal` (backstop mismatch,
+   also exit 2) is the one exit-2 case that does print it, because the run
+   reached the gate machinery. The §Gate-rule-5 non-canonical branch
+   prints `GATE_FAILURE=drift`. ADR-0018 decision 7 already warns exit
+   codes are meaning-bearing; this keeps the two exit-1 causes scriptable
+   without parsing prose.
 2. The exit-1 drift remedy line, printed after the classification table:
    `Baseline drift detected. Run \`npm run redteam -- --update-baseline\`,
    review the diff, and commit eval/redteam/baseline.json. (The gate fails
@@ -199,7 +207,15 @@ contract** (tests assert them; prose around them may evolve):
     symlink-refused like every other write path.
   - Otherwise the command behaves normally (still writes the timestamped
     `--out` scorecard, still prints the markdown summary) — update mode is
-    the normal run plus a baseline write.
+    the normal run plus a baseline write, **except that it never performs
+    the compare-gate**: a successful update (baseline written) exits **0**
+    regardless of how the new baseline differs from the old one; the
+    classifier report against the *previous* baseline is informational
+    only. (Otherwise the remedy command would exit 1 in exactly the drift
+    scenario it exists to resolve.) Update mode prints the `GATE_FAILURE=`
+    line only on its refusal paths (`false-block` on the false-block
+    refusal, `internal` on the backstop refusal); a successful update
+    prints no `GATE_FAILURE=` line — it is not a gate run.
 - `--baseline <path>` — optional override of the default path (named
   constant beside `EVAL_OUT_DIR`), used by tests and by outside-repo
   invocations (§Consumer contract).
@@ -291,7 +307,11 @@ Package-relative resolution is **not** built now (YAGNI pre-publish).
   lockstep — correct, not noise).
 - **ADR-0018 amendments** — decision 9's Revisit-if fires (E-3 closed the
   ship-window limitation); decision 8 notes recalibration edits now surface
-  mechanically; the level-vs-delta sentence above.
+  mechanically; the level-vs-delta sentence above; **decision 7's literal
+  wording amended** — its "exit 1 fires only on the one gate-load-bearing
+  failure kind (`false-block`)" becomes false when drift also exits 1, so
+  the same PR updates that sentence (the §Exit-codes claim "contract shape
+  unchanged" is true only with this amendment landed).
 - **`process/01-requirements.md`** — E-3 row amended (SQLite → committed
   canonical-JSON baseline), deviation cross-referenced to ADR-0019.
 - **`docs/security-model.md`** — one entry: the keyless gate command now
@@ -333,6 +353,8 @@ Package-relative resolution is **not** built now (YAGNI pre-publish).
   each → the right typed error; independent totals re-derivation trips on
   a corrupted fixture (and on a corrupted `corpusSize`).
 - CLI: `--update-baseline` writes normalized canonical bytes atomically;
+  **successful update exits 0 even when the new baseline differs from the
+  old (no compare-gate in update mode), with no `GATE_FAILURE=` line**;
   refuses on false-block (exit 1, no write) and backstop failure (exit 2,
   no write); missing parent dir → exit 2; compare-path exit codes (0 equal;
   1 drift; 1 falseBlock-with-equal-baseline; 1 both-with-single-combined-

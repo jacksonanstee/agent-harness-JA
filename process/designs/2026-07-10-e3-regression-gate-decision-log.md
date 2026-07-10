@@ -1,7 +1,7 @@
 # E-3 Regression Gate — Design Review Decision Log
 
 Date: 2026-07-10
-Panel: skeptic (SK, Fable-inherit) + constraint-guardian (CG, Fable-inherit) + user-advocate (UA, sonnet), each blind to the others, reviewing commit `5c7fb6a` of the design. Arbiter pass follows this log.
+Panel: skeptic (SK, Fable-inherit) + constraint-guardian (CG, Fable-inherit) + user-advocate (UA, sonnet), each blind to the others, reviewing commit `5c7fb6a` of the design. 36 findings total (34 actionable + 2 confirmed-non-issue probes). Arbiter pass follows this log; arbiter disposition after round 1 = REVISE (3 pin-level wording gaps: update-mode success exit code, ADR-0018 d7 amendment listing, `GATE_FAILURE=` scope), fixed in the same session and re-checked.
 Pre-panel: external best-practice survey (WebSearch subagent) informed the two user-locked decisions; user locked (1) strict per-row weakening semantics, (2) fail on ANY drift including improvements. Neither was reopened by the panel.
 
 Verdict column: **ACCEPT** (design changed), **ACCEPT-PARTIAL** (changed with narrower scope, rationale given), **REJECT** (rationale given), **N/A** (reviewer confirmed non-issue).
