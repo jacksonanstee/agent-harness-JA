@@ -25,3 +25,5 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      - name: Red-team gate
+        run: node dist/cli.js redteam
