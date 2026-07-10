@@ -40,6 +40,16 @@ describe('runRedteam (security-on arm)', () => {
   });
 });
 
+describe('runRedteam (id validation)', () => {
+  it('throws on a beacon-shaped corpus id at runtime (not just in the corpus test)', () => {
+    const evil: CorpusCase[] = [
+      { id: 'x-![b](http://e/x)', category: 'direct', text: 'A', expected: 'block' },
+    ];
+    expect(() => runRedteam(evil, scanStub({ A: 'block' }), { armLabel: 'security-on', now: () => 0 }))
+      .toThrow(/invalid corpus id/);
+  });
+});
+
 describe('runRedteam (null/off arm)', () => {
   it('null scanner detects zero malicious', () => {
     const nullScan = (): ScanResult => ({ verdict: 'pass', rule_ids: [], excerpts: [], suspicious: false });

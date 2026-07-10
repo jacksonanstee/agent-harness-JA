@@ -497,6 +497,24 @@ describe('redteamExitCode', () => {
     expect(scorecard.totals.falseBlockCount).toBe(0);
     expect(redteamExitCode(scorecard)).toBe(0);
   });
+
+  it('returns 0 for a deliberate missed case with no false-block (a miss alone never gates)', () => {
+    // Isolated from the live corpus: pins that a `missed` row on its own does
+    // not fire the gate even if the scanner later closes today's known misses.
+    const cases: CorpusCase[] = [
+      { id: 'malicious-01', category: 'direct', text: 'malicious-case', expected: 'block' },
+    ];
+    const stubScan = (): ScanResult => ({
+      verdict: 'pass', // scanner misses the malicious case
+      rule_ids: [],
+      excerpts: [],
+      suspicious: false,
+    });
+    const scorecard = runRedteam(cases, stubScan, { armLabel: 'security-on' });
+    expect(scorecard.totals.byFailureKind.missed).toBe(1);
+    expect(scorecard.totals.falseBlockCount).toBe(0);
+    expect(redteamExitCode(scorecard)).toBe(0);
+  });
 });
 
 describe('main (redteam)', () => {

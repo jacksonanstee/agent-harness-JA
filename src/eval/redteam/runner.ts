@@ -5,6 +5,13 @@ import type { Category, CorpusCase } from './types.js';
 export const REDTEAM_FAILURE_KINDS = ['missed', 'false-flag', 'false-block'] as const;
 export type RedteamFailureKind = (typeof REDTEAM_FAILURE_KINDS)[number];
 
+/** Runtime charset guard for corpus ids (ADR-0018 decision 4). `id` is the one
+ *  author-controlled free-text field that reaches the rendered artifact, so a
+ *  beacon-shaped id (`x-![b](http://e/x)`) must be rejected here at runtime —
+ *  not only by the corpus unit test — mirroring golden's parse-time id schema.
+ *  Same shape as `corpus.test.ts`'s pin; both guards are kept independently. */
+const CORPUS_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 export type RedteamRow = ScorecardRowCore<RedteamFailureKind> & {
   category: Category;
   verdict: 'pass' | 'block' | 'ask';
@@ -39,6 +46,9 @@ export function runRedteam(
   opts: { armLabel: string; harnessVersion?: string; now?: () => number },
 ): RedteamScorecard {
   const now = opts.now ?? Date.now;
+  for (const c of corpus) {
+    if (!CORPUS_ID_RE.test(c.id)) throw new Error(`invalid corpus id: ${c.id}`);
+  }
   const rows = corpus.map((c) => scoreCase(c, scan(c.text).verdict));
   const malicious = corpus.filter((c) => c.category !== 'benign');
   const detectedRows = rows.filter((r) => r.category !== 'benign' && r.verdict !== 'pass');

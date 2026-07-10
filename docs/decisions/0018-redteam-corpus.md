@@ -100,13 +100,16 @@ read.
    rule-table change cannot spuriously rewrite the diffed baseline.
 
    The one author-controlled free-text field that *does* reach the rendered
-   artifact is `id`. It gets a double guard: corpus ids are pattern-pinned
-   to `^[a-z0-9][a-z0-9-]{0,63}$` at corpus-validation time (same shape as
-   golden's task ids — the ADR-0017 bidi-in-row-id lesson), **and** every id
-   is passed through the shared `escapeCell` at render. A crafted id like
-   `x-![beacon](https://evil/collect)` is rejected at validation, not merely
+   artifact is `id`. It gets a double guard: `runRedteam` validates every
+   corpus id against `^[a-z0-9][a-z0-9-]{0,63}$` at runtime — before any row
+   is built — throwing on a violation (parallel to golden's parse-time id
+   schema; the ADR-0017 bidi-in-row-id lesson), **and** every id is passed
+   through the shared `escapeCell` at render. A crafted id like
+   `x-![beacon](https://evil/collect)` is rejected at runtime, not merely
    escaped at render — closing the image-beacon vector at its only entry
-   point rather than trusting a single downstream defense.
+   point rather than trusting a single downstream defense. A `corpus.test.ts`
+   assertion pins the same charset independently, so the two guards can't both
+   silently regress.
 
 5. **Defang convention for corpus payload text.** Attack payloads must
    remain faithful enough to be meaningful test cases without tripping the
@@ -122,9 +125,11 @@ read.
 6. **Scorecard: shared minimal core, per-producer extension and renderer.**
    `src/eval/scorecard/` exports only the producer-agnostic core: a generic
    `ScorecardRowCore<K>` (`{ id, pass, failureKind: K | null }`), the
-   `byFailureKind` totals partition (built from a producer-supplied
-   `as const` kind tuple so the runtime array and the type `K` cannot
-   drift), `toCanonicalJson`, the shared `escapeCell`/`truncateWellFormed`
+   `byFailureKind` totals partition (which must be passed the producer's
+   canonical `as const` kind tuple; the helper is defensive against an
+   out-of-tuple kind — it skips it rather than corrupting the count to NaN —
+   but does not type-enforce that the tuple is complete), `toCanonicalJson`,
+   the shared `escapeCell`/`truncateWellFormed`
    cell helpers, and a `producer: 'golden' | 'redteam'` discriminator on the
    envelope. Golden keeps its `volatile` (cost/turns) row extension, its
    cost totals, its `taskDir`/`models` meta, and its existing renderer —

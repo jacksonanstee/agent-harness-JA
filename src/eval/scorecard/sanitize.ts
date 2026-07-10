@@ -13,8 +13,8 @@ const BIDI_CONTROLS = /[‪-‮⁦-⁩‎‏؜]/g;
 /**
  * Every string entering a scorecard row goes through this: redact (fail-closed
  * to a sentinel — spec decision #1), strip control/bidi chars, truncate.
- * The field allowlist is structural (ScorecardRow has no raw-output field);
- * this guards the fields that do exist.
+ * The field allowlist is structural (the scorecard row types — GoldenRow /
+ * RedteamRow — carry no raw-output field); this guards the fields that exist.
  */
 export function cleanForScorecard(
   text: string,

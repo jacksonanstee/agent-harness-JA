@@ -31,7 +31,10 @@ export function computeByFailureKind<K extends string>(
 ): Record<K, number> {
   const out = Object.fromEntries(kinds.map((k) => [k, 0])) as Record<K, number>;
   for (const row of rows) {
-    if (row.failureKind !== null) out[row.failureKind] += 1;
+    // Defensive: only count a kind the producer actually seeded. A row whose
+    // kind is absent from `kinds` (an out-of-tuple drift) is skipped rather
+    // than corrupting its slot to NaN via `undefined + 1`.
+    if (row.failureKind !== null && row.failureKind in out) out[row.failureKind] += 1;
   }
   return out;
 }

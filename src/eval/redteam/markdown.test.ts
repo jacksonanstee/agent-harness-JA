@@ -20,7 +20,21 @@ describe('toRedteamMarkdown', () => {
     expect(md).toContain('false-blocks: 0');
   });
   it('renders detection as N/M with counts and the strength split', () => {
-    expect(toRedteamMarkdown(card)).toMatch(/1\/1 malicious/);
+    // Fixture with a non-trivial split (blocked 1, flagged-only 1) so a swap of
+    // the two counts, or dropping the segment, fails — ADR-0018 decision 9's
+    // interim block->ask-softening defense lives in this render line.
+    const strengthCard: RedteamScorecard = {
+      ...card,
+      meta: { ...card.meta, corpusSize: 2 },
+      rows: [
+        { id: 'm-block', category: 'direct', verdict: 'block', expected: 'block', pass: true, failureKind: null, reason: 'malicious input blocked' },
+        { id: 'm-ask', category: 'indirect', verdict: 'ask', expected: 'block', pass: true, failureKind: null, reason: 'malicious input flagged (ask)' },
+      ],
+      totals: { total: 2, passed: 2, failed: 0, byFailureKind: { missed: 0, 'false-flag': 0, 'false-block': 0 }, malicious: 2, detected: 2, blocked: 1, flaggedOnly: 1, falseBlockCount: 0 },
+    };
+    const md = toRedteamMarkdown(strengthCard);
+    expect(md).toMatch(/2\/2 malicious/);
+    expect(md).toContain('blocked 1 / flagged-only 1');
   });
   it('never renders the bare word FAIL for a missed/detected row', () => {
     const md = toRedteamMarkdown(card);
