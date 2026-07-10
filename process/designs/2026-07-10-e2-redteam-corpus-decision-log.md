@@ -120,3 +120,15 @@ All three reviewers invoked; all objections resolved or explicitly folded; no re
 Material design changes from review (net): (1) gate ≠ measurement — CI gates `falseBlockCount===0` (+ E-3 no-regression later); detection rate is reported, feeding ADR-0016 S-5. (2) detection-based semantics (block-or-ask), reverting the over-strict exact-match. (3) failure kinds = `missed`/`false-flag`/`false-block`. (4) **redteam rows carry no payload text/excerpts** — outcomes only; not redacted; nothing adversarial reaches committed/rendered artifacts. (5) shared minimal core row + per-producer extension/renderer/meta; `producer` discriminator. (6) eval type named `CorpusCase`; defang convention for payloads; non-gating drift diagnostic. (7) ADR-0018 leads with the gate-vs-S-5 circularity argument and states the measured detection rate.
 
 **DISPOSITION: APPROVED** (revisions folded into the design). Proceed to spec doc → user review → writing-plans.
+
+## External adversarial round — Gemini 2.5 Flash (2026-07-10)
+
+Ran the review-validated spec + decision log through the Gemini API (multi-model verification workflow; 2.5-pro and 3-pro quota-blocked, so 2.5-flash — a weaker reviewer). Two findings folded, rest were known tradeoffs.
+
+**G1 (folded) — the row `id` is an un-guarded author-controlled field reaching the rendered/committed artifact.**
+ACCEPTED. The "rows carry no payloads" resolution (CG2) missed that `id` is on the row and is free text. A corpus id like `x-![beacon](https://evil/collect)` reproduces the image-beacon exfil CG2 closed — the exact E-1 bidi-in-row-id class. RESOLUTION: corpus ids pattern-pinned to `^[a-z0-9][a-z0-9-]{0,63}$` at validation time AND run through shared `escapeCell` at render (double-guard). Added to spec + testing.
+
+**G2 (folded) — block→ask softening is CI-invisible in the E-2 ship window (before E-3's no-regression clause).**
+ACCEPTED as an explicit documented limitation (sharpens CG11). RESOLUTION: ADR-0018 names the window as a known time-boxed weakness; interim defense = the prominent strength line; S-5 decision reads the strength split, not detection alone. No new gate (a strength gate needs a baseline = E-3's job).
+
+**Not folded (known/accepted):** detection-counts-`ask` possibly flattering S-5 (mitigated by G2's strength-split note); corpus size 50 overfit risk (reinforces the open size question to Jackson); defang reduces realism (accepted safety cost); §3 scorecard boundary — Gemini explicitly validated it as correct.

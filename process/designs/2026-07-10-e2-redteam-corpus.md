@@ -46,6 +46,18 @@ Therefore:
 This split is the load-bearing engineering judgment of E-2; ADR-0018 leads
 with it (§ADR below) so it reads as rigor, not as lowering a bar.
 
+**E-2-ship-window limitation (stated explicitly in ADR-0018).** Until E-3's
+no-regression clause lands, the effective gate is `falseBlockCount === 0`
+alone. In that window a malicious case can soften from `block` to `ask`
+without failing CI — detection still counts it, `falseBlockCount` is
+unmoved — so the scanner's *blocking* strength could erode green. E-2's
+interim defense is the prominent strength line (`blocked X / flagged-only Y`)
+in the summary, read by a human; E-3 converts it into a gate by diffing the
+committed baseline. ADR-0018 names this window as a known, time-boxed
+weakness rather than leaving it implicit, and notes the S-5 decision should
+read the strength split, not detection rate alone (an `ask`-heavy 92% is a
+weaker posture than a `block`-heavy 92%).
+
 ## Semantics (aligned with the existing S-1 corpus)
 
 Per-case pass/fail is detection-based, not exact-verdict-match:
@@ -92,7 +104,13 @@ parts do not move into the shared core:
 Redteam rows contain **no case text and no scan excerpts**. A row is
 `{ id, category, verdict, expected, failureKind, reason }` where `reason` is a
 fixed enumerated explanation (`"expected block, scanner returned pass"`).
-Payloads live only in the corpus source. Consequences:
+Payloads live only in the corpus source. The `id` is the one author-controlled
+free-text field that reaches the rendered/committed artifact, so it is
+double-guarded: corpus ids are pattern-pinned to `^[a-z0-9][a-z0-9-]{0,63}$`
+(same shape as golden task ids — the E-1 bidi-in-row-id lesson) AND passed
+through the shared `escapeCell` in the renderer. A malicious id like
+`x-![beacon](https://evil/collect)` is rejected at corpus-validation time, not
+merely escaped at render. Consequences:
 
 - Nothing adversarial reaches the rendered markdown, the committed canonical
   baseline, or a viewer's browser (no live image-beacon exfil markup in a
@@ -192,7 +210,9 @@ budget (only the existing test-time ReDoS assertion).
 ## Testing (TDD)
 
 - Corpus: size ≥50; every case internally consistent (benign→expected pass,
-  malicious→expected block/ask); category coverage across all five families.
+  malicious→expected block/ask); category coverage across all five families;
+  every `id` matches `^[a-z0-9][a-z0-9-]{0,63}$` (rejects markdown/beacon
+  injection in the one author-controlled rendered field).
 - Runner: each failure kind produced from a synthetic scanner; `falseBlockCount`
   correct; detection computed over malicious only; deterministic rows.
 - Renderer: gate-first summary; outcome labels (no bare `FAIL`); `false-block`
