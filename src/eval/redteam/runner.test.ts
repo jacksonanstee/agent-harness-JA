@@ -47,3 +47,32 @@ describe('runRedteam (null/off arm)', () => {
     expect(sc.totals.detected).toBe(0);
   });
 });
+
+describe('runRedteam (ask verdict)', () => {
+  const askCases: CorpusCase[] = [
+    { id: 'm-ask',   category: 'direct',   text: 'E', expected: 'block' }, // malicious, scanned as ask
+    { id: 'm-block', category: 'indirect', text: 'F', expected: 'block' }, // malicious, scanned as block
+    { id: 'b-ask',   category: 'benign',   text: 'G', expected: 'pass' },  // benign, scanned as ask
+  ];
+  const scan = scanStub({ E: 'ask', F: 'block', G: 'ask' });
+  const sc = runRedteam(askCases, scan, { armLabel: 'security-on', now: () => 0 });
+  const byId = Object.fromEntries(sc.rows.map((r) => [r.id, r]));
+
+  it('malicious + ask is detected: failureKind null, pass true', () => {
+    expect(byId['m-ask'].failureKind).toBeNull();
+    expect(byId['m-ask'].pass).toBe(true);
+  });
+  it('benign + ask is a tolerated soft flag: false-flag, pass true', () => {
+    expect(byId['b-ask'].failureKind).toBe('false-flag');
+    expect(byId['b-ask'].pass).toBe(true);
+  });
+  it('benign + ask does not count toward falseBlockCount', () => {
+    expect(sc.totals.falseBlockCount).toBe(0);
+  });
+  it('splits detected malicious into blocked vs flaggedOnly, summing to detected', () => {
+    expect(sc.totals.detected).toBe(2); // m-ask + m-block
+    expect(sc.totals.blocked).toBe(1); // m-block
+    expect(sc.totals.flaggedOnly).toBe(1); // m-ask
+    expect(sc.totals.blocked + sc.totals.flaggedOnly).toBe(sc.totals.detected);
+  });
+});
