@@ -1,6 +1,6 @@
 # E-3 — Deterministic Red-Team Regression Gate
 
-Status: design (revised after 3-reviewer structured panel; arbiter pending)
+Status: design (review-validated — 3-reviewer structured panel + arbiter, disposition APPROVED after one REVISE round)
 Date: 2026-07-10
 Depends on: E-2 red-team corpus (`src/eval/redteam/`, ADR-0018), E-1 scorecard core (`src/eval/scorecard/`, ADR-0017)
 Feeds: closes ADR-0018 decision 9's ship-window limitation (block→ask softening becomes gated); week-plan Week-3 E-3 checkbox
