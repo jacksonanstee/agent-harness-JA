@@ -57,6 +57,20 @@ Verdict column: **ACCEPT** (design changed), **ACCEPT-PARTIAL** (changed with na
 | UA9 | LOW | One-row change → two-hunk baseline diff (row + totals) may puzzle reviewers | **ACCEPT** — one-line note in ADR-0019 (lockstep movement is correct, not noise). |
 | UA10 | — | GH Actions log rendering: plain-text report confirmed fine | **N/A** — probe recorded as addressed. |
 
+## External adversarial pass (Gemini, 2026-07-10)
+
+Post-arbiter iterated adversarial dialogue (gemini-2.5-flash; 2.5-pro was
+quota-limited), given the full design + this decision log and instructed not
+to re-raise resolved items. Converged in 2 of max 5 rounds.
+
+| # | Sev | Finding (compressed) | Resolution |
+|---|---|---|---|
+| GM1 | HIGH | SK9's mitigation (require-branches-up-to-date) is an optional operational control, not a binding requirement — a future multi-contributor phase could silently lack it | **ACCEPT** — elevated to a recorded MUST in §Interaction + ADR-0019, verified by the E-3 PR checklist. |
+| GM2 | HIGH | No binding contract that row fields stay deterministic — a future volatile field added to a *row* (vs `meta`) would spuriously drift every run, forcing reflexive `--update-baseline` (the rubber-stamp failure mode) | **ACCEPT** — binding row-determinism contract added to §Baseline artifact; volatility permitted only in `meta`; normalization fixture pin is the tripwire; recorded in ADR-0019. |
+
+Round-2 verdict after amendments: **SOUND** (both fixes confirmed adequate;
+no new findings above LOW).
+
 ## Cross-cutting designer notes
 
 - Convergent findings (SK7=CG1, SK3=CG7, SK4=UA6, SK8=UA2, SK13=CG2,

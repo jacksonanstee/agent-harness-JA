@@ -75,6 +75,18 @@ baseline adds no new adversarial payload surface — but the baseline file
 itself is repo-controlled input and is validated as hostile (§Baseline
 load).
 
+**Row-determinism contract (binding).** Every field on a scorecard row —
+core (`id`, `pass`, `failureKind`) and redteam extensions (`category`,
+`verdict`, `expected`, `reason`) — must be deterministic and non-volatile:
+same corpus + same scanner ⇒ same bytes. Volatility is permitted only in
+`meta`, where the normalization function strips it. Any future field added
+to a row type must satisfy this contract or must instead live in `meta` and
+be added to the normalization's dropped list (with its pinning fixture
+updated) in the same change — otherwise the gate degrades into spurious
+drift on every run, forcing reflexive `--update-baseline` and reintroducing
+the rubber-stamp failure mode the design exists to avoid. Recorded in
+ADR-0019; the normalization fixture pin is the mechanical tripwire.
+
 ## Baseline load (hostile-input validation)
 
 `docs/security-model.md`'s attacker model puts a malicious cloned repo in
@@ -287,8 +299,12 @@ Package-relative resolution is **not** built now (YAGNI pre-publish).
   textual merge can produce a baseline that is not the canonical output of
   the merged code → post-merge main goes red with no PR to blame. Classic
   snapshot-file semantic conflict (the Jest-doctrine failure mode carried
-  over honestly). Mitigation: enable require-branches-up-to-date protection;
-  recovery is a one-command regenerate commit. Solo-maintainer repo today.
+  over honestly). **Binding requirement (ADR-0019, not optional advice):
+  `main` MUST have require-branches-up-to-date protection enabled from the
+  moment the baseline lands** — an operational control, but a recorded MUST
+  the E-3 PR's checklist verifies, not a suggestion a future multi-
+  contributor phase can silently lack. Recovery from a slipped-through
+  conflict is a one-command regenerate commit. Solo-maintainer repo today.
 - ADR-0016 §7 unchanged: the gate still scores the deterministic heuristic
   arm only. ADR-0018's "detection rate is never gated" gains a required
   clarifying sentence in the amendment: the *level* is never gated; the
