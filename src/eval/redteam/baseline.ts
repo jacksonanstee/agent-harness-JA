@@ -1,5 +1,5 @@
 import type { ScorecardEnvelope } from '../scorecard/index.js';
-import type { RedteamRow, RedteamScorecard, RedteamTotals } from './runner.js';
+import type { RedteamMeta, RedteamRow, RedteamScorecard, RedteamTotals } from './runner.js';
 
 /** Non-volatile meta kept in the committed baseline (design §Baseline artifact). */
 export interface BaselineMeta {
@@ -20,7 +20,17 @@ export function normalizeForBaseline(scorecard: RedteamScorecard): BaselineScore
     schemaVersion: scorecard.schemaVersion,
     producer: scorecard.producer,
     meta: { corpusSize: scorecard.meta.corpusSize, armLabel: scorecard.meta.armLabel },
-    rows: scorecard.rows,
-    totals: scorecard.totals,
+    rows: [...scorecard.rows],
+    totals: { ...scorecard.totals },
   };
 }
+
+/** GM2 tripwire: adding a field to RedteamMeta is a compile error here until
+ *  it is explicitly classified — kept (add to BaselineMeta) or volatile (add
+ *  to this dropped-fields union). */
+type DroppedMetaField = 'createdAt' | 'harnessVersion';
+type UnclassifiedMetaField = Exclude<keyof RedteamMeta, keyof BaselineMeta | DroppedMetaField>;
+const _metaExhaustive: UnclassifiedMetaField extends never
+  ? true
+  : ['unclassified RedteamMeta field', UnclassifiedMetaField] = true;
+void _metaExhaustive;

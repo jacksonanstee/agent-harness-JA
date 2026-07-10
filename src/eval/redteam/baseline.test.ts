@@ -28,7 +28,9 @@ describe('normalizeForBaseline', () => {
 
   it('does not mutate its input', () => {
     const s = fresh();
-    normalizeForBaseline(s);
+    const n = normalizeForBaseline(s);
     expect(s.meta.createdAt).toBeDefined();
+    expect(n.rows).not.toBe(s.rows);
+    expect(n.totals).not.toBe(s.totals);
   });
 });
