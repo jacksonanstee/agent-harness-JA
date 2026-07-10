@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -88,10 +88,40 @@ describe('loadBaseline', () => {
     expect(() => loadBaseline(linkPath)).toThrow(/symlink/);
   });
 
-  it('throws BaselineError with "parse" (case-insensitive) on malformed JSON', () => {
-    const path = writeBaseline(freshDir(), '{');
-    expect(() => loadBaseline(path)).toThrow(BaselineError);
+  it('throws BaselineError with "symlink" when the parent directory is a symlink', () => {
+    const dir = freshDir();
+    const realDir = join(dir, 'real-dir');
+    mkdirSync(realDir);
+    writeBaseline(realDir, toCanonicalJson(normalizeForBaseline(fresh())));
+    const linkedDir = join(dir, 'linked-dir');
+    symlinkSync(realDir, linkedDir);
+    const viaLink = join(linkedDir, 'baseline.json');
+    expect(() => loadBaseline(viaLink)).toThrow(BaselineError);
+    expect(() => loadBaseline(viaLink)).toThrow(/symlink/);
+  });
+
+  it('throws BaselineError with "cannot read" when the baseline path is a directory', () => {
+    const path = join(freshDir(), 'baseline.json');
+    mkdirSync(path);
+    expect(() => loadBaseline(path)).toThrowError(BaselineError);
+    expect(() => loadBaseline(path)).toThrow(/cannot read/);
+  });
+
+  it('throws BaselineError with "parse" on malformed JSON, without echoing file bytes', () => {
+    // The marker (with an ANSI-escape prefix) stands in for attacker-controlled
+    // bytes; V8's SyntaxError would embed a snippet of it — the loader must not.
+    const path = writeBaseline(freshDir(), '{\u001b[31mEVIL');
+    expect(() => loadBaseline(path)).toThrowError(BaselineError);
     expect(() => loadBaseline(path)).toThrow(/parse/i);
+    let message = '';
+    try {
+      loadBaseline(path);
+    } catch (error: unknown) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toBe('');
+    expect(message).not.toContain('EVIL');
+    expect(message).not.toContain('\u001b');
   });
 
   describe('shape violations (each rejected as /baseline/ with ajv detail)', () => {
@@ -142,11 +172,17 @@ describe('loadBaseline', () => {
   });
 
   it('rejects schemaVersion: 2 and producer: "golden"', () => {
-    const withBadVersion = { ...goodJson(), schemaVersion: 2 };
-    expect(() => loadBaseline(writeBaseline(freshDir(), JSON.stringify(withBadVersion)))).toThrow(BaselineError);
+    // Both the class AND a message assertion: toThrow(BaselineError) alone
+    // matched ANY error while loadBaseline was unimplemented (the import was
+    // undefined, and toThrow(undefined) matches everything) — the message
+    // regex is what makes this test capable of failing.
+    const badVersionPath = writeBaseline(freshDir(), JSON.stringify({ ...goodJson(), schemaVersion: 2 }));
+    expect(() => loadBaseline(badVersionPath)).toThrowError(BaselineError);
+    expect(() => loadBaseline(badVersionPath)).toThrow(/invalid|baseline/);
 
-    const withBadProducer = { ...goodJson(), producer: 'golden' };
-    expect(() => loadBaseline(writeBaseline(freshDir(), JSON.stringify(withBadProducer)))).toThrow(BaselineError);
+    const badProducerPath = writeBaseline(freshDir(), JSON.stringify({ ...goodJson(), producer: 'golden' }));
+    expect(() => loadBaseline(badProducerPath)).toThrowError(BaselineError);
+    expect(() => loadBaseline(badProducerPath)).toThrow(/invalid|baseline/);
   });
 
   it('happy path: returns raw byte-equal to disk and parsed.rows for the whole corpus', () => {

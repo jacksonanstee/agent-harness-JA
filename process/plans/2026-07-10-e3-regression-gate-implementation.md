@@ -423,12 +423,25 @@ export function loadBaseline(path: string): { raw: string; parsed: BaselineScore
   if (size > MAX_BASELINE_BYTES) {
     throw new BaselineError(`baseline ${path} exceeds ${MAX_BASELINE_BYTES} bytes (${size})`);
   }
-  const raw = readFileSync(path, 'utf8');
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (error: unknown) {
+    // ALL load failures throw BaselineError (design contract): readFileSync
+    // can throw raw past the stat guards (EISDIR when path is a directory,
+    // EACCES on permission loss between stat and read).
+    throw new BaselineError(
+      `cannot read baseline ${path} (${(error as NodeJS.ErrnoException).code ?? 'read error'})`,
+    );
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch (error: unknown) {
-    throw new BaselineError(`baseline ${path} failed to parse as JSON: ${String(error)}`);
+  } catch {
+    // Deliberately NOT String(error): V8 SyntaxError messages embed a
+    // verbatim snippet of the (attacker-controlled) input, and this message
+    // is terminal-bound — no raw repo-controlled bytes in output.
+    throw new BaselineError(`baseline ${path} failed to parse as JSON`);
   }
   if (!validateBaseline(parsed)) {
     throw new BaselineError(`baseline ${path} is invalid: ${ajv.errorsText(validateBaseline.errors)}`);
