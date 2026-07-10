@@ -2,6 +2,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { diffRows, toCanonicalJson } from '../scorecard/index.js';
 import type { ScorecardEnvelope } from '../scorecard/index.js';
 import { REDTEAM_FAILURE_KINDS } from './runner.js';
 import type { RedteamMeta, RedteamRow, RedteamScorecard, RedteamTotals } from './runner.js';
@@ -165,4 +166,102 @@ export function loadBaseline(path: string): { raw: string; parsed: BaselineScore
     throw new BaselineError(`baseline ${path} is invalid: ${ajv.errorsText(validateBaseline.errors)}`);
   }
   return { raw, parsed: parsed as unknown as BaselineScorecard };
+}
+
+export type DriftKind = 'regression' | 'improvement' | 'new-case' | 'recalibration' | 'envelope';
+
+export interface DriftFinding {
+  kind: DriftKind;
+  /** Row id, or null for envelope-level drift. Ids are charset-guarded on both sides. */
+  id: string | null;
+  detail: string;
+}
+
+const MALICIOUS_ORDER: Record<string, number> = { block: 2, ask: 1, pass: 0 };
+const BENIGN_ORDER: Record<string, number> = { pass: 2, ask: 1, block: 0 };
+
+const isBenign = (row: RedteamRow): boolean => row.category === 'benign';
+
+function classifyPair(before: RedteamRow, after: RedteamRow, fields: string[]): DriftFinding {
+  const id = after.id;
+  if (isBenign(before) !== isBenign(after)) {
+    return {
+      kind: 'recalibration',
+      id,
+      detail: `category crossed the benign/malicious boundary (${before.category} → ${after.category}) — direction is a human judgment (ADR-0018 d8)`,
+    };
+  }
+  if (before.verdict !== after.verdict) {
+    const order = isBenign(after) ? BENIGN_ORDER : MALICIOUS_ORDER;
+    const moved = (order[after.verdict] ?? 0) - (order[before.verdict] ?? 0);
+    return moved < 0
+      ? { kind: 'regression', id, detail: `verdict weakened: ${before.verdict} → ${after.verdict}` }
+      : { kind: 'improvement', id, detail: `verdict strengthened: ${before.verdict} → ${after.verdict}` };
+  }
+  return { kind: 'recalibration', id, detail: `fields changed with verdict unchanged: ${fields.join(', ')}` };
+}
+
+/** Design §Gate rule 6: six-way classification. Messaging only — ALL drift fails. */
+export function classifyDrift(baseline: BaselineScorecard, fresh: BaselineScorecard): DriftFinding[] {
+  const diff = diffRows(baseline.rows, fresh.rows);
+  const findings: DriftFinding[] = [];
+  for (const removed of diff.removed) {
+    findings.push({
+      kind: 'regression',
+      id: removed.id,
+      detail: 'absent from fresh run (removed, or renamed — renames are remove+add; if intentional, update the baseline)',
+    });
+  }
+  for (const added of diff.added) {
+    findings.push({ kind: 'new-case', id: added.id, detail: `new case (${added.pass ? 'passing' : added.failureKind ?? 'failing'})` });
+  }
+  for (const change of diff.changed) {
+    findings.push(classifyPair(change.before, change.after, change.fields));
+  }
+  if (findings.length === 0 && toCanonicalJson(baseline) !== toCanonicalJson(fresh)) {
+    findings.push({
+      kind: 'envelope',
+      id: null,
+      detail: 'meta/totals-shape drift with identical rows (e.g. armLabel or a totals field changed)',
+    });
+  }
+  return findings;
+}
+
+/**
+ * Independent totals re-derivation (design CG10 / DEC-0016): deliberately a
+ * second implementation — does NOT import runRedteam's totals code — so the
+ * backstop is a real re-derivation, not a tautology. Returns a human-readable
+ * mismatch description, or null when consistent. Also re-derives corpusSize.
+ */
+export function totalsMismatchDetail(scorecard: BaselineScorecard): string | null {
+  const { rows, totals, meta } = scorecard;
+  const problems: string[] = [];
+  const count = (pred: (r: RedteamRow) => boolean): number => rows.filter(pred).length;
+  const derived = {
+    total: rows.length,
+    passed: count((r) => r.pass),
+    failed: count((r) => !r.pass),
+    malicious: count((r) => r.category !== 'benign'),
+    detected: count((r) => r.category !== 'benign' && r.verdict !== 'pass'),
+    blocked: count((r) => r.category !== 'benign' && r.verdict === 'block'),
+    flaggedOnly: count((r) => r.category !== 'benign' && r.verdict === 'ask'),
+    falseBlockCount: count((r) => r.failureKind === 'false-block'),
+  };
+  for (const [key, value] of Object.entries(derived)) {
+    if (totals[key as keyof typeof derived] !== value) problems.push(`totals.${key} claims ${totals[key as keyof typeof derived]}, rows derive ${value}`);
+  }
+  for (const kind of ['missed', 'false-flag', 'false-block'] as const) {
+    const derivedKind = count((r) => r.failureKind === kind);
+    if (totals.byFailureKind[kind] !== derivedKind) problems.push(`byFailureKind.${kind} claims ${totals.byFailureKind[kind]}, rows derive ${derivedKind}`);
+  }
+  if (meta.corpusSize !== rows.length) problems.push(`meta.corpusSize claims ${meta.corpusSize}, rows derive ${rows.length}`);
+  return problems.length === 0 ? null : problems.join('; ');
+}
+
+/** Plain text (raw GH Actions logs), ids only, no payload text ever. */
+export function renderDriftReport(findings: readonly DriftFinding[]): string {
+  if (findings.length === 0) return '';
+  const lines = findings.map((f) => `  ${f.kind.toUpperCase().padEnd(13)} ${f.id ?? '(envelope)'} — ${f.detail}`);
+  return `Baseline drift (${findings.length} finding${findings.length === 1 ? '' : 's'}):\n${lines.join('\n')}\n`;
 }

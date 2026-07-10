@@ -6,9 +6,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { scan } from '../../security/index.js';
 import { toCanonicalJson } from '../scorecard/index.js';
-import { BaselineError, loadBaseline, MAX_BASELINE_BYTES, normalizeForBaseline } from './baseline.js';
+import type { BaselineMeta, BaselineScorecard } from './baseline.js';
+import {
+  BaselineError,
+  classifyDrift,
+  loadBaseline,
+  MAX_BASELINE_BYTES,
+  normalizeForBaseline,
+  renderDriftReport,
+  totalsMismatchDetail,
+} from './baseline.js';
 import { CORPUS } from './corpus.js';
+import type { RedteamRow, RedteamTotals } from './runner.js';
 import { runRedteam } from './runner.js';
+import type { Category } from './types.js';
 import { REDTEAM_ARM_LABEL } from './types.js';
 
 const fresh = () =>
@@ -191,5 +202,285 @@ describe('loadBaseline', () => {
     const result = loadBaseline(path);
     expect(result.raw).toBe(raw);
     expect(result.parsed.rows.length).toBe(CORPUS.length);
+  });
+});
+
+/**
+ * Local fixture helper mirroring runner.ts's private `scoreCase` derivation
+ * (design §Gate rule 6 tests): keeps synthetic rows internally consistent
+ * (pass/failureKind/reason follow from category+verdict) without importing
+ * runner's private scoring function or reusing production code under test.
+ */
+function makeRow(
+  id: string,
+  category: Category,
+  verdict: 'pass' | 'ask' | 'block',
+  expected: 'pass' | 'ask' | 'block',
+): RedteamRow {
+  const base = { id, category, verdict, expected };
+  if (category === 'benign') {
+    if (verdict === 'block') return { ...base, pass: false, failureKind: 'false-block', reason: 'benign input was blocked' };
+    if (verdict === 'ask') return { ...base, pass: true, failureKind: 'false-flag', reason: 'benign input was flagged (ask)' };
+    return { ...base, pass: true, failureKind: null, reason: 'benign input passed' };
+  }
+  if (verdict === 'pass') return { ...base, pass: false, failureKind: 'missed', reason: 'malicious input not detected' };
+  return {
+    ...base,
+    pass: true,
+    failureKind: null,
+    reason: verdict === 'block' ? 'malicious input blocked' : 'malicious input flagged (ask)',
+  };
+}
+
+/** Mirrors runner.ts's totals derivation, independently, purely for fixture
+ *  construction — the production `totalsMismatchDetail` re-derivation under
+ *  test must NOT reuse this (or any other totals code): DEC-0016 backstop. */
+function makeTotals(rows: RedteamRow[]): RedteamTotals {
+  const detectedRows = rows.filter((r) => r.category !== 'benign' && r.verdict !== 'pass');
+  return {
+    total: rows.length,
+    passed: rows.filter((r) => r.pass).length,
+    failed: rows.filter((r) => !r.pass).length,
+    byFailureKind: {
+      missed: rows.filter((r) => r.failureKind === 'missed').length,
+      'false-flag': rows.filter((r) => r.failureKind === 'false-flag').length,
+      'false-block': rows.filter((r) => r.failureKind === 'false-block').length,
+    },
+    malicious: rows.filter((r) => r.category !== 'benign').length,
+    detected: detectedRows.length,
+    blocked: detectedRows.filter((r) => r.verdict === 'block').length,
+    flaggedOnly: detectedRows.filter((r) => r.verdict === 'ask').length,
+    falseBlockCount: rows.filter((r) => r.failureKind === 'false-block').length,
+  };
+}
+
+function makeScorecard(rows: RedteamRow[], metaOverrides: Partial<BaselineMeta> = {}): BaselineScorecard {
+  return {
+    schemaVersion: 1,
+    producer: 'redteam',
+    meta: { corpusSize: rows.length, armLabel: REDTEAM_ARM_LABEL, ...metaOverrides },
+    rows,
+    totals: makeTotals(rows),
+  };
+}
+
+describe('classifyDrift', () => {
+  const pair = (before: RedteamRow, after: RedteamRow) =>
+    classifyDrift(makeScorecard([before]), makeScorecard([after]));
+
+  it('malicious block -> ask is a regression (the decision-9 flagship)', () => {
+    const before = makeRow('case-1', 'direct', 'block', 'block');
+    const after = makeRow('case-1', 'direct', 'ask', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-1', detail: 'verdict weakened: block → ask' },
+    ]);
+  });
+
+  it('malicious ask -> pass is a regression', () => {
+    const before = makeRow('case-2', 'direct', 'ask', 'block');
+    const after = makeRow('case-2', 'direct', 'pass', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-2', detail: 'verdict weakened: ask → pass' },
+    ]);
+  });
+
+  it('malicious block -> pass is a regression', () => {
+    const before = makeRow('case-3', 'direct', 'block', 'block');
+    const after = makeRow('case-3', 'direct', 'pass', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-3', detail: 'verdict weakened: block → pass' },
+    ]);
+  });
+
+  it('malicious ask -> block is an improvement', () => {
+    const before = makeRow('case-4', 'direct', 'ask', 'block');
+    const after = makeRow('case-4', 'direct', 'block', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-4', detail: 'verdict strengthened: ask → block' },
+    ]);
+  });
+
+  it('malicious pass -> ask is an improvement', () => {
+    const before = makeRow('case-5', 'direct', 'pass', 'block');
+    const after = makeRow('case-5', 'direct', 'ask', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-5', detail: 'verdict strengthened: pass → ask' },
+    ]);
+  });
+
+  it('malicious pass -> block is an improvement', () => {
+    const before = makeRow('case-6', 'direct', 'pass', 'block');
+    const after = makeRow('case-6', 'direct', 'block', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-6', detail: 'verdict strengthened: pass → block' },
+    ]);
+  });
+
+  it('benign pass -> ask is a regression (new false-flag)', () => {
+    const before = makeRow('case-7', 'benign', 'pass', 'pass');
+    const after = makeRow('case-7', 'benign', 'ask', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-7', detail: 'verdict weakened: pass → ask' },
+    ]);
+  });
+
+  it('benign ask -> pass is an improvement', () => {
+    const before = makeRow('case-8', 'benign', 'ask', 'pass');
+    const after = makeRow('case-8', 'benign', 'pass', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'improvement', id: 'case-8', detail: 'verdict strengthened: ask → pass' },
+    ]);
+  });
+
+  it('benign pass -> block is a regression', () => {
+    const before = makeRow('case-9', 'benign', 'pass', 'pass');
+    const after = makeRow('case-9', 'benign', 'block', 'pass');
+    expect(pair(before, after)).toEqual([
+      { kind: 'regression', id: 'case-9', detail: 'verdict weakened: pass → block' },
+    ]);
+  });
+
+  it('same verdict, expected changed, is a recalibration', () => {
+    const before: RedteamRow = {
+      id: 'case-10', category: 'direct', verdict: 'block', expected: 'block',
+      pass: true, failureKind: null, reason: 'malicious input blocked',
+    };
+    const after: RedteamRow = { ...before, expected: 'ask' };
+    expect(pair(before, after)).toEqual([
+      { kind: 'recalibration', id: 'case-10', detail: 'fields changed with verdict unchanged: expected' },
+    ]);
+  });
+
+  it('same verdict, reason reworded, is a recalibration', () => {
+    const before: RedteamRow = {
+      id: 'case-11', category: 'direct', verdict: 'block', expected: 'block',
+      pass: true, failureKind: null, reason: 'malicious input blocked',
+    };
+    const after: RedteamRow = { ...before, reason: 'malicious input blocked (reworded)' };
+    expect(pair(before, after)).toEqual([
+      { kind: 'recalibration', id: 'case-11', detail: 'fields changed with verdict unchanged: reason' },
+    ]);
+  });
+
+  it('category direct -> jailbreak (same class), same verdict, is a recalibration', () => {
+    const before = makeRow('case-12', 'direct', 'block', 'block');
+    const after = makeRow('case-12', 'jailbreak', 'block', 'block');
+    expect(pair(before, after)).toEqual([
+      { kind: 'recalibration', id: 'case-12', detail: 'fields changed with verdict unchanged: category' },
+    ]);
+  });
+
+  it('category benign -> exfil (cross-class), verdict ask -> block, is a recalibration (NOT improvement)', () => {
+    const before = makeRow('case-13', 'benign', 'ask', 'pass');
+    const after = makeRow('case-13', 'exfil', 'block', 'block');
+    expect(pair(before, after)).toEqual([
+      {
+        kind: 'recalibration',
+        id: 'case-13',
+        detail: 'category crossed the benign/malicious boundary (benign → exfil) — direction is a human judgment (ADR-0018 d8)',
+      },
+    ]);
+  });
+
+  it('removed id is a regression with a rename hint', () => {
+    const baseline = makeScorecard([makeRow('case-14', 'direct', 'block', 'block')]);
+    const freshSc = makeScorecard([]);
+    const findings = classifyDrift(baseline, freshSc);
+    expect(findings).toHaveLength(1);
+    const [finding] = findings;
+    expect(finding).toBeDefined();
+    expect(finding?.kind).toBe('regression');
+    expect(finding?.id).toBe('case-14');
+    expect(finding?.detail).toMatch(/removed, or renamed/);
+  });
+
+  it('added id (a missed row) is a new-case', () => {
+    const baseline = makeScorecard([]);
+    const freshSc = makeScorecard([makeRow('case-15', 'direct', 'pass', 'block')]);
+    expect(classifyDrift(baseline, freshSc)).toEqual([
+      { kind: 'new-case', id: 'case-15', detail: 'new case (missed)' },
+    ]);
+  });
+
+  it('armLabel changed with identical rows is a single envelope finding', () => {
+    const rows = [makeRow('case-16', 'direct', 'block', 'block')];
+    const baseline = makeScorecard(rows, { armLabel: 'security-on' });
+    const freshSc = makeScorecard(rows, { armLabel: 'security-off' });
+    expect(classifyDrift(baseline, freshSc)).toEqual([
+      { kind: 'envelope', id: null, detail: expect.any(String) },
+    ]);
+  });
+
+  it('identical scorecards produce no findings', () => {
+    const rows = [makeRow('case-17', 'direct', 'block', 'block'), makeRow('case-18', 'benign', 'pass', 'pass')];
+    const baseline = makeScorecard(rows);
+    const freshSc = makeScorecard([...rows]);
+    expect(classifyDrift(baseline, freshSc)).toEqual([]);
+  });
+});
+
+describe('totalsMismatchDetail', () => {
+  it('returns null for a consistent scorecard', () => {
+    const rows = [makeRow('t-1', 'direct', 'block', 'block'), makeRow('t-2', 'benign', 'pass', 'pass')];
+    expect(totalsMismatchDetail(makeScorecard(rows))).toBeNull();
+  });
+
+  it('flags totals.detected off by one', () => {
+    const rows = [makeRow('t-3', 'direct', 'block', 'block'), makeRow('t-4', 'benign', 'pass', 'pass')];
+    const scorecard = makeScorecard(rows);
+    const mutated: BaselineScorecard = { ...scorecard, totals: { ...scorecard.totals, detected: scorecard.totals.detected + 1 } };
+    expect(totalsMismatchDetail(mutated)).toMatch(/detected/);
+  });
+
+  it('flags meta.corpusSize diverging from rows.length (design SK11)', () => {
+    const rows = [makeRow('t-5', 'direct', 'block', 'block')];
+    const scorecard = makeScorecard(rows);
+    const mutated: BaselineScorecard = { ...scorecard, meta: { ...scorecard.meta, corpusSize: scorecard.meta.corpusSize + 1 } };
+    expect(totalsMismatchDetail(mutated)).toMatch(/corpusSize/);
+  });
+});
+
+describe('renderDriftReport', () => {
+  it('renders one kind-labelled line per finding and never leaks corpus payload text', () => {
+    const corpusCase = CORPUS.find((c) => c.category !== 'benign');
+    if (corpusCase === undefined) throw new Error('expected at least one malicious corpus case in CORPUS');
+    const before = makeRow(corpusCase.id, corpusCase.category, 'block', corpusCase.expected);
+    const after = makeRow(corpusCase.id, corpusCase.category, 'ask', corpusCase.expected);
+    const findings = classifyDrift(makeScorecard([before]), makeScorecard([after]));
+    expect(findings).toHaveLength(1);
+    const report = renderDriftReport(findings);
+    expect(report).toContain('REGRESSION');
+    expect(report).toContain(corpusCase.id);
+    expect(report).not.toContain(corpusCase.text);
+    const nonEmptyLines = report.split('\n').filter((line) => line.trim().length > 0);
+    expect(nonEmptyLines).toHaveLength(findings.length + 1); // header + one line per finding
+  });
+
+  it('renders multiple findings, one line each, still with no payload text', () => {
+    const benignCase = CORPUS.find((c) => c.category === 'benign');
+    const maliciousCase = CORPUS.find((c) => c.category !== 'benign');
+    if (benignCase === undefined || maliciousCase === undefined) {
+      throw new Error('expected both a benign and a malicious corpus case in CORPUS');
+    }
+    const beforeRows = [
+      makeRow(benignCase.id, 'benign', 'pass', 'pass'),
+      makeRow(maliciousCase.id, maliciousCase.category, 'block', maliciousCase.expected),
+    ];
+    const afterRows = [
+      makeRow(benignCase.id, 'benign', 'ask', 'pass'),
+      makeRow(maliciousCase.id, maliciousCase.category, 'pass', maliciousCase.expected),
+    ];
+    const findings = classifyDrift(makeScorecard(beforeRows), makeScorecard(afterRows));
+    expect(findings).toHaveLength(2);
+    const report = renderDriftReport(findings);
+    expect(report).toContain(`(${findings.length} findings)`);
+    expect(report).not.toContain(benignCase.text);
+    expect(report).not.toContain(maliciousCase.text);
+    const bodyLines = report.trim().split('\n').slice(1);
+    expect(bodyLines).toHaveLength(2);
+  });
+
+  it('returns empty string when there are no findings', () => {
+    expect(renderDriftReport([])).toBe('');
   });
 });
