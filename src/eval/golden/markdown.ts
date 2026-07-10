@@ -1,6 +1,6 @@
-import { escapeCell } from './sanitize.js';
-import { GOLDEN_FAILURE_KINDS } from '../golden/scorecard-shape.js';
-import type { GoldenRow, GoldenScorecard } from '../golden/scorecard-shape.js';
+import { escapeCell } from '../scorecard/index.js';
+import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
+import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
 
 function money(value: number): string {
   return `$${value.toFixed(4)}`;

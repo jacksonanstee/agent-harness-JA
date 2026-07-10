@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toMarkdown } from './markdown.js';
-import type { GoldenRow, GoldenScorecard } from '../golden/scorecard-shape.js';
+import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
 
 function makeCard(rows: GoldenRow[], overrides?: {
   totalCostUsd?: number;

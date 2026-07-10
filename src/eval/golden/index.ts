@@ -11,6 +11,7 @@ export type {
   TaskSessionConfig,
 } from './runner.js';
 export { DEFAULT_MAX_TURNS, parseTaskFile } from './task.js';
+export { toMarkdown } from './markdown.js';
 export type { GoldenTask, TaskParseResult } from './task.js';
 export { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
 export type {
