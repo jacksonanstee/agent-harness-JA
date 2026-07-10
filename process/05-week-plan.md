@@ -80,7 +80,7 @@ Where this project earns its differentiation. Most portfolio repos skip eval ent
 - [ ] **Adversarial verification** (E-4) — second-pass model challenges primary output. Pluggable adversary model.
 - [ ] `docs/eval-methodology.md` — how scoring works, what counts as a regression, how to author new cases.
 
-**Checkpoint:** `npx agent-harness-ja eval` produces a Markdown scorecard. Red-team pass rate is ≥90% with default security on; falls to <50% with security off (proves the security layer is doing real work). CI runs eval on every PR (the deterministic red-team arm only — golden eval needs a live key and executes repo oracle code, so it never runs in per-PR CI; ADR-0016 §7, ADR-0017).
+**Checkpoint:** `npx agent-harness-ja eval` produces a Markdown scorecard. The every-PR CI gate on the red-team arm is `falseBlockCount === 0` (no benign input is ever blocked) — not a pass-rate threshold; gating on a detection percentage would strand honest new cases the scanner misses and disarm the same number ADR-0016 §6's S-5 trigger needs to measure (ADR-0018). Detection rate with default security on (≥90% measured at E-2 design time) and the security-off differential (<50%, proving the security layer does real work) are **reported** scorecard metrics that feed the S-5 decision, not merge blockers. CI runs eval on every PR (the deterministic red-team arm only — golden eval needs a live key and executes repo oracle code, so it never runs in per-PR CI; ADR-0016 §7, ADR-0017, ADR-0018).
 
 ## Week 4 — Docs polish + launch (planned 2026-06-08 → 2026-06-14; re-dated 2026-07-20 → 2026-07-26)
 
