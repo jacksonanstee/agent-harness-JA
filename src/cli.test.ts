@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRedteamArgs, parseRunArgs, redteamExitCode, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
-import { CORPUS, EvalUsageError, runRedteam } from './eval/index.js';
+import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
 import type { CorpusCase, GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
@@ -447,14 +447,24 @@ describe('parseEvalArgs', () => {
 });
 
 describe('parseRedteamArgs', () => {
+  // Full coverage of --update-baseline / --baseline / defaults lives in
+  // src/cli/redteam-command.test.ts (E-3 Task 8); these two are kept here
+  // only as the pre-existing pin that parseArgs('redteam', ...) reaches this
+  // parser unchanged post-extraction.
   it('defaults out to the shared eval scorecard directory', () => {
     const result = parseRedteamArgs([]);
-    expect(result).toEqual({ ok: true, value: { command: 'redteam', out: join('.harness', 'eval') } });
+    expect(result).toEqual({
+      ok: true,
+      value: { command: 'redteam', out: join('.harness', 'eval'), updateBaseline: false, baselinePath: 'eval/redteam/baseline.json' },
+    });
   });
 
   it('accepts --out <dir>', () => {
     const result = parseRedteamArgs(['--out', '/tmp/redteam-out']);
-    expect(result).toEqual({ ok: true, value: { command: 'redteam', out: '/tmp/redteam-out' } });
+    expect(result).toEqual({
+      ok: true,
+      value: { command: 'redteam', out: '/tmp/redteam-out', updateBaseline: false, baselinePath: 'eval/redteam/baseline.json' },
+    });
   });
 
   it('rejects --out with no value', () => {
@@ -518,14 +528,29 @@ describe('redteamExitCode', () => {
 });
 
 describe('main (redteam)', () => {
+  // E-3 (Task 8) made `redteam` compare-by-default: a passing run now needs a
+  // baseline that matches the live corpus, so these two write one to a tmp
+  // path via `--baseline` rather than relying on the (not-yet-committed
+  // until Task 9) repo-default `eval/redteam/baseline.json`.
+  const writeMatchingBaseline = (): { dir: string; path: string } => {
+    const dir = mkdtempSync(join(tmpdir(), 'redteam-baseline-'));
+    const path = join(dir, 'baseline.json');
+    const canonical = toCanonicalJson(
+      normalizeForBaseline(runRedteam(CORPUS, scan, { armLabel: REDTEAM_ARM_LABEL, harnessVersion: '0.0.0-test' })),
+    );
+    writeFileSync(path, canonical);
+    return { dir, path };
+  };
+
   it('does not require ANTHROPIC_API_KEY', async () => {
     const out = mkdtempSync(join(tmpdir(), 'redteam-out-'));
+    const baseline = writeMatchingBaseline();
     const saved = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const code = await main(['redteam', '--out', out]);
+      const code = await main(['redteam', '--out', out, '--baseline', baseline.path]);
       expect(code).toBe(0);
       const stdoutText = stdoutSpy.mock.calls.map((c) => String(c[0])).join('');
       const stderrText = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
@@ -536,18 +561,21 @@ describe('main (redteam)', () => {
       stderrSpy.mockRestore();
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
       rmSync(out, { recursive: true, force: true });
+      rmSync(baseline.dir, { recursive: true, force: true });
     }
   });
 
   it('exits 0, prints a Gate: PASS markdown summary, and writes the scorecard on the real corpus', async () => {
     const out = mkdtempSync(join(tmpdir(), 'redteam-out-'));
+    const baseline = writeMatchingBaseline();
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const code = await main(['redteam', '--out', out]);
+      const code = await main(['redteam', '--out', out, '--baseline', baseline.path]);
       expect(code).toBe(0);
       const stdoutText = stdoutSpy.mock.calls.map((c) => String(c[0])).join('');
       expect(stdoutText).toContain('Gate: PASS');
+      expect(stdoutText).toContain('GATE_FAILURE=none');
       const stderrText = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
       const writtenPath = /scorecard written to (.+)$/m.exec(stderrText)?.[1]?.trim();
       expect(writtenPath).toBeDefined();
@@ -558,6 +586,7 @@ describe('main (redteam)', () => {
       stdoutSpy.mockRestore();
       stderrSpy.mockRestore();
       rmSync(out, { recursive: true, force: true });
+      rmSync(baseline.dir, { recursive: true, force: true });
     }
   });
 

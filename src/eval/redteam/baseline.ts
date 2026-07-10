@@ -111,7 +111,16 @@ const baselineSchema = {
 const ajv = new Ajv2020({ allErrors: true });
 const validateBaseline = ajv.compile(baselineSchema);
 
-function refuseSymlink(path: string, label: string): void {
+/**
+ * Exported for reuse by `src/cli/redteam-command.ts`'s `--update-baseline`
+ * write path (E-3 Task 8 deviation from the design's "implement a small
+ * local check" suggestion): the write path needs the identical file+parent
+ * symlink guard `loadBaseline` already enforces on read, and duplicating the
+ * ENOENT-tolerant lstat logic would be the second implementation of the same
+ * check with no independent value (unlike the deliberate totals-backstop
+ * duplication, DEC-0016).
+ */
+export function refuseSymlink(path: string, label: string): void {
   let isLink: boolean;
   try {
     isLink = lstatSync(path).isSymbolicLink();

@@ -12,6 +12,7 @@ export {
   loadBaseline,
   MAX_BASELINE_BYTES,
   normalizeForBaseline,
+  refuseSymlink,
   renderDriftReport,
   totalsMismatchDetail,
 } from './baseline.js';
