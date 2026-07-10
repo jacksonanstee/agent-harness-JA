@@ -34,6 +34,7 @@ export default tseslint.config(
             '**/session',
             '**/cli',
             '**/cli.js',
+            '**/cli/**',
             '**/eval/**',
             '**/eval',
           ],
@@ -57,7 +58,7 @@ export default tseslint.config(
             '**/telemetry/*', '**/telemetry',
             '**/security/*', '**/security',
             '**/session/*', '**/session',
-            '**/cli', '**/cli.js',
+            '**/cli', '**/cli.js', '**/cli/**',
             '**/eval/**', '**/eval',
           ],
         },
@@ -77,6 +78,7 @@ export default tseslint.config(
             '**/session',
             '**/cli',
             '**/cli.js',
+            '**/cli/**',
             '**/hooks/*',
             '**/hooks',
             '**/eval/**',
@@ -101,6 +103,7 @@ export default tseslint.config(
             '**/session',
             '**/cli',
             '**/cli.js',
+            '**/cli/**',
             '**/router/*',
             '**/router',
             '**/skills/*',
@@ -127,7 +130,7 @@ export default tseslint.config(
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: ['**/eval/**', '**/eval', '**/cli', '**/cli.js'] },
+        { patterns: ['**/eval/**', '**/eval', '**/cli', '**/cli.js', '**/cli/**'] },
       ],
     },
   },
@@ -136,7 +139,7 @@ export default tseslint.config(
   {
     files: ['src/eval/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: ['**/cli', '**/cli.js'] }],
+      'no-restricted-imports': ['error', { patterns: ['**/cli', '**/cli.js', '**/cli/**'] }],
     },
   },
 );

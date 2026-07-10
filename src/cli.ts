@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  CORPUS,
   createGoldenRunner,
   EvalUsageError,
-  REDTEAM_ARM_LABEL,
-  runRedteam,
-  toCanonicalJson,
   toMarkdown,
-  toRedteamMarkdown,
 } from './eval/index.js';
-import type { RedteamScorecard, TaskSessionConfig } from './eval/index.js';
+import type { TaskSessionConfig } from './eval/index.js';
+import {
+  EVAL_OUT_DIR,
+  readPackageVersion,
+  refuseSymlinkedDir,
+  sanitizeForTerminal,
+  USAGE,
+  writeScorecard,
+} from './cli/shared.js';
+import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
+import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
@@ -47,6 +52,17 @@ import {
 } from './telemetry/index.js';
 import type { TelemetryEventInput, TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
 
+// Pure-move re-exports (E-3 CG8): src/cli.test.ts imports these from './cli.js'
+// unmodified — the proof that the src/cli/ extraction changed no behavior.
+export {
+  refuseSymlinkedDir,
+  sanitizeForTerminal,
+  scorecardFilename,
+  writeScorecard,
+} from './cli/shared.js';
+export { parseRedteamArgs, redteamExitCode } from './cli/redteam-command.js';
+export type { RedteamArgs } from './cli/redteam-command.js';
+
 export interface RunArgs {
   command: 'run';
   prompt: string;
@@ -69,25 +85,11 @@ export interface EvalArgs {
   taskDir: string;
 }
 
-export interface RedteamArgs {
-  command: 'redteam';
-  out: string;
-}
-
 export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
   | { ok: false; error: string };
-
-// Deliberately separate from src/internal/sanitize.ts: model output and
-// warnings reach the user's terminal, where newline/tab are kept for
-// readability while ANSI/OSC escape introducers and C1 controls are stripped.
-const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
-
-export function sanitizeForTerminal(text: string): string {
-  return text.replace(TERMINAL_UNSAFE, ' ');
-}
 
 /** Path-prefixed settings failures from the composition root's combined loader. */
 export class SettingsLoadError extends Error {
@@ -174,16 +176,6 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   return { permissions, sandbox, warnings };
 }
 
-/** Default scorecard output directory, shared by eval and redteam (both are
- *  scorecard producers writing through the same `writeScorecard` helper). */
-const EVAL_OUT_DIR = join('.harness', 'eval');
-
-const USAGE =
-  'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
-  '       agent-harness-ja eval [taskDir]\n' +
-  '       agent-harness-ja redteam [--out <dir>]\n' +
-  '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]';
-
 export function parseArgs(argv: string[]): ParseResult {
   if (argv[0] === 'telemetry') {
     return parseTelemetryArgs(argv.slice(1));
@@ -211,26 +203,6 @@ export function parseEvalArgs(argv: string[]): ParseResult {
     positionalSeen = true;
   }
   return { ok: true, value: { command: 'eval', taskDir } };
-}
-
-/** No positionals; `--out` overrides the shared scorecard directory. */
-export function parseRedteamArgs(argv: string[]): ParseResult {
-  let out = EVAL_OUT_DIR;
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === undefined) break;
-    if (arg === '--out') {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --out. ${USAGE}` };
-      }
-      out = value;
-      i += 1;
-    } else {
-      return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
-    }
-  }
-  return { ok: true, value: { command: 'redteam', out } };
 }
 
 function parseTelemetryArgs(argv: string[]): ParseResult {
@@ -355,70 +327,6 @@ export function hookRecordToTelemetryInput(
     ...base,
     payload: { kind: record.kind, event: record.event, handlersFired: record.handlersFired },
   };
-}
-
-/** Filesystem-safe scorecard timestamp (spec: arbiter condition 2 — no colons). */
-export function scorecardFilename(nowMs: number): string {
-  const stamp = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-');
-  return `scorecard-${stamp}.json`;
-}
-
-/**
- * A malicious repo must not redirect the scorecard write (spec decision #21):
- * refuse a symlink at the output-dir path. Missing is fine (we mkdir it).
- */
-export function refuseSymlinkedDir(path: string): void {
-  let isSymlink: boolean;
-  try {
-    isSymlink = lstatSync(path).isSymbolicLink();
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  if (isSymlink) {
-    throw new EvalUsageError(`refusing to write scorecards: ${path} is a symlink`);
-  }
-}
-
-/**
- * Write the canonical scorecard under outDir. Every failure maps to a message,
- * never a throw: a failed write means no scorecard was produced, which the
- * caller must surface as exit 2 (ADR-0017 decision #4) — bubbling to the
- * generic exit-1 handler would report it on the code reserved for "ran, at
- * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
- * committed at the output path), EACCES, and ENOSPC all end here too.
- *
- * Generic over any scorecard envelope (golden, redteam, ...): the same
- * constraint `toCanonicalJson` requires, so every scorecard producer writes
- * through this one helper instead of duplicating it.
- */
-export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }>(
-  scorecard: T,
-  outDir: string,
-  nowMs: number = Date.now(),
-): { ok: true; path: string } | { ok: false; message: string } {
-  try {
-    mkdirSync(outDir, { recursive: true });
-    // Re-checks only the leaf path (outDir); it narrows the TOCTOU window
-    // opened by mkdir but does not close it — an in-process oracle can write
-    // anywhere regardless (security-model R-10).
-    refuseSymlinkedDir(outDir);
-    const path = join(outDir, scorecardFilename(nowMs));
-    writeFileSync(path, toCanonicalJson(scorecard));
-    return { ok: true, path };
-  } catch (error: unknown) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function readPackageVersion(): string {
-  try {
-    const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === 'string' ? parsed.version : '0.0.0-unknown';
-  } catch {
-    return '0.0.0-unknown';
-  }
 }
 
 function runTelemetryExport(args: TelemetryExportArgs): number {
@@ -581,43 +489,6 @@ async function runEval(args: EvalArgs): Promise<number> {
   } finally {
     db.close();
   }
-}
-
-/**
- * Gate is `totals.falseBlockCount`, not overall pass/fail: a keyless redteam
- * run over the corpus is expected to have `missed`/`false-flag` rows today
- * (S-1's known-missed cases), and those must not fail the CLI gate — only a
- * regression that blocks a real user (a false-block) does (decision log CG11).
- */
-export function redteamExitCode(scorecard: RedteamScorecard): number {
-  return scorecard.totals.falseBlockCount > 0 ? 1 : 0;
-}
-
-/**
- * Keyless: the corpus is compiled in and the security-on scanner is pure,
- * in-process code — no repo code executes, so there is no R-10 warning here
- * (unlike eval's oracle execution). Runs ONLY the security-on arm; the
- * security-off arm is a guaranteed-zero null-scanner baseline the renderer
- * already labels at render time (decision log CG11) — running and storing it
- * here would be a stored tautology. JSON is written before anything reaches
- * stdout, mirroring eval's exit-2 contract (ADR-0017 decision #4).
- */
-function runRedteamCommand(args: RedteamArgs): number {
-  const scorecard = runRedteam(CORPUS, scan, {
-    armLabel: REDTEAM_ARM_LABEL,
-    harnessVersion: readPackageVersion(),
-  });
-
-  const written = writeScorecard(scorecard, args.out);
-  if (!written.ok) {
-    process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
-    return 2;
-  }
-  process.stderr.write(`scorecard written to ${written.path}\n`);
-
-  process.stdout.write(sanitizeForTerminal(toRedteamMarkdown(scorecard)));
-
-  return redteamExitCode(scorecard);
 }
 
 export async function main(argv: string[]): Promise<number> {
