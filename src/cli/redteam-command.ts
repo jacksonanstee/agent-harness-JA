@@ -1,4 +1,4 @@
-import { renameSync, statSync, writeFileSync } from 'node:fs';
+import { renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -206,8 +206,13 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
     return outcome.exitCode;
   }
 
+  const tmpPath = `${args.baselinePath}.tmp`;
   try {
     refuseSymlink(args.baselinePath, 'file');
+    // The tmp write target is as attacker-plantable as the baseline itself
+    // (a cloned repo can commit `baseline.json.tmp` as a symlink), so it gets
+    // the same refusal — and the `wx` write below holds even if this races.
+    refuseSymlink(tmpPath, 'file');
     refuseSymlink(dirname(args.baselinePath), 'directory');
   } catch (error: unknown) {
     if (error instanceof BaselineError) {
@@ -239,8 +244,11 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
     oldParsed = null; // first write, or an unreadable prior baseline: nothing to diff against
   }
 
-  const tmpPath = `${args.baselinePath}.tmp`;
-  writeFileSync(tmpPath, toCanonicalJson(freshNorm));
+  // `rm` clears a leftover regular tmp from a crashed run (never follows a
+  // symlink); `wx` (O_CREAT|O_EXCL) refuses anything that appears at tmpPath
+  // after the checks above, so the write can never traverse a planted link.
+  rmSync(tmpPath, { force: true });
+  writeFileSync(tmpPath, toCanonicalJson(freshNorm), { flag: 'wx' });
   renameSync(tmpPath, args.baselinePath);
   process.stderr.write(`baseline written to ${args.baselinePath}\n`);
 

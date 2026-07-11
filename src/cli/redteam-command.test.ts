@@ -282,6 +282,34 @@ describe('runRedteamCommand: --update-baseline mode', () => {
     expect(compared.stdout).toContain('GATE_FAILURE=none');
   });
 
+  it('symlink planted at the tmp write path (baseline.json.tmp → victim): exit 2, victim untouched, baseline not created', () => {
+    const root = freshDir();
+    const parent = join(root, 'eval', 'redteam');
+    mkdirSync(parent, { recursive: true });
+    const baselinePath = join(parent, 'baseline.json');
+    const victimPath = join(root, 'victim.txt');
+    writeFileSync(victimPath, 'precious');
+    symlinkSync(victimPath, `${baselinePath}.tmp`);
+
+    const { code, stderr } = captureIO(() => runRedteamCommand(baseArgs({ baselinePath, updateBaseline: true })));
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/symlink/);
+    expect(readFileSync(victimPath, 'utf8')).toBe('precious');
+    expect(() => readFileSync(baselinePath, 'utf8')).toThrow();
+  });
+
+  it('leftover regular .tmp file from a crashed prior run: update still succeeds and baseline matches the live run', () => {
+    const root = freshDir();
+    const parent = join(root, 'eval', 'redteam');
+    mkdirSync(parent, { recursive: true });
+    const baselinePath = join(parent, 'baseline.json');
+    writeFileSync(`${baselinePath}.tmp`, 'stale leftover');
+
+    const { code } = captureIO(() => runRedteamCommand(baseArgs({ baselinePath, updateBaseline: true })));
+    expect(code).toBe(0);
+    expect(readFileSync(baselinePath, 'utf8')).toBe(liveCanonical());
+  });
+
   it('missing parent dir: exit 2, no file written', () => {
     const root = freshDir();
     const baselinePath = join(root, 'nope', 'baseline.json');
