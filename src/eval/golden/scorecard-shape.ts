@@ -16,6 +16,7 @@ import type {
   ScorecardRowCore,
   ScorecardTotalsCore,
 } from '../scorecard/index.js';
+import type { ChallengeFinding } from '../verifier/types.js';
 
 export const GOLDEN_FAILURE_KINDS = [
   'task-parse',
@@ -61,4 +62,18 @@ export type GoldenTotals = ScorecardTotalsCore<GoldenFailureKind> & {
   unpricedTasks: number;
 };
 
-export type GoldenScorecard = ScorecardEnvelope<GoldenMeta, GoldenRow, GoldenTotals>;
+/** E-4 report-only section. Volatile like everything golden — never diffed. */
+export interface VerificationSection {
+  adversaryModelId: string;
+  /** One per oracle-pass row (incl. 'no-output' rows), ordered by taskId. */
+  findings: ChallengeFinding[];
+  totals: { agreed: number; challenged: number; verifierErrors: number; noOutput: number };
+  totalCostUsd: number;
+  unpricedChallenges: number;
+}
+
+// The shared envelope is closed and shared with redteam; it is never widened
+// (spec §Scorecard shape, forbidden implementation):
+export type GoldenScorecard = ScorecardEnvelope<GoldenMeta, GoldenRow, GoldenTotals> & {
+  verification?: VerificationSection;
+};
