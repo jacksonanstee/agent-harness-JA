@@ -266,9 +266,10 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   (`src/eval/golden/runner.ts:39`, no `?`) — previously optional.
   ADR-0017's revisit-if M1 named this exact trigger — "a second runner
   composition appears" — and an egress path is a stronger trigger than M1's
-  letter. Migration surface (stated, mechanical): the ~25
-  `createGoldenRunner` call sites in `runner.test.ts` that previously
-  omitted it became type errors and each was given the existing fake.
+  letter. Migration surface (stated, mechanical): of the 14
+  `createGoldenRunner` call sites in `runner.test.ts`, ~12 previously
+  omitted it and became type errors; each was given `identityRedact`, a
+  no-op fake introduced in this same commit (not a pre-existing helper).
   Note for honesty: `cleanForScorecard`'s redactor parameter stays optional
   (it is shared with the redteam producer, whose rows carry no free text to
   redact) — the required-ness lives at the golden composition boundary,
@@ -459,9 +460,11 @@ diverged:
 3. Unknown enum from the adversary is a per-row `verifier-error`, never
    parse-time widening — §4.
 4. Adversary cost mirrors the never-understated totals pattern. Field names
-   as shipped: `verification.totalCostUsd` + `unpricedChallenges`
-   (`verifier-error` counts as unpriced; `no-output` counts in neither) —
-   §5.
+   as shipped: `verification.totalCostUsd` + `unpricedChallenges` — an
+   attempted call with unknown cost counts as unpriced (most
+   `verifier-error` findings, e.g. `call-failed`/`unparseable`/
+   `unknown-enum`; but not `redaction-failed`, where no call is ever made);
+   `no-output` counts in neither — §5.
 5. C fallback trigger EOD 2026-07-16, with a requirements-row deviation if
    invoked — §9 (did not fire).
 6. `confidence` dropped (or explicitly uncalibrated with revisit-if) —

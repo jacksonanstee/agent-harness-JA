@@ -188,6 +188,24 @@ describe('createGoldenRunner rows', () => {
     expect(scorecard.meta.models).toEqual(['claude-sonnet-4-6']);
   });
 
+  it('treats a non-finite session costUsd (Infinity) as unpriced, never summed (differential-review nit N2)', async () => {
+    // A hostile/misbehaving SDK result reporting costUsd: Infinity must not
+    // poison totalCostUsd (Infinity + anything = Infinity) or pass through
+    // as a real price — it falls into the existing unpriced accounting,
+    // same as an explicit costUsd: null.
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ costUsd: Infinity })),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+
+    const alpha = scorecard.rows.find((r) => r.id === 'alpha');
+    expect(alpha?.volatile.costUsd).toBeNull();
+    expect(scorecard.totals.totalCostUsd).toBe(0);
+    expect(scorecard.totals.unpricedTasks).toBe(3);
+  });
+
   it('threads task config into the session factory', async () => {
     const calls: TaskSessionConfig[] = [];
     const runner = createGoldenRunner({
@@ -484,6 +502,25 @@ describe('adversarial verification (E-4 phase 2)', () => {
     // and returned costUsd: null — the one attempted-but-unpriced case.
     expect(verification?.unpricedChallenges).toBe(1);
     expect(verification?.adversaryModelId).toBe('fake-adversary');
+  });
+
+  it('treats a non-finite adversary costUsd (NaN) as unpriced, never summed (differential-review nit N2)', async () => {
+    // A hostile Verifier returning costUsd: NaN must not poison
+    // totalCostUsd (NaN + anything = NaN) — it counts as unpriced instead,
+    // same as an explicit costUsd: null.
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-nan-cost-'));
+    writeTasks(dir, ['solo']);
+    const verifier = fakeVerifier({ solo: { status: 'agreed', costUsd: NaN } });
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['solo'])),
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(scorecard.verification?.totalCostUsd).toBe(0);
+    expect(scorecard.verification?.unpricedChallenges).toBe(1);
   });
 
   it('omits the verification key entirely when no verifier dep is supplied (case 7)', async () => {

@@ -94,7 +94,10 @@ export const buildAdversary =
       if (m.type === 'result') {
         const r = m as SdkResultMessage;
         text = r.result ?? '';
-        costUsd = typeof r.total_cost_usd === 'number' ? r.total_cost_usd : null;
+        costUsd =
+          typeof r.total_cost_usd === 'number' && Number.isFinite(r.total_cost_usd)
+            ? r.total_cost_usd
+            : null;
       }
     }
     return { text, costUsd };

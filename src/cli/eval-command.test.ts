@@ -102,6 +102,18 @@ describe('buildAdversary', () => {
     expect(outcome).toEqual({ text: '', costUsd: null });
   });
 
+  it('treats a non-finite total_cost_usd (Infinity) as null, not a real price (differential-review nit N2)', async () => {
+    // A hostile/misbehaving SDK result message must not report an infinite
+    // cost as if it were priced — it falls into the existing null/unpriced
+    // path instead.
+    const fake = fakeQuery([{ ...RESULT, total_cost_usd: Infinity }]);
+    const adversary = buildAdversary(fake.query, 'claude-adversary-model');
+
+    const outcome = await adversary('challenge this transcript');
+
+    expect(outcome).toEqual({ text: 'adversary verdict text', costUsd: null });
+  });
+
   it('calls query with maxTurns: 1 and the routed model', async () => {
     const fake = fakeQuery([RESULT]);
     const adversary = buildAdversary(fake.query, 'claude-adversary-model');

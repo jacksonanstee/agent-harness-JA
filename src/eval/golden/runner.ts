@@ -63,6 +63,14 @@ function emptyVolatile(): GoldenRow['volatile'] {
   return { costUsd: null, numTurns: null, durationMs: null, resultSubtype: null };
 }
 
+/** A non-finite cost (NaN/Infinity, from an untrusted SDK or adversary
+ *  payload) is treated as unknown rather than summed — it falls into the
+ *  existing unpriced accounting instead of poisoning a total (differential-
+ *  review nit N2). */
+function finiteCostOrNull(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function discoverTaskFiles(root: string): string[] {
   let entries;
   try {
@@ -213,12 +221,13 @@ async function runChallengePhase(
     const { finding, costUsd } = await challengeOutput(entry, deps);
     findings.push(finding);
     onProgress?.(`[challenge ${i}/${total}] ${taskId} … ${finding.status}`);
-    if (costUsd === null) {
+    const pricedCost = finiteCostOrNull(costUsd);
+    if (pricedCost === null) {
       if (finding.status !== 'no-output' && finding.errorKind !== 'redaction-failed') {
         unpricedChallenges += 1;
       }
     } else {
-      totalCostUsd += costUsd;
+      totalCostUsd += pricedCost;
     }
   }
 
@@ -301,7 +310,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       };
     }
     const volatile = {
-      costUsd: result.costUsd,
+      costUsd: finiteCostOrNull(result.costUsd),
       numTurns: result.numTurns,
       durationMs: now() - startedAt,
       resultSubtype: result.resultSubtype,

@@ -196,6 +196,8 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   (bounded by `redact()`'s 128 KiB cap per row); row `volatile.durationMs`
   is finalized in phase 1 and **never includes challenge time**; a mid-run
   crash in phase 2 loses only verification, never oracle results.
+  [Superseded at implementation: raw text is retained, only when
+  --challenge is active, redacted lazily per row — see ADR-0020 §5.]
 - Challenge eligibility: **oracle-pass rows only** — failed/errored rows
   carry no information a challenge adds (`task-parse`/`oracle-load`/
   `session-error` rows have no output; `oracle-fail` rows are already

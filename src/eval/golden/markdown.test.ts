@@ -174,6 +174,41 @@ describe('toMarkdown — verification section', () => {
     const tableLine = md.split('\n').find((l) => l.includes('a\\|b'));
     expect(tableLine).toBeDefined();
   });
+
+  it('escapes the status and category/error detail cells (defense-in-depth, differential-review nit N1)', () => {
+    // status/category/errorKind are closed enums in production —
+    // escapeCell is identity for real values, so every other test above
+    // (di-01/challenged/incomplete, gate-01/no-output) is unaffected by
+    // wiring the escape — but the table-cell rendering must not silently
+    // rely on "enums never contain pipes" as its only defense. Values are
+    // cast past the enum type to prove the escaping is actually wired.
+    const findings: ChallengeFinding[] = [
+      {
+        taskId: 'hostile-status',
+        status: 'chall|enged\n' as ChallengeFinding['status'],
+        category: null,
+        errorKind: null,
+      },
+      {
+        taskId: 'hostile-detail',
+        status: 'challenged',
+        category: 'in|complete\n' as ChallengeFinding['category'],
+        errorKind: null,
+      },
+    ];
+    const card: GoldenScorecard = {
+      ...makeCard([passRow]),
+      verification: sectionFixture({
+        findings,
+        totals: { agreed: 0, challenged: 2, verifierErrors: 0, noOutput: 0 },
+      }),
+    };
+    const md = toMarkdown(card);
+    expect(md).toContain('| hostile-status | chall\\|enged  | — |');
+    expect(md).toContain('| hostile-detail | challenged | in\\|complete  |');
+    expect(md).not.toContain('chall|enged\n');
+    expect(md).not.toContain('in|complete\n');
+  });
 });
 
 describe('toMarkdown', () => {

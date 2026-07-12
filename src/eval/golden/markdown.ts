@@ -27,7 +27,7 @@ function verificationFindingLine(finding: ChallengeFinding): string {
       : finding.status === 'verifier-error'
         ? (finding.errorKind ?? '—')
         : '—';
-  return `| ${escapeCell(finding.taskId)} | ${finding.status} | ${detail} |`;
+  return `| ${escapeCell(finding.taskId)} | ${escapeCell(finding.status)} | ${escapeCell(detail)} |`;
 }
 
 /** Four states per spec §Scorecard shape (absent / zero-passed / all-agreed /

@@ -37,9 +37,10 @@ import {
 } from './telemetry/index.js';
 import type { TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
 
-// Pure-move re-exports (E-3 CG8, extended E-4 T8): src/cli.test.ts imports
-// these from './cli.js' unmodified — the proof that the src/cli/ extraction
-// changed no behavior.
+// Pure-move re-exports (E-3 CG8, extended E-4 T8): API-compat only now —
+// src/cli.test.ts still imports these from './cli.js', but full behavior
+// coverage for parseEvalArgs/parseRedteamArgs moved to their own command
+// test files; only reachability through parseArgs is pinned here.
 export {
   refuseSymlinkedDir,
   sanitizeForTerminal,
