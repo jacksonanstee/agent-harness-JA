@@ -258,3 +258,30 @@ challenge section correctly absent.
 Next: `docs/eval-methodology.md` — the challenge-rate metric's real
 consumer (ADR-0020 is interim), the synthetic rendered example, and the
 exit-invariance-by-composition note — closes Week 3.
+
+## 2026-07-13 — Week 3 closed; autobuilder pilot retro
+
+`docs/eval-methodology.md` merged (PR #23) — the last week-plan box. Its
+docs-parity review caught two MEDIUM overclaims in the draft before commit
+(cost-bucket semantics for verifier-error findings; the known-miss
+convention records the should-produce verdict, not the live one) — the
+docs-overclaim defect class now has four consecutive appearances across
+E-2/E-3/E-4/this doc, which is why the parity pass stays mandatory.
+
+The autobuilder pilot retro ran
+(`process/automation/autobuilder-retro.md`), answering its pre-flight's
+own question — "did this beat doing it by hand?" — with the honest
+timeline: the cloud routine never ran (its first scoped deliverable
+merged four minutes before the pilot's own prompt doc did), while a
+*local* overnight autonomous session delivered the E-3 core in ~93
+unattended minutes on zero new infrastructure. The load-bearing safety
+property turned out to be portable and boundary-independent: unattended
+output is untrusted input until the interactive review gates run on it —
+proven by the two CRITICALs those gates later found in the overnight
+code. Routine killed; prompt doc retained as a retired design artifact;
+the report-only nightly check (different shape, no merge authority)
+survives.
+
+Week 3 done: E-1 → E-4 merged, methodology doc live, 835 tests, gate
+green. Next: Week 4 — README/architecture polish, blog drafts,
+`harness init`.

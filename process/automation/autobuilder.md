@@ -1,5 +1,11 @@
 # Autobuilder — supervised overnight task-runner (Week-3 pilot)
 
+> **RETIRED 2026-07-13.** The routine never ran — both scoped deliverables
+> shipped through interactive/local flows before its pre-flight completed.
+> Retro (what happened, why it lost, what survives):
+> [`autobuilder-retro.md`](./autobuilder-retro.md). Kept as a design
+> artifact.
+
 > This file IS the operative prompt for the cloud build routine. The routine's
 > config is a three-line bootstrap that tells the agent to read and follow
 > this file, so the instructions governing unattended runs are
