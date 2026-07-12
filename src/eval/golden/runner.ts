@@ -178,11 +178,23 @@ async function runChallengePhase(
       continue;
     }
 
-    const { finding, costUsd } = await deps.verifier.challenge({
-      taskId,
-      taskPrompt: entry.prompt ?? '',
-      redactedResultText: redacted.redacted,
-    });
+    // Verifier is a plain interface with no non-throwing contract; a
+    // throwing implementation must not escape run() — the same
+    // "adversary failure can never alter the authoritative result" floor
+    // (ADR-0020 §4) applies to a call that throws, not only one that
+    // resolves with an error shape (review3 HIGH).
+    let finding: ChallengeFinding;
+    let costUsd: number | null;
+    try {
+      ({ finding, costUsd } = await deps.verifier.challenge({
+        taskId,
+        taskPrompt: entry.prompt ?? '',
+        redactedResultText: redacted.redacted,
+      }));
+    } catch {
+      finding = { taskId, status: 'verifier-error', category: null, errorKind: 'call-failed' };
+      costUsd = null;
+    }
     findings.push(finding);
     onProgress?.(`[challenge ${i}/${total}] ${taskId} … ${finding.status}`);
     if (costUsd === null) {

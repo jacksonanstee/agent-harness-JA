@@ -520,6 +520,49 @@ describe('adversarial verification (E-4 phase 2)', () => {
     expect(withV.verification).toBeDefined();
   });
 
+  it('a verifier.challenge() throw becomes verifier-error/call-failed and the run completes (case 10, review3 HIGH)', async () => {
+    // A hostile/buggy Verifier implementation that throws instead of
+    // resolving must not escape run() — Verifier is a plain interface with
+    // no non-throwing contract, and ADR-0020's "adversary failure can never
+    // alter the authoritative result" floor must hold even here: rows,
+    // totals, and the rest of the scorecard must still be produced.
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-throw-'));
+    writeTasks(dir, ['a1', 'b2']);
+    const verifier: Verifier = {
+      adversaryModelId: 'fake-adversary',
+      async challenge({ taskId }) {
+        if (taskId === 'a1') throw new Error('adversary exploded');
+        return {
+          finding: { taskId, status: 'agreed', category: null, errorKind: null },
+          costUsd: 0.01,
+        };
+      },
+    };
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['a1', 'b2'])),
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(scorecard.verification?.findings).toEqual([
+      { taskId: 'a1', status: 'verifier-error', category: null, errorKind: 'call-failed' },
+      { taskId: 'b2', status: 'agreed', category: null, errorKind: null },
+    ]);
+    // The throw is confined to the challenge phase — oracle rows/totals are
+    // untouched (report-only floor holds for a hostile Verifier too).
+    expect(scorecard.rows.every((r) => r.pass)).toBe(true);
+    expect(scorecard.totals.failed).toBe(0);
+    expect(scorecard.verification?.totals).toEqual({
+      agreed: 1, challenged: 0, verifierErrors: 1, noOutput: 0,
+    });
+    // Unpriced: the throw path has no costUsd, and it's not a
+    // redaction-failed/no-output finding, so it counts as an unpriced
+    // attempted call (same branch a call-failed timeout already uses).
+    expect(scorecard.verification?.unpricedChallenges).toBe(1);
+  });
+
   it('emits phase-boundary progress lines: warning(N), N=0 variant, one [challenge i/N] per call (case 9)', async () => {
     // N > 0: warning + one indexed line per adversary-eligible task.
     const dirN = mkdtempSync(join(tmpdir(), 'golden-phase2-progress-'));
