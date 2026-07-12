@@ -210,7 +210,7 @@ function classifyPair(before: RedteamRow, after: RedteamRow, fields: string[]): 
   return { kind: 'recalibration', id, detail: `fields changed with verdict unchanged: ${fields.join(', ')}` };
 }
 
-/** Design §Gate rule 6: six-way classification. Messaging only — ALL drift fails. */
+/** ADR-0019 d3: five drift classes (internal is a gate outcome, not drift). Messaging only — ALL drift fails. */
 export function classifyDrift(baseline: BaselineScorecard, fresh: BaselineScorecard): DriftFinding[] {
   const diff = diffRows(baseline.rows, fresh.rows);
   const findings: DriftFinding[] = [];
