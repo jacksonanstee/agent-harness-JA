@@ -108,6 +108,9 @@ does not exist yet (it is the Week-3 close item that follows E-4); when
 written it must carry this definition forward plus a synthetic rendered
 example (golden scorecards are gitignored, so no real one is ever committed
 — without an example the portfolio audience never sees the payoff).
+*(Discharged 2026-07-13: [`docs/eval-methodology.md`](../eval-methodology.md)
+now exists and carries the definition, the synthetic example, and the
+exit-invariance-by-composition note; it is the metric's consumer of record.)*
 
 **Challenge rate, defined here:**
 

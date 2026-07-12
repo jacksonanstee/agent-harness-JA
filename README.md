@@ -72,8 +72,9 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 3. **[docs/decisions/](./docs/decisions/)** — Six-plus ADRs covering harness positioning, license, SDK target, telemetry storage, injection-scanner approach, and skill schema.
 4. **[docs/architecture.md](./docs/architecture.md)** — System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)** — Threat model and mitigations.
-6. **[src/](./src)** — The implementation. Requirement IDs from `process/01-requirements.md` are cited in code comments where they are verified.
-7. **[process/devlog/](./process/devlog/)** — Weekly retros, including what went wrong.
+6. **[docs/eval-methodology.md](./docs/eval-methodology.md)** — How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
+7. **[src/](./src)** — The implementation. Requirement IDs from `process/01-requirements.md` are cited in code comments where they are verified.
+8. **[process/devlog/](./process/devlog/)** — Weekly retros, including what went wrong.
 
 The `process/` folder is the differentiator. Most repos show the artefact; this one shows the thinking.
 
