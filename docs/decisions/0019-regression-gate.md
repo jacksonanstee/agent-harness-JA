@@ -67,10 +67,16 @@ surveyed pattern) was rejected outright: offsetting flips net to zero.
    ("regression test detects a deliberately-broken baseline") is met by the
    corrupted-fixture tests in `src/eval/redteam/baseline.test.ts` (the
    independent totals re-derivation trips on a corrupted fixture and on a
-   corrupted `corpusSize`) plus the e2e negative check (a flipped verdict
-   fails with the classified report).
+   corrupted `corpusSize`) plus the CLI compare-path negative test in
+   `src/cli/redteam-command.test.ts` (a baseline verdict pinned differently
+   from the live scanner fails with the classified report; the
+   current-baseline e2e in `baseline-e2e.test.ts` asserts only the positive
+   direction).
 
-3. **Six-class drift taxonomy — messaging only; all drift fails.**
+3. **Drift taxonomy: five drift classes plus the `internal` gate outcome —
+   messaging only; all drift fails.** (`internal` is produced by the gate's
+   outcome mapping, never by the drift classifier — it appears in this
+   table because the report surface is shared.)
    Direction comes from a strength order per expected-class: malicious
    `block > ask > pass`; benign `pass > ask > block`.
 
@@ -103,19 +109,32 @@ surveyed pattern) was rejected outright: offsetting flips net to zero.
    rubber-stamp failure mode this design exists to avoid. The normalization
    fixture pin in `baseline.test.ts` is the mechanical tripwire.
 
+   A second precondition the contract imposes: **row fields must be JSON
+   scalars** (string / number / boolean / null). The all-own-fields differ
+   compares fields with shallow strict equality, so a structural field
+   (array/object) that is deterministic and byte-canonical would still be
+   reference-unequal — it cannot produce spurious *gate* failures (the
+   byte-equal short-circuit catches the identical case first), but on any
+   genuine drift it would be misreported as a "changed" field in the
+   classified report. A structural field must live in `meta`, or the
+   differ must first gain deep equality.
+
 5. **The baseline is hostile input.** `docs/security-model.md`'s attacker
    model puts a malicious cloned repo in scope, and `baseline.json` is the
    keyless gate command's first read of repo-controlled data. Load order:
-   size cap before read (1 MB, `stat` first), symlink refusal (file and
-   parent), full structural validation against an exact field allowlist
+   symlink refusal (file and parent), size cap before read (1 MB, `stat`
+   first), full structural validation against an exact field allowlist
    (ajv, the ADR-0017 precedent), every baseline row id re-validated
    against the same `^[a-z0-9][a-z0-9-]{0,63}$` charset `runRedteam`
    enforces (the fresh side is guarded inside `runRedteam`; the baseline
-   side bypasses that guard, so it gets its own check — this also excludes
-   `__proto__`/`constructor`), `Map`-based row pairing (never a
-   plain-object index), and the drift report written through the CLI's
-   existing `sanitizeForTerminal`. `schemaVersion` or `producer` mismatch →
-   exit 2, never a best-effort diff.
+   side bypasses that guard, so it gets its own check — the charset also
+   rejects `__proto__`, though `constructor` is a syntactically valid id),
+   and `Map`-based row pairing (never a plain-object index) — the Map, not
+   the charset, is what makes pairing immune to prototype-key ids like
+   `constructor`; any future code that indexes baseline rows by id must
+   use a `Map`, not a plain object. The drift report is written through
+   the CLI's existing `sanitizeForTerminal`. `schemaVersion` or `producer`
+   mismatch → exit 2, never a best-effort diff.
 
 6. **No new exit code; `GATE_FAILURE=` line scoped precisely.** Contract
    shape unchanged from ADR-0018 decision 7 (as amended): `0` gate green;

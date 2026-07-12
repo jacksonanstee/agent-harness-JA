@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-
 import { describe, expect, it } from 'vitest';
 
 import { scan } from '../../security/index.js';
@@ -31,6 +29,7 @@ describe('committed baseline (eval/redteam/baseline.json)', () => {
   });
 
   it('is the file git has, unmangled by line endings', () => {
-    expect(readFileSync('eval/redteam/baseline.json', 'utf8')).not.toContain('\r\n');
+    // raw is the exact bytes loadBaseline read — no second, unguarded read.
+    expect(raw).not.toContain('\r\n');
   });
 });

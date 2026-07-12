@@ -1,10 +1,12 @@
 # Security model
 
 > Threat model for the security layer as shipped at the end of Week 2
-> (S-1–S-4, ADRs 0012–0015). This document says what the layer defends,
-> against whom, and — just as deliberately — what it does not. Claims here
-> are anchored to shipped code and to incidents found and fixed in review,
-> not to intentions.
+> (S-1–S-4, ADRs 0012–0015), with dated Week-3 amendments where the eval
+> layer touched the security surface (ADR-0019 hostile-baseline handling,
+> 2026-07-12). This document says what the layer defends, against whom,
+> and — just as deliberately — what it does not. Claims here are anchored
+> to shipped code and to incidents found and fixed in review, not to
+> intentions.
 
 ## 1. Scope and posture
 
@@ -143,15 +145,16 @@ themselves:
 **The committed red-team baseline is treated as hostile input.**
 `eval/redteam/baseline.json` (ADR-0019) is the keyless gate command's first
 read of repo-controlled data, and a malicious cloned repo is in scope (§2).
-Load order: size cap before read (1 MB, `stat` first), symlink refusal on
-file and parent, full structural validation against an exact ajv field
-allowlist (never just the discriminators), every baseline row id
+Load order: symlink refusal on file and parent, size cap before read
+(1 MB, `stat` first), full structural validation against an exact ajv
+field allowlist (never just the discriminators), every baseline row id
 re-validated against the corpus id charset (`^[a-z0-9][a-z0-9-]{0,63}$` —
 the fresh side is guarded inside `runRedteam`, but the baseline side comes
-from a file and bypasses that guard, so it gets its own check, which also
-excludes `__proto__`/`constructor` as ids), `Map`-based row pairing (never
-a plain-object index), and the drift report written through the CLI's
-`sanitizeForTerminal`. A malformed or mismatched baseline exits 2 with a
+from a file and bypasses that guard, so it gets its own check; the charset
+also rejects `__proto__`, though not `constructor`), `Map`-based row
+pairing — which, not the charset, is what makes pairing immune to
+prototype-key ids like `constructor` (a plain-object index would not be) —
+and the drift report written through the CLI's `sanitizeForTerminal`. A malformed or mismatched baseline exits 2 with a
 typed message, never a best-effort diff or a mid-diff TypeError.
 
 Excerpts are stripped of bidi controls before logging (Trojan-Source,
@@ -264,9 +267,16 @@ not live values:
 - Findings in this document marked "verified live" were demonstrated
   empirically during the 3-agent + differential review rounds, not reasoned
   about (`/ETC/passwd` bypass; dual-table gate gap).
-- Week 3 replaces the starter corpus with the ≥50-case eval corpus (E-2) and
-  the regression gate: ≥90% pass with security on, <50% with it off — the
-  test that the layer is doing real work rather than decorating the repo.
+- Week 3 replaced the starter corpus with the 51-case eval corpus (E-2,
+  ADR-0018) and the regression gate (E-3, ADR-0019). The gate is **not** a
+  pass-rate threshold — gating on a detection percentage would strand
+  honest new cases the scanner misses (ADR-0018's gate-vs-measurement
+  split). The every-PR gate is `falseBlockCount === 0` plus no drift
+  against the committed baseline; detection rate (92.5% measured at E-2
+  design time, with the security-off null-scanner control at a
+  guaranteed 0%) is a **reported** metric feeding the ADR-0016 §6 S-5
+  decision. That reported on/off split is the test that the layer does
+  real work rather than decorating the repo.
 
 ## 8. ADR index
 
