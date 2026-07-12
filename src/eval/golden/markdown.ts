@@ -1,6 +1,7 @@
 import { escapeCell } from '../scorecard/index.js';
 import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
 import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
+import type { ChallengeFinding } from '../verifier/types.js';
 
 function money(value: number): string {
   return `$${value.toFixed(4)}`;
@@ -17,6 +18,47 @@ function rowLine(row: GoldenRow): string {
       ? 'n/a'
       : `${(row.volatile.durationMs / 1000).toFixed(1)}s`;
   return `| ${escapeCell(row.id)} | ${result} | ${kind} | ${reason} | ${cost} | ${turns} | ${duration} |`;
+}
+
+function verificationFindingLine(finding: ChallengeFinding): string {
+  const detail =
+    finding.status === 'challenged'
+      ? (finding.category ?? '—')
+      : finding.status === 'verifier-error'
+        ? (finding.errorKind ?? '—')
+        : '—';
+  return `| ${escapeCell(finding.taskId)} | ${finding.status} | ${detail} |`;
+}
+
+/** Four states per spec §Scorecard shape (absent / zero-passed / all-agreed /
+ *  mixed); the table lists non-agreed findings only. */
+function verificationLines(scorecard: GoldenScorecard): string[] {
+  const { verification, totals } = scorecard;
+  if (verification === undefined) {
+    return [
+      'Adversarial challenge: not run — pass --challenge (adds a second model call per passed task)',
+    ];
+  }
+  if (totals.passed === 0) {
+    return ['Adversarial challenge (report-only): 0 passed tasks — nothing to challenge'];
+  }
+  const vt = verification.totals;
+  const lines = [
+    '## Adversarial challenge (report-only — never affects pass/fail or exit codes)',
+    '',
+    `Adversary: ${verification.adversaryModelId} · challenged ${vt.challenged} / agreed ${vt.agreed} / errors ${vt.verifierErrors} / no-output ${vt.noOutput}, of ${totals.passed} passed tasks`,
+    `Challenge cost: ${money(verification.totalCostUsd)} (${verification.unpricedChallenges} unpriced)`,
+  ];
+  const nonAgreed = verification.findings.filter((f) => f.status !== 'agreed');
+  if (nonAgreed.length > 0) {
+    lines.push(
+      '',
+      '| task | status | category / error |',
+      '|---|---|---|',
+      ...nonAgreed.map(verificationFindingLine),
+    );
+  }
+  return lines;
 }
 
 /** Totals first (spec decision #20), then the per-task table. */
@@ -46,6 +88,7 @@ export function toMarkdown(scorecard: GoldenScorecard): string {
     '|------|--------|--------------|--------|------|-------|----------|',
     ...scorecard.rows.map(rowLine),
     '',
+    ...verificationLines(scorecard),
   );
   return lines.join('\n');
 }
