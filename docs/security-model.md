@@ -3,10 +3,10 @@
 > Threat model for the security layer as shipped at the end of Week 2
 > (S-1–S-4, ADRs 0012–0015), with dated Week-3 amendments where the eval
 > layer touched the security surface (ADR-0019 hostile-baseline handling,
-> 2026-07-12). This document says what the layer defends, against whom,
-> and — just as deliberately — what it does not. Claims here are anchored
-> to shipped code and to incidents found and fixed in review, not to
-> intentions.
+> ADR-0020 adversary-is-injectable, both 2026-07-12). This document says
+> what the layer defends, against whom, and — just as deliberately — what
+> it does not. Claims here are anchored to shipped code and to incidents
+> found and fixed in review, not to intentions.
 
 ## 1. Scope and posture
 
@@ -161,6 +161,50 @@ Excerpts are stripped of bidi controls before logging (Trojan-Source,
 CVE-2021-42574), so a hostile payload cannot visually reorder the audit trail
 that describes it.
 
+**The adversarial verifier's adversary reads attacker-influenceable content
+and is itself injectable (ADR-0020, E-4).** Two payloads reach the
+`--challenge` model on every call: the golden task prompt (repo-controlled —
+a malicious cloned repo is in scope, §2) and the primary agent's own output
+(a live, redacted tool-use result — content an adversarial tool result may
+already have steered, per R-4). Both are delimited with per-call random
+boundary tokens (`crypto.randomBytes`, distinct per call — a fixed delimiter
+would let either payload contain and forge the boundary) and labelled
+untrusted; the oracle `.mjs` source is never sent to it. **Authority
+analysis: a compromised adversary is noise, never authority.** Three
+independent controls hold that line, not one: (1) **enum confinement** — the
+adversary's response can only ever select a closed `{status, category}` pair
+via a strict two-branch `oneOf` schema (ADR-0016 decision 4's structured-verdict-
+only requirement, applied here); a compromised or manipulated adversary
+cannot inject prose, cannot widen the category set, and an out-of-enum or
+malformed response degrades to a `verifier-error` finding rather than an
+undefined mapping cell. (2) **Report-only, machine-enforced** — findings can
+never touch `totals`, `pass`, `failureKind`, or the exit code (a CI-safe
+differential invariance test pins this, ADR-0020 §9), so "convince the
+adversary" is not an attack with any payoff: there is nothing for a
+successful manipulation to unlock. (3) **A de-fanged call channel** — the
+adversary call wraps the SDK's `query()` with `maxTurns: 1` and a deny-all
+`PreToolUse` hook, so even a fully compromised adversary turn cannot execute
+a tool; this is deliberately stricter than a normal session (which at least
+sits behind the real permission/sandbox gates), because the adversary call
+has no session-level gates to fall back on otherwise. The composed guarantee
+mirrors ADR-0016 decision 2's judge posture (compromise can only ever
+produce a false positive) at zero authority instead of one-way authority —
+ADR-0020 states the two documents' equivalence explicitly so they don't read
+as conflicting.
+
+**Provider-pluggability is out of scope for the adversary until
+redact-before-egress is a hard precondition.** The routing table is
+structurally all-Anthropic (`src/router/table.ts`), so router-pinned
+adversary selection is itself a same-provider control: sending primary
+output to a non-Anthropic model would egress content that may carry
+un-rewritten secrets (R-4) to a new trust domain with no redaction gate in
+front of it. The runner redacts `resultText` before it ever reaches the
+verifier (`redactSecrets` is a required `GoldenRunnerDeps` dependency as of
+ADR-0020, closing ADR-0017's revisit-if M1) as defense in depth on top of
+the same-provider pin, but that redaction step is what a future
+cross-provider adversary would need to make a hard precondition, not an
+optional layer.
+
 ### Repudiation — could an action escape the record?
 
 This is the thinnest leg, and honestly so. Telemetry (ADR-0011) records every
@@ -289,3 +333,4 @@ not live values:
 | [0015](./decisions/0015-sandbox-pre-tool-gate.md) | Sandbox as pre-tool gate, intersection merge |
 | [0016](./decisions/0016-llm-judge-design-deferred.md) | Judge design locked (tighten-only), implementation deferred |
 | [0019](./decisions/0019-regression-gate.md) | Red-team regression gate; committed baseline loaded as hostile input |
+| [0020](./decisions/0020-adversarial-verifier.md) | Two-pass adversarial verifier: offline, report-only, enum-confined; adversary is injectable but zero-authority |

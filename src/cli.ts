@@ -2,27 +2,21 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  createGoldenRunner,
-  EvalUsageError,
-  toMarkdown,
-} from './eval/index.js';
-import type { TaskSessionConfig } from './eval/index.js';
-import {
-  EVAL_OUT_DIR,
-  readPackageVersion,
-  refuseSymlinkedDir,
+  composeSecurity,
+  hookRecordToTelemetryInput,
   sanitizeForTerminal,
+  SettingsLoadError,
   USAGE,
-  writeScorecard,
 } from './cli/shared.js';
+import type { SecurityComposition } from './cli/shared.js';
+import { parseEvalArgs, runEval } from './cli/eval-command.js';
+import type { EvalArgs } from './cli/eval-command.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
-import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route } from './router/index.js';
 import { createSession } from './session/index.js';
@@ -30,36 +24,31 @@ import type { QueryFn } from './session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
-  mergeLayers,
-  mergeSandboxLayers,
-  parsePermissionSettings,
-  parseSandboxSettings,
-  PermissionSettingsError,
   permissionHook,
   redact,
   sandboxHook,
-  SandboxSettingsError,
   scan,
-  SHELL_RUNNER_BINARIES,
 } from './security/index.js';
-import type { EvaluatorOptions, SandboxConfig } from './security/index.js';
-import { loadJsonSettings } from './internal/settings.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
   openTelemetryDatabase,
   TELEMETRY_EVENT_TYPES,
 } from './telemetry/index.js';
-import type { TelemetryEventInput, TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
+import type { TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
 
-// Pure-move re-exports (E-3 CG8): src/cli.test.ts imports these from './cli.js'
-// unmodified — the proof that the src/cli/ extraction changed no behavior.
+// Pure-move re-exports (E-3 CG8, extended E-4 T8): API-compat only now —
+// src/cli.test.ts still imports these from './cli.js', but full behavior
+// coverage for parseEvalArgs/parseRedteamArgs moved to their own command
+// test files; only reachability through parseArgs is pinned here.
 export {
   refuseSymlinkedDir,
   sanitizeForTerminal,
   scorecardFilename,
   writeScorecard,
 } from './cli/shared.js';
+export { composeSecurity, hookRecordToTelemetryInput, SettingsLoadError } from './cli/shared.js';
+export { parseEvalArgs } from './cli/eval-command.js';
 export { parseRedteamArgs, redteamExitCode } from './cli/redteam-command.js';
 export type { RedteamArgs } from './cli/redteam-command.js';
 
@@ -80,101 +69,11 @@ export interface TelemetryExportArgs {
   type: TelemetryEventType | null;
 }
 
-export interface EvalArgs {
-  command: 'eval';
-  taskDir: string;
-}
-
 export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
   | { ok: false; error: string };
-
-/** Path-prefixed settings failures from the composition root's combined loader. */
-export class SettingsLoadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'SettingsLoadError';
-  }
-}
-
-export interface SecurityComposition {
-  permissions: EvaluatorOptions;
-  sandbox: SandboxConfig;
-  /** Startup notices for the operator (prompter gaps, risky allowlists). */
-  warnings: string[];
-}
-
-export interface ComposeSecurityDeps {
-  readFile: (path: string) => string;
-  userDir: string;
-  projectDir: string;
-}
-
-/**
- * Loads and merges both security settings layers. Each file is read ONCE and
- * its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
- * ADR-0015). Module parse errors are re-tagged SettingsLoadError so the
- * shared loader path-prefixes them and main() has one failure type to map to
- * exit 2. Extracted from main() so the composition logic is unit-testable
- * without an SDK or API key.
- */
-export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
-  const layers = [
-    join(deps.userDir, '.harness', 'settings.json'),
-    join(deps.projectDir, '.harness', 'settings.json'),
-  ].map((path) =>
-    loadJsonSettings(
-      path,
-      deps.readFile,
-      (doc) => {
-        try {
-          return {
-            permissions: parsePermissionSettings(doc),
-            sandbox: parseSandboxSettings(doc),
-          };
-        } catch (error: unknown) {
-          if (
-            error instanceof PermissionSettingsError ||
-            error instanceof SandboxSettingsError
-          ) {
-            throw new SettingsLoadError(error.message);
-          }
-          throw error;
-        }
-      },
-      { permissions: { rules: [] }, sandbox: {} },
-      SettingsLoadError,
-    ),
-  );
-  const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
-  const permissions = mergeLayers(user.permissions, project.permissions);
-  const sandbox = mergeSandboxLayers(user.sandbox, project.sandbox);
-
-  const warnings: string[] = [];
-  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
-  // to deny — fail closed, but tell the settings author (ADR-0014 §4).
-  if (
-    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
-    permissions.defaultDecision === 'ask'
-  ) {
-    warnings.push(
-      "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
-    );
-  }
-  // Shell runners are DENIED by the sandbox regardless of the allowlist
-  // (SHELL_RUNNER_BINARIES blocklist); surface the conflict at startup.
-  const blocked = (sandbox.commands?.allow ?? []).filter((entry) =>
-    SHELL_RUNNER_BINARIES.includes(entry),
-  );
-  if (blocked.length > 0) {
-    warnings.push(
-      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners defeat first-token enforcement and are always denied (ADR-0015 §3)`,
-    );
-  }
-  return { permissions, sandbox, warnings };
-}
 
 export function parseArgs(argv: string[]): ParseResult {
   if (argv[0] === 'telemetry') {
@@ -187,22 +86,6 @@ export function parseArgs(argv: string[]): ParseResult {
     return parseRedteamArgs(argv.slice(1));
   }
   return parseRunArgs(argv);
-}
-
-export function parseEvalArgs(argv: string[]): ParseResult {
-  let taskDir = './eval/golden';
-  let positionalSeen = false;
-  for (const arg of argv) {
-    if (arg.startsWith('--')) {
-      return { ok: false, error: `Unknown flag '${arg}'. ${USAGE}` };
-    }
-    if (positionalSeen) {
-      return { ok: false, error: `Unexpected extra argument '${arg}'. ${USAGE}` };
-    }
-    taskDir = arg;
-    positionalSeen = true;
-  }
-  return { ok: true, value: { command: 'eval', taskDir } };
 }
 
 function parseTelemetryArgs(argv: string[]): ParseResult {
@@ -290,45 +173,6 @@ export function parseRunArgs(argv: string[]): ParseResult {
   return { ok: true, value: { command: 'run', prompt, skillsDir, dbPath, maxTurns } };
 }
 
-/**
- * Maps a hook runtime record onto telemetry's structural hook-event payload.
- * Lives here (the composition root) so hooks and telemetry stay import-free
- * peers (ADR-0011).
- */
-export function hookRecordToTelemetryInput(
-  record: HookEventRecord,
-  ids: { sessionId: string; turnId: string },
-): TelemetryEventInput {
-  const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
-  if (record.kind === 'denied-by-hook') {
-    return {
-      ...base,
-      payload: {
-        kind: record.kind,
-        event: record.event,
-        tool: record.tool,
-        reason: record.reason,
-        handlerIndex: record.handlerIndex,
-      },
-    };
-  }
-  if (record.kind === 'hook-error') {
-    return {
-      ...base,
-      payload: {
-        kind: record.kind,
-        event: record.event,
-        reason: record.reason,
-        handlerIndex: record.handlerIndex,
-      },
-    };
-  }
-  return {
-    ...base,
-    payload: { kind: record.kind, event: record.event, handlersFired: record.handlersFired },
-  };
-}
-
 function runTelemetryExport(args: TelemetryExportArgs): number {
   const db = openTelemetryDatabase({ path: args.dbPath });
   try {
@@ -348,144 +192,6 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
       process.stdout.write(sanitizeForTerminal(body));
     }
     return 0;
-  } finally {
-    db.close();
-  }
-}
-
-async function runEval(args: EvalArgs): Promise<number> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    process.stderr.write('ANTHROPIC_API_KEY is not set. Export it before running eval.\n');
-    return 2;
-  }
-
-  let security: SecurityComposition;
-  try {
-    security = composeSecurity({
-      readFile: (p) => readFileSync(p, 'utf8'),
-      userDir: homedir(),
-      projectDir: process.cwd(),
-    });
-  } catch (error: unknown) {
-    if (error instanceof SettingsLoadError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
-      return 2;
-    }
-    throw error;
-  }
-  for (const warning of security.warnings) {
-    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
-  }
-
-  // Pre-flight, before any spend: the write path must be trustworthy.
-  try {
-    refuseSymlinkedDir('.harness');
-    refuseSymlinkedDir(EVAL_OUT_DIR);
-  } catch (error: unknown) {
-    if (error instanceof EvalUsageError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
-      return 2;
-    }
-    throw error;
-  }
-
-  const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
-  if (typeof sdk.query !== 'function') {
-    process.stderr.write(
-      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
-    );
-    return 2;
-  }
-  const query = sdk.query as QueryFn;
-
-  // Oracle execution is arbitrary in-process code from the task directory
-  // (docs/security-model.md R-10) — say so before the first import.
-  process.stderr.write(
-    'warning: golden-eval oracles are arbitrary code from the task directory, executed in-process — only run eval on repos you trust (security-model R-10)\n',
-  );
-
-  // In-memory DB per eval run: never contaminates the operator's real
-  // .harness/telemetry.db (spec decision #15).
-  const db = openTelemetryDatabase({ path: ':memory:' });
-  try {
-    const telemetry = createTelemetryStore(db);
-    const memory = createMemoryStore(db);
-
-    const createTaskSession = (config: TaskSessionConfig) => {
-      const sessionId = randomUUID();
-      const turnId = randomUUID();
-      const hooks = createHookRuntime({
-        onEvent: (record) => {
-          const result = telemetry.record(
-            hookRecordToTelemetryInput(record, { sessionId, turnId }),
-          );
-          if (!result.ok) {
-            process.stderr.write(
-              `warning: telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
-            );
-          }
-        },
-      });
-      hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
-      hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
-      return createSession(
-        {
-          query,
-          hooks,
-          memory,
-          loadSkills,
-          route,
-          telemetry,
-          scanInjection: (text) => scan(text),
-          redactSecrets: (text) => redact(text),
-        },
-        {
-          skillsDir: config.skillsDir,
-          maxTurns: config.maxTurns,
-          ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
-          generateId: () => sessionId,
-          turnId,
-          // No onText: eval's stdout is the scorecard, nothing else.
-          onWarning: (message) =>
-            process.stderr.write(`warning: ${sanitizeForTerminal(message)}\n`),
-        },
-      );
-    };
-
-    const runner = createGoldenRunner({
-      createTaskSession,
-      redactSecrets: (text) => redact(text),
-      harnessVersion: readPackageVersion(),
-    });
-
-    let scorecard;
-    try {
-      scorecard = await runner.run(args.taskDir, {
-        onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(line)}\n`),
-      });
-    } catch (error: unknown) {
-      if (error instanceof EvalUsageError) {
-        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
-        return 2;
-      }
-      throw error;
-    }
-
-    // Write the JSON scorecard BEFORE anything hits stdout: a symlink planted
-    // between the pre-flight check and here must still honor the exit-2
-    // contract (ADR-0017 decision #4 — exit 2 means no scorecard produced).
-    // Once the markdown below reaches stdout that contract can no longer be
-    // kept, so writeScorecard maps every failure to a message, none bubble.
-    const written = writeScorecard(scorecard, EVAL_OUT_DIR);
-    if (!written.ok) {
-      process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
-      return 2;
-    }
-    process.stderr.write(`scorecard written to ${written.path}\n`);
-
-    process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
-
-    return scorecard.totals.failed === 0 ? 0 : 1;
   } finally {
     db.close();
   }

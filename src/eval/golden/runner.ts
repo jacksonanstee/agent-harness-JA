@@ -9,12 +9,14 @@ import type {
   GoldenRow,
   GoldenScorecard,
   GoldenTotals,
+  VerificationSection,
 } from './scorecard-shape.js';
 import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
 import type { LoadOracleFn } from './oracle.js';
 import { loadOracle as defaultLoadOracle, validateVerdict } from './oracle.js';
 import type { TaskParseResult } from './task.js';
 import { parseTaskFile } from './task.js';
+import type { ChallengeFinding, Verifier } from '../verifier/index.js';
 
 /** Run-level usage/config errors (spec: arbiter condition 1) — CLI exit 2. */
 export class EvalUsageError extends Error {
@@ -34,12 +36,14 @@ export interface GoldenRunnerDeps {
   /** Composition root wires the real createSession; tests inject fakes. */
   createTaskSession: (config: TaskSessionConfig) => Session;
   /** Every string entering a scorecard row passes through this (spec decision #1). */
-  redactSecrets?: (text: string) => RedactResult;
+  redactSecrets: (text: string) => RedactResult;
   /** Injectable for error-path tests; defaults to the real dynamic import. */
   loadOracle?: LoadOracleFn;
   /** Injected clock (epoch ms) for deterministic tests. */
   now?: () => number;
   harnessVersion?: string;
+  /** Presence enables phase 2 (E-4): challenge oracle-pass rows with output. */
+  verifier?: Verifier;
 }
 
 export interface RunOptions {
@@ -57,6 +61,14 @@ function errorMessage(cause: unknown): string {
 
 function emptyVolatile(): GoldenRow['volatile'] {
   return { costUsd: null, numTurns: null, durationMs: null, resultSubtype: null };
+}
+
+/** A non-finite cost (NaN/Infinity, from an untrusted SDK or adversary
+ *  payload) is treated as unknown rather than summed — it falls into the
+ *  existing unpriced accounting instead of poisoning a total (differential-
+ *  review nit N2). */
+function finiteCostOrNull(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function discoverTaskFiles(root: string): string[] {
@@ -107,10 +119,130 @@ function computeTotals(rows: GoldenRow[]): GoldenTotals {
   };
 }
 
-/** A scored row, paired with the model that produced it (null if no session ran/succeeded). */
+/**
+ * A scored row, paired with the model that produced it (null if no session
+ * ran/succeeded). `resultText`/`prompt` are retained in memory ONLY for the
+ * phase-2 challenge — they are never copied onto `row` and must never reach
+ * a scorecard; both are null on every path except an oracle-pass verdict.
+ */
 interface ScoredRow {
   row: GoldenRow;
   model: string | null;
+  resultText: string | null;
+  prompt: string | null;
+}
+
+/** Deps the challenge phase actually needs — a narrowed, non-optional slice. */
+interface ChallengePhaseDeps {
+  redactSecrets: (text: string) => RedactResult;
+  verifier: Verifier;
+}
+
+/** A per-entry challenge outcome: the finding to record plus its known cost
+ *  (null when unknown/unpriced), before totals are folded in by the caller. */
+interface ChallengeOutcome {
+  finding: ChallengeFinding;
+  costUsd: number | null;
+}
+
+/**
+ * Redacts one row's resultText, then calls the verifier — both stages
+ * guarded, both failure modes collapsing to the same `verifier-error`
+ * contract so a throw from either can never escape phase 2 (review3 HIGH:
+ * `Verifier` is a plain interface with no non-throwing contract; ADR-0020
+ * §4's "adversary failure can never alter the authoritative result" floor
+ * applies to a call that throws, not only one that resolves with an error
+ * shape). Only called for entries whose `resultText` is non-null — the
+ * caller handles the `no-output` case itself.
+ */
+async function challengeOutput(
+  entry: ScoredRow,
+  deps: ChallengePhaseDeps,
+): Promise<ChallengeOutcome> {
+  const taskId = entry.row.id;
+  let redacted: RedactResult;
+  try {
+    redacted = deps.redactSecrets(entry.resultText as string);
+  } catch {
+    return {
+      finding: { taskId, status: 'verifier-error', category: null, errorKind: 'redaction-failed' },
+      costUsd: null,
+    };
+  }
+  try {
+    return await deps.verifier.challenge({
+      taskId,
+      taskPrompt: entry.prompt ?? '',
+      redactedResultText: redacted.redacted,
+    });
+  } catch {
+    return {
+      finding: { taskId, status: 'verifier-error', category: null, errorKind: 'call-failed' },
+      costUsd: null,
+    };
+  }
+}
+
+/**
+ * Phase 2 (E-4): challenge oracle-pass rows, ordered by row id, AFTER every
+ * oracle has scored (phase 1's durationMs is already finalized — this phase
+ * never touches the clock). `scored` entries with `pass !== true` are not
+ * eligible; a `resultText === null` pass row is runner-constructed as
+ * 'no-output' with no adversary call. Kept as a module-level function (not a
+ * closure) so `run()` stays under 50 lines.
+ */
+async function runChallengePhase(
+  scored: ScoredRow[],
+  deps: ChallengePhaseDeps,
+  onProgress?: (line: string) => void,
+): Promise<VerificationSection> {
+  const eligible = scored
+    .filter((s) => s.row.pass === true)
+    .sort((a, b) => (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
+  const total = eligible.filter((s) => s.resultText !== null).length;
+  onProgress?.(
+    total > 0
+      ? `warning: --challenge adds ${total} adversary call(s) (one per passed task with output)`
+      : `--challenge: no adversary calls needed (0 passed tasks with output)`,
+  );
+
+  const findings: ChallengeFinding[] = [];
+  let totalCostUsd = 0;
+  let unpricedChallenges = 0;
+  let i = 0;
+  for (const entry of eligible) {
+    const taskId = entry.row.id;
+    if (entry.resultText === null) {
+      findings.push({ taskId, status: 'no-output', category: null, errorKind: null });
+      continue;
+    }
+    i += 1;
+
+    const { finding, costUsd } = await challengeOutput(entry, deps);
+    findings.push(finding);
+    onProgress?.(`[challenge ${i}/${total}] ${taskId} … ${finding.status}`);
+    const pricedCost = finiteCostOrNull(costUsd);
+    if (pricedCost === null) {
+      if (finding.status !== 'no-output' && finding.errorKind !== 'redaction-failed') {
+        unpricedChallenges += 1;
+      }
+    } else {
+      totalCostUsd += pricedCost;
+    }
+  }
+
+  return {
+    adversaryModelId: deps.verifier.adversaryModelId,
+    findings,
+    totals: {
+      agreed: findings.filter((f) => f.status === 'agreed').length,
+      challenged: findings.filter((f) => f.status === 'challenged').length,
+      verifierErrors: findings.filter((f) => f.status === 'verifier-error').length,
+      noOutput: findings.filter((f) => f.status === 'no-output').length,
+    },
+    totalCostUsd,
+    unpricedChallenges,
+  };
 }
 
 export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
@@ -136,7 +268,14 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   // outcome also carries the model choice (or null) so the caller can build
   // meta.models without re-deriving it from the rows.
   const scoreTask = async (parse: TaskParseResult): Promise<ScoredRow> => {
-    if (!parse.ok) return { row: failRow(parse.rowId, 'task-parse', parse.message), model: null };
+    if (!parse.ok) {
+      return {
+        row: failRow(parse.rowId, 'task-parse', parse.message),
+        model: null,
+        resultText: null,
+        prompt: null,
+      };
+    }
     const task = parse.value;
 
     // Oracle load precedes the session run: a broken oracle must not spend.
@@ -144,7 +283,12 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
     try {
       oracle = await loadOracle(task.oraclePath);
     } catch (cause: unknown) {
-      return { row: failRow(task.id, 'oracle-load', errorMessage(cause)), model: null };
+      return {
+        row: failRow(task.id, 'oracle-load', errorMessage(cause)),
+        model: null,
+        resultText: null,
+        prompt: null,
+      };
     }
 
     const startedAt = now();
@@ -161,10 +305,12 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       return {
         row: { ...row, volatile: { ...row.volatile, durationMs: now() - startedAt } },
         model: null,
+        resultText: null,
+        prompt: null,
       };
     }
     const volatile = {
-      costUsd: result.costUsd,
+      costUsd: finiteCostOrNull(result.costUsd),
       numTurns: result.numTurns,
       durationMs: now() - startedAt,
       resultSubtype: result.resultSubtype,
@@ -172,6 +318,12 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
 
     try {
       const verdict = validateVerdict(await oracle(result));
+      // Raw output is retained only when phase 2 can ever consume it — a
+      // plain oracle-only run (no --challenge) must not hold raw resultText
+      // in memory it never retained before (review3 MEDIUM). runChallengePhase
+      // is the only reader of these two fields (grep-verified) and it only
+      // runs when deps.verifier is defined, so this gate has no other effect.
+      const retain = verdict.pass && deps.verifier !== undefined;
       return {
         row: {
           id: task.id,
@@ -181,13 +333,20 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
           volatile,
         },
         model: result.modelChoice.model,
+        resultText: retain ? result.resultText : null,
+        prompt: retain ? task.prompt : null,
       };
     } catch (cause: unknown) {
       const row = failRow(task.id, 'oracle-error', errorMessage(cause));
       // The session ran (its cost is already in `volatile`/totalCostUsd)
       // even though the oracle threw — keep the model it used so
       // meta.models and totalCostUsd stay consistent.
-      return { row: { ...row, volatile }, model: result.modelChoice.model };
+      return {
+        row: { ...row, volatile },
+        model: result.modelChoice.model,
+        resultText: null,
+        prompt: null,
+      };
     }
   };
 
@@ -204,19 +363,34 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         `discovered ${parses.length} task${parses.length === 1 ? '' : 's'} in ${root}`,
       );
 
-      const rows: GoldenRow[] = [];
+      // Phase 1: every oracle scores (durationMs finalized here — two-phase
+      // is what makes the differential-invariance property hold) before
+      // phase 2 (the challenge) is even considered.
+      const scored: ScoredRow[] = [];
       const models = new Set<string>();
       const createdAt = new Date(now()).toISOString();
       for (const [index, parse] of parses.entries()) {
-        const { row, model } = await scoreTask(parse);
-        rows.push(row);
-        if (model !== null) models.add(model);
+        const outcome = await scoreTask(parse);
+        scored.push(outcome);
+        if (outcome.model !== null) models.add(outcome.model);
+        const { row } = outcome;
         const cost =
           row.volatile.costUsd === null ? '' : ` ($${row.volatile.costUsd.toFixed(4)})`;
-        const outcome = row.pass ? `pass${cost}` : `fail (${row.failureKind ?? 'unknown'})${cost}`;
-        opts.onProgress?.(`[${index + 1}/${parses.length}] ${row.id} … ${outcome}`);
+        const label = row.pass ? `pass${cost}` : `fail (${row.failureKind ?? 'unknown'})${cost}`;
+        opts.onProgress?.(`[${index + 1}/${parses.length}] ${row.id} … ${label}`);
       }
 
+      const { redactSecrets } = deps;
+      const verification =
+        deps.verifier === undefined
+          ? undefined
+          : await runChallengePhase(
+              scored,
+              { redactSecrets, verifier: deps.verifier },
+              opts.onProgress,
+            );
+
+      const rows = scored.map((s) => s.row);
       const sorted = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       return {
         schemaVersion: 1,
@@ -224,6 +398,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         meta: { createdAt, harnessVersion, taskDir: root, models: [...models].sort() },
         rows: sorted,
         totals: computeTotals(sorted),
+        ...(verification !== undefined && { verification }),
       };
     },
   };

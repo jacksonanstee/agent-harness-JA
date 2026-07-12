@@ -21,4 +21,8 @@ export type {
   GoldenScorecard,
   GoldenTotals,
   RowVolatile,
+  VerificationSection,
 } from './scorecard-shape.js';
+// Re-exported so a GoldenScorecard consumer can name a VerificationSection's
+// finding shape without a deep import into ../verifier (review3 LOW L-4).
+export type { ChallengeFinding } from '../verifier/index.js';
