@@ -227,10 +227,19 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   challenge time**. Phase 2, only when `deps.verifier` is present
   (`src/eval/golden/runner.ts:runChallengePhase`): the runner walks the
   completed rows in taskId order and challenges each **oracle-pass row**.
-  The redacted `resultText` of each pass row is retained in memory between
-  phases (bounded by `redact()`'s 128 KiB cap per row, same instance as the
-  primary redaction path); a mid-run crash in phase 2 loses only
-  verification, never oracle results. An earlier draft challenged
+  The **raw** `resultText` of each pass row is retained in memory **only
+  when `--challenge` is active** (`deps.verifier` present) — a plain golden
+  run never retains it, gated at the point of capture
+  (`src/eval/golden/runner.ts:scoreTask`). Retained raw text is redacted
+  **lazily, per row, immediately before that row's adversary call** (the
+  "redaction responsibility" bullet below) — it is not redacted up front,
+  and its retained size is **not bounded by `redact()`'s 128 KiB cap**
+  (that cap applies to the text egressed to the adversary, not to the copy
+  held in memory between phases; the retained copy is bounded in practice
+  only by the session's own output size). If redaction fails for a row, the
+  finding is `verifier-error`/`redaction-failed` and **no call is made** for
+  that row. A mid-run crash in phase 2 loses only verification, never
+  oracle results. An earlier draft challenged
   immediately after each row scored — rejected because the pre-adversary
   spend warning (§6 CLI) needs the pass-row count known before the first
   adversary call, which only phase 1 completing can guarantee.

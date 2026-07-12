@@ -293,6 +293,12 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
 
     try {
       const verdict = validateVerdict(await oracle(result));
+      // Raw output is retained only when phase 2 can ever consume it — a
+      // plain oracle-only run (no --challenge) must not hold raw resultText
+      // in memory it never retained before (review3 MEDIUM). runChallengePhase
+      // is the only reader of these two fields (grep-verified) and it only
+      // runs when deps.verifier is defined, so this gate has no other effect.
+      const retain = verdict.pass && deps.verifier !== undefined;
       return {
         row: {
           id: task.id,
@@ -302,8 +308,8 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
           volatile,
         },
         model: result.modelChoice.model,
-        resultText: verdict.pass ? result.resultText : null,
-        prompt: verdict.pass ? task.prompt : null,
+        resultText: retain ? result.resultText : null,
+        prompt: retain ? task.prompt : null,
       };
     } catch (cause: unknown) {
       const row = failRow(task.id, 'oracle-error', errorMessage(cause));

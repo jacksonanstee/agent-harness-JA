@@ -497,6 +497,53 @@ describe('adversarial verification (E-4 phase 2)', () => {
     expect('verification' in scorecard).toBe(false);
   });
 
+  it(
+    'no-verifier run retains no raw output: rows never carry resultText/prompt, ' +
+      'and behavior is byte-for-byte the pre-E-4 shape (case 7b, review3 MEDIUM)',
+    async () => {
+      // Retention gating (runner.ts scoreTask: `retain = verdict.pass &&
+      // deps.verifier !== undefined`) is intentionally module-internal:
+      // ScoredRow.resultText/prompt are read nowhere except
+      // runChallengePhase, which itself never runs without deps.verifier
+      // (grep-verified — see the comment at the gate). There is therefore no
+      // black-box surface a public-API test could observe the gate through
+      // beyond what's asserted here: (a) GoldenRow never carries the raw
+      // fields at all (the row type has no such fields — a structural
+      // guarantee, checked at runtime too so a future field-add can't
+      // silently reintroduce the leak) and (b) a no-verifier run's rows/
+      // totals are identical to a run before E-4 ever retained anything.
+      const runner = createGoldenRunner({
+        createTaskSession: fakeSessionFactory(fakeResult()),
+        redactSecrets: (t: string) => identityRedact(t),
+        now: fakeNow(),
+        harnessVersion: '0.1.0-test',
+      });
+      const scorecard = await runner.run(fixtures('run'));
+      for (const row of scorecard.rows) {
+        expect('resultText' in row).toBe(false);
+        expect('prompt' in row).toBe(false);
+      }
+      expect(scorecard.verification).toBeUndefined();
+      // Same totals shape as the pre-E-4 'scores pass/fail/parse-fail rows'
+      // test above — the retention gate must not perturb ordinary runs.
+      expect(scorecard.totals).toEqual({
+        total: 3,
+        passed: 1,
+        failed: 2,
+        byFailureKind: {
+          'task-parse': 1,
+          'oracle-load': 0,
+          'session-error': 0,
+          'oracle-error': 0,
+          'oracle-fail': 1,
+        },
+        passRate: 1 / 3,
+        totalCostUsd: 0.02,
+        unpricedTasks: 1,
+      });
+    },
+  );
+
   it('DIFFERENTIAL INVARIANCE: verifier presence never changes rows/totals (case 8, arbiter condition 2)', async () => {
     // Each call to buildDeps() mints a FRESH clock and FRESH session fake —
     // a shared mutable counter across both runs would carry state into run
