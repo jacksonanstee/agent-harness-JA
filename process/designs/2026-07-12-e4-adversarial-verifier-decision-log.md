@@ -86,3 +86,15 @@ Settled architecture unchallenged by all three reviewers. All findings were spec
 | R2-21 | Advocate 1 | Rendered section never shown | Concrete markdown example pinned in §Scorecard shape |
 | R2-22 | Advocate 3 | "Pointer to re-run" has no re-run command | Reworded to prompt-to-re-examine; no single-task selector recorded as limitation |
 | R2-23 | Advocate 4 | Challenge phase silent (hang perception) | Per-challenge onProgress lines pinned |
+
+## Round 3 — external Gemini adversarial pass on the IMPLEMENTATION PLAN (2026-07-12)
+
+Gemini 2.5-flash, scratchpad dialogue harness (key via header), 3 rounds. Round 1 clean (re-probed per two-pass doctrine); round 2 forcing-frame produced 3 candidates + 6 targeted probes; round 3 verdict **SOUND**.
+
+| Finding | Disposition |
+|---|---|
+| taskPrompt retention = new memory class | REJECTED — `parses` already retains every prompt for run() scope today; no new class |
+| `—` rendering logic underdetermined | ALREADY SPECIFIED (Task 7 interface block); reviewer confirmed misread |
+| Progress-line wording could mislead into runner-writes-stderr (layering breach) | ACCEPTED — plan now states runner emits via onProgress only; CLI writes stderr |
+| P4: invariance test with a SHARED mutable step-clock diverges between runs | ACCEPTED — plan now mandates fresh clock + fresh session fakes per run (best catch of the pass) |
+| P1/P2/P3/P5/P6 probes (timeout race unhandled-rejection path, ajv oneOf behavior, stream-throw absorption, intra-eval import direction, re-export fallout) | All confirmed clean |

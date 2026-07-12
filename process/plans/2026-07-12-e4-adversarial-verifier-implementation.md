@@ -542,7 +542,9 @@ export type {
   - `GoldenRunnerDeps.redactSecrets: (text: string) => RedactResult` — now **required** (drop the `?`).
   - `GoldenRunnerDeps.verifier?: Verifier` — optional; presence enables phase 2.
   - `run()` returns a scorecard whose `verification` key is present iff `verifier` was supplied.
-  - Phase-boundary progress lines (exact copy, CLI writes them to stderr):
+  - Phase-boundary progress lines — the runner EMITS these via the existing
+    `opts.onProgress` callback (never writes stderr itself — layering);
+    `eval-command.ts` consumes the callback and writes stderr. Exact copy:
     - N > 0: `warning: --challenge adds ${N} adversary call(s) (one per passed task with output)`
     - N = 0: `--challenge: no adversary calls needed (0 passed tasks with output)`
     - per challenge: `[challenge ${i}/${N}] ${taskId} … ${finding.status}`
@@ -589,8 +591,11 @@ const fakeVerifier = (script: Record<string, { status: string; category?: string
 //    totalCostUsd sums non-null; unpricedChallenges counts attempted-null only (script one costUsd: null).
 // 7. no verifier dep → scorecard.verification is undefined (property absent from JSON:
 //    expect('verification' in scorecard).toBe(false) OR toCanonicalJson lacks the key).
-// 8. DIFFERENTIAL INVARIANCE (arbiter condition 2): same fakes + injected now(),
-//    run once with verifier, once without → expect(withV.rows).toEqual(without.rows);
+// 8. DIFFERENTIAL INVARIANCE (arbiter condition 2): identical fake CONSTRUCTORS,
+//    but construct a FRESH injected step-clock and fresh session fakes PER RUN —
+//    a shared mutable counter would carry state into run 2 and diverge the
+//    timestamps, failing the test for the wrong reason.
+//    Run once with verifier, once without → expect(withV.rows).toEqual(without.rows);
 //    expect(withV.totals).toEqual(without.totals); exit-derivation equality
 //    (withV.totals.failed === without.totals.failed); the only top-level key
 //    difference is 'verification'.
