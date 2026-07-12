@@ -54,8 +54,12 @@ fixed-shape record of closed enums and a task id. The adversary's raw
 response text exists only inside the verifier's strict parser.
 
 The honestly-priced consequence (recorded, not hidden): an individual
-finding — `{di-01, challenge, incomplete}` — is a *pointer to re-run*, not a
-diagnosis. The feature's value lives in the aggregate: the challenge rate
+finding — `{di-01, challenge, incomplete}` — is a *prompt to re-examine*,
+not a diagnosis — and re-examination means re-running the suite (or
+temporarily isolating the task file in its own directory): there is **no
+single-task selector in v1** (YAGNI, recorded in §Accepted limitations),
+and golden runs are nondeterministic, so a re-run may not reproduce the
+challenged output. The feature's value lives in the aggregate: the challenge rate
 over oracle-pass rows is a **reported metric** with a named consumer
 (`docs/eval-methodology.md` and any future S-5-style judge decision), the
 same gate-vs-measurement standing as E-2's detection rate. It never gates.
@@ -77,23 +81,32 @@ export const CHALLENGE_CATEGORIES = [
 ] as const;
 export type ChallengeCategory = (typeof CHALLENGE_CATEGORIES)[number];
 
-export type ChallengeStatus = 'agreed' | 'challenged' | 'verifier-error';
+// 'no-output' = oracle-pass row with resultText: null (gating-behavior
+// tasks, ADR-0017's named first-class case) — nothing to challenge, finding
+// recorded so the one-per-pass-row cardinality holds. Not an error.
+export type ChallengeStatus = 'agreed' | 'challenged' | 'verifier-error' | 'no-output';
 
 export interface ChallengeFinding {
   taskId: string;                       // ^[a-z0-9][a-z0-9-]{0,63}$ (the task's own id)
   status: ChallengeStatus;
   category: ChallengeCategory | null;   // non-null iff status === 'challenged'
-  errorKind: 'call-failed' | 'unparseable' | 'unknown-enum' | null; // non-null iff verifier-error
+  // non-null iff status === 'verifier-error'. 'redaction-failed' = redact()
+  // threw before any call was made (nothing egressed).
+  errorKind: 'call-failed' | 'unparseable' | 'unknown-enum' | 'redaction-failed' | null;
 }
 
 export interface AdversaryResult { text: string; costUsd: number | null; }
 export type AdversaryFn = (prompt: string) => Promise<AdversaryResult>;
 
 export interface Verifier {
+  /** The routed model id, for VerificationSection.adversaryModelId — the
+   *  runner cannot learn it any other way (route() runs at the composition
+   *  root; nothing analogous to SessionResult.modelChoice flows back). */
+  adversaryModelId: string;
   challenge(input: { taskId: string; taskPrompt: string; redactedResultText: string }):
     Promise<{ finding: ChallengeFinding; costUsd: number | null }>;
 }
-export function createVerifier(deps: { adversary: AdversaryFn }): Verifier;
+export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId: string }): Verifier;
 ```
 
 - **No `confidence` field.** A model's self-reported confidence has no
@@ -107,15 +120,48 @@ export function createVerifier(deps: { adversary: AdversaryFn }): Verifier;
 - The task prompt and the redacted output are **delimited and explicitly
   labelled as untrusted content to be analyzed** — both are
   attacker-influenceable (the task file is repo-controlled; the output came
-  from a live agent run). The oracle `.mjs` source is **never** sent to the
-  adversary (repo-controlled code; a direct injection channel, R-10
-  adjacent).
+  from a live agent run). **The delimiting mechanism is pinned** (nothing
+  concrete exists to inherit — ADR-0016's judge was never built): each
+  payload is wrapped in **per-call random boundary tokens**
+  (`<<<UNTRUSTED-{nonce}>>> … <<<END-UNTRUSTED-{nonce}>>>`, nonce =
+  16 hex chars from `crypto.randomBytes` per challenge call), with a label
+  sentence naming the payload's origin. A payload cannot contain the
+  boundary it has never seen — this closes the payload-contains-delimiter
+  breakout that any fixed delimiter invites. The oracle `.mjs` source is
+  **never** sent to the adversary (repo-controlled code; a direct injection
+  channel, R-10 adjacent).
 - The adversary is instructed to return a single JSON object. The **wire
-  format** is `{verdict: 'agree' | 'challenge', category?}` — the verifier
-  maps it onto the finding's `status` (which adds the third,
-  verifier-owned value `verifier-error` the adversary can never produce).
-  The response is parsed with an **exact ajv field allowlist**, both values
-  checked against the closed enums (arbiter condition 1).
+  format** is a two-branch `oneOf`: `{verdict: 'agree'}` (category
+  **forbidden**) or `{verdict: 'challenge', category: <enum>}` (category
+  **required**) — `additionalProperties: false` on both branches, so the
+  two wrong combinations (challenge-without-category,
+  agree-with-category) fail validation as `unparseable` rather than
+  landing in an undefined mapping cell. The verifier maps the wire verdict
+  onto the finding's `status` (which adds the verifier-owned values
+  `verifier-error`/`no-output` the adversary can never produce).
+  **Arbiter condition 1 is discharged here, at the wire-response parse** —
+  that is the untrusted input; the constructed `VerificationSection` needs
+  no load-time validator because nothing ever re-reads a golden scorecard
+  (no baseline, ADR-0019 d9) — its shape is guaranteed by TS construction
+  and pinned by the differential test. (The decision log's condition-1
+  wording says "verification section"; this paragraph is the reconciled
+  reading, folded into the decision log's round-2 table.)
+- **Response handling order, pinned:** `AdversaryResult.text` is capped at
+  **128 KiB before parsing** (the `redact()` `MAX_INPUT` precedent) —
+  oversize → `unparseable`; the text is trimmed (leading/trailing
+  whitespace only — a ` ```json ` fence fails parse, deliberately: strict
+  means strict); then `JSON.parse` → ajv `oneOf` validation → only then
+  are fields read. Prototype-shaped keys are inert by construction
+  (`JSON.parse` creates own properties; `additionalProperties: false`
+  rejects `__proto__` as an extra field → `verifier-error`).
+- **Timeout, owned by the verifier:** each adversary call races a
+  **60_000 ms timer** (`ADVERSARY_TIMEOUT_MS`); on expiry the finding is
+  `verifier-error`/`call-failed` and the orphaned promise's eventual
+  settlement is discarded. Neither `AdversaryFn` nor the SDK exposes an
+  abort channel (ADR-0017's recorded reason golden tasks have no
+  wall-clock timeout), so the underlying call may still run to completion
+  and bill — which is why timed-out findings count as unpriced spend
+  (§Runner integration).
   Anything else — extra fields, prose wrapper that doesn't parse, an enum
   value outside the tuple — is a per-row `verifier-error` with the matching
   `errorKind`. **Unknown enum values are never widened at parse time**
@@ -133,25 +179,57 @@ export function createVerifier(deps: { adversary: AdversaryFn }): Verifier;
 
 ## Runner integration
 
-- `GoldenRunnerDeps` gains optional `verifier?: Verifier`. When present, the
-  runner challenges **oracle-pass rows only** — failed/errored rows carry no
-  information a challenge adds (`task-parse`/`oracle-load`/`session-error`
-  rows have no output; `oracle-fail` rows are already red). Recorded scope
-  limit: an oracle-fail row's output is never second-opinioned.
-- The challenge runs right after the oracle scores the row, on the
-  **redacted** `resultText`: `redactSecrets` is applied to the adversary's
-  request payload before the call. The primary call needs raw output to
-  function; the adversary does not — redact-before-egress is defense in
-  depth on top of the same-provider pin (§Adversary model).
+- **The run is TWO-PHASE, pinned** (an earlier draft said "right after the
+  oracle scores the row", which contradicted the phase-boundary warning —
+  the warning's rationale requires the pass count to be known before the
+  first adversary call). Phase 1 is today's loop, unchanged: every task
+  runs and its oracle scores it. Phase 2, only when `verifier` is present:
+  the runner walks the completed rows in taskId order and challenges each
+  **oracle-pass row**. Consequences pinned with the shape: the redacted
+  `resultText` of each pass row is retained in memory between phases
+  (bounded by `redact()`'s 128 KiB cap per row); row `volatile.durationMs`
+  is finalized in phase 1 and **never includes challenge time**; a mid-run
+  crash in phase 2 loses only verification, never oracle results.
+- Challenge eligibility: **oracle-pass rows only** — failed/errored rows
+  carry no information a challenge adds (`task-parse`/`oracle-load`/
+  `session-error` rows have no output; `oracle-fail` rows are already
+  red). Recorded scope limit: an oracle-fail row's output is never
+  second-opinioned. A pass row with `resultText: null` (gating-behavior
+  tasks — oracle asserts on `denied[]`; ADR-0017's named first-class case)
+  gets a **`no-output` finding**: no call is made, cardinality holds, and
+  the state is legible rather than a spurious `incomplete` challenge
+  against an empty string.
+- **Redaction responsibility, one sentence:** the runner redacts
+  `resultText` with its (now required) `redactSecrets` and passes
+  `redactedResultText` to the verifier; `taskPrompt` is deliberately NOT
+  redacted — it is repo-committed text, already public in the artifact's
+  own repo. If `redact()` throws, the finding is
+  `verifier-error`/`redaction-failed` and **no call is made** (nothing
+  egresses unredacted). The primary call needs raw output to function; the
+  adversary does not — redact-before-egress is defense in depth on top of
+  the same-provider pin (§Adversary model).
 - **`redactSecrets` becomes a REQUIRED `GoldenRunnerDeps` dep** (currently
   optional, `runner.ts:37`). ADR-0017's revisit-if M1 named this exact
   trigger — "a second runner composition appears" — and an egress path is a
-  stronger trigger than M1's letter. Tests inject a fake; omission becomes a
-  type error, not a silent no-redaction default.
+  stronger trigger than M1's letter. Migration surface (stated, mechanical):
+  ~15 `createGoldenRunner` sites in `runner.test.ts` omit it and become
+  type errors — each gets the existing fake. Note for honesty:
+  `cleanForScorecard`'s redactor parameter stays optional (it is shared
+  with the redteam producer, whose rows carry no free text to redact) —
+  the required-ness lives at the golden composition boundary, where the
+  egress is.
 - Verification cost is captured from `AdversaryResult.costUsd` per call and
   reported with the never-understated pattern (arbiter condition 4):
-  `verification.totalCostUsd` (sum of known) + `unpricedChallenges` (count
-  of null) — mirroring `GoldenTotals.totalCostUsd`/`unpricedTasks`.
+  `verification.totalCostUsd` (sum of known) + `unpricedChallenges` —
+  where `unpricedChallenges` counts every finding whose call was attempted
+  and whose cost is unknown, **including `verifier-error` findings**
+  (a timed-out or failed call may still have billed; unknown spend is
+  counted as unpriced, never assumed zero). `no-output` findings made no
+  call and count in neither.
+- **Progress cadence:** phase 2 reuses the existing `onProgress` channel,
+  one line per challenge — `[challenge i/N] <taskId> … agreed|challenged|
+  verifier-error|no-output` — so N live calls are never a silent phase
+  (the oracle phase's own per-task cadence, extended).
 
 ## Scorecard shape (golden-only, binding)
 
@@ -164,20 +242,50 @@ findings are a **section, never row fields**:
 
 ```ts
 export interface VerificationSection {
-  adversaryModelId: string;
+  adversaryModelId: string;           // from Verifier.adversaryModelId
   findings: ChallengeFinding[];       // one per oracle-pass row, ordered by taskId
-  totals: { agreed: number; challenged: number; verifierErrors: number };
+  totals: { agreed: number; challenged: number; verifierErrors: number; noOutput: number };
   totalCostUsd: number;
   unpricedChallenges: number;
 }
-// GoldenScorecard gains: verification?: VerificationSection
+// GoldenScorecard becomes an INTERSECTION — the shared envelope is closed
+// and shared with redteam, so it is never widened (the natural-but-
+// forbidden implementation, named to forbid it):
+//   export type GoldenScorecard =
+//     ScorecardEnvelope<GoldenMeta, GoldenRow, GoldenTotals> &
+//     { verification?: VerificationSection };
 ```
 
-Tri-state legibility (panel condition): section **absent** = not run (and
-the rendered markdown says so: "Adversarial challenge: not run — pass
-`--challenge` (adds a second model call per passed task)"); section present
-with `challenged: 0` = ran, nothing challenged; present with challenges =
-the findings table. A reader of the bare artifact can distinguish all three.
+State legibility (panel condition — there are FOUR states, and the
+rendered line always relates the finding counts to `totals.passed` so
+"ran over zero candidates" can never read as "ran, nothing challenged"):
+
+1. Section **absent** — not run. Rendered: `Adversarial challenge: not
+   run — pass --challenge (adds a second model call per passed task)`.
+2. Present, zero passed tasks — ran, nothing eligible. Rendered:
+   `Adversarial challenge (report-only): 0 passed tasks — nothing to
+   challenge`.
+3. Present, all agreed — rendered summary line + no table.
+4. Present with challenges/errors — summary line + findings table.
+
+Rendered shape (pinned — the feature IS this section, so the spec shows
+it, the way `markdown.ts` pins every existing section):
+
+```markdown
+## Adversarial challenge (report-only — never affects pass/fail or exit codes)
+
+Adversary: claude-sonnet-4-6 · challenged 1 / agreed 3 / errors 0 / no-output 1, of 5 passed tasks
+Challenge cost: $0.0312 (0 unpriced)
+
+| task | status | category / error |
+|---|---|---|
+| di-01 | challenged | incomplete |
+| di-02 | agreed | — |
+| gate-01 | no-output | — |
+```
+
+The `status` and `category / error` cells are closed-enum values by
+construction — the table cannot carry adversary prose.
 
 Golden scorecards remain gitignored, live-key, never baselined (ADR-0019
 d9) — adversary nondeterminism is admissible in this artifact class and no
@@ -196,6 +304,22 @@ findings go to `meta` or nowhere (ADR-0019 d4's rule).
   primary overlap is possible and **recorded, not hidden**: the section
   reports `adversaryModelId`, and the reader can compare it with
   `meta.models`.
+- **The call channel, pinned** (the repo has no raw Messages-API client
+  and adds no new dependency): the composition root builds `AdversaryFn`
+  by wrapping the same Agent SDK `query()` the session uses — **without**
+  `createSession` (no memory/telemetry pollution) and **de-fanged with two
+  independent controls expressible in the existing typed `QueryOptions`**:
+  `maxTurns: 1` (bounds the agentic loop) and a **deny-all `PreToolUse`
+  hook** (`SdkPreToolDenyOutput` — any tool call the model attempts in its
+  one turn fails closed). A bare `query()` without these would be an
+  ungated, tool-capable agent turn processing attacker-influenceable
+  content — strictly worse than R-4; the two controls are why
+  "compromised adversary = noise, never authority" holds for the tool
+  channel as well as the verdict channel. `costUsd` is read from the
+  result message's `total_cost_usd` (`SdkResultMessage`), null when
+  absent. If the implementation plan verifies the SDK's `allowedTools: []`
+  option, it may be added to the typed `QueryOptions` subset as a third
+  control — additive, not a substitute.
 - **"Pluggable" = the injected `AdversaryFn`** (composition root builds it;
   tests inject fakes) — satisfying the requirement's letter the same way
   `InjectionJudge` does. The requirement's acceptance ("Claude as both
@@ -213,19 +337,31 @@ findings go to `meta` or nowhere (ADR-0019 d4's rule).
 - Flag: **`eval --challenge`** (not `--verify` — "verify" is overloaded
   three ways in this repo and reads as a gate; "challenge" is the
   week-plan's own verb and cannot be mistaken for one). Default off.
-- **Wiring lives in `src/cli/eval-command.ts`** — a pure-move extraction of
-  the existing eval command from `cli.ts` (the redteam-command precedent;
-  also discharges the E-3 review backlog LOW "asymmetric subcommand
-  extraction"). `cli.ts` keeps dispatch only. The extraction commit is
-  move-only, verified the same way ba79533 was; the `--challenge` wiring
-  lands on top.
-- **Pre-adversary-spend warning** to stderr at the phase boundary — after
-  the oracle phase, before the first adversary call, because the pass-row
-  count (= the number of adversary calls) is only knowable then:
-  `warning: --challenge adds N adversary call(s) (one per passed task)`.
-- Exit codes: **unchanged and solely oracle-derived** — stated as a
-  co-located comment where the exit code is computed (the repo's pattern
-  for report-only-adjacent decisions, cf. `gateOutcome`'s docstring).
+- **Wiring lives in `src/cli/eval-command.ts`** — an extraction of the
+  existing eval command from `cli.ts` (the redteam-command precedent; also
+  discharges the E-3 review backlog LOW "asymmetric subcommand
+  extraction"). Honestly scoped: this is **not** a pure move —
+  `runEval` shares `composeSecurity`, `SettingsLoadError`, and
+  `hookRecordToTelemetryInput` with the `run` path, and a `src/cli/`
+  module importing `../cli.js` back is a real ESM cycle
+  (`redteam-command.ts:33-37` documents it) — so those shared helpers
+  relocate to `src/cli/shared.ts` in the same commit, with the ba79533
+  re-export verification covering the helpers too. `cli.ts` keeps
+  dispatch, the `run` wiring, and telemetry-export. The `--challenge`
+  wiring lands on top of the extraction commit.
+- **Pre-adversary-spend warning** to stderr at the phase boundary (the
+  two-phase shape, §Runner integration, is what makes N knowable):
+  `warning: --challenge adds N adversary call(s) (one per passed task with
+  output)`. When N = 0 the warning is replaced by
+  `--challenge: no passed tasks with output — adversary phase skipped`
+  and the section still renders state 2 (§Scorecard shape).
+- Exit codes: **unchanged** — still `totals.failed === 0 ? 0 : 1` exactly
+  as today (note: `failed` already includes `task-parse`/`oracle-load`/
+  `session-error` rows where no oracle ran, so "oracle-derived" would be
+  the wrong words); verification findings and verification failures never
+  contribute to `totals.failed`. Stated as a co-located comment where the
+  exit code is computed (the repo's pattern for report-only-adjacent
+  decisions, cf. `gateOutcome`'s docstring).
 - `USAGE` gains `eval [taskDir] [--challenge]`; README quick-start gains
   the `--challenge` line beside the `eval` one.
 - Terminal output derived from findings is enum/count-only by construction;
@@ -235,11 +371,14 @@ findings go to `meta` or nowhere (ADR-0019 d4's rule).
 ## Report-only as a tested property (binding)
 
 A CI-safe **differential invariance test** (arbiter condition 2): run the
-golden runner with a fake adversary and without the verifier; assert
-`rows[]`, `totals`, and the derived exit code are **identical** in both
-runs, and the only delta is the presence of the `verification` section.
-"Report-only" is thereby a property the suite enforces, not a sentence in
-this document.
+golden runner twice with **injected clock and fake sessions** (both pinned
+— under the default `Date.now` clock nothing is reproducible), once with a
+fake verifier and once without; assert `rows[]` and `totals` are
+**deep-equal (field identity, not byte identity)** and the derived exit
+code is equal, with the `verification` key the only top-level delta. The
+two-phase shape makes row timing verifier-independent by construction
+(`durationMs` is finalized in phase 1). "Report-only" is thereby a
+property the suite enforces, not a sentence in this document.
 
 ## Accepted limitations (recorded)
 
@@ -260,6 +399,18 @@ this document.
 - **A 100%-verifier-error run still exits green.** Report-only means
   verification *failures* don't move exit codes either; mitigation is the
   stderr warning and the `verifierErrors` count in the section.
+- **No single-task re-run surface.** `eval` takes a directory and runs
+  every `*.task.md` in it; acting on a finding means re-running the suite
+  or isolating the task file. A task selector is deliberately not built
+  in v1.
+- **The adversary call is a second wall-clock hazard, bounded but not
+  aborted.** The 60 s verifier-owned race converts a hang into a
+  `call-failed` finding, but the orphaned call may run to completion and
+  bill (no abort channel exists — ADR-0017's recorded limitation, doubled
+  here and mitigated where sessions couldn't be).
+- **Long outputs reach the adversary truncated.** `redact()` caps input at
+  128 KiB (tail replaced with a marker); a challenge over a truncated
+  output judges the truncation. Fidelity caveat, not a security one.
 
 ## Fallback (arbiter condition 5)
 
@@ -283,22 +434,35 @@ the acceptance test exists.
 
 ## Testing (TDD; all CI tests fake-adversary, keyless)
 
-- **Verifier unit**: prompt construction (delimiters present, labels
-  present, oracle source absent, redacted text used); strict parse — valid
-  agree, valid challenge each category, extra field → `unparseable`,
-  out-of-enum category → `unknown-enum`, call rejection → `call-failed`;
+- **Verifier unit**: prompt construction (per-call nonce boundaries
+  present and distinct across calls, labels present, oracle source absent,
+  redacted text used); strict parse — valid agree, valid challenge each
+  category, extra field → `unparseable`, challenge-without-category →
+  `unparseable`, agree-with-category → `unparseable`, out-of-enum
+  category → `unknown-enum`, >128 KiB response → `unparseable`, fenced
+  JSON → `unparseable`, call rejection → `call-failed`, timer expiry →
+  `call-failed` with orphan settlement discarded (fake timers);
   one-call-no-retry pinned.
-- **Runner integration**: pass-rows-only selection (fail/error rows get no
-  finding); findings ordered by taskId; cost sum + unpriced count; required
-  `redactSecrets` type-error proof (compile-time) + adversary payload is
-  the redacted text (runtime assertion via fake).
+- **Runner integration**: two-phase shape (all oracles complete before the
+  first challenge; `durationMs` finalized in phase 1); pass-rows-only
+  selection (fail/error rows get no finding); `resultText: null` pass row
+  → `no-output` finding, no call; redaction throw → `redaction-failed`,
+  no call; findings ordered by taskId; cost sum + unpriced semantics
+  (verifier-error counts as unpriced, no-output counts in neither);
+  required `redactSecrets` type-error proof (compile-time) + adversary
+  payload is the redacted text (runtime assertion via fake); per-challenge
+  `onProgress` lines.
 - **Differential invariance** (condition 2): rows/totals/exit identical
   with and without the verifier.
 - **CLI**: `--challenge` parse; unknown-flag rejection unchanged for other
-  flags; tri-state markdown rendering (absent / zero-challenge / findings
-  table); phase-boundary warning line; exit-code invariance; USAGE string.
-- **Extraction commit**: eval-command move verified behavior-preserving
-  (cli.test.ts imports unchanged, the ba79533 pattern).
+  flags; four-state markdown rendering pinned to the §Scorecard shape
+  copy (absent / zero-eligible / all-agreed / findings table, counts
+  related to `totals.passed`); rendered challenge-cost line (condition 4
+  at the presentation layer, not just the JSON); phase-boundary warning
+  line incl. the N = 0 variant; exit-code invariance; USAGE string.
+- **Extraction commit**: eval-command + shared-helper relocation verified
+  behavior-preserving (cli.test.ts imports unchanged, the ba79533
+  pattern, re-export pins covering the relocated helpers).
 - **Live acceptance** (operator-invoked, never CI): `node dist/cli.js eval
   --challenge` on the starter tasks with a real key — Claude as both
   primary and adversary, satisfying the E-4 acceptance clause; result
@@ -310,7 +474,15 @@ the acceptance test exists.
   by-construction resolution; aggregate-value/gate-vs-measurement framing;
   B's rejection; C fallback + trigger; the six arbiter conditions; the
   router-legality note (eval-layer verifier vs ADR-0016's security-layer
-  judge); accepted limitations verbatim.
+  judge); accepted limitations verbatim. **ADR-0020 is the interim
+  consumer of the challenge-rate metric** (definition + how to read it):
+  `docs/eval-methodology.md` does not exist yet — it is the separate
+  week-plan item that follows E-4 — and when written it must carry the
+  metric definition plus a **synthetic rendered example** of the
+  verification section (golden scorecards are gitignored, so no real one
+  is ever committed; without an example the portfolio audience never sees
+  the payoff). Until then the metric's definition lives in ADR-0020, not
+  in a pointer to a nonexistent file.
 - `docs/security-model.md`: adversary-is-injectable entry (d4 transfer,
   authority analysis: compromised adversary = noise never authority) +
   provider-pluggability precondition.

@@ -56,3 +56,33 @@ designer revision (A-minimal) → arbiter ruling. Disposition: **APPROVED
 4. Adversary cost mirrors totalCostUsd/unpricedTasks (never silently understated)
 5. C fallback trigger EOD 2026-07-16, with requirements-row deviation if invoked
 6. `confidence` dropped (or explicitly uncalibrated with revisit-if) — dropped
+
+## Round 2 — spec-level review (same panel roles, blind, on the committed spec text)
+
+Settled architecture unchallenged by all three reviewers. All findings were spec-precision gaps; all folded into the spec same-day.
+
+| # | Source | Finding | Resolution (spec §) |
+|---|---|---|---|
+| R2-1 | Skeptic CRIT / Constraint F-3 | Loop-shape contradiction: per-row challenge vs phase-boundary warning | TWO-PHASE pinned (all oracles, then challenges); retention, timing, crash semantics stated (§Runner integration) |
+| R2-2 | All three | AdversaryFn call channel unresolvable (only channel is agentic query(); bare = ungated tool-capable turn) | Pinned: wrap query() sans session, de-fanged by maxTurns:1 + deny-all PreToolUse hook (typed today); cost from total_cost_usd; allowedTools additive if plan verifies it (§Adversary model) |
+| R2-3 | Skeptic 3 / Constraint F-4 | Pass rows with resultText:null unhandled (gating-behavior tasks) | New status 'no-output': finding recorded, no call, cardinality holds (§Verifier contract, §Runner integration) |
+| R2-4 | Skeptic 5 / Constraint F-7 | Condition-1 artifact mismatch (wire response vs section) | Reconciled: condition 1 discharged at wire-response parse; section needs no load-time validator (nothing re-reads golden scorecards); TS construction + differential test pin the shape |
+| R2-5 | Constraint F-1 | Delimiting waved at; fixed delimiters invite breakout | Per-call random nonce boundary tokens (crypto.randomBytes) + origin labels (§Prompt hardening) |
+| R2-6 | Skeptic 2 | adversaryModelId unpopulatable through specced interfaces | Verifier gains adversaryModelId member; createVerifier deps carry it |
+| R2-7 | Skeptic 6 | Wire-format undefined cells (challenge w/o category; agree w/ category) | Two-branch oneOf: agree forbids category, challenge requires it; wrong combos = unparseable |
+| R2-8 | Skeptic 7 / Constraint F-8 | "Timeout" named but no mechanism/owner | Verifier-owned 60s race → call-failed; orphan discarded; may still bill → counts unpriced; hang surface recorded as limitation |
+| R2-9 | Skeptic 8 | Invariance test "identical" ambiguous (clock, meta, timing) | Injected clock + fake sessions required; deep-equal field identity on rows/totals + exit; two-phase makes row timing verifier-independent |
+| R2-10 | Skeptic 9 / Advocate 5 | Named consumer (eval-methodology.md) doesn't exist | ADR-0020 = interim metric consumer; eval-methodology (next week item) must carry metric + synthetic rendered example |
+| R2-11 | Skeptic 10 / Advocate 2 | Tri-state hides fourth state (zero eligible rows) | Four states pinned with rendered copy; counts always related to totals.passed; N=0 warning variant |
+| R2-12 | Skeptic 11 | Envelope widening is the natural-but-forbidden implementation | Intersection type pinned in the spec's own code block |
+| R2-13 | Skeptic 12 | redactSecrets migration surface understated | ~15 test call sites named; cleanForScorecard param deliberately stays optional (redteam), stated |
+| R2-14 | Skeptic 13 | unpricedChallenges conflates unpriced with no-spend | Pinned: verifier-error counts as unpriced (unknown ≠ zero); no-output counts in neither |
+| R2-15 | Skeptic 14 | "Solely oracle-derived" exit wording false today | Fixed: "unchanged — totals.failed===0 as today"; verification never contributes |
+| R2-16 | Constraint F-5 | Redaction failure on egress path unspecified | errorKind gains 'redaction-failed'; no call made; nothing egresses |
+| R2-17 | Constraint F-6 | No response size bound; parse order unstated | 128 KiB cap pre-parse; trim-only; parse→validate→read pinned; fenced JSON = unparseable |
+| R2-18 | Constraint F-9 / Advocate 6 | "Pure-move" extraction inaccurate (shared helpers, ESM cycle) | Honestly scoped: helpers relocate to cli/shared.ts same commit; cli.ts keeps dispatch + run/telemetry |
+| R2-19 | Constraint F-10 | Headline cost line would understate on --challenge runs | Rendered challenge-cost line required (condition 4 at presentation layer) |
+| R2-20 | Constraint F-11 | Redaction responsibility stated 3 ways | One sentence: runner redacts resultText; taskPrompt deliberately unredacted (repo-committed), said aloud |
+| R2-21 | Advocate 1 | Rendered section never shown | Concrete markdown example pinned in §Scorecard shape |
+| R2-22 | Advocate 3 | "Pointer to re-run" has no re-run command | Reworded to prompt-to-re-examine; no single-task selector recorded as limitation |
+| R2-23 | Advocate 4 | Challenge phase silent (hang perception) | Per-challenge onProgress lines pinned |
