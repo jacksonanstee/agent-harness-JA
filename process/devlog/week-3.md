@@ -200,3 +200,61 @@ is the steady state the gate exists to hold.
 
 Next: E-4 adversarial verification (design-first) and
 `docs/eval-methodology.md` close the week.
+
+## 2026-07-13 — E-4 adversarial verifier (design panel ×2 + Gemini → 11-task SDD → merge)
+
+E-4 shipped as PR #22 (squash to main `8cd8ad5`): `eval --challenge` runs a
+router-selected second Claude model as an adversarial reviewer over every
+oracle-passed golden task, reporting findings in a new `verification`
+scorecard section. Report-only **by construction**, not by promise —
+findings are closed `{status, category}` enums, and `rows[]`, `totals`, and
+the exit code are verifier-independent.
+
+The design fight was about what a "finding" is allowed to be. The skeptic's
+CRITICAL: prose findings would downgrade E-1's structural no-raw-output
+allowlist to procedural sanitization — one missed escape and a hostile
+adversary response walks into a rendered artifact. Resolution: enum
+confinement (an unknown enum is a per-row `verifier-error`, never a
+parse-time widening), with the honestly-priced consequence recorded in
+ADR-0020 that a single finding is a prompt to re-examine, not a diagnosis —
+the value lives in the aggregate challenge rate. Option B (persist raw
+output for investigability) died on the constraint reviewer's CRITICAL: it
+reverses ADR-0017 d6 and creates a new hostile-input surface. And
+"report-only" itself was challenged as "a sentence, not a property" — the
+answer is a CI-enforced differential invariance test pinning rows/totals/
+exit equality with and without the verifier. The external Gemini pass on
+the implementation plan earned its keep here: a shared mutable step-clock
+between the two invariance runs would have made them diverge; the plan now
+mandates fresh fakes per run.
+
+Security posture: the adversary is de-fanged — a bare SDK `query()` (never
+`createSession`; no memory/telemetry pollution), `maxTurns: 1`, and a
+deny-all `PreToolUse` hook pinned by a test that *invokes* the hook rather
+than asserting its presence. Prompt hardening is per-call random nonce
+delimiters around labelled untrusted payloads. `redactSecrets` promoted
+from optional to REQUIRED runner dep (ADR-0017's revisit-if M1, fired by
+the new egress path) — output is redacted before the adversary sees it, and
+a redaction failure means no call is made at all.
+
+Review layers again found different things. The whole-branch /review3
+caught a HIGH the per-task gates missed: an unguarded `verifier.challenge()`
+throw could discard a completed oracle run — guarded, plus the MEDIUM raw
+retention/ADR overclaim, all fixes independently verifier-confirmed. The
+milestone differential review (three parallel dimensions) came back
+SOUND-WITH-NITS, 0 crit/high/med: the CLI extraction verified as a
+byte-identical pure move, plain `eval` bit-for-bit main behavior, E-3
+surfaces zero-diff. Its best LOWs: unescaped `status` cells in the
+verification table (a hostile `Verifier` implementation could spoof rows)
+and non-finite `costUsd` rendering garbage — both fixed with tests
+(`dfca9d4`).
+
+Live acceptance (Claude as both primary and adversary): sonnet-4-6
+adversary over the 2 starter tasks, agreed 2/2, challenge cost $0.13, exit
+0. The C fallback (deferral ADR, trigger EOD 07-16) never fired. 835
+tests. Post-merge smoke on main: `redteam` exit 0 `GATE_FAILURE=none`
+(baseline still byte-matches), plain `eval` 2/2 pass $0.045 with the
+challenge section correctly absent.
+
+Next: `docs/eval-methodology.md` — the challenge-rate metric's real
+consumer (ADR-0020 is interim), the synthetic rendered example, and the
+exit-invariance-by-composition note — closes Week 3.
