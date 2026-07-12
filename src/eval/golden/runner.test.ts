@@ -1,12 +1,20 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
 import { createGoldenRunner, EvalUsageError } from './runner.js';
-import type { TaskSessionConfig } from './runner.js';
+import type { GoldenRunnerDeps, TaskSessionConfig } from './runner.js';
+import type { LoadOracleFn } from './oracle.js';
+import type {
+  ChallengeCategory,
+  ChallengeErrorKind,
+  ChallengeFinding,
+  ChallengeStatus,
+  Verifier,
+} from '../verifier/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = (name: string) => join(here, '__fixtures__', name);
@@ -48,6 +56,59 @@ function fakeSessionFactory(
 function fakeNow(): () => number {
   let t = 1_750_000_000_000;
   return () => (t += 100);
+}
+
+// Writes one minimal *.task.md per id into dir (phase-2 fixtures: oracle
+// pass/fail is controlled by the injected loadOracle fake below, not by
+// real sibling .oracle.mjs files, so no oracle files are needed on disk).
+function writeTasks(dir: string, ids: string[]): void {
+  for (const id of ids) {
+    writeFileSync(
+      join(dir, `${id}.task.md`),
+      ['---', `id: ${id}`, 'maxTurns: 1', '---', '', `Reply for ${id}.`, ''].join('\n'),
+    );
+  }
+}
+
+// A loadOracle fake keyed by the sibling oracle path's basename (== task id,
+// since writeTasks names files `${id}.task.md`), so oracle pass/fail is
+// controllable per task id without touching resultText content.
+function oracleFor(passIds: Set<string>): LoadOracleFn {
+  return (path: string) => {
+    const id = basename(path).replace(/\.oracle\.mjs$/, '');
+    return Promise.resolve(() => ({ pass: passIds.has(id) }));
+  };
+}
+
+// The fake verifier factory pinned in the task-6 brief: `script` maps taskId
+// to the finding it should produce; `calls` records `${taskId}:${redactedResultText}`
+// for every invocation, in call order.
+interface FakeVerifierScriptEntry {
+  status: ChallengeStatus;
+  category?: ChallengeCategory | null;
+  errorKind?: ChallengeErrorKind | null;
+  costUsd?: number | null;
+}
+
+function fakeVerifier(
+  script: Record<string, FakeVerifierScriptEntry>,
+): Verifier & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    adversaryModelId: 'fake-adversary',
+    async challenge({ taskId, redactedResultText }) {
+      calls.push(`${taskId}:${redactedResultText}`);
+      const s: FakeVerifierScriptEntry = script[taskId] ?? { status: 'agreed' };
+      const finding: ChallengeFinding = {
+        taskId,
+        status: s.status,
+        category: s.category ?? null,
+        errorKind: s.errorKind ?? null,
+      };
+      return { finding, costUsd: s.costUsd === undefined ? 0.01 : s.costUsd };
+    },
+  };
 }
 
 describe('createGoldenRunner run-level errors (exit-2 class)', () => {
@@ -283,5 +344,223 @@ describe('createGoldenRunner rows', () => {
     expect(lines[1]).toMatch(/^\[1\/3\] alpha … pass/);
     expect(lines[2]).toMatch(/^\[2\/3\] beta … fail \(oracle-fail\)/);
     expect(lines[3]).toMatch(/^\[3\/3\] broken\.task\.md … fail \(task-parse\)/);
+  });
+});
+
+describe('adversarial verification (E-4 phase 2)', () => {
+  it('runs the challenge phase only after every oracle has scored (case 1: two-phase ordering)', async () => {
+    const order: string[] = [];
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-order-'));
+    writeTasks(dir, ['t1', 't2']);
+    const sessionFactory = (): Session => ({
+      run: () => {
+        order.push('session');
+        return Promise.resolve(fakeResult());
+      },
+    });
+    const verifier: Verifier = {
+      adversaryModelId: 'fake-adversary',
+      async challenge({ taskId }) {
+        order.push(`challenge:${taskId}`);
+        return {
+          finding: { taskId, status: 'agreed', category: null, errorKind: null },
+          costUsd: 0.01,
+        };
+      },
+    };
+    const runner = createGoldenRunner({
+      createTaskSession: sessionFactory,
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['t1', 't2'])),
+      verifier,
+      now: fakeNow(),
+    });
+    await runner.run(dir);
+    // Both session runs (phase 1) precede both challenge calls (phase 2) —
+    // not just "eventually happens", but a hard ordering guarantee.
+    expect(order).toEqual(['session', 'session', 'challenge:t1', 'challenge:t2']);
+  });
+
+  it('challenges only oracle-pass rows (case 2: pass, oracle-fail, pass → 2 calls)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-passonly-'));
+    writeTasks(dir, ['a1', 'b2', 'c3']);
+    const verifier = fakeVerifier({});
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['a1', 'c3'])), // b2 oracle-fails
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(verifier.calls).toHaveLength(2);
+    expect(scorecard.verification?.findings.map((f) => f.taskId)).toEqual(['a1', 'c3']);
+  });
+
+  it('a pass row with resultText: null becomes a no-output finding, zero calls (case 3)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-nooutput-'));
+    writeTasks(dir, ['solo']);
+    const verifier = fakeVerifier({});
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ resultText: null })),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['solo'])),
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(verifier.calls).toHaveLength(0);
+    expect(scorecard.verification?.findings).toEqual([
+      { taskId: 'solo', status: 'no-output', category: null, errorKind: null },
+    ]);
+  });
+
+  it('a redactSecrets throw becomes verifier-error/redaction-failed, no call (case 4)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-redactthrow-'));
+    writeTasks(dir, ['solo']);
+    const verifier = fakeVerifier({});
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: () => {
+        throw new Error('redactor exploded');
+      },
+      loadOracle: oracleFor(new Set(['solo'])),
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    expect(verifier.calls).toHaveLength(0);
+    expect(scorecard.verification?.findings).toEqual([
+      { taskId: 'solo', status: 'verifier-error', category: null, errorKind: 'redaction-failed' },
+    ]);
+  });
+
+  it('sends the REDACTED text to the adversary, never the raw resultText (case 5)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-redacted-payload-'));
+    writeTasks(dir, ['solo']);
+    const verifier = fakeVerifier({});
+    const rawText = 'alpha and beta';
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ resultText: rawText })),
+      redactSecrets: (t) => ({ redacted: `REDACTED:${t}`, findings: [] }),
+      loadOracle: oracleFor(new Set(['solo'])),
+      verifier,
+      now: fakeNow(),
+    });
+    await runner.run(dir);
+    expect(verifier.calls[0]?.endsWith(`REDACTED:${rawText}`)).toBe(true);
+  });
+
+  it('orders findings by taskId and computes totals/costs correctly (case 6)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'golden-phase2-totals-'));
+    // Filenames sort f1 < f2 < f3 (phase-1 processing order), but their ids
+    // sort alpha < mike < zeta — the challenge phase must reorder by
+    // row.id, not carry over the phase-1 file-processing order.
+    const taskBody = (id: string) =>
+      ['---', `id: ${id}`, 'maxTurns: 1', '---', '', 'Reply.', ''].join('\n');
+    writeFileSync(join(dir, 'f1.task.md'), taskBody('zeta'));
+    writeFileSync(join(dir, 'f2.task.md'), taskBody('alpha'));
+    writeFileSync(join(dir, 'f3.task.md'), taskBody('mike'));
+    const verifier = fakeVerifier({
+      zeta: { status: 'agreed', costUsd: 0.01 },
+      alpha: { status: 'challenged', category: 'incorrect', costUsd: 0.02 },
+      mike: { status: 'verifier-error', errorKind: 'call-failed', costUsd: null },
+    });
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      // All three pass regardless of file/id naming — this case tests
+      // ordering and totals, not pass/fail branching.
+      loadOracle: () => Promise.resolve(() => ({ pass: true })),
+      verifier,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(dir);
+    const verification = scorecard.verification;
+    expect(verification?.findings.map((f) => f.taskId)).toEqual(['alpha', 'mike', 'zeta']);
+    expect(verification?.totals).toEqual({ agreed: 1, challenged: 1, verifierErrors: 1, noOutput: 0 });
+    expect(verification?.totalCostUsd).toBeCloseTo(0.03);
+    // mike's call was attempted (status !== 'no-output', errorKind !== 'redaction-failed')
+    // and returned costUsd: null — the one attempted-but-unpriced case.
+    expect(verification?.unpricedChallenges).toBe(1);
+    expect(verification?.adversaryModelId).toBe('fake-adversary');
+  });
+
+  it('omits the verification key entirely when no verifier dep is supplied (case 7)', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    expect(scorecard.verification).toBeUndefined();
+    expect('verification' in scorecard).toBe(false);
+  });
+
+  it('DIFFERENTIAL INVARIANCE: verifier presence never changes rows/totals (case 8, arbiter condition 2)', async () => {
+    // Each call to buildDeps() mints a FRESH clock and FRESH session fake —
+    // a shared mutable counter across both runs would carry state into run
+    // 2 and diverge the timestamps, failing this test for the wrong reason.
+    const buildDeps = (withVerifier: boolean): GoldenRunnerDeps => {
+      const base: GoldenRunnerDeps = {
+        createTaskSession: fakeSessionFactory(fakeResult()),
+        redactSecrets: (t: string) => identityRedact(t),
+        now: fakeNow(),
+      };
+      return withVerifier ? { ...base, verifier: fakeVerifier({}) } : base;
+    };
+    const without = await createGoldenRunner(buildDeps(false)).run(fixtures('run'));
+    const withV = await createGoldenRunner(buildDeps(true)).run(fixtures('run'));
+
+    expect(withV.rows).toEqual(without.rows);
+    expect(withV.totals).toEqual(without.totals);
+    expect(withV.totals.failed).toBe(without.totals.failed); // exit-derivation equality
+    expect(Object.keys(withV).sort()).toEqual([...Object.keys(without), 'verification'].sort());
+    expect(without.verification).toBeUndefined();
+    expect(withV.verification).toBeDefined();
+  });
+
+  it('emits phase-boundary progress lines: warning(N), N=0 variant, one [challenge i/N] per call (case 9)', async () => {
+    // N > 0: warning + one indexed line per adversary-eligible task.
+    const dirN = mkdtempSync(join(tmpdir(), 'golden-phase2-progress-'));
+    writeTasks(dirN, ['a1', 'b2']);
+    const verifierN = fakeVerifier({
+      a1: { status: 'agreed' },
+      b2: { status: 'challenged', category: 'incorrect' },
+    });
+    const linesN: string[] = [];
+    const runnerN = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['a1', 'b2'])),
+      verifier: verifierN,
+      now: fakeNow(),
+    });
+    await runnerN.run(dirN, { onProgress: (l) => linesN.push(l) });
+    expect(linesN).toContain(
+      'warning: --challenge adds 2 adversary call(s) (one per passed task with output)',
+    );
+    expect(linesN).toContain('[challenge 1/2] a1 … agreed');
+    expect(linesN).toContain('[challenge 2/2] b2 … challenged');
+
+    // N = 0: every pass row is no-output, so no adversary calls are made and
+    // no [challenge i/N] lines appear.
+    const dirZero = mkdtempSync(join(tmpdir(), 'golden-phase2-progress-zero-'));
+    writeTasks(dirZero, ['a1', 'b2']);
+    const verifierZero = fakeVerifier({});
+    const linesZero: string[] = [];
+    const runnerZero = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ resultText: null })),
+      redactSecrets: (t: string) => identityRedact(t),
+      loadOracle: oracleFor(new Set(['a1', 'b2'])),
+      verifier: verifierZero,
+      now: fakeNow(),
+    });
+    await runnerZero.run(dirZero, { onProgress: (l) => linesZero.push(l) });
+    expect(linesZero).toContain(
+      '--challenge: no adversary calls needed (0 passed tasks with output)',
+    );
+    expect(linesZero.some((l) => l.startsWith('[challenge'))).toBe(false);
+    expect(verifierZero.calls).toHaveLength(0);
   });
 });
