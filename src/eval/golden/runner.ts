@@ -34,7 +34,7 @@ export interface GoldenRunnerDeps {
   /** Composition root wires the real createSession; tests inject fakes. */
   createTaskSession: (config: TaskSessionConfig) => Session;
   /** Every string entering a scorecard row passes through this (spec decision #1). */
-  redactSecrets?: (text: string) => RedactResult;
+  redactSecrets: (text: string) => RedactResult;
   /** Injectable for error-path tests; defaults to the real dynamic import. */
   loadOracle?: LoadOracleFn;
   /** Injected clock (epoch ms) for deterministic tests. */

@@ -3,12 +3,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
 import { createGoldenRunner, EvalUsageError } from './runner.js';
 import type { TaskSessionConfig } from './runner.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = (name: string) => join(here, '__fixtures__', name);
+
+// No-op redactor: the identity fake used everywhere a test doesn't care
+// about redaction behavior specifically (redactSecrets is a required dep).
+const identityRedact = (text: string): RedactResult => ({ redacted: text, findings: [] });
 
 function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
   return {
@@ -46,7 +51,11 @@ function fakeNow(): () => number {
 }
 
 describe('createGoldenRunner run-level errors (exit-2 class)', () => {
-  const deps = { createTaskSession: fakeSessionFactory(fakeResult()), now: fakeNow() };
+  const deps = {
+    createTaskSession: fakeSessionFactory(fakeResult()),
+    redactSecrets: (t: string) => identityRedact(t),
+    now: fakeNow(),
+  };
 
   it('throws EvalUsageError for a missing task dir', async () => {
     const runner = createGoldenRunner(deps);
@@ -62,6 +71,7 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
     const calls: TaskSessionConfig[] = [];
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     await expect(runner.run(fixtures('dup'))).rejects.toThrow(/duplicate task id/);
@@ -73,6 +83,7 @@ describe('createGoldenRunner rows', () => {
   it('scores pass/fail/parse-fail rows and keeps going (per-task isolation)', async () => {
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
       harnessVersion: '0.1.0-test',
     });
@@ -120,6 +131,7 @@ describe('createGoldenRunner rows', () => {
     const calls: TaskSessionConfig[] = [];
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     await runner.run(fixtures('run'));
@@ -133,6 +145,7 @@ describe('createGoldenRunner rows', () => {
       createTaskSession: () => ({
         run: () => Promise.reject(new Error('SDK exploded')),
       }),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     const scorecard = await runner.run(fixtures('run'));
@@ -148,6 +161,7 @@ describe('createGoldenRunner rows', () => {
       loadOracle: () => Promise.resolve(() => {
         throw new Error('oracle bug');
       }),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     const scorecard = await runner.run(fixtures('run'));
@@ -164,6 +178,7 @@ describe('createGoldenRunner rows', () => {
       createTaskSession: fakeSessionFactory(fakeResult()),
       loadOracle: () =>
         Promise.resolve((() => ({ pass: 1 })) as unknown as () => { pass: boolean }),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     const scorecard = await runner.run(fixtures('run'));
@@ -176,6 +191,7 @@ describe('createGoldenRunner rows', () => {
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult(), calls),
       loadOracle: () => Promise.reject(new Error('no such oracle')),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     const scorecard = await runner.run(fixtures('run'));
@@ -208,6 +224,7 @@ describe('createGoldenRunner rows', () => {
     );
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     const scorecard = await runner.run(dir);
@@ -229,6 +246,7 @@ describe('createGoldenRunner rows', () => {
     const calls: TaskSessionConfig[] = [];
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     await expect(runner.run(dir)).rejects.toThrow(/duplicate task id/);
@@ -257,6 +275,7 @@ describe('createGoldenRunner rows', () => {
     const lines: string[] = [];
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
     await runner.run(fixtures('run'), { onProgress: (l) => lines.push(l) });
