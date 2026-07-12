@@ -158,12 +158,58 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison.
 - **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil. Each case includes a `source` field citing the public research it draws from.
 
-#### `eval/adversarial-verifier`
+#### `eval/verifier`
 
-- **Owns:** the two-pass verification pattern (primary model produces output → adversary model challenges it → reconcile).
-- **Public API:** `verify(primaryOutput: string, ctx: VerificationContext): VerificationResult`.
-- **Depends on:** the router (for adversary model selection).
-- **Design notes:** Adversary model defaults to a different family than the primary (e.g. Haiku vs Sonnet) to reduce shared-failure modes. Pluggable to external models in v2.
+- **Owns:** the two-pass adversarial verification pattern over golden-run
+  outputs — offline, report-only, enum-confined. A second model challenges
+  each oracle-**pass** row's output; findings never flip an oracle verdict,
+  never touch `totals`/`pass`/`failureKind`, never move the exit code
+  (authority stays entirely with the deterministic oracle — the ADR-0016
+  tighten-only doctrine, transposed to zero authority instead of one-way
+  authority).
+- **Public API:** `createVerifier(deps: { adversary: AdversaryFn;
+  adversaryModelId: string }): Verifier`, where `Verifier.challenge(input:
+  { taskId, taskPrompt, redactedResultText }): Promise<{ finding:
+  ChallengeFinding; costUsd: number | null }>`. `ChallengeFinding` is a
+  closed-enum record — `{ taskId, status: 'agreed' | 'challenged' |
+  'verifier-error' | 'no-output', category: ChallengeCategory | null,
+  errorKind: ChallengeErrorKind | null }` — never adversary prose; no field
+  anywhere in the type can carry free text from the adversary's response
+  (ADR-0017 decision 6's no-raw-output guarantee, extended by construction
+  rather than by sanitization).
+- **Depends on:** `eval/golden`'s runner, which composes it as an optional
+  `verifier` dep and drives a **two-phase run** — phase 1 (unchanged)
+  scores every task with its oracle; phase 2, only when a `verifier` is
+  present, challenges each oracle-pass row in taskId order. The verifier
+  itself imports router types only, at the composition root
+  (`src/cli/eval-command.ts`) — legal, since `eval` already depends on
+  `harness` in the dependency direction below; this is a different seam
+  from the security-layer LLM judge (ADR-0016 decision 5 bars the router
+  there specifically, to keep security below harness — it does not bar
+  eval, which sits above harness, from using it).
+- **Design notes:** the adversary is routed through a **fixed
+  review-shaped descriptor** — `{shape: 'review', sensitivity: 'low',
+  expected_tokens: 8_000}` → sonnet-tier — never a "different family than
+  the primary" selection, because `route()` has no exclusion or
+  relative-selection channel to build one from; same-model overlap with the
+  primary is possible and recorded on the scorecard (`adversaryModelId`
+  next to `meta.models`), not hidden. The call channel wraps the SDK's
+  `query()` directly (never `createSession`, to avoid memory/telemetry
+  pollution) and is de-fanged with `maxTurns: 1` plus a deny-all
+  `PreToolUse` hook — a bare, ungated `query()` call over
+  attacker-influenceable content would be strictly worse than the
+  model-facing enforcement gap named in `security-model.md` R-4. Findings
+  are surfaced only in a golden-scoped `verification` section
+  (`GoldenScorecard`'s own type, never the shared scorecard envelope or a
+  row field) behind the `eval --challenge` flag; the CLI's pre-adversary-
+  spend warning and the section's four rendered states (not run / zero
+  eligible / all-agreed / findings table) are pinned in
+  [ADR-0020](./decisions/0020-adversarial-verifier.md), which is also the
+  interim consumer of the reported (never gated) challenge-rate metric.
+  **Provider-pluggability is out of scope for v1** — the routing table is
+  structurally all-Anthropic, so router-pinned selection is itself a
+  same-provider control until a redact-before-egress step is a hard
+  precondition for sending primary output to a different provider.
 
 ## Data flow: a single agent turn
 
@@ -267,6 +313,19 @@ These are not yet resolved. Each will be answered in an ADR before the affected 
 
 3. **Should hooks be allowed to mutate tool arguments / results, or only observe + accept/deny?** Mutation is powerful but couples hooks to internal state. Likely answer: observe + accept/deny only in v1.0; mutation deferred to v1.x with a stricter typed surface. ADR pending.
 
-4. **Where does the adversarial verifier's adversary model come from?** A second Claude model (Haiku reviewing Sonnet, Sonnet reviewing Opus) is the simplest answer. Whether to support an entirely different family (e.g. Gemini) in v1.0 is open — leaning no, since cross-provider would require multi-SDK support that is explicitly deferred.
+4. **Where does the adversarial verifier's adversary model come from?**
+   **Resolved in [ADR-0020](./decisions/0020-adversarial-verifier.md):** a
+   second Claude model, selected by routing a fixed review-shaped
+   descriptor (`{shape: 'review', sensitivity: 'low', expected_tokens:
+   8_000}`) through the existing router — not a "different family than the
+   primary" rule, since `route()` has no exclusion or relative-selection
+   channel to build one from; same-model overlap with the primary is
+   possible and recorded on the scorecard, not engineered away. No
+   cross-provider support in v1: the routing table is structurally
+   all-Anthropic, so router-pinned selection is itself a same-provider
+   control, and a non-Anthropic adversary would egress primary output
+   (which may carry un-rewritten secrets, R-4) to a new trust domain with
+   no redaction gate in front of it. Revisit if a redact-before-egress step
+   is ever built as a hard precondition for a cross-provider adversary.
 
 These open questions are part of the demonstrated thinking. They are not weaknesses to hide — they are the work-in-progress that proves the architecture was reasoned about, not copied.
