@@ -116,4 +116,12 @@ describe('eslint layering rules', () => {
     );
     expect(violations.length).toBeGreaterThan(0);
   });
+
+  it('blocks eval importing the CLI src/cli/ subdirectory (extraction, E-3 CG8)', async () => {
+    const violations = await lintViolations(
+      'src/eval/golden/bad-cli-dir-import.ts',
+      "import { USAGE } from '../../cli/shared.js';\nUSAGE;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
 });

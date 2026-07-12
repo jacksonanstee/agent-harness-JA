@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scan } from '../../security/index.js';
-import { CORPUS, runRedteam } from './index.js';
+import { CORPUS, REDTEAM_ARM_LABEL, runRedteam } from './index.js';
 
 /**
  * Non-gating drift diagnostic (ADR-0018 decision 8; decision log CG7).
@@ -17,7 +17,10 @@ import { CORPUS, runRedteam } from './index.js';
  */
 describe('red-team drift diagnostic (non-gating)', () => {
   it('prints live-vs-expected drift and the measured detection rate, without asserting on either', () => {
-    const scorecard = runRedteam(CORPUS, scan, { armLabel: 'security-on (live, drift check)', now: () => 0 });
+    const scorecard = runRedteam(CORPUS, scan, {
+      armLabel: `${REDTEAM_ARM_LABEL} (live, drift check)`,
+      now: () => 0,
+    });
 
     for (const row of scorecard.rows) {
       if (row.verdict !== row.expected) {

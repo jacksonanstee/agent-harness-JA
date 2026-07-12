@@ -30,9 +30,9 @@ directions, so one number cannot serve both.
 Therefore the design splits them:
 
 - **The CI gate enforces hard invariants only:** `falseBlockCount === 0` (no
-  benign input is ever blocked), plus — once E-3 lands — no regression
-  against the committed baseline. At E-2 ship time, before E-3 exists, the
-  effective gate is `falseBlockCount === 0` alone.
+  benign input is ever blocked), plus — since E-3 landed (ADR-0019) — no
+  drift against the committed baseline. At E-2 ship time, before E-3
+  existed, the effective gate was `falseBlockCount === 0` alone.
 - **Detection rate is a reported metric**, written into the scorecard and
   read by a human or by the ADR-0016 §6 S-5 decision. It never blocks a
   merge. An honest `missed` row lands green.
@@ -147,13 +147,17 @@ read.
    shape anyone depends on.
 
 7. **Exit-code contract differs from `eval`'s, by design.** `cli redteam`
-   returns `0` = gate passed, `1` = `falseBlockCount > 0` (a hard invariant
-   violated), `2` = usage/write error. This is **not** the same meaning as
-   `eval`'s exit `1` (ADR-0017 §4: "at least one row failed", i.e. any
-   `oracle-fail`/`missed`-equivalent row). Redteam's `1` fires only on the
-   one gate-load-bearing failure kind (`false-block`); a `missed` row alone
-   never produces exit `1`. Consumers scripting against these exit codes
-   must not assume the two commands' `1` means the same thing.
+   returns `0` = gate passed, `1` = gate failure, `2` = usage/write error.
+   This is **not** the same meaning as `eval`'s exit `1` (ADR-0017 §4: "at
+   least one row failed", i.e. any `oracle-fail`/`missed`-equivalent row).
+   *(Amended by ADR-0019, which added drift as a second exit-1 cause:)*
+   redteam's `1` fires on `falseBlockCount > 0` (a hard invariant violated)
+   and/or on any drift against the committed baseline, the two causes
+   distinguished by the pinned `GATE_FAILURE=` line rather than a new exit
+   code; a `missed` row alone still never produces exit `1` — an honest new
+   miss gates only until its baseline row is committed. Consumers scripting
+   against these exit codes must not assume the two commands' `1` means the
+   same thing.
 
 8. **Recalibration policy, with a named adjudicator.** Editing a corpus
    case's `expected` verdict (or its `category`) is legitimate **only**
@@ -169,7 +173,11 @@ read.
    each case's live verdict and prints any drift from `expected`, so a
    silent expectation edit with no corresponding scan-side change shows up
    in CI output for the maintainer to notice and question, even though it
-   does not fail the build.
+   does not fail the build. *(ADR-0019 note:)* recalibration edits now also
+   surface **mechanically** — an `expected` edit changes the row bytes, so
+   the regression gate fails until the same PR commits the baseline drift,
+   classified `recalibration` in the report. The *justification* judgment
+   remains human; E-3 only makes the edit visible.
 
 9. **E-2 ship-window limitation: block→ask softening is gate-invisible
    until E-3.** Because pass/fail is detection-based (decision 2), a
@@ -185,9 +193,13 @@ read.
    S-5 decision must read the strength split, not the bare detection rate**
    — a 92.5%-detected corpus that is mostly `ask` is a materially weaker
    security posture than one that is mostly `block`, even though both round
-   to the same headline number. E-3 converts this line into an actual gate
-   by diffing the committed baseline; until then, this is a named,
-   time-boxed weakness, not an oversight.
+   to the same headline number. *(Closed by ADR-0019, 2026-07-12:)* E-3
+   landed and converted this line into an actual gate by diffing the
+   committed baseline — the window this decision named is now shut. The
+   clarification that survives E-3: the detection *level* is never gated;
+   the *delta* now always is (an honest new miss lands green **after** its
+   baseline row is committed — the new-case report message makes the loop
+   legible).
 
 10. **`scan()` has no runtime time budget.** It is pure, synchronous regex
     matching with no timeout, no abort channel, and no per-call cost. The
@@ -223,9 +235,10 @@ read.
 
 ### Negative / accepted
 
-- Block→ask softening is invisible to CI until E-3 ships (decision 9).
-  Accepted as a named, time-boxed weakness with an interim human-readable
-  defense (the strength line), not silently deferred.
+- Block→ask softening was invisible to CI until E-3 shipped (decision 9).
+  Accepted at the time as a named, time-boxed weakness with an interim
+  human-readable defense (the strength line), not silently deferred —
+  and closed on schedule by ADR-0019.
 - The recalibration policy (decision 8) has no mechanical enforcement — a
   maintainer could edit `expected` without a genuine rule-confidence
   justification and nothing but the non-gating drift print and personal
@@ -273,9 +286,9 @@ read.
 
 ## Revisit if
 
-- E-3 (the regression gate) lands — the strength split (decision 9) becomes
-  an actual gated comparison against the committed baseline, closing the
-  ship-window limitation.
+- ~~E-3 (the regression gate) lands — the strength split (decision 9)
+  becomes an actual gated comparison against the committed baseline,
+  closing the ship-window limitation.~~ **Fired 2026-07-12: ADR-0019.**
 - The three known misses (`indirect-09`, `jailbreak-03`, `exfil-02`) — or
   the broader jailbreak/paraphrase-persona gap they expose — motivate
   building the ADR-0016 S-5 judge; that decision should cite this ADR's

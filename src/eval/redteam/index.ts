@@ -6,7 +6,18 @@ export type {
   RedteamScorecard,
   RedteamTotals,
 } from './runner.js';
+export {
+  BaselineError,
+  classifyDrift,
+  loadBaseline,
+  MAX_BASELINE_BYTES,
+  normalizeForBaseline,
+  refuseSymlink,
+  renderDriftReport,
+  totalsMismatchDetail,
+} from './baseline.js';
+export type { BaselineMeta, BaselineScorecard, DriftFinding, DriftKind } from './baseline.js';
 export { toRedteamMarkdown } from './markdown.js';
 export { CORPUS } from './corpus.js';
-export { CATEGORIES } from './types.js';
+export { CATEGORIES, REDTEAM_ARM_LABEL } from './types.js';
 export type { Category, CorpusCase } from './types.js';

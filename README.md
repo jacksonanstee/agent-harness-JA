@@ -48,8 +48,11 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # Run the agent
 npx agent-harness-ja run
 
-# Run the golden eval suite (red-team corpus lands in E-2)
+# Run the golden eval suite
 npx agent-harness-ja eval
+
+# Run the keyless red-team gate (fails on ANY drift vs the committed baseline — see docs/decisions/0019)
+npm run redteam
 
 # Export telemetry as JSONL (filter by --session / --type)
 npx agent-harness-ja telemetry export
