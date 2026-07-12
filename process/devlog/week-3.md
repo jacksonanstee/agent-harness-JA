@@ -140,3 +140,63 @@ script, never a looser proxy. Fixed, both legs green, 706 tests.
 Next: E-3 deterministic regression gate — it diffs this scorecard's
 `producer: redteam` canonical JSON and fails CI on drift, converting
 E-2's thin gate into a real one.
+
+## 2026-07-12 — E-3 regression gate (design → 12-task SDD → merge)
+
+E-3 shipped as PR #21: `cli redteam` is now compare-by-default against a
+committed canonical-JSON baseline (`eval/redteam/baseline.json`), and CI
+fails on *any* behaviour drift — ADR-0018 decision 9's named window
+(block→ask softening invisible to the gate) is closed on schedule.
+
+The load-bearing design choice, made before any code and recorded in
+ADR-0019: **fail on any drift, improvements included.** The surveyed
+consensus (promptfoo, Braintrust, Semgrep/gitleaks baselines, Jest
+snapshot doctrine, Betterer) is an asymmetric ratchet — weakenings fail,
+improvements warn. The ratchet has a latent hole: an unrecorded
+improvement leaves the committed baseline stale, and a later slide back
+to the recorded state diffs clean. Betterer papers over it by
+auto-committing; our CI can't commit, so the honest equivalent is
+byte-equality with reality, always. The asymmetry lives in the
+*messaging*: every drifted row is classified (regression / improvement /
+new-case / recalibration / envelope) with a per-class remedy line, so a
+red gate tells the contributor exactly which kind of red it is — an
+honestly-added missed case gets "update the baseline to record it",
+never "curate the case away."
+
+The baseline itself is treated as hostile input (the attacker model puts
+a malicious cloned repo in scope, and this file is the keyless gate's
+first read of repo-controlled data): symlink refusal, stat-before-read
+size cap, an exact ajv field allowlist, id-charset revalidation, and
+Map-based row pairing. Review earned its keep twice here. The overnight
+build's own gate caught a CRITICAL in the update path — `writeFileSync`
+through an unchecked `${path}.tmp` follows a repo-committed symlink, a
+deterministic arbitrary-file overwrite, fixed with O_EXCL and a tmp-path
+symlink check. And the final review panel caught the docs *overclaiming*
+the defenses: the id charset was credited with excluding
+`constructor` — it doesn't (`^[a-z0-9][a-z0-9-]{0,63}$` matches it
+fine); the real prototype-key immunity is the Map pairing, and the docs
+now attribute it honestly, with a rule for future code: index rows by
+Map, never by plain object.
+
+The milestone differential review (whole branch vs main) came back
+SOUND-WITH-NITS with the killer scenario — a crafted baseline making the
+gate exit 0 while behaviour drifted — closed by construction: the
+absolute `falseBlockCount === 0` gate and the independent totals
+backstop read only the fresh run, never the baseline, so nothing an
+attacker commits can suppress them.
+
+Process note, recorded in lessons: resuming the plan at "Task 9 done"
+revealed the task was half-landed — the commit message claimed the task,
+the commit contained one of its three files. Commit messages lie by
+omission; when resuming a plan, diff the task's file list against
+`git show --stat` before trusting the checkbox.
+
+Merged squash to main (`bbffd01`), 784 tests, both CI legs green under
+the new branch protection (require-branches-up-to-date, itself an
+ADR-0019 MUST — two concurrent baseline-updating PRs can merge cleanly
+into a baseline neither generated). Live smoke on merged main: exit 0,
+`GATE_FAILURE=none` — the committed baseline byte-matches reality, which
+is the steady state the gate exists to hold.
+
+Next: E-4 adversarial verification (design-first) and
+`docs/eval-methodology.md` close the week.
