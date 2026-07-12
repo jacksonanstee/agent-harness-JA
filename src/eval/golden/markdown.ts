@@ -46,7 +46,7 @@ function verificationLines(scorecard: GoldenScorecard): string[] {
   const lines = [
     '## Adversarial challenge (report-only — never affects pass/fail or exit codes)',
     '',
-    `Adversary: ${verification.adversaryModelId} · challenged ${vt.challenged} / agreed ${vt.agreed} / errors ${vt.verifierErrors} / no-output ${vt.noOutput}, of ${totals.passed} passed tasks`,
+    `Adversary: ${escapeCell(verification.adversaryModelId)} · challenged ${vt.challenged} / agreed ${vt.agreed} / errors ${vt.verifierErrors} / no-output ${vt.noOutput}, of ${totals.passed} passed tasks`,
     `Challenge cost: ${money(verification.totalCostUsd)} (${verification.unpricedChallenges} unpriced)`,
   ];
   const nonAgreed = verification.findings.filter((f) => f.status !== 'agreed');

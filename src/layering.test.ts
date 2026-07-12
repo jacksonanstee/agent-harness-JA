@@ -124,4 +124,12 @@ describe('eslint layering rules', () => {
     );
     expect(violations.length).toBeGreaterThan(0);
   });
+
+  it('blocks src/eval/verifier (E-4) importing the CLI composition root — proves the eval-ban glob covers the new subdir', async () => {
+    const violations = await lintViolations(
+      'src/eval/verifier/bad-cli-import.ts',
+      "import { main } from '../../cli.js';\nmain;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
 });

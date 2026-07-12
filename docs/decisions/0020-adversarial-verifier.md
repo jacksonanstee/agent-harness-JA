@@ -163,8 +163,9 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   from a live agent run). **The delimiting mechanism is per-call random
   boundary tokens**, not a fixed delimiter: `<<<UNTRUSTED-{nonce}>>> …
   <<<END-UNTRUSTED-{nonce}>>>`, `nonce` = 16 hex chars from
-  `crypto.randomBytes` per challenge call
-  (`src/eval/verifier/prompt.ts:buildChallengePrompt`), with a label
+  `crypto.randomBytes(8)` per challenge call — the default `randomHex`
+  (`src/eval/verifier/verifier.ts:createVerifier`), injected into
+  `buildChallengePrompt` (`src/eval/verifier/prompt.ts`), with a label
   sentence naming each payload's origin. A payload cannot contain a boundary
   it has never seen — this closes the payload-contains-delimiter breakout
   that any fixed delimiter invites. The oracle `.mjs` source is **never**
@@ -521,7 +522,12 @@ fallout) were confirmed clean, not defects.
   the option that fixed it (B) died on a worse CRITICAL (§1, §2).
 - **No ground truth for finding quality.** The adversary's challenge rate is
   unmeasured and uncalibrated at ship time. Enum confinement bounds the
-  blast radius (a bad adversary produces noise, never authority); nothing
+  blast radius (a bad adversary produces noise, never authority — the R-5
+  shape: `docs/security-model.md` §6's residual-risk table records the same
+  compromise-bounded-by-construction pattern for ADR-0016's judge ("tighten-
+  only authority converts compromise into false positives at worst"); this
+  verifier's report-only, zero-authority design is the same shape one rung
+  further down — noise, never authority, at any severity); nothing
   cures it. Revisit-if: enough live `--challenge` runs accumulate to judge
   the category enum and challenge rate against human review (§12).
 - **Oracle-fail rows are never challenged** (scope limit, §5) — the only

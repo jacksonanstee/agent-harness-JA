@@ -146,6 +146,19 @@ describe('toMarkdown — verification section', () => {
     expect(md).toContain('Challenge cost: $0.0312 (0 unpriced)');
   });
 
+  it('escapes the adversaryModelId in the summary line (defense-in-depth, review3 LOW L-1)', () => {
+    // adversaryModelId is router-derived in production (never attacker
+    // input), but the summary line renders it unescaped — escapeCell is
+    // identity for real model ids, so this is defense-in-depth only.
+    const card: GoldenScorecard = {
+      ...makeCard([passRow]),
+      verification: sectionFixture({ adversaryModelId: 'claude|sonnet\n-4-6' }),
+    };
+    const md = toMarkdown(card);
+    expect(md).toContain('Adversary: claude\\|sonnet -4-6');
+    expect(md).not.toContain('Adversary: claude|sonnet\n-4-6');
+  });
+
   it('escapes pipes in finding taskId cells (Markdown injection)', () => {
     const findings: ChallengeFinding[] = [
       { taskId: 'a|b', status: 'challenged', category: 'incorrect', errorKind: null },

@@ -130,6 +130,51 @@ interface ChallengePhaseDeps {
   verifier: Verifier;
 }
 
+/** A per-entry challenge outcome: the finding to record plus its known cost
+ *  (null when unknown/unpriced), before totals are folded in by the caller. */
+interface ChallengeOutcome {
+  finding: ChallengeFinding;
+  costUsd: number | null;
+}
+
+/**
+ * Redacts one row's resultText, then calls the verifier — both stages
+ * guarded, both failure modes collapsing to the same `verifier-error`
+ * contract so a throw from either can never escape phase 2 (review3 HIGH:
+ * `Verifier` is a plain interface with no non-throwing contract; ADR-0020
+ * §4's "adversary failure can never alter the authoritative result" floor
+ * applies to a call that throws, not only one that resolves with an error
+ * shape). Only called for entries whose `resultText` is non-null — the
+ * caller handles the `no-output` case itself.
+ */
+async function challengeOutput(
+  entry: ScoredRow,
+  deps: ChallengePhaseDeps,
+): Promise<ChallengeOutcome> {
+  const taskId = entry.row.id;
+  let redacted: RedactResult;
+  try {
+    redacted = deps.redactSecrets(entry.resultText as string);
+  } catch {
+    return {
+      finding: { taskId, status: 'verifier-error', category: null, errorKind: 'redaction-failed' },
+      costUsd: null,
+    };
+  }
+  try {
+    return await deps.verifier.challenge({
+      taskId,
+      taskPrompt: entry.prompt ?? '',
+      redactedResultText: redacted.redacted,
+    });
+  } catch {
+    return {
+      finding: { taskId, status: 'verifier-error', category: null, errorKind: 'call-failed' },
+      costUsd: null,
+    };
+  }
+}
+
 /**
  * Phase 2 (E-4): challenge oracle-pass rows, ordered by row id, AFTER every
  * oracle has scored (phase 1's durationMs is already finalized — this phase
@@ -146,8 +191,7 @@ async function runChallengePhase(
   const eligible = scored
     .filter((s) => s.row.pass === true)
     .sort((a, b) => (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
-  const withOutput = eligible.filter((s) => s.resultText !== null);
-  const total = withOutput.length;
+  const total = eligible.filter((s) => s.resultText !== null).length;
   onProgress?.(
     total > 0
       ? `warning: --challenge adds ${total} adversary call(s) (one per passed task with output)`
@@ -166,35 +210,7 @@ async function runChallengePhase(
     }
     i += 1;
 
-    let redacted: RedactResult;
-    try {
-      redacted = deps.redactSecrets(entry.resultText);
-    } catch {
-      const finding: ChallengeFinding = {
-        taskId, status: 'verifier-error', category: null, errorKind: 'redaction-failed',
-      };
-      findings.push(finding);
-      onProgress?.(`[challenge ${i}/${total}] ${taskId} … ${finding.status}`);
-      continue;
-    }
-
-    // Verifier is a plain interface with no non-throwing contract; a
-    // throwing implementation must not escape run() — the same
-    // "adversary failure can never alter the authoritative result" floor
-    // (ADR-0020 §4) applies to a call that throws, not only one that
-    // resolves with an error shape (review3 HIGH).
-    let finding: ChallengeFinding;
-    let costUsd: number | null;
-    try {
-      ({ finding, costUsd } = await deps.verifier.challenge({
-        taskId,
-        taskPrompt: entry.prompt ?? '',
-        redactedResultText: redacted.redacted,
-      }));
-    } catch {
-      finding = { taskId, status: 'verifier-error', category: null, errorKind: 'call-failed' };
-      costUsd = null;
-    }
+    const { finding, costUsd } = await challengeOutput(entry, deps);
     findings.push(finding);
     onProgress?.(`[challenge ${i}/${total}] ${taskId} … ${finding.status}`);
     if (costUsd === null) {
