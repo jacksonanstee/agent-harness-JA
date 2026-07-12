@@ -140,6 +140,20 @@ themselves:
   `canonicalizePath` now folds case on darwin/win32 (accepting conflation on
   opt-in case-sensitive volumes — R-6).
 
+**The committed red-team baseline is treated as hostile input.**
+`eval/redteam/baseline.json` (ADR-0019) is the keyless gate command's first
+read of repo-controlled data, and a malicious cloned repo is in scope (§2).
+Load order: size cap before read (1 MB, `stat` first), symlink refusal on
+file and parent, full structural validation against an exact ajv field
+allowlist (never just the discriminators), every baseline row id
+re-validated against the corpus id charset (`^[a-z0-9][a-z0-9-]{0,63}$` —
+the fresh side is guarded inside `runRedteam`, but the baseline side comes
+from a file and bypasses that guard, so it gets its own check, which also
+excludes `__proto__`/`constructor` as ids), `Map`-based row pairing (never
+a plain-object index), and the drift report written through the CLI's
+`sanitizeForTerminal`. A malformed or mismatched baseline exits 2 with a
+typed message, never a best-effort diff or a mid-diff TypeError.
+
 Excerpts are stripped of bidi controls before logging (Trojan-Source,
 CVE-2021-42574), so a hostile payload cannot visually reorder the audit trail
 that describes it.
@@ -264,3 +278,4 @@ not live values:
 | [0014](./decisions/0014-declarative-permission-model.md) | allow/ask/deny permission model, sticky deny |
 | [0015](./decisions/0015-sandbox-pre-tool-gate.md) | Sandbox as pre-tool gate, intersection merge |
 | [0016](./decisions/0016-llm-judge-design-deferred.md) | Judge design locked (tighten-only), implementation deferred |
+| [0019](./decisions/0019-regression-gate.md) | Red-team regression gate; committed baseline loaded as hostile input |

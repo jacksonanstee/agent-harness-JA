@@ -38,7 +38,7 @@ Requirements are split into three layers matching the architecture (harness / se
 |---|---|---|---|
 | E-1 | MUST | A `harness eval` command runs a configured set of golden tasks and outputs a Markdown scorecard. | Sample golden task suite ships with the repo; CI runs it on every PR. |
 | E-2 | MUST | A red-team corpus of ≥50 prompt-injection / jailbreak / exfil cases ships with the repo, each with a pass/fail oracle. | Corpus listed in `src/eval/corpus/`; per-case test runs. |
-| E-3 | MUST | Eval results are persisted in SQLite with a stable schema; regression detection compares runs. | Schema documented; regression test detects a deliberately-broken baseline. |
+| E-3 | MUST | Red-team results are committed as a canonical-JSON baseline (`eval/redteam/baseline.json`); regression detection diffs every run against it and CI fails on any drift. *(Amended from "persisted in SQLite with a stable schema" — deviation recorded in ADR-0019: the E-1/E-2 canonical-JSON scorecard superseded the database.)* | Baseline schema validated on load (ajv allowlist); regression test detects a deliberately-broken baseline (corrupted-fixture tests in `baseline.test.ts` + e2e negative check). |
 | E-4 | SHOULD | A two-pass adversarial verification module is available as a runtime guardrail OR offline eval, with the second pass model pluggable. | Test using Claude as both primary and adversary. |
 | E-5 | COULD | Export evaluation runs as OpenTelemetry traces for ingestion by external observability platforms. | Deferred to v1.x. |
 
