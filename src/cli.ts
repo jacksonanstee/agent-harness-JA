@@ -2,7 +2,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -12,17 +11,20 @@ import {
 } from './eval/index.js';
 import type { TaskSessionConfig } from './eval/index.js';
 import {
+  composeSecurity,
   EVAL_OUT_DIR,
+  hookRecordToTelemetryInput,
   readPackageVersion,
   refuseSymlinkedDir,
   sanitizeForTerminal,
+  SettingsLoadError,
   USAGE,
   writeScorecard,
 } from './cli/shared.js';
+import type { SecurityComposition } from './cli/shared.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
-import type { HookEventRecord } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route } from './router/index.js';
 import { createSession } from './session/index.js';
@@ -30,36 +32,29 @@ import type { QueryFn } from './session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
-  mergeLayers,
-  mergeSandboxLayers,
-  parsePermissionSettings,
-  parseSandboxSettings,
-  PermissionSettingsError,
   permissionHook,
   redact,
   sandboxHook,
-  SandboxSettingsError,
   scan,
-  SHELL_RUNNER_BINARIES,
 } from './security/index.js';
-import type { EvaluatorOptions, SandboxConfig } from './security/index.js';
-import { loadJsonSettings } from './internal/settings.js';
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
   openTelemetryDatabase,
   TELEMETRY_EVENT_TYPES,
 } from './telemetry/index.js';
-import type { TelemetryEventInput, TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
+import type { TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
 
-// Pure-move re-exports (E-3 CG8): src/cli.test.ts imports these from './cli.js'
-// unmodified — the proof that the src/cli/ extraction changed no behavior.
+// Pure-move re-exports (E-3 CG8, extended E-4 T8): src/cli.test.ts imports
+// these from './cli.js' unmodified — the proof that the src/cli/ extraction
+// changed no behavior.
 export {
   refuseSymlinkedDir,
   sanitizeForTerminal,
   scorecardFilename,
   writeScorecard,
 } from './cli/shared.js';
+export { composeSecurity, hookRecordToTelemetryInput, SettingsLoadError } from './cli/shared.js';
 export { parseRedteamArgs, redteamExitCode } from './cli/redteam-command.js';
 export type { RedteamArgs } from './cli/redteam-command.js';
 
@@ -90,91 +85,6 @@ export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs;
 export type ParseResult =
   | { ok: true; value: CliArgs }
   | { ok: false; error: string };
-
-/** Path-prefixed settings failures from the composition root's combined loader. */
-export class SettingsLoadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'SettingsLoadError';
-  }
-}
-
-export interface SecurityComposition {
-  permissions: EvaluatorOptions;
-  sandbox: SandboxConfig;
-  /** Startup notices for the operator (prompter gaps, risky allowlists). */
-  warnings: string[];
-}
-
-export interface ComposeSecurityDeps {
-  readFile: (path: string) => string;
-  userDir: string;
-  projectDir: string;
-}
-
-/**
- * Loads and merges both security settings layers. Each file is read ONCE and
- * its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
- * ADR-0015). Module parse errors are re-tagged SettingsLoadError so the
- * shared loader path-prefixes them and main() has one failure type to map to
- * exit 2. Extracted from main() so the composition logic is unit-testable
- * without an SDK or API key.
- */
-export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
-  const layers = [
-    join(deps.userDir, '.harness', 'settings.json'),
-    join(deps.projectDir, '.harness', 'settings.json'),
-  ].map((path) =>
-    loadJsonSettings(
-      path,
-      deps.readFile,
-      (doc) => {
-        try {
-          return {
-            permissions: parsePermissionSettings(doc),
-            sandbox: parseSandboxSettings(doc),
-          };
-        } catch (error: unknown) {
-          if (
-            error instanceof PermissionSettingsError ||
-            error instanceof SandboxSettingsError
-          ) {
-            throw new SettingsLoadError(error.message);
-          }
-          throw error;
-        }
-      },
-      { permissions: { rules: [] }, sandbox: {} },
-      SettingsLoadError,
-    ),
-  );
-  const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
-  const permissions = mergeLayers(user.permissions, project.permissions);
-  const sandbox = mergeSandboxLayers(user.sandbox, project.sandbox);
-
-  const warnings: string[] = [];
-  // No prompter is wired yet (no interactive mode), so every 'ask' resolves
-  // to deny — fail closed, but tell the settings author (ADR-0014 §4).
-  if (
-    (permissions.rules ?? []).some((r) => r.decision === 'ask') ||
-    permissions.defaultDecision === 'ask'
-  ) {
-    warnings.push(
-      "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
-    );
-  }
-  // Shell runners are DENIED by the sandbox regardless of the allowlist
-  // (SHELL_RUNNER_BINARIES blocklist); surface the conflict at startup.
-  const blocked = (sandbox.commands?.allow ?? []).filter((entry) =>
-    SHELL_RUNNER_BINARIES.includes(entry),
-  );
-  if (blocked.length > 0) {
-    warnings.push(
-      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners defeat first-token enforcement and are always denied (ADR-0015 §3)`,
-    );
-  }
-  return { permissions, sandbox, warnings };
-}
 
 export function parseArgs(argv: string[]): ParseResult {
   if (argv[0] === 'telemetry') {
@@ -288,45 +198,6 @@ export function parseRunArgs(argv: string[]): ParseResult {
   }
 
   return { ok: true, value: { command: 'run', prompt, skillsDir, dbPath, maxTurns } };
-}
-
-/**
- * Maps a hook runtime record onto telemetry's structural hook-event payload.
- * Lives here (the composition root) so hooks and telemetry stay import-free
- * peers (ADR-0011).
- */
-export function hookRecordToTelemetryInput(
-  record: HookEventRecord,
-  ids: { sessionId: string; turnId: string },
-): TelemetryEventInput {
-  const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
-  if (record.kind === 'denied-by-hook') {
-    return {
-      ...base,
-      payload: {
-        kind: record.kind,
-        event: record.event,
-        tool: record.tool,
-        reason: record.reason,
-        handlerIndex: record.handlerIndex,
-      },
-    };
-  }
-  if (record.kind === 'hook-error') {
-    return {
-      ...base,
-      payload: {
-        kind: record.kind,
-        event: record.event,
-        reason: record.reason,
-        handlerIndex: record.handlerIndex,
-      },
-    };
-  }
-  return {
-    ...base,
-    payload: { kind: record.kind, event: record.event, handlersFired: record.handlersFired },
-  };
 }
 
 function runTelemetryExport(args: TelemetryExportArgs): number {
