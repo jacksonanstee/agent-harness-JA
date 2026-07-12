@@ -51,6 +51,9 @@ npx agent-harness-ja run
 # Run the golden eval suite
 npx agent-harness-ja eval
 
+# Add a second-pass adversarial challenge over passed tasks (report-only; adds one model call per passed task)
+npx agent-harness-ja eval --challenge
+
 # Run the keyless red-team gate (fails on ANY drift vs the committed baseline — see docs/decisions/0019)
 npm run redteam
 

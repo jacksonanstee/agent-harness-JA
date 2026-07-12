@@ -4,11 +4,13 @@ import { homedir } from 'node:os';
 
 import { createGoldenRunner, EvalUsageError, toMarkdown } from '../eval/index.js';
 import type { TaskSessionConfig } from '../eval/index.js';
+import { createVerifier } from '../eval/verifier/index.js';
+import type { AdversaryFn, AdversaryResult, Verifier } from '../eval/verifier/index.js';
 import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { createSession } from '../session/index.js';
-import type { QueryFn } from '../session/index.js';
+import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from '../session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
@@ -35,6 +37,7 @@ import type { SecurityComposition } from './shared.js';
 export interface EvalArgs {
   command: 'eval';
   taskDir: string;
+  challenge: boolean;
 }
 
 /**
@@ -49,7 +52,12 @@ type EvalParseResult =
 export function parseEvalArgs(argv: string[]): EvalParseResult {
   let taskDir = './eval/golden';
   let positionalSeen = false;
+  let challenge = false;
   for (const arg of argv) {
+    if (arg === '--challenge') {
+      challenge = true;
+      continue;
+    }
     if (arg.startsWith('--')) {
       return { ok: false, error: `Unknown flag '${arg}'. ${USAGE}` };
     }
@@ -59,8 +67,38 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
     taskDir = arg;
     positionalSeen = true;
   }
-  return { ok: true, value: { command: 'eval', taskDir } };
+  return { ok: true, value: { command: 'eval', taskDir, challenge } };
 }
+
+// E-4: the adversary is a de-fanged single completion — maxTurns 1 bounds the
+// agentic loop, the deny-all PreToolUse hook fail-closes any tool call the
+// model attempts in its one turn. Never wrapped in createSession (no memory/
+// telemetry pollution). Both controls exist in the typed QueryOptions today.
+export const buildAdversary =
+  (query: QueryFn, model: string): AdversaryFn =>
+  async (prompt: string): Promise<AdversaryResult> => {
+    const denyAll: SdkHookCallback = async () => ({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'adversary calls are tool-free (E-4, ADR-0020)',
+      },
+    });
+    let text = '';
+    let costUsd: number | null = null;
+    for await (const message of query({
+      prompt,
+      options: { model, maxTurns: 1, hooks: { PreToolUse: [{ hooks: [denyAll] }] } },
+    })) {
+      const m = message as SdkMessage;
+      if (m.type === 'result') {
+        const r = m as SdkResultMessage;
+        text = r.result ?? '';
+        costUsd = typeof r.total_cost_usd === 'number' ? r.total_cost_usd : null;
+      }
+    }
+    return { text, costUsd };
+  };
 
 export async function runEval(args: EvalArgs): Promise<number> {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -106,6 +144,19 @@ export async function runEval(args: EvalArgs): Promise<number> {
     return 2;
   }
   const query = sdk.query as QueryFn;
+
+  // Report-only second pass over already-passed tasks (E-4): the adversary is
+  // routed the same way any other task descriptor is, and both the AdversaryFn
+  // and the model id recorded on the scorecard come from the SAME route()
+  // result — never re-derived separately, so they can't drift apart.
+  let verifier: Verifier | undefined;
+  if (args.challenge) {
+    const adversaryChoice = route({ shape: 'review', sensitivity: 'low', expected_tokens: 8_000 });
+    verifier = createVerifier({
+      adversary: buildAdversary(query, adversaryChoice.model),
+      adversaryModelId: adversaryChoice.model,
+    });
+  }
 
   // Oracle execution is arbitrary in-process code from the task directory
   // (docs/security-model.md R-10) — say so before the first import.
@@ -165,6 +216,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
       createTaskSession,
       redactSecrets: (text) => redact(text),
       harnessVersion: readPackageVersion(),
+      ...(verifier !== undefined && { verifier }),
     });
 
     let scorecard;
@@ -194,6 +246,9 @@ export async function runEval(args: EvalArgs): Promise<number> {
 
     process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
 
+    // E-4 report-only contract: verification findings AND verification
+    // failures never contribute to totals.failed — this line is
+    // verifier-independent (differential invariance test pins it).
     return scorecard.totals.failed === 0 ? 0 : 1;
   } finally {
     db.close();

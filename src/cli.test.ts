@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseEvalArgs, parseRedteamArgs, parseRunArgs, redteamExitCode, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, redteamExitCode, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
 import type { CorpusCase, GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
@@ -418,26 +418,10 @@ describe('composeSecurity', () => {
 });
 
 describe('parseEvalArgs', () => {
-  it('defaults taskDir to ./eval/golden (README quick-start contract)', () => {
-    const result = parseEvalArgs([]);
-    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './eval/golden' } });
-  });
-
-  it('accepts a positional task directory', () => {
-    const result = parseEvalArgs(['./my-tasks']);
-    expect(result).toEqual({ ok: true, value: { command: 'eval', taskDir: './my-tasks' } });
-  });
-
-  it('rejects unknown flags (no --max-tasks in v1)', () => {
-    const result = parseEvalArgs(['--max-tasks', '5']);
-    expect(result.ok).toBe(false);
-  });
-
-  it('rejects extra positional arguments', () => {
-    const result = parseEvalArgs(['a', 'b']);
-    expect(result.ok).toBe(false);
-  });
-
+  // Full coverage of --challenge / defaults / rejection lives in
+  // src/cli/eval-command.test.ts (E-4 Task 9, redteam-command precedent);
+  // this is kept here only as the pre-existing pin that parseArgs('eval', ...)
+  // reaches this parser unchanged post-extraction.
   it('is reachable through parseArgs', () => {
     const result = parseArgs(['eval', './tasks']);
     expect(result.ok).toBe(true);

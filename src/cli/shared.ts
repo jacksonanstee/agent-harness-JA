@@ -22,7 +22,7 @@ export const EVAL_OUT_DIR = join('.harness', 'eval');
 
 export const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
-  '       agent-harness-ja eval [taskDir]\n' +
+  '       agent-harness-ja eval [taskDir] [--challenge]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
   '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]';
 
