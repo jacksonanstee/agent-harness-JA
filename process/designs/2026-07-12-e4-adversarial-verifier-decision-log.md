@@ -50,10 +50,10 @@ designer revision (A-minimal) → arbiter ruling. Disposition: **APPROVED
 
 ## Binding conditions of approval
 
-1. Verification section validated against an exact ajv field allowlist (structural, ADR-0017-d6-style)
+1. Verification section validated against an exact ajv field allowlist (structural, ADR-0017-d6-style) — *reconciled reading (R2-4): the allowlist binds the adversary WIRE RESPONSE, the untrusted input; the constructed section needs no load-time validator (nothing re-reads golden scorecards) — its shape is TS-constructed and pinned by the differential test*
 2. Report-only proven by a CI-safe differential invariance test
 3. Unknown enum from the adversary = per-row verifier-error, never parse-time widening
-4. Adversary cost mirrors totalCostUsd/unpricedTasks (never silently understated)
+4. Adversary cost mirrors the never-understated totals pattern — *field names as shipped: `verification.totalCostUsd` + `unpricedChallenges` (verifier-error counts as unpriced; no-output counts in neither)*
 5. C fallback trigger EOD 2026-07-16, with requirements-row deviation if invoked
 6. `confidence` dropped (or explicitly uncalibrated with revisit-if) — dropped
 

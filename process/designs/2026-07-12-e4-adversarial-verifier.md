@@ -136,9 +136,15 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   **required**) — `additionalProperties: false` on both branches, so the
   two wrong combinations (challenge-without-category,
   agree-with-category) fail validation as `unparseable` rather than
-  landing in an undefined mapping cell. The verifier maps the wire verdict
-  onto the finding's `status` (which adds the verifier-owned values
-  `verifier-error`/`no-output` the adversary can never produce).
+  landing in an undefined mapping cell. **`category` validates as a
+  string in-schema; enum membership is checked after validation** — an
+  out-of-enum category is therefore `unknown-enum`, not `unparseable`
+  (keeping the two errorKinds distinct and both reachable). The verifier
+  maps the wire verdict onto the finding's `status` — a value space the
+  adversary can never fully drive: `verifier-error` is verifier-owned and
+  `no-output` is **runner-constructed** (for null-`resultText` pass rows
+  the runner records the finding directly; `challenge()` is never
+  called).
   **Arbiter condition 1 is discharged here, at the wire-response parse** —
   that is the untrusted input; the constructed `VerificationSection` needs
   no load-time validator because nothing ever re-reads a golden scorecard
@@ -256,20 +262,32 @@ export interface VerificationSection {
 //     { verification?: VerificationSection };
 ```
 
-State legibility (panel condition — there are FOUR states, and the
+State legibility (panel condition — the states are EXHAUSTIVE, and the
 rendered line always relates the finding counts to `totals.passed` so
 "ran over zero candidates" can never read as "ran, nothing challenged"):
 
 1. Section **absent** — not run. Rendered: `Adversarial challenge: not
    run — pass --challenge (adds a second model call per passed task)`.
-2. Present, zero passed tasks — ran, nothing eligible. Rendered:
+2. Present, **`totals.passed === 0`** — ran, nothing eligible. Rendered:
    `Adversarial challenge (report-only): 0 passed tasks — nothing to
-   challenge`.
-3. Present, all agreed — rendered summary line + no table.
-4. Present with challenges/errors — summary line + findings table.
+   challenge`. (This state is keyed to passed tasks, NOT to the call
+   count N: a run whose passed tasks all have `resultText: null` has
+   N = 0 but `totals.passed > 0` — it renders state 3/4 with its
+   `no-output` findings, never this copy.)
+3. Present, every finding `agreed` — summary line, **no table** (the
+   degenerate case of the table rule below).
+4. Present with any non-agreed finding (`challenged` / `verifier-error` /
+   `no-output`) — summary line + findings table.
+
+**Table rule (pinned):** the table lists **non-agreed findings only** —
+agreed rows are represented by the summary count, keeping the table
+signal-dense (a 40-row all-but-one-agreed table would bury the one
+challenge). Every `challenged`, `verifier-error`, and `no-output` finding
+gets a row.
 
 Rendered shape (pinned — the feature IS this section, so the spec shows
-it, the way `markdown.ts` pins every existing section):
+it, the way `markdown.ts` pins every existing section; counts sum to
+`totals.passed`: 1 challenged + 3 agreed + 0 errors + 1 no-output = 5):
 
 ```markdown
 ## Adversarial challenge (report-only — never affects pass/fail or exit codes)
@@ -280,7 +298,6 @@ Challenge cost: $0.0312 (0 unpriced)
 | task | status | category / error |
 |---|---|---|
 | di-01 | challenged | incomplete |
-| di-02 | agreed | — |
 | gate-01 | no-output | — |
 ```
 
@@ -353,8 +370,10 @@ findings go to `meta` or nowhere (ADR-0019 d4's rule).
   two-phase shape, §Runner integration, is what makes N knowable):
   `warning: --challenge adds N adversary call(s) (one per passed task with
   output)`. When N = 0 the warning is replaced by
-  `--challenge: no passed tasks with output — adversary phase skipped`
-  and the section still renders state 2 (§Scorecard shape).
+  `--challenge: no adversary calls needed (0 passed tasks with output)` —
+  note phase 2 still runs when there are passed tasks: it records their
+  `no-output` findings (no calls are made), and the section renders per
+  the state rules in §Scorecard shape.
 - Exit codes: **unchanged** — still `totals.failed === 0 ? 0 : 1` exactly
   as today (note: `failed` already includes `task-parse`/`oracle-load`/
   `session-error` rows where no oracle ran, so "oracle-derived" would be
