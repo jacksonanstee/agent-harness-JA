@@ -3,7 +3,10 @@
 > Threat model for the security layer as shipped at the end of Week 2
 > (S-1–S-4, ADRs 0012–0015), with dated Week-3 amendments where the eval
 > layer touched the security surface (ADR-0019 hostile-baseline handling,
-> ADR-0020 adversary-is-injectable, both 2026-07-12). This document says
+> ADR-0020 adversary-is-injectable, both 2026-07-12), and a Week-4
+> amendment for PR #25's baseline load-path hardening (duplicate-row-id
+> refusal, ancestor-chain symlink walk, single-fd `O_NOFOLLOW` read —
+> 2026-07-13; see §5 Tampering). This document says
 > what the layer defends, against whom, and — just as deliberately — what
 > it does not. Claims here are anchored to shipped code and to incidents
 > found and fixed in review, not to intentions.
@@ -32,7 +35,8 @@ possible (S-1/S-2 are observe-only in v1 — see §6, residual risk R-4).
 
 - **Adversarial tool results.** A web page, file, or command output that
   contains instructions aimed at the agent (indirect prompt injection —
-  Greshake et al., OWASP LLM01). This is the highest-frequency, highest-impact
+  Greshake et al., OWASP LLM01; "Agent Goal Hijack", OWASP ASI01 — see §9).
+  This is the highest-frequency, highest-impact
   class and the reason the injection scanner exists.
 - **A malicious or compromised cloned repository**, including its
   `.harness/settings.json`. Project-level config is attacker-influenced input:
@@ -145,9 +149,16 @@ themselves:
 **The committed red-team baseline is treated as hostile input.**
 `eval/redteam/baseline.json` (ADR-0019) is the keyless gate command's first
 read of repo-controlled data, and a malicious cloned repo is in scope (§2).
-Load order: symlink refusal on file and parent, size cap before read
-(1 MB, `stat` first), full structural validation against an exact ajv
-field allowlist (never just the discriminators), every baseline row id
+Load order (hardened in Week 4, PR #25): the file is opened once with
+`O_NOFOLLOW` and `fstat`-ed on that same descriptor (no separate
+stat-then-read race); for relative baseline paths every ancestor path
+component is symlink-checked via a raw-component walk (raw `split`, not a
+lexically normalized string — normalization would cancel `link/..`
+textually while the real syscall follows the link), size cap before read
+(1 MB), full structural validation against an exact ajv
+field allowlist (never just the discriminators), explicit refusal of
+duplicate baseline row ids at load (`BaselineError`, exit 2 — previously a
+duplicate surfaced only as a confusing `removed` drift), every baseline row id
 re-validated against the corpus id charset (`^[a-z0-9][a-z0-9-]{0,63}$` —
 the fresh side is guarded inside `runRedteam`, but the baseline side comes
 from a file and bypasses that guard, so it gets its own check; the charset
@@ -332,5 +343,32 @@ not live values:
 | [0014](./decisions/0014-declarative-permission-model.md) | allow/ask/deny permission model, sticky deny |
 | [0015](./decisions/0015-sandbox-pre-tool-gate.md) | Sandbox as pre-tool gate, intersection merge |
 | [0016](./decisions/0016-llm-judge-design-deferred.md) | Judge design locked (tighten-only), implementation deferred |
+| [0017](./decisions/0017-golden-runner.md) | Golden runner; oracles are ungated in-scope code with runtime warning (R-10) |
+| [0018](./decisions/0018-redteam-corpus.md) | 51-case red-team corpus; gate-vs-measurement split |
 | [0019](./decisions/0019-regression-gate.md) | Red-team regression gate; committed baseline loaded as hostile input |
 | [0020](./decisions/0020-adversarial-verifier.md) | Two-pass adversarial verifier: offline, report-only, enum-confined; adversary is injectable but zero-authority |
+
+## 9. OWASP Agentic Top 10 mapping
+
+*Added 2026-07-13. The [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) (ASI01–ASI10, December 2025) is the current reference taxonomy for agent-specific risk; earlier sections of this document cite the older LLM Top 10 where individual controls were designed against it. This table maps each ASI risk to this harness's control — or to the honestly-named residual gap.*
+
+| ASI | Risk | This harness | Ref |
+|-----|------|--------------|-----|
+| ASI01 | Agent Goal Hijack | Heuristic injection scanner (S-1) on tool results; LLM-judge stage designed, not yet implemented. Residual: verdicts are observe-only in v1 (R-4) | ADR-0012, ADR-0016, §6 R-4/R-5 |
+| ASI02 | Tool Misuse & Exploitation | Pre-tool permission + sandbox gates, fail-closed | ADR-0014, ADR-0015, §6 R-2/R-9 |
+| ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: scalar `defaultDecision` override (R-8) | ADR-0014 §5, §6 R-8 |
+| ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. npm publish hardening is a named pending decision (Week-4 publish ADR) | ADR-0019, §3, §5 Tampering |
+| ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
+| ASI06 | Memory & Context Poisoning | Named gap: S-1 scan is observe-only, flagged content still reaches model context | §6 R-4, ADR-0012 §9 |
+| ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
+| ASI08 | Cascading Agent Failures | Fail-closed posture; drift gate fails red rather than degrading | §1, ADR-0015, ADR-0019 |
+| ASI09 | Human-Agent Trust Exploitation | Spoofing detectors (`system:`-framing, role-impersonation tokens) | §5 Spoofing |
+| ASI10 | Rogue Agents | Adversary de-fanged by construction: maxTurns=1, deny-all PreToolUse on the challenge channel | ADR-0020 |
+
+Rows deliberately point at §5/§6/ADR anchors rather than restating mechanism —
+those sections are the single source of truth; this table is an index.
+The composed R-3+R-4 chain in §6 is the ASI01→ASI06 escalation narrative in
+this taxonomy's terms.
+
+<!-- FORWARD-REF: week4-publish-adr — ASI04 row above and ADR-0019 "Revisit if"
+     both reference the not-yet-written npm-publish ADR; update both when it lands. -->

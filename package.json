@@ -26,7 +26,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "eval": "node ./dist/cli.js eval",
-    "redteam": "node ./dist/cli.js redteam"
+    "redteam": "node ./dist/cli.js redteam",
+    "check:links": "bash scripts/check-links.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

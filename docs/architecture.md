@@ -104,7 +104,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** discovery, validation, and loading of skill files.
 - **Public API:** `load(dir: string): LoadResult` (amended 2026-07-05 — see ADR-0006 amendment), `validate(file: string): ValidationResult`.
 - **Depends on:** `gray-matter` for frontmatter parsing, `ajv` for schema validation.
-- **Design notes:** Markdown + YAML frontmatter; see [ADR-0006](./decisions/0006-skill-schema-markdown-frontmatter.md).
+- **Design notes:** Markdown + YAML frontmatter; see [ADR-0006](./decisions/0006-skill-schema-markdown-frontmatter.md). Week-4 hardening (PR #25) added a breadth cap (`MAX_SCAN_ENTRIES` 10k), a diamond-symlink diagnostic, a pinned walk order, and partial-EACCES handling on top of the existing per-entry realpath containment. Skill manifests may declare `requires.tools`; in v1 this is **declarative metadata only** — nothing reads or enforces it yet. The named follow-up is to intersect a loaded skill's declared tools with the permission evaluator (the ADR-0015 intersection idiom: loading a skill may tighten the tool surface, never widen it).
 
 #### `harness/hooks`
 
@@ -140,23 +140,23 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `eval/scorecard`
 
 - **Owns:** producer-agnostic scoring machinery — the scorecard schema (deterministic vs volatile partitions), canonical JSON, Markdown rendering, row-text sanitization.
-- **Public API:** `toCanonicalJson(scorecard): string`; `toMarkdown(scorecard): string`; `cleanForScorecard(text, redactSecrets?): string`; the `Scorecard` / `ScorecardRow` / `FailureKind` types.
+- **Public API:** `toCanonicalJson(scorecard): string`; `toMarkdown(scorecard): string`; `cleanForScorecard(text, redactSecrets?): string`; the generic `ScorecardEnvelope<Meta, Row, Totals>` / `ScorecardRowCore<K>` / `ScorecardTotalsCore<K>` types (failure kinds are per-producer: `GoldenFailureKind`, `RedteamFailureKind`).
 - **Depends on:** `internal/sanitize`; security types only.
 - **Design notes:** Only the deterministic partition (`{id, pass, failureKind, reason}`, rows sorted by id) may ever be baseline-diffed (E-3); cost/turns/duration and `meta` are volatile and informational ([ADR-0017](./decisions/0017-golden-runner.md)).
 
 #### `eval/golden`
 
 - **Owns:** running a set of golden tasks and scoring them.
-- **Public API:** `createGoldenRunner(deps)`; `runner.run(taskDir: string, opts?): Promise<Scorecard>`.
+- **Public API:** `createGoldenRunner(deps)`; `runner.run(taskDir: string, opts?): Promise<GoldenScorecard>`.
 - **Depends on:** the full harness — runs real agents through it; `eval/scorecard` for output.
 - **Design notes:** Each task is Markdown frontmatter + body (the prompt) with a sibling `<name>.oracle.mjs` module (JSDoc-typed via the exported `OracleFn`). Oracles judge the `SessionResult` self-report; per-task failures become rows with a `failureKind`; failure reasons are redacted and truncated before entering the scorecard. Shipped ([ADR-0017](./decisions/0017-golden-runner.md)).
 
 #### `eval/red-team`
 
 - **Owns:** the ≥50-case adversarial corpus and per-case pass/fail evaluation.
-- **Public API:** `run(corpusDir: string, opts?: RunOptions): RedTeamScorecard`.
+- **Public API:** `runRedteam(corpus: readonly CorpusCase[], scan, opts): RedteamScorecard` — the corpus is compiled-in TS literals (no directory scan), and the scanner is injected as a function.
 - **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison.
-- **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil. Each case includes a `source` field citing the public research it draws from.
+- **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil, and benign (the benign slice drives the absolute `falseBlockCount === 0` gate). Each case includes a `source` field citing the public research it draws from.
 
 #### `eval/verifier`
 
