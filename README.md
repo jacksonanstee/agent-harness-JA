@@ -1,6 +1,7 @@
 # agent-harness-JA
 
-> A production-grade harness for LLM agents — multi-model routing, security guardrails, and adversarial evaluation. Built on the Claude Agent SDK.
+> Most repos show the artefact; this one shows the thinking.
+> A local-first agent harness on the Claude Agent SDK — model routing, security guardrails, adversarial evals — with every non-trivial decision recorded: 20 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -79,7 +80,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 7. **[src/](./src)** — The implementation. Requirement IDs from `process/01-requirements.md` are cited in code comments where they are verified.
 8. **[process/devlog/](./process/devlog/)** — Weekly retros, including what went wrong.
 
-The `process/` folder is the differentiator. Most repos show the artefact; this one shows the thinking.
+The `process/` folder is the differentiator — if you only read one thing, start there.
 
 ---
 
