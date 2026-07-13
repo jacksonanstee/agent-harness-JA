@@ -79,6 +79,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)** — How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
 7. **[src/](./src)** — The implementation. Requirement IDs from `process/01-requirements.md` are cited in code comments where they are verified.
 8. **[process/devlog/](./process/devlog/)** — Weekly retros, including what went wrong.
+9. **[docs/blog/](./docs/blog/)** — Three essays on the judgment behind the design: [harness ≠ framework](./docs/blog/harness-not-framework.md), [adversarial evaluation](./docs/blog/adversarial-evaluation.md), and [the pragmatic security model](./docs/blog/pragmatic-security-model.md). Start here if you want the reasoning without the file-by-file tour; there is also a runnable, evaluated example agent in [examples/repo-qa/](./examples/repo-qa/README.md).
 
 The `process/` folder is the differentiator — if you only read one thing, start there.
 
