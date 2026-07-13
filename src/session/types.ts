@@ -118,7 +118,9 @@ export interface SessionDeps {
 }
 
 export interface SessionConfig {
-  skillsDir: string;
+  /** Directory to load skills from, or null to run with no skills at all —
+   *  loading is skipped entirely: no read, no skill-load warnings. */
+  skillsDir: string | null;
   descriptor?: TaskDescriptor;
   maxTurns?: number;
   /** Streams assistant text as it arrives. */

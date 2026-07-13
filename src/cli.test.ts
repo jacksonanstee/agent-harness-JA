@@ -4,13 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, redteamExitCode, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
-import type { CorpusCase, GoldenScorecard } from './eval/index.js';
+import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { scan } from './security/index.js';
-import type { ScanResult } from './security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
 import type { TelemetryEvent } from './telemetry/index.js';
 
@@ -467,47 +466,6 @@ describe('parseRedteamArgs', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.command).toBe('redteam');
-  });
-});
-
-describe('redteamExitCode', () => {
-  it('returns 1 when a stub scanner false-blocks a benign case', () => {
-    const cases: CorpusCase[] = [
-      { id: 'benign-01', category: 'benign', text: 'benign-case', expected: 'pass' },
-    ];
-    const stubScan = (): ScanResult => ({
-      verdict: 'block',
-      rule_ids: [],
-      excerpts: [],
-      suspicious: false,
-    });
-    const scorecard = runRedteam(cases, stubScan, { armLabel: 'security-on' });
-    expect(scorecard.totals.falseBlockCount).toBe(1);
-    expect(redteamExitCode(scorecard)).toBe(1);
-  });
-
-  it('returns 0 on the real corpus with the real scanner (gate passes today)', () => {
-    const scorecard = runRedteam(CORPUS, scan, { armLabel: 'security-on' });
-    expect(scorecard.totals.falseBlockCount).toBe(0);
-    expect(redteamExitCode(scorecard)).toBe(0);
-  });
-
-  it('returns 0 for a deliberate missed case with no false-block (a miss alone never gates)', () => {
-    // Isolated from the live corpus: pins that a `missed` row on its own does
-    // not fire the gate even if the scanner later closes today's known misses.
-    const cases: CorpusCase[] = [
-      { id: 'malicious-01', category: 'direct', text: 'malicious-case', expected: 'block' },
-    ];
-    const stubScan = (): ScanResult => ({
-      verdict: 'pass', // scanner misses the malicious case
-      rule_ids: [],
-      excerpts: [],
-      suspicious: false,
-    });
-    const scorecard = runRedteam(cases, stubScan, { armLabel: 'security-on' });
-    expect(scorecard.totals.byFailureKind.missed).toBe(1);
-    expect(scorecard.totals.falseBlockCount).toBe(0);
-    expect(redteamExitCode(scorecard)).toBe(0);
   });
 });
 

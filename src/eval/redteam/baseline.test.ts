@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -116,6 +116,73 @@ describe('loadBaseline', () => {
     mkdirSync(path);
     expect(() => loadBaseline(path)).toThrowError(BaselineError);
     expect(() => loadBaseline(path)).toThrow(/cannot read/);
+  });
+
+  it('RELATIVE path: refuses a symlinked GRANDPARENT (ancestor-chain walk, Week-4 hardening)', () => {
+    // Repo-relative layout under gitignored .harness/ because vitest's
+    // threads pool forbids chdir — cwd stays the repo root, so a relative
+    // path must be constructed relative to it. A committed symlink at a
+    // grandparent component (`evil` → real) redirects the whole subtree;
+    // the pre-Week-4 leaf+parent checks lstat'd `evil/sub` THROUGH the link
+    // and passed.
+    mkdirSync('.harness', { recursive: true });
+    const base = mkdtempSync('.harness/w4-ancestor-');
+    dirs.push(base); // relative; afterEach rmSync handles it from cwd
+    const realDir = join(base, 'real');
+    mkdirSync(join(realDir, 'sub'), { recursive: true });
+    writeFileSync(join(realDir, 'sub', 'baseline.json'), toCanonicalJson(normalizeForBaseline(fresh())));
+    symlinkSync('real', join(base, 'evil'));
+    const viaGrandparentLink = join(base, 'evil', 'sub', 'baseline.json');
+    expect(() => loadBaseline(viaGrandparentLink)).toThrow(BaselineError);
+    expect(() => loadBaseline(viaGrandparentLink)).toThrow(/symlink/);
+  });
+
+  it('RELATIVE path with `..` AFTER a symlink component: still refused (raw-component walk, not lexical normalize)', () => {
+    // The security-review PoC: `eval/symlinkdir/../real/baseline.json`.
+    // path.normalize() would cancel `symlinkdir/..` textually, dropping the
+    // symlink from the walk while the real open() follows it. The raw-component
+    // walk lstats `<base>/eval/symlinkdir` and catches it.
+    mkdirSync('.harness', { recursive: true });
+    const base = mkdtempSync('.harness/w4-dotdot-');
+    dirs.push(base);
+    const realDir = join(base, 'eval', 'real');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'baseline.json'), toCanonicalJson(normalizeForBaseline(fresh())));
+    // eval/symlinkdir -> real (a sibling); the payload is reachable as
+    // eval/symlinkdir/../real/baseline.json, which normalizes to eval/real/...
+    symlinkSync('real', join(base, 'eval', 'symlinkdir'));
+    // Built by raw concatenation, NOT join() — join normalizes and would
+    // cancel `symlinkdir/..` before loadBaseline ever sees it, exactly the
+    // lexical collapse the fix must NOT do. This is the string a hostile
+    // package.json script could hand an operator.
+    const viaDotDot =
+      join(base, 'eval', 'symlinkdir') + sep + '..' + sep + 'real' + sep + 'baseline.json';
+    expect(() => loadBaseline(viaDotDot)).toThrow(BaselineError);
+    expect(() => loadBaseline(viaDotDot)).toThrow(/symlink/);
+  });
+
+  it('ABSOLUTE path: a symlinked grandparent is ALLOWED (operator-supplied paths may traverse OS symlinks)', () => {
+    // Pins the deliberate asymmetry: absolute --baseline paths are operator
+    // territory (macOS /tmp and /var are themselves symlinks), so only the
+    // leaf and parent are checked — the chain is not walked.
+    const dir = freshDir();
+    const realDir = join(dir, 'real');
+    mkdirSync(join(realDir, 'sub'), { recursive: true });
+    writeFileSync(join(realDir, 'sub', 'baseline.json'), toCanonicalJson(normalizeForBaseline(fresh())));
+    symlinkSync(realDir, join(dir, 'link'));
+    const viaLink = join(dir, 'link', 'sub', 'baseline.json'); // absolute: freshDir is absolute
+    expect(() => loadBaseline(viaLink)).not.toThrow();
+  });
+
+  it('throws BaselineError with "duplicate row id" when two rows share an id (LOW-1)', () => {
+    const base = goodJson();
+    const rows = base.rows as Record<string, unknown>[];
+    const first = rows[0];
+    if (first === undefined) throw new Error('corpus produced no rows');
+    const mutated = { ...base, rows: [first, ...rows] }; // duplicate the first row
+    const path = writeBaseline(freshDir(), JSON.stringify(mutated));
+    expect(() => loadBaseline(path)).toThrow(BaselineError);
+    expect(() => loadBaseline(path)).toThrow(/duplicate row id/);
   });
 
   it('throws BaselineError with "parse" on malformed JSON, without echoing file bytes', () => {

@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import matter from 'gray-matter';
@@ -36,8 +36,11 @@ export interface GoldenTask {
   prompt: string;
   descriptor?: TaskDescriptor;
   maxTurns: number;
-  /** Resolved absolute; default `<task file dir>/skills` (spec decision #25). */
-  skillsDir: string;
+  /** Resolved absolute; default `<task file dir>/skills` (spec decision #25).
+   *  Null when the DEFAULT dir is absent — "no skills", the session skips
+   *  loading (Week-4); an explicit-but-missing dir stays a string so the
+   *  loader's warning surfaces. */
+  skillsDir: string | null;
   /** Absolute path of the source file. */
   path: string;
   /** Sibling `<name>.oracle.mjs`, derived — existence checked at load time. */
@@ -191,11 +194,18 @@ export function parseTaskFile(file: string): TaskParseResult {
   }
 
   const taskFileDir = dirname(path);
-  const skillsDir = resolve(taskFileDir, frontmatter.skillsDir ?? 'skills');
-  const containmentError = containSkillsDir(skillsDir, taskFileDir);
+  const explicitSkillsDir = frontmatter.skillsDir !== undefined;
+  const resolvedSkillsDir = resolve(taskFileDir, frontmatter.skillsDir ?? 'skills');
+  const containmentError = containSkillsDir(resolvedSkillsDir, taskFileDir);
   if (containmentError !== undefined) {
     return fail(frontmatter.id, containmentError);
   }
+  // Defaulted-and-absent resolves to null ("no skills", Week-4): the default
+  // `skills/` is a convention, not a request — a task without a skills dir
+  // shouldn't warn on every run. An EXPLICIT skillsDir that is missing stays
+  // a string so the loader's missing-dir warning surfaces: the task asked
+  // for skills it doesn't have, and that IS worth a warning.
+  const skillsDir = !explicitSkillsDir && !existsSync(resolvedSkillsDir) ? null : resolvedSkillsDir;
 
   return {
     ok: true,

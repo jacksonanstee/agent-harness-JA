@@ -86,8 +86,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const descriptor = config.descriptor ?? DEFAULT_DESCRIPTOR;
     const modelChoice = deps.route(descriptor);
 
-    // Step 3: skills.
-    const loadResult = deps.loadSkills(config.skillsDir);
+    // Step 3: skills. A null skillsDir means "no skills" — skip the load
+    // entirely (golden eval passes null for a defaulted-and-absent skills
+    // dir, so a task with no skills doesn't warn on every run).
+    const loadResult = config.skillsDir === null
+      ? { skills: [], errors: [] }
+      : deps.loadSkills(config.skillsDir);
     for (const error of loadResult.errors) {
       warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
     }

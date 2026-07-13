@@ -132,4 +132,36 @@ describe('eslint layering rules', () => {
     );
     expect(violations.length).toBeGreaterThan(0);
   });
+
+  it('blocks the scorecard core importing a producer (redteam) — intra-eval direction, Week-4', async () => {
+    const violations = await lintViolations(
+      'src/eval/scorecard/bad-producer-import.ts',
+      "import { runRedteam } from '../redteam/index.js';\nrunRedteam;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('blocks the scorecard core importing golden — intra-eval direction covers both producers', async () => {
+    const violations = await lintViolations(
+      'src/eval/scorecard/bad-golden-import.ts',
+      "import { createGoldenRunner } from '../golden/index.js';\ncreateGoldenRunner;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('still blocks the scorecard core importing the CLI — the scorecard block must restate the eval-wide ban (flat-config no-restricted-imports overrides, never merges)', async () => {
+    const violations = await lintViolations(
+      'src/eval/scorecard/bad-cli-import.ts',
+      "import { USAGE } from '../../cli/shared.js';\nUSAGE;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('allows a producer (redteam) importing the scorecard core — the legal direction', async () => {
+    const violations = await lintViolations(
+      'src/eval/redteam/good-scorecard-import.ts',
+      "import { toCanonicalJson } from '../scorecard/index.js';\ntoCanonicalJson;\n",
+    );
+    expect(violations).toEqual([]);
+  });
 });

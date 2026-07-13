@@ -251,6 +251,25 @@ describe('createSession', () => {
     expect(postFired).toEqual(['Read', 'Bash']);
   });
 
+  it('skillsDir null skips skill loading entirely: loadSkills never called, no warnings (Week-4)', async () => {
+    const fake = fakeQuery([INIT, RESULT]);
+    const warnings: string[] = [];
+    let loadCalls = 0;
+    const session = createSession(
+      makeDeps(fake, {
+        loadSkills: () => {
+          loadCalls += 1;
+          return { skills: [], errors: [{ file: '/nope', kind: 'read', message: 'should never surface' }] };
+        },
+      }),
+      { skillsDir: null, onWarning: (w) => warnings.push(w) },
+    );
+    const result = await session.run('hi');
+    expect(result.resultText).not.toBeNull();
+    expect(loadCalls).toBe(0);
+    expect(warnings.filter((w) => w.includes('skill load'))).toEqual([]);
+  });
+
   it('injects loaded skill names into the system prompt and surfaces load errors as warnings', async () => {
     const fake = fakeQuery([INIT, RESULT]);
     const warnings: string[] = [];

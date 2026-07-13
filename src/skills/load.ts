@@ -126,6 +126,16 @@ function fail(error: SkillError): ValidationResult {
 const MAX_SCAN_DEPTH = 64;
 
 /**
+ * Refuse to examine more than this many directory entries in total across
+ * the whole scan (resource-exhaustion guard, the breadth counterpart to
+ * MAX_SCAN_DEPTH): depth bounds nesting but not the number of files/dirs at
+ * or below any one level, so a shallow pack shipping tens of thousands of
+ * entries would otherwise still turn a load() call into a denial-of-service
+ * nuisance.
+ */
+const MAX_SCAN_ENTRIES = 10_000;
+
+/**
  * Collect .md files under `root` with a manual walk instead of
  * readdirSync({recursive: true}): whether recursive readdir descends into
  * symlinked directories differs across Node versions (Node 20 does not,
@@ -134,10 +144,16 @@ const MAX_SCAN_DEPTH = 64;
  * symlink is resolved at the point it is encountered and refused if its real
  * path escapes the skills root; symlinks resolving inside the root are
  * followed normally.
+ *
+ * `maxEntries` defaults to MAX_SCAN_ENTRIES; the parameter exists so the cap
+ * can be exercised in tests without generating a MAX_SCAN_ENTRIES-sized
+ * tree. Production code (`load`) always calls this with the default, so the
+ * cap is not new configuration surface — just a testable seam.
  */
-function scanMarkdownFiles(
+export function scanMarkdownFiles(
   root: string,
   realRoot: string,
+  maxEntries: number = MAX_SCAN_ENTRIES,
 ): { files: string[]; errors: SkillError[] } {
   const files: string[] = [];
   const errors: SkillError[] = [];
@@ -146,7 +162,26 @@ function scanMarkdownFiles(
   // The parent's real path is threaded through the walk so a plain (non-
   // symlink) subdirectory's real path is a cheap join, not a realpath call.
   const visitedDirs = new Set<string>([realRoot]);
-  const walk = (currentDir: string, currentRealDir: string, depth: number): void => {
+  let entryCount = 0;
+  let entryCapHit = false;
+
+  /**
+   * Order contract: within one directory, entries are sorted ordinally by
+   * bare name (not localeCompare — see below) and walked in that order,
+   * descending into a subdirectory the moment it's reached (preorder,
+   * depth-first) rather than after finishing the rest of the level. So a
+   * directory sorts before a sibling file only when its bare name does —
+   * e.g. `sub` (dir) sorts before `sub.md` (file) because "sub" < "sub.md"
+   * ordinally, so every file under `sub/` is emitted before `sub.md`. This
+   * differs from sorting fully-materialized file paths, where `sub.md`
+   * would sort before `sub/nested.md` ('.' < '/').
+   */
+  const walk = (
+    currentDir: string,
+    currentRealDir: string,
+    depth: number,
+    ancestorRealDirs: ReadonlySet<string>,
+  ): void => {
     if (depth > MAX_SCAN_DEPTH) {
       errors.push(
         skillError(
@@ -171,11 +206,28 @@ function scanMarkdownFiles(
       return;
     }
     for (const entry of entries) {
+      entryCount += 1;
+      if (entryCount > maxEntries) {
+        // Fail-open, like EACCES above: stop scanning and keep whatever was
+        // already found rather than throwing away partial results.
+        if (!entryCapHit) {
+          entryCapHit = true;
+          errors.push(
+            skillError(
+              root,
+              'read',
+              `refusing to scan: exceeds maximum entry count of ${maxEntries}`,
+            ),
+          );
+        }
+        return;
+      }
       const path = join(currentDir, entry.name);
       let realPath = join(currentRealDir, entry.name);
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
+      const isSymlink = entry.isSymbolicLink();
+      if (isSymlink) {
         // Containment gate: a skill pack shipping a symlink could otherwise
         // exfiltrate arbitrary .md files into the agent's context.
         try {
@@ -200,15 +252,34 @@ function scanMarkdownFiles(
         }
       }
       if (isDir) {
-        if (visitedDirs.has(realPath)) continue;
+        if (visitedDirs.has(realPath)) {
+          // Diamond symlink: a second in-root symlink resolving to a real
+          // directory already loaded via a different path. A cycle back
+          // onto an ancestor (already on the current walk stack) stays
+          // silent — that's the same content we're already inside, nothing
+          // goes missing. A symlink resolving to a real directory visited
+          // elsewhere in the tree does mean this path's skills are only
+          // reachable via the other one, which is worth a non-fatal
+          // diagnostic rather than a silent drop.
+          if (isSymlink && !ancestorRealDirs.has(realPath)) {
+            errors.push(
+              skillError(
+                path,
+                'read',
+                'refusing to load a second time: already reachable via a different symlink to the same real directory',
+              ),
+            );
+          }
+          continue;
+        }
         visitedDirs.add(realPath);
-        walk(path, realPath, depth + 1);
+        walk(path, realPath, depth + 1, new Set([...ancestorRealDirs, realPath]));
       } else if (isFile && entry.name.endsWith('.md')) {
         files.push(path);
       }
     }
   };
-  walk(root, realRoot, 0);
+  walk(root, realRoot, 0, new Set([realRoot]));
   return { files, errors };
 }
 

@@ -44,6 +44,11 @@ export function scorecardFilename(nowMs: number): string {
 /**
  * A malicious repo must not redirect the scorecard write (spec decision #21):
  * refuse a symlink at the output-dir path. Missing is fine (we mkdir it).
+ *
+ * DELIBERATE second implementation alongside `src/eval/redteam/baseline.ts`'s
+ * `refuseSymlink` (different layer, different error type, different ENOENT
+ * semantics) — extract to `src/internal/` only on a third consumer, per the
+ * sanitize.ts precedent (ADR-0008 Revisit-if fired at the 4th copy).
  */
 export function refuseSymlinkedDir(path: string): void {
   let isSymlink: boolean;

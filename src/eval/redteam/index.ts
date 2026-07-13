@@ -12,6 +12,7 @@ export {
   loadBaseline,
   MAX_BASELINE_BYTES,
   normalizeForBaseline,
+  refuseAncestorSymlinks,
   refuseSymlink,
   renderDriftReport,
   totalsMismatchDetail,

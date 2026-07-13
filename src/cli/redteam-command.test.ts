@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -317,5 +317,24 @@ describe('runRedteamCommand: --update-baseline mode', () => {
     const { code } = captureIO(() => runRedteamCommand(baseArgs({ baselinePath, updateBaseline: true })));
     expect(code).toBe(2);
     expect(() => readFileSync(baselinePath, 'utf8')).toThrow();
+  });
+
+  it('write failure (unwritable parent dir): exit 2 with "failed to write baseline" on stderr, no gate-colliding exit 1 (Week-4 fix)', () => {
+    const root = freshDir();
+    const parent = join(root, 'eval', 'redteam');
+    mkdirSync(parent, { recursive: true });
+    const baselinePath = join(parent, 'baseline.json');
+    chmodSync(parent, 0o555); // read+exec, no write: writeFileSync(tmp) EACCES
+    try {
+      const { code, stderr, stdout } = captureIO(() =>
+        runRedteamCommand(baseArgs({ baselinePath, updateBaseline: true })),
+      );
+      expect(code).toBe(2);
+      expect(stderr).toContain('failed to write baseline');
+      expect(stdout).not.toContain('GATE_FAILURE=');
+      expect(() => readFileSync(baselinePath, 'utf8')).toThrow();
+    } finally {
+      chmodSync(parent, 0o755); // afterEach rmSync needs write back
+    }
   });
 });
