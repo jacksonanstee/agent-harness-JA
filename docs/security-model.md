@@ -184,6 +184,22 @@ scanner at session start (observe-only, the R-4 posture): they enter the
 system prompt, which made them a context-poisoning channel that bypassed the
 scanner entirely.
 
+As of 2026-07-14 (ADR-0006 amendment) the same treatment covers full skill
+**bodies**, which now enter the system prompt whole — the body is the skill's
+actual content, and until then it never reached the model at all. This is a
+deliberate widening of the R-4 observe-only surface, and a materially
+stronger one than tool output: a hostile body lands at system-prompt
+authority, unconditionally, at session start, with no tool call required.
+Accepted for v1 because the channel is operator-opted-in (the operator
+chooses the skills directory), every body is scanned raw before charset
+stripping with a per-skill-labelled warning, and the aggregate injected size
+is budget-capped in `buildSystemPrompt` (whole-skill drop + warning, on top
+of the loader's per-file 1 MB cap). The named follow-up is a stricter policy
+for this channel specifically — unlike arbitrary tool output, a legitimate
+skill has no reason to contain scanner-flagged override phrasing, and unlike
+tool output the harness owns this channel, so blocking is implementable
+without an SDK rewrite channel.
+
 **The adversarial verifier's adversary reads attacker-influenceable content
 and is itself injectable (ADR-0020, E-4).** Two payloads reach the
 `--challenge` model on every call: the golden task prompt (repo-controlled —
@@ -295,7 +311,7 @@ R-1/R-2 rather than half-solved.
 | R-1 | Symlink inside an allowed directory pointing outside defeats the path gate | High (targeted) | `realpath` is impure, needs existence fallbacks, still TOCTOU-racy; documented over half-solved | ADR-0015 §2, revisit-if |
 | R-2 | Interpreter-as-wrapper (`node -e`, `python -c`) and argv-level exec when the interpreter is allowlisted | Medium | argv[0] honesty: the gate bounds which program starts; containment beyond that needs an OS sandbox | ADR-0015 §3 |
 | R-3 | Network egress ungated (`WebFetch`/`WebSearch` absent from the tool table) | Medium | Needs a URL/domain dimension, not a path prefix; deliberate exclusion over false claim | ADR-0015 revisit-if |
-| R-4 | Model-facing enforcement gap: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees | High | No SDK result-rewrite channel exists yet; harness data plane (persist/emit) is covered | ADR-0012 §9 + revisit-if, ADR-0013 §9 |
+| R-4 | Model-facing enforcement gap: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. Widened 2026-07-14: skill bodies enter the system prompt whole (unconditional, session-start) under the same observe-only posture | High | No SDK result-rewrite channel exists yet; harness data plane (persist/emit) is covered. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel is the named follow-up (§5) | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
 | R-5 | LLM judge is injectable once implemented | Low (bounded) | Tighten-only authority converts compromise into false positives at worst | ADR-0016 §2 |
 | R-6 | Case folding conflates distinct files on opt-in case-sensitive volumes (darwin/win32) | Low | The default-filesystem bypass it closes (`/ETC/passwd`) was live-verified; the conflation case is rare and fails toward stricter | ADR-0015 §2 |
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
@@ -371,7 +387,7 @@ not live values:
 | ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: scalar `defaultDecision` override (R-8) | ADR-0014 §5, §6 R-8 |
 | ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. npm publish hardening is a named pending decision (Week-4 publish ADR) | ADR-0019, §3, §5 Tampering |
 | ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
-| ASI06 | Memory & Context Poisoning | Skill descriptions scanned + smuggling-stripped before the system prompt (2026-07-13). Named gap: S-1 verdicts observe-only, flagged content still reaches model context | §6 R-4, §5 Tampering, ADR-0012 §9 |
+| ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Named gap: S-1 verdicts observe-only, flagged content still reaches model context | §6 R-4, §5 Tampering, ADR-0012 §9, ADR-0006 amendment |
 | ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
 | ASI08 | Cascading Agent Failures | Fail-closed posture; drift gate fails red rather than degrading | §1, ADR-0015, ADR-0019 |
 | ASI09 | Human-Agent Trust Exploitation | Spoofing detectors (`system:`-framing, role-impersonation tokens) | §5 Spoofing |
