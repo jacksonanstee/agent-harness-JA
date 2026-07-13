@@ -45,3 +45,6 @@ coverage/
 # Temp
 tmp/
 .cache/
+
+# Local planning scratch (never committed — internal working notes)
+tasks/
