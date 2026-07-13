@@ -145,6 +145,11 @@ const validateBaseline = ajv.compile(baselineSchema);
  * ENOENT-tolerant lstat logic would be the second implementation of the same
  * check with no independent value (unlike the deliberate totals-backstop
  * duplication, DEC-0016).
+ *
+ * DELIBERATE second implementation alongside `src/cli/shared.ts`'s
+ * `refuseSymlinkedDir` (different layer, different error type, different
+ * ENOENT semantics) — extract to `src/internal/` only on a third consumer,
+ * per the sanitize.ts precedent (ADR-0008 Revisit-if fired at the 4th copy).
  */
 export function refuseSymlink(path: string, label: string): void {
   let isLink: boolean;
