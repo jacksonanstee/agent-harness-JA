@@ -13,7 +13,15 @@ export interface SkillMetadata {
 }
 
 export interface Skill {
+  /** Schema-constrained (`^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64) at load. */
   name: string;
+  /**
+   * RAW attacker-influenced free text (length-capped only). Deliberately not
+   * sanitized at load — sinks opt in per charset contract: session.ts
+   * `cleanSkillText` strips control/bidi/invisible chars before the system
+   * prompt and scans the raw text. A new consumer of this field must do the
+   * same at its own boundary.
+   */
   description: string;
   version: string;
   trigger?: SkillTrigger;

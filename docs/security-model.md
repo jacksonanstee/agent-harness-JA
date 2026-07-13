@@ -6,7 +6,10 @@
 > ADR-0020 adversary-is-injectable, both 2026-07-12), and a Week-4
 > amendment for PR #25's baseline load-path hardening (duplicate-row-id
 > refusal, ancestor-chain symlink walk, single-fd `O_NOFOLLOW` read —
-> 2026-07-13; see §5 Tampering). This document says
+> 2026-07-13; see §5 Tampering) and a same-day amendment for the skill-content
+> sanitization fix (issue #24: bidi-stripped diagnostics, invisible-char
+> stripping + observe-only scan of skill descriptions before the system
+> prompt — see §5 Tampering, §9 ASI06). This document says
 > what the layer defends, against whom, and — just as deliberately — what
 > it does not. Claims here are anchored to shipped code and to incidents
 > found and fixed in review, not to intentions.
@@ -170,7 +173,16 @@ typed message, never a best-effort diff or a mid-diff TypeError.
 
 Excerpts are stripped of bidi controls before logging (Trojan-Source,
 CVE-2021-42574), so a hostile payload cannot visually reorder the audit trail
-that describes it.
+that describes it. As of 2026-07-13 (issue #24) the same stripping covers the
+skills-loader diagnostics (`SkillError` file/field/message) and the skill
+name/description lines that `buildSystemPrompt` emits — previously separate,
+weaker sinks (the prompt sink also drops invisible smuggling chars:
+zero-width, tag block, variation selectors — combining marks are deliberately
+left, as they are legitimate in NFD accented text). Skill descriptions are
+additionally run through the injection
+scanner at session start (observe-only, the R-4 posture): they enter the
+system prompt, which made them a context-poisoning channel that bypassed the
+scanner entirely.
 
 **The adversarial verifier's adversary reads attacker-influenceable content
 and is itself injectable (ADR-0020, E-4).** Two payloads reach the
@@ -359,7 +371,7 @@ not live values:
 | ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: scalar `defaultDecision` override (R-8) | ADR-0014 §5, §6 R-8 |
 | ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. npm publish hardening is a named pending decision (Week-4 publish ADR) | ADR-0019, §3, §5 Tampering |
 | ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
-| ASI06 | Memory & Context Poisoning | Named gap: S-1 scan is observe-only, flagged content still reaches model context | §6 R-4, ADR-0012 §9 |
+| ASI06 | Memory & Context Poisoning | Skill descriptions scanned + smuggling-stripped before the system prompt (2026-07-13). Named gap: S-1 verdicts observe-only, flagged content still reaches model context | §6 R-4, §5 Tampering, ADR-0012 §9 |
 | ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
 | ASI08 | Cascading Agent Failures | Fail-closed posture; drift gate fails red rather than degrading | §1, ADR-0015, ADR-0019 |
 | ASI09 | Human-Agent Trust Exploitation | Spoofing detectors (`system:`-framing, role-impersonation tokens) | §5 Spoofing |

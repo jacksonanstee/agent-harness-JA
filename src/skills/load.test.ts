@@ -416,4 +416,32 @@ describe('skills: load', () => {
       expect(() => load(tmp)).not.toThrow();
     });
   });
+
+  describe('diagnostic sanitization strips bidi controls (issue #24, Trojan-Source)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'skills-bidi-'));
+    afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+    it('SkillError.file never carries bidi overrides from a hostile filename', () => {
+      // RLO (U+202E) in the filename would render "...dm.evil" reversed at
+      // the operator's terminal, disguising the real extension.
+      writeFileSync(join(tmp, 'legit‮dm.evil.md'), 'not a skill: no frontmatter\n');
+      const { errors } = load(tmp);
+      expect(errors.length).toBeGreaterThan(0);
+      for (const error of errors) {
+        expect(error.file).not.toMatch(/[‪-‮⁦-⁩‎‏؜]/);
+        expect(error.message).not.toMatch(/[‪-‮⁦-⁩‎‏؜]/);
+      }
+    });
+
+    it('SkillError.field never carries bidi from a hostile unknown frontmatter key', () => {
+      writeFileSync(
+        join(tmp, 'unknown-key.md'),
+        '---\nname: ok-skill\ndescription: fine\nversion: 1.0.0\n"bad‮key": x\n---\nbody\n',
+      );
+      const { errors } = load(tmp);
+      const schemaError = errors.find((e) => e.file.includes('unknown-key.md'));
+      expect(schemaError).toBeDefined();
+      expect(schemaError?.field ?? '').not.toMatch(/[‪-‮⁦-⁩]/);
+    });
+  });
 });
