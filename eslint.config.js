@@ -142,4 +142,25 @@ export default tseslint.config(
       'no-restricted-imports': ['error', { patterns: ['**/cli', '**/cli.js', '**/cli/**'] }],
     },
   },
+  // Intra-eval direction (Week-4; closes the E-3 review3 MEDIUM): scorecard/
+  // is the producer-agnostic core — producers (golden, redteam) and the
+  // verifier import IT, never the reverse. NOTE: flat-config
+  // no-restricted-imports OVERRIDES rather than merges (the known telemetry
+  // peer-ban gap), so this block must restate the eval-wide CLI ban above.
+  {
+    files: ['src/eval/scorecard/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/cli', '**/cli.js', '**/cli/**',
+            '**/golden', '**/golden/**',
+            '**/redteam', '**/redteam/**',
+            '**/verifier', '**/verifier/**',
+          ],
+        },
+      ],
+    },
+  },
 );
