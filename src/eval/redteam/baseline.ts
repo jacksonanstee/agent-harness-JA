@@ -1,6 +1,6 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
-import { lstatSync, readFileSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute, normalize, sep } from 'node:path';
 
 import { diffRows, toCanonicalJson } from '../scorecard/index.js';
 import type { ScorecardEnvelope } from '../scorecard/index.js';
@@ -42,6 +42,35 @@ const _metaExhaustive: UnclassifiedMetaField extends never
   : ['unclassified RedteamMeta field', UnclassifiedMetaField] = true;
 void _metaExhaustive;
 
+/**
+ * GM2 tripwire, rows + totals legs (Week-4 hardening — previously meta-only,
+ * so adding a RedteamRow/RedteamTotals field failed at RUNTIME on the next
+ * baseline load instead of at typecheck). The schema's `required` lists below
+ * are built from these consts; `satisfies` catches a stale entry here, the
+ * `Exclude` tripwires catch a type field missing from here. Adding a field to
+ * either type is a compile error until the schema is updated in the same
+ * change — and the baseline regenerated (`required` + additionalProperties:
+ * false make old baselines fail loudly at load, by design).
+ */
+const ROW_FIELDS = [
+  'id', 'pass', 'failureKind', 'category', 'verdict', 'expected', 'reason',
+] as const satisfies readonly (keyof RedteamRow)[];
+type UnlistedRowField = Exclude<keyof RedteamRow, (typeof ROW_FIELDS)[number]>;
+const _rowExhaustive: UnlistedRowField extends never
+  ? true
+  : ['RedteamRow field missing from ROW_FIELDS/schema', UnlistedRowField] = true;
+void _rowExhaustive;
+
+const TOTALS_FIELDS = [
+  'total', 'passed', 'failed', 'byFailureKind',
+  'malicious', 'detected', 'blocked', 'flaggedOnly', 'falseBlockCount',
+] as const satisfies readonly (keyof RedteamTotals)[];
+type UnlistedTotalsField = Exclude<keyof RedteamTotals, (typeof TOTALS_FIELDS)[number]>;
+const _totalsExhaustive: UnlistedTotalsField extends never
+  ? true
+  : ['RedteamTotals field missing from TOTALS_FIELDS/schema', UnlistedTotalsField] = true;
+void _totalsExhaustive;
+
 /** All baseline load/validate failures. The CLI maps every one to exit 2. */
 export class BaselineError extends Error {
   constructor(message: string) {
@@ -73,7 +102,7 @@ const baselineSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'pass', 'failureKind', 'category', 'verdict', 'expected', 'reason'],
+        required: [...ROW_FIELDS],
         properties: {
           id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,63}$' },
           pass: { type: 'boolean' },
@@ -88,10 +117,7 @@ const baselineSchema = {
     totals: {
       type: 'object',
       additionalProperties: false,
-      required: [
-        'total', 'passed', 'failed', 'byFailureKind',
-        'malicious', 'detected', 'blocked', 'flaggedOnly', 'falseBlockCount',
-      ],
+      required: [...TOTALS_FIELDS],
       properties: {
         total: { type: 'integer' }, passed: { type: 'integer' }, failed: { type: 'integer' },
         byFailureKind: {
@@ -132,6 +158,35 @@ export function refuseSymlink(path: string, label: string): void {
 }
 
 /**
+ * Ancestor-chain guard (Week-4 hardening; closes the review3 leaf+parent-only
+ * gap). A RELATIVE baseline path is repo-internal — every component is
+ * attacker-committable data under the malicious-cloned-repo threat model, so
+ * each accumulating directory is lstat-checked (a committed symlink at `eval`
+ * redirects `eval/redteam/baseline.json` wholesale; the leaf and parent checks
+ * never see it). An ABSOLUTE path is operator-supplied and may legitimately
+ * traverse OS-owned symlinks (macOS `/tmp`, `/var`), so it keeps the parent
+ * check only — the operator owns that path, the repo does not.
+ */
+export function refuseAncestorSymlinks(path: string): void {
+  if (isAbsolute(path)) {
+    refuseSymlink(dirname(path), 'directory');
+    return;
+  }
+  const parts = normalize(path).split(sep);
+  let acc = '';
+  for (const part of parts.slice(0, -1)) {
+    acc = acc === '' ? part : acc + sep + part;
+    refuseSymlink(acc, 'directory');
+  }
+}
+
+// O_NOFOLLOW is a POSIX belt-and-braces backstop for the lstat checks above
+// (an fd opened with it can never traverse a leaf symlink, even one raced in
+// after the lstat). Absent on platforms without it — the lstat checks remain
+// the primary, message-bearing guard everywhere.
+const O_NOFOLLOW: number = fsConstants.O_NOFOLLOW ?? 0;
+
+/**
  * Hostile-input load (design §Baseline load): the baseline is repo-controlled
  * data under the malicious-cloned-repo threat model. Size-capped before read,
  * symlink-refused, ajv-validated against an exact allowlist whose id pattern
@@ -139,28 +194,43 @@ export function refuseSymlink(path: string, label: string): void {
  */
 export function loadBaseline(path: string): { raw: string; parsed: BaselineScorecard } {
   refuseSymlink(path, 'file');
-  refuseSymlink(dirname(path), 'directory');
-  let size: number;
+  refuseAncestorSymlinks(path);
+  // Single-fd read (Week-4 hardening): open → fstat → read on ONE descriptor
+  // collapses the former lstat→stat→read window — the size cap and the read
+  // are now guaranteed to see the same file, and O_NOFOLLOW refuses a leaf
+  // symlink at the syscall even if one races in after the lstat above.
+  let fd: number;
   try {
-    size = statSync(path).size;
-  } catch {
-    throw new BaselineError(
-      `no baseline found at ${path}; in the agent-harness-JA repo, run --update-baseline and commit the result; outside it, pass --baseline <path>`,
-    );
-  }
-  if (size > MAX_BASELINE_BYTES) {
-    throw new BaselineError(`baseline ${path} exceeds ${MAX_BASELINE_BYTES} bytes (${size})`);
+    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new BaselineError(
+        `no baseline found at ${path}; in the agent-harness-JA repo, run --update-baseline and commit the result; outside it, pass --baseline <path>`,
+      );
+    }
+    if (code === 'ELOOP') {
+      throw new BaselineError(`refusing baseline: file ${path} is a symlink`);
+    }
+    throw new BaselineError(`cannot read baseline ${path} (${code ?? 'open error'})`);
   }
   let raw: string;
   try {
-    raw = readFileSync(path, 'utf8');
+    const stat = fstatSync(fd);
+    if (stat.isDirectory()) {
+      throw new BaselineError(`cannot read baseline ${path} (EISDIR)`);
+    }
+    if (stat.size > MAX_BASELINE_BYTES) {
+      throw new BaselineError(`baseline ${path} exceeds ${MAX_BASELINE_BYTES} bytes (${stat.size})`);
+    }
+    raw = readFileSync(fd, 'utf8');
   } catch (error: unknown) {
-    // ALL load failures throw BaselineError (design contract): readFileSync
-    // can throw raw past the stat guards (EISDIR when path is a directory,
-    // EACCES on permission loss between stat and read).
+    if (error instanceof BaselineError) throw error;
     throw new BaselineError(
       `cannot read baseline ${path} (${(error as NodeJS.ErrnoException).code ?? 'read error'})`,
     );
+  } finally {
+    closeSync(fd);
   }
   let parsed: unknown;
   try {
@@ -174,7 +244,20 @@ export function loadBaseline(path: string): { raw: string; parsed: BaselineScore
   if (!validateBaseline(parsed)) {
     throw new BaselineError(`baseline ${path} is invalid: ${ajv.errorsText(validateBaseline.errors)}`);
   }
-  return { raw, parsed: parsed as unknown as BaselineScorecard };
+  const baseline = parsed as unknown as BaselineScorecard;
+  // Row-id uniqueness (milestone review LOW-1): ajv cannot express it, and a
+  // duplicated id previously surfaced only downstream as a confusing
+  // `removed` drift (fail-closed, exit 1). Malformed baselines are a LOAD
+  // failure — refuse here, exit 2, before any gate evaluation. Ids are
+  // charset-pinned by the schema pattern above, so interpolating is safe.
+  const seenIds = new Set<string>();
+  for (const row of baseline.rows) {
+    if (seenIds.has(row.id)) {
+      throw new BaselineError(`baseline ${path} has duplicate row id '${row.id}'`);
+    }
+    seenIds.add(row.id);
+  }
+  return { raw, parsed: baseline };
 }
 
 export type DriftKind = 'regression' | 'improvement' | 'new-case' | 'recalibration' | 'envelope';

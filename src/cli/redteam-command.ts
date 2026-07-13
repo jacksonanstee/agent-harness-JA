@@ -8,6 +8,7 @@ import {
   loadBaseline,
   normalizeForBaseline,
   REDTEAM_ARM_LABEL,
+  refuseAncestorSymlinks,
   refuseSymlink,
   renderDriftReport,
   runRedteam,
@@ -15,7 +16,7 @@ import {
   toRedteamMarkdown,
   totalsMismatchDetail,
 } from '../eval/index.js';
-import type { BaselineScorecard, DriftFinding, RedteamScorecard } from '../eval/index.js';
+import type { BaselineScorecard, DriftFinding } from '../eval/index.js';
 import { scan } from '../security/index.js';
 import { EVAL_OUT_DIR, readPackageVersion, sanitizeForTerminal, USAGE, writeScorecard } from './shared.js';
 
@@ -68,19 +69,6 @@ export function parseRedteamArgs(argv: string[]): RedteamParseResult {
     }
   }
   return { ok: true, value: { command: 'redteam', out, updateBaseline, baselinePath } };
-}
-
-/**
- * Gate is `totals.falseBlockCount`, not overall pass/fail: a keyless redteam
- * run over the corpus is expected to have `missed`/`false-flag` rows today
- * (S-1's known-missed cases), and those must not fail the CLI gate — only a
- * regression that blocks a real user (a false-block) does (decision log CG11).
- * Superseded as the *combined* gate by `gateOutcome` (E-3), but kept as its
- * own export: `src/cli.ts` still re-exports it and `src/cli.test.ts` exercises
- * it directly as a standalone false-block predicate.
- */
-export function redteamExitCode(scorecard: RedteamScorecard): number {
-  return scorecard.totals.falseBlockCount > 0 ? 1 : 0;
 }
 
 export interface GateOutcome {
@@ -185,9 +173,12 @@ function runCompare(args: RedteamArgs, freshNorm: BaselineScorecard, internalDet
  * `--update-baseline` (design §Update mechanics): never compares — it
  * refuses on the same two baseline-independent signals a compare run would
  * fail on (false-block, totals backstop), so local can never bake in a
- * state CI would reject anyway. Otherwise it always succeeds: exit 0, no
- * `GATE_FAILURE=` line (it is not a gate run). The diff against whatever
- * baseline previously existed is printed as an informational courtesy only.
+ * state CI would reject anyway. Otherwise it always succeeds: exit 0. An
+ * update run is not a gate run, so NO code path here emits a `GATE_FAILURE=`
+ * line (Week-4 fix — the refusal branch used to print one, contradicting
+ * this contract); refusals keep gateOutcome's exit codes (1 false-block,
+ * 2 internal) with the reason on stderr. The diff against whatever baseline
+ * previously existed is printed as an informational courtesy only.
  */
 function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDetail: string | null): number {
   if (internalDetail !== null || freshNorm.totals.falseBlockCount > 0) {
@@ -202,7 +193,6 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
       driftFindings: [],
       nonCanonical: false,
     });
-    process.stdout.write(`${outcome.gateLine}\n`);
     return outcome.exitCode;
   }
 
@@ -213,7 +203,9 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
     // (a cloned repo can commit `baseline.json.tmp` as a symlink), so it gets
     // the same refusal — and the `wx` write below holds even if this races.
     refuseSymlink(tmpPath, 'file');
-    refuseSymlink(dirname(args.baselinePath), 'directory');
+    // Whole ancestor chain for relative (repo-internal) paths, parent-only
+    // for operator-supplied absolute paths — same rule as the read side.
+    refuseAncestorSymlinks(args.baselinePath);
   } catch (error: unknown) {
     if (error instanceof BaselineError) {
       process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
@@ -247,9 +239,20 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
   // `rm` clears a leftover regular tmp from a crashed run (never follows a
   // symlink); `wx` (O_CREAT|O_EXCL) refuses anything that appears at tmpPath
   // after the checks above, so the write can never traverse a planted link.
-  rmSync(tmpPath, { force: true });
-  writeFileSync(tmpPath, toCanonicalJson(freshNorm), { flag: 'wx' });
-  renameSync(tmpPath, args.baselinePath);
+  // Write failures are infrastructure, not gate state: exit 2 with the code
+  // on stderr (Week-4 fix — they used to escape to the generic catch as a
+  // gate-colliding exit 1 with no diagnostic).
+  try {
+    rmSync(tmpPath, { force: true });
+    writeFileSync(tmpPath, toCanonicalJson(freshNorm), { flag: 'wx' });
+    renameSync(tmpPath, args.baselinePath);
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'write error';
+    process.stderr.write(
+      `${sanitizeForTerminal(`failed to write baseline ${args.baselinePath} (${code})`)}\n`,
+    );
+    return 2;
+  }
   process.stderr.write(`baseline written to ${args.baselinePath}\n`);
 
   if (oldParsed !== null) {

@@ -49,7 +49,7 @@ export {
 } from './cli/shared.js';
 export { composeSecurity, hookRecordToTelemetryInput, SettingsLoadError } from './cli/shared.js';
 export { parseEvalArgs } from './cli/eval-command.js';
-export { parseRedteamArgs, redteamExitCode } from './cli/redteam-command.js';
+export { parseRedteamArgs } from './cli/redteam-command.js';
 export type { RedteamArgs } from './cli/redteam-command.js';
 
 export interface RunArgs {
