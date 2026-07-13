@@ -79,12 +79,49 @@ function assistantText(message: SdkAssistantMessage): string[] {
     .map((block) => block.text);
 }
 
-function buildSystemPrompt(skills: Skill[]): string | undefined {
-  if (skills.length === 0) return undefined;
-  const lines = skills.map(
-    (skill) => `- ${cleanSkillText(skill.name)}: ${cleanSkillText(skill.description)}`,
-  );
-  return ['You have the following harness skills available:', ...lines].join('\n');
+/**
+ * Aggregate budget for skill content injected into the system prompt. The
+ * loader's 1 MB cap is per FILE (memory safety); without an aggregate bound a
+ * malicious skill pack (many schema-valid files with large bodies) turns
+ * every session turn into a context/cost blowup. Whole-skill granularity: an
+ * over-budget skill is dropped and warned about, never truncated mid-body —
+ * a half-injected skill is worse than an absent one.
+ */
+const MAX_SKILL_PROMPT_CHARS = 256_000;
+
+function buildSystemPrompt(skills: Skill[]): {
+  prompt: string | undefined;
+  droppedSkills: string[];
+} {
+  if (skills.length === 0) return { prompt: undefined, droppedSkills: [] };
+  // The body IS the skill (ADR-0006: "This is what the agent reads when the
+  // skill is loaded") — inject it whole, not just the name/description line.
+  // Same charset contract as the header: control/bidi/invisible chars are
+  // stripped; the injection scan runs on the RAW body before this.
+  const sections: string[] = [];
+  const droppedSkills: string[] = [];
+  let remaining = MAX_SKILL_PROMPT_CHARS;
+  for (const skill of skills) {
+    const name = cleanSkillText(skill.name);
+    const header = `## Skill: ${name}\n${cleanSkillText(skill.description)}`;
+    const body = cleanSkillText(skill.body).trim();
+    const section = body === '' ? header : `${header}\n\n${body}`;
+    // A later, smaller skill may still fit after an oversized one is dropped:
+    // inclusion is per-skill against the remaining budget, in load order.
+    // +2 counts the `\n\n` join separator, so the cap is exact, not soft —
+    // otherwise ~20k minimal skills overrun the budget ~15% via separators.
+    if (section.length + 2 > remaining) {
+      droppedSkills.push(name);
+      continue;
+    }
+    remaining -= section.length + 2;
+    sections.push(section);
+  }
+  if (sections.length === 0) return { prompt: undefined, droppedSkills };
+  return {
+    prompt: ['You have the following harness skills available:', ...sections].join('\n\n'),
+    droppedSkills,
+  };
 }
 
 /**
@@ -120,6 +157,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // raw text first, so stripping cannot hide anything from it.
     for (const skill of loadResult.skills) {
       runInjectionScan(`skill "${cleanSkillText(skill.name)}" description`, skill.description);
+      runInjectionScan(`skill "${cleanSkillText(skill.name)}" body`, skill.body);
     }
 
     const harnessSessionId = generateId();
@@ -341,13 +379,21 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let numTurns: number | null = null;
     let streamError: unknown = null;
 
+    const { prompt: systemPrompt, droppedSkills } = buildSystemPrompt(loadResult.skills);
+    for (const name of droppedSkills) {
+      warn(
+        `skill "${name}" dropped from the system prompt: aggregate skill budget ` +
+          `(${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
+      );
+    }
+
     try {
       // Steps 5-14: the SDK turn.
       const stream = deps.query({
         prompt,
         options: {
           model: modelChoice.model,
-          systemPrompt: buildSystemPrompt(loadResult.skills),
+          systemPrompt,
           maxTurns: config.maxTurns,
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],

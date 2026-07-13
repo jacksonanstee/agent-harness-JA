@@ -27,7 +27,15 @@ export interface Skill {
   trigger?: SkillTrigger;
   requires?: SkillRequires;
   metadata?: SkillMetadata;
-  /** Markdown body below the frontmatter, trimmed. */
+  /**
+   * Markdown body below the frontmatter, trimmed. Like `description`, this is
+   * RAW attacker-influenced free text — bounded only by the loader's 1 MB
+   * file cap, and deliberately not sanitized at load. Sinks opt in per
+   * charset contract: session.ts `cleanSkillText` strips control/bidi/
+   * invisible chars before the system prompt, scans the raw text first, and
+   * bounds the aggregate injected size. A new consumer of this field must do
+   * the same at its own boundary.
+   */
   body: string;
   /** Absolute path of the source file. */
   path: string;
