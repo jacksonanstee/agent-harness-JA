@@ -110,7 +110,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
-As of 2026-07-13:
+As of 2026-07-14:
 
 | Milestone | Status |
 |---|---|
@@ -120,7 +120,7 @@ As of 2026-07-13:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0020 |
-| Tests | 849 at this snapshot — [live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml) |
+| Tests | 865 at this snapshot — [live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml) |
 | Docs polish, blog series, npm publish | Week 4 — in progress |
 
 Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
