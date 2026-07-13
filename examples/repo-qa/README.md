@@ -31,11 +31,16 @@ denied. A typical run costs well under a cent.
 ### See the security policy fire
 
 The committed [`.harness/settings.json`](./.harness/settings.json) denies
-`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `WebFetch`. Ask the agent to
-do something that needs one of them:
+`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, and `WebFetch` — this
+agent answers questions; it has no business mutating anything. `Bash` is on
+the list because denying `Write` alone is not a boundary: an agent asked to
+create a file will happily route around it with `echo > file` (observed live
+while building this example — the same lesson as the harness's own
+dual-table incident, where tools missing from one gate's table bypassed it).
+Ask the agent to do something that needs a denied tool:
 
 ```bash
-node ../../dist/cli.js run "Create a file named demo.txt containing the word hello"
+node ../../dist/cli.js run "Try to create a file named demo.txt containing the word hello. If you cannot, reply DENIED and stop."
 ```
 
 The write is denied by the pre-tool permission gate (ADR-0014) and the trailer
