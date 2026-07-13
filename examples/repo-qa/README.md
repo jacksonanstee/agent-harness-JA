@@ -31,8 +31,11 @@ denied. A typical run costs well under a cent.
 ### See the security policy fire
 
 The committed [`.harness/settings.json`](./.harness/settings.json) denies
-`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, and `WebFetch` — this
-agent answers questions; it has no business mutating anything. `Bash` is on
+`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `WebFetch`, and
+`WebSearch` — this agent answers questions about local files; it has no
+business mutating anything or talking to the network (the security model
+names `WebFetch`/`WebSearch` together as the ungated-egress pair — deny one
+and not the other and you've kept the documented exfiltration path open). `Bash` is on
 the list because denying `Write` alone is not a boundary: an agent asked to
 create a file will happily route around it with `echo > file` (observed live
 while building this example — the same lesson as the harness's own
@@ -53,13 +56,21 @@ user's policy. Rules only.
 ## Evaluate it
 
 The two `*.task.md` files here are real golden tasks (ADR-0017 format) with
-sibling `*.oracle.mjs` oracles. From the repo root:
+sibling `*.oracle.mjs` oracles. Run the eval **from this directory** — the
+security settings are read from the working directory's
+`.harness/settings.json`, so evaluating from the repo root would silently
+run the tasks with no policy at all (the repo root commits no settings
+file). From `examples/repo-qa/`:
 
 ```bash
-node dist/cli.js eval examples/repo-qa
+node ../../dist/cli.js eval .
 ```
 
-Expected: 2/2 pass, and a scorecard JSON written under `.harness/eval/`.
+Expected: 2/2 pass, and a scorecard JSON written under this directory's
+`.harness/eval/` (gitignored). The oracles also pin *how* the answer was
+produced, not just its content: a passing task must complete in a single
+turn, which a tool-hunting answer cannot — see the note in either
+`*.oracle.mjs` for why that guard exists.
 
 > **Trust caveat (R-10):** oracles are arbitrary code executed in-process by
 > the eval CLI. Only run `eval` against repositories you trust — including

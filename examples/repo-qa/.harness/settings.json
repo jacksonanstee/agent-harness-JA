@@ -6,7 +6,8 @@
       { "tool": "MultiEdit", "decision": "deny" },
       { "tool": "NotebookEdit", "decision": "deny" },
       { "tool": "Bash", "decision": "deny" },
-      { "tool": "WebFetch", "decision": "deny" }
+      { "tool": "WebFetch", "decision": "deny" },
+      { "tool": "WebSearch", "decision": "deny" }
     ]
   }
 }

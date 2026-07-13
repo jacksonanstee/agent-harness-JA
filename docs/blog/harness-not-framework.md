@@ -116,10 +116,10 @@ the harness shape kept the codebase small enough that the
 aspiration.
 
 The cost is real too. A harness is only as expressive as the seams the SDK
-exposes. Two of the security model's named residual risks (R-4's
-observe-only posture; the absence of a result-rewrite channel) exist
-*because* the loop isn't mine — enforcement that a framework would implement
-in a weekend waits on an upstream channel. I have chosen to document that
+exposes. The security model's most consequential named residual risk — R-4,
+the observe-only posture, accepted because no SDK result-rewrite channel
+exists yet — is there *because* the loop isn't mine: enforcement that a
+framework would implement in a weekend waits on an upstream channel. I have chosen to document that
 boundary rather than fork my way around it, and week by week that choice
 keeps being tested. So far it has held.
 

@@ -98,14 +98,15 @@ review — and a disproportionate number were found *in the fixes*:
 - The permission model's review caught a project match-rule out-specificing
   a user's blanket deny (a cloned repo defeating global policy) — and the
   *verify pass on that fix* caught the fix's own regression: relative match
-  patterns silently failing open (`/etc/*` matching `/etcetera`).
+  patterns silently failing open (a relative `secrets/*` deny that never
+  fired). The same hardening round pinned the boundary case in the other
+  direction too, so `/etc/*` cannot false-match `/etcetera`.
 - A case-folding hardening was caught folding in the **widening**
   direction — case-insensitive matching applied to allow rules loosens
   policy; the shipped fix folds argv0 only.
-- A symlink containment fix was caught (with an empirical proof-of-concept)
-  normalizing `link/../real` textually while the syscall followed the link —
-  lexical path logic and the filesystem disagree, so the walk now uses raw
-  components.
+- A symlink containment fix was caught normalizing `link/../real` textually
+  while the syscall followed the link — lexical path logic and the
+  filesystem disagree, so the walk now uses raw components.
 
 One more incident deserves its own paragraph because every security tool
 author eventually meets it: **a secret scanner's own test fixtures are
@@ -114,9 +115,8 @@ module's corpus of fake AWS keys and tokens tripped this repo's own
 pre-commit secret gate *and* GitHub's push protection. The fix is a small
 discipline stack: fixture tokens are assembled from split fragments at
 runtime (`'AKIA' + 'IOSF…'`) so no detectable literal exists in any file or
-git history, the rule tables use `as const satisfies` typing so
-secret-named identifiers don't self-match, and the feature branch was
-squashed so no intermediate commit carries an assembled literal. None of
+git history, and the feature branch was squashed so no intermediate commit
+carries an assembled literal. None of
 this is in the threat model — the attacker here is your own tooling — but
 it is the kind of friction that separates a security layer someone has
 actually operated from one that has only been designed.
