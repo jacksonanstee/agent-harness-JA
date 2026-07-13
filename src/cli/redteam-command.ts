@@ -173,12 +173,11 @@ function runCompare(args: RedteamArgs, freshNorm: BaselineScorecard, internalDet
  * `--update-baseline` (design §Update mechanics): never compares — it
  * refuses on the same two baseline-independent signals a compare run would
  * fail on (false-block, totals backstop), so local can never bake in a
- * state CI would reject anyway. Otherwise it always succeeds: exit 0. An
- * update run is not a gate run, so NO code path here emits a `GATE_FAILURE=`
- * line (Week-4 fix — the refusal branch used to print one, contradicting
- * this contract); refusals keep gateOutcome's exit codes (1 false-block,
- * 2 internal) with the reason on stderr. The diff against whatever baseline
- * previously existed is printed as an informational courtesy only.
+ * state CI would reject anyway. A successful update is exit 0 with NO
+ * `GATE_FAILURE=` line (not a gate run); its REFUSAL paths DO print the line
+ * (ADR-0019 decision 6 — the refusal is a gate-shaped outcome, kept
+ * scriptable). The diff against whatever baseline previously existed is
+ * printed as an informational courtesy only.
  */
 function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDetail: string | null): number {
   if (internalDetail !== null || freshNorm.totals.falseBlockCount > 0) {
@@ -193,6 +192,7 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
       driftFindings: [],
       nonCanonical: false,
     });
+    process.stdout.write(`${outcome.gateLine}\n`);
     return outcome.exitCode;
   }
 

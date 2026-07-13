@@ -1,6 +1,6 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
-import { dirname, isAbsolute, normalize, sep } from 'node:path';
+import { dirname, isAbsolute, sep } from 'node:path';
 
 import { diffRows, toCanonicalJson } from '../scorecard/index.js';
 import type { ScorecardEnvelope } from '../scorecard/index.js';
@@ -171,13 +171,24 @@ export function refuseSymlink(path: string, label: string): void {
  * never see it). An ABSOLUTE path is operator-supplied and may legitimately
  * traverse OS-owned symlinks (macOS `/tmp`, `/var`), so it keeps the parent
  * check only — the operator owns that path, the repo does not.
+ *
+ * The relative walk operates on the RAW components, never `normalize(path)`
+ * first: lexical normalization cancels `symlinkdir/..` textually, dropping an
+ * intermediate symlink from the walk while the real `open()` still follows it
+ * (a security review found this — a `symlinkdir/../real/baseline.json` shape
+ * evaded the whole check). Splitting the raw path and lstat-checking every
+ * accumulating prefix catches a symlink at ANY component: for a symlink at
+ * position k, the prefix ending exactly at k has it as its final component,
+ * which lstat reports without following. `.`/empty segments are resolution
+ * no-ops (dropped); `..` is retained — `lstat` on a `..`-terminated prefix is
+ * always safe, and the symlink one component earlier is already caught.
  */
 export function refuseAncestorSymlinks(path: string): void {
   if (isAbsolute(path)) {
     refuseSymlink(dirname(path), 'directory');
     return;
   }
-  const parts = normalize(path).split(sep);
+  const parts = path.split(sep).filter((p) => p !== '' && p !== '.');
   let acc = '';
   for (const part of parts.slice(0, -1)) {
     acc = acc === '' ? part : acc + sep + part;

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -135,6 +135,30 @@ describe('loadBaseline', () => {
     const viaGrandparentLink = join(base, 'evil', 'sub', 'baseline.json');
     expect(() => loadBaseline(viaGrandparentLink)).toThrow(BaselineError);
     expect(() => loadBaseline(viaGrandparentLink)).toThrow(/symlink/);
+  });
+
+  it('RELATIVE path with `..` AFTER a symlink component: still refused (raw-component walk, not lexical normalize)', () => {
+    // The security-review PoC: `eval/symlinkdir/../real/baseline.json`.
+    // path.normalize() would cancel `symlinkdir/..` textually, dropping the
+    // symlink from the walk while the real open() follows it. The raw-component
+    // walk lstats `<base>/eval/symlinkdir` and catches it.
+    mkdirSync('.harness', { recursive: true });
+    const base = mkdtempSync('.harness/w4-dotdot-');
+    dirs.push(base);
+    const realDir = join(base, 'eval', 'real');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'baseline.json'), toCanonicalJson(normalizeForBaseline(fresh())));
+    // eval/symlinkdir -> real (a sibling); the payload is reachable as
+    // eval/symlinkdir/../real/baseline.json, which normalizes to eval/real/...
+    symlinkSync('real', join(base, 'eval', 'symlinkdir'));
+    // Built by raw concatenation, NOT join() — join normalizes and would
+    // cancel `symlinkdir/..` before loadBaseline ever sees it, exactly the
+    // lexical collapse the fix must NOT do. This is the string a hostile
+    // package.json script could hand an operator.
+    const viaDotDot =
+      join(base, 'eval', 'symlinkdir') + sep + '..' + sep + 'real' + sep + 'baseline.json';
+    expect(() => loadBaseline(viaDotDot)).toThrow(BaselineError);
+    expect(() => loadBaseline(viaDotDot)).toThrow(/symlink/);
   });
 
   it('ABSOLUTE path: a symlinked grandparent is ALLOWED (operator-supplied paths may traverse OS symlinks)', () => {
