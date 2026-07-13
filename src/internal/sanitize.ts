@@ -35,7 +35,8 @@ export function stripBidi(text: string): string {
 // excluded because they are legitimate in NFD-form accented text \u2014 the
 // scanner strips them only transiently for its re-scan pass, never from
 // content. Keep the two charsets in sync when either changes.
-const INVISIBLES = /[\u200b\u200c\u200d\u2060\ufeff\u00ad\ufe00-\ufe0f\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+// eslint-disable-next-line no-misleading-character-class -- the joiners/VS ARE the payload chars being stripped, same suppression as the scanner's SMUGGLING_CHARS
+const INVISIBLES = /[\u200B\u200C\u200D\u2060\uFEFF\u00AD\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
 
 export function stripInvisibles(text: string): string {
   return text.replace(INVISIBLES, '');

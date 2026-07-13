@@ -837,6 +837,7 @@ describe('createSession', () => {
       );
       await session.run('hi');
       const prompt = fake.captured[0]?.options?.systemPrompt ?? '';
+      // eslint-disable-next-line no-misleading-character-class -- asserting the absence of exactly these joiner/VS payload chars
       expect(prompt).not.toMatch(/[\u200B-\u200D\u2060\uFEFF\u00AD\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u);
       expect(prompt).toContain('dothething now');
     });
