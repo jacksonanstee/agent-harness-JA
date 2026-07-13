@@ -16,7 +16,21 @@ import type {
   SessionDeps,
   SessionResult,
 } from './types.js';
-import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
+import { sanitizeControlChars, stripBidi, stripInvisibles } from '../internal/sanitize.js';
+
+// Alias: keeps the ~10 pre-existing call sites unchanged after the
+// internal/ hoist; charset contract (C0/C1 only) is identical.
+const sanitizeText = sanitizeControlChars;
+
+// Skill name/description are attacker-influenced (a hostile skill pack is in
+// the threat model) and flow into the system prompt and warnings — strip
+// control chars, bidi overrides, and invisible smuggling chars (zero-width/
+// tag/variation-selector) at this boundary. Combining marks are deliberately
+// left (legit NFD accents); the injection scan below sees the RAW text, so
+// nothing stripped here evades detection (issue #24 follow-up).
+function cleanSkillText(text: string): string {
+  return stripInvisibles(stripBidi(sanitizeControlChars(text)));
+}
 
 const DEFAULT_DESCRIPTOR: TaskDescriptor = {
   shape: 'build',
@@ -67,7 +81,9 @@ function assistantText(message: SdkAssistantMessage): string[] {
 
 function buildSystemPrompt(skills: Skill[]): string | undefined {
   if (skills.length === 0) return undefined;
-  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+  const lines = skills.map(
+    (skill) => `- ${cleanSkillText(skill.name)}: ${cleanSkillText(skill.description)}`,
+  );
   return ['You have the following harness skills available:', ...lines].join('\n');
 }
 
@@ -94,6 +110,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       : deps.loadSkills(config.skillsDir);
     for (const error of loadResult.errors) {
       warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
+    }
+    // Skill descriptions enter the system prompt (buildSystemPrompt), so scan
+    // them like any other untrusted channel (ASI06 context-poisoning path that
+    // previously bypassed the scanner entirely). Observe-only — same v1
+    // posture as tool results (R-4): a hostile description warns, never
+    // blocks. buildSystemPrompt independently strips control/bidi/invisible
+    // chars (not combining marks — see cleanSkillText); the scan runs on the
+    // raw text first, so stripping cannot hide anything from it.
+    for (const skill of loadResult.skills) {
+      runInjectionScan(`skill "${cleanSkillText(skill.name)}" description`, skill.description);
     }
 
     const harnessSessionId = generateId();

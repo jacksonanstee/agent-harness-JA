@@ -9,7 +9,8 @@ import type {
   SkillError,
   ValidationResult,
 } from './types.js';
-import { sanitizeControlChars as sanitize } from '../internal/sanitize.js';
+import { sanitizeControlChars, stripBidi } from '../internal/sanitize.js';
+
 import {
   hasUnsafeFenceLanguage,
   MAX_FILE_BYTES,
@@ -28,6 +29,11 @@ type Frontmatter = Omit<Skill, 'body' | 'path'>;
 type KeysMatch<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 true satisfies KeysMatch<keyof typeof skillSchema.properties, keyof Frontmatter>;
 
+// Diagnostics carry attacker-influenced strings (filenames, frontmatter keys,
+// parser messages) to the operator's terminal: strip C0/C1 AND bidi controls
+// (issue #24, Trojan-Source) so a hostile name cannot render reversed.
+const sanitize = (text: string): string => stripBidi(sanitizeControlChars(text));
+
 // Frontmatter safety guards (fence-language RCE, engine neutralization, size
 // cap) are shared with the eval task parser: src/internal/frontmatter.ts.
 
@@ -41,7 +47,12 @@ function skillError(
   message: string,
   field?: string,
 ): SkillError {
-  return { file: sanitize(file), kind, ...(field !== undefined && { field }), message: sanitize(message) };
+  return {
+    file: sanitize(file),
+    kind,
+    ...(field !== undefined && { field: sanitize(field) }),
+    message: sanitize(message),
+  };
 }
 
 /**

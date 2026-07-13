@@ -1,14 +1,8 @@
 import type { RedactResult } from '../../security/index.js';
-import { sanitizeControlChars } from '../../internal/sanitize.js';
+import { sanitizeControlChars, stripBidi } from '../../internal/sanitize.js';
 
 /** Stored-reason cap; toMarkdown truncates further for table cells. */
 export const MAX_REASON_LENGTH = 500;
-
-// Bidi format/override + isolate controls (Trojan Source, CVE-2021-42574) +
-// explicit marks. sanitizeControlChars covers C0/C1 but not these; the
-// injection scanner's SMUGGLING_CHARS is deliberately module-private, so this
-// small charset is owned here (scorecard text is a different sink contract).
-const BIDI_CONTROLS = /[‪-‮⁦-⁩‎‏؜]/g;
 
 /**
  * Every string entering a scorecard row goes through this: redact (fail-closed
@@ -38,10 +32,12 @@ export function cleanForScorecard(
  * duplicate-id check (so bidi-distinct hostile filenames collide loudly,
  * pre-spend, instead of aliasing in the final scorecard) and are never
  * secret-redacted (a schema-valid id must survive verbatim).
+ *
+ * Implementation lives in the zero-dep leaf (issue #24: skills needed it and
+ * cannot import eval); re-exported here so scorecard consumers keep their
+ * import path.
  */
-export function stripBidi(text: string): string {
-  return text.replace(BIDI_CONTROLS, ' ');
-}
+export { stripBidi } from '../../internal/sanitize.js';
 
 /** One-line, markdown-cell-safe: strip newlines, escape pipes, well-formed
  *  truncate. Shared by every producer's renderer so an escaping fix lands
