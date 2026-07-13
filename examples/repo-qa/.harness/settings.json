@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "rules": [
+      { "tool": "Write", "decision": "deny" },
+      { "tool": "Edit", "decision": "deny" },
+      { "tool": "MultiEdit", "decision": "deny" },
+      { "tool": "NotebookEdit", "decision": "deny" },
+      { "tool": "WebFetch", "decision": "deny" }
+    ]
+  }
+}
