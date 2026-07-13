@@ -27,13 +27,40 @@ describe('parseTaskFile', () => {
     expect(result.value.oraclePath).toBe(valid('hello.oracle.mjs'));
   });
 
-  it('defaults maxTurns and skillsDir on a minimal task', () => {
+  it('defaults maxTurns; a defaulted-and-ABSENT skillsDir resolves to null (no skills, Week-4)', () => {
     const result = parseTaskFile(valid('minimal.task.md'));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.maxTurns).toBe(DEFAULT_MAX_TURNS);
-    expect(result.value.skillsDir).toBe(resolve(join(here, '__fixtures__', 'valid', 'skills')));
+    // valid/ has no skills/ subdir: the default is a convention, not a
+    // request, so its absence means "no skills" — not a per-run warning.
+    expect(result.value.skillsDir).toBeNull();
     expect(result.value.descriptor).toBeUndefined();
+  });
+
+  it('a defaulted skillsDir that EXISTS still resolves to the absolute path', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-default-skills-'));
+    writeFileSync(
+      join(taskDir, 'with-skills.task.md'),
+      '---\nid: with-skills\n---\nprompt body\n',
+    );
+    mkdirSync(join(taskDir, 'skills'));
+    const result = parseTaskFile(join(taskDir, 'with-skills.task.md'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.skillsDir).toBe(resolve(taskDir, 'skills'));
+  });
+
+  it('an EXPLICIT skillsDir that is missing stays a string (the loader warning must surface)', () => {
+    const taskDir = mkdtempSync(join(tmpdir(), 'task-explicit-skills-'));
+    writeFileSync(
+      join(taskDir, 'wants-skills.task.md'),
+      '---\nid: wants-skills\nskillsDir: my-skills\n---\nprompt body\n',
+    );
+    const result = parseTaskFile(join(taskDir, 'wants-skills.task.md'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.skillsDir).toBe(resolve(taskDir, 'my-skills'));
   });
 
   it('rejects an id that violates the pattern, keyed by the frontmatter id', () => {

@@ -27,7 +27,8 @@ export class EvalUsageError extends Error {
 }
 
 export interface TaskSessionConfig {
-  skillsDir: string;
+  /** Null = no skills (see GoldenTask.skillsDir). */
+  skillsDir: string | null;
   descriptor?: TaskDescriptor;
   maxTurns: number;
 }

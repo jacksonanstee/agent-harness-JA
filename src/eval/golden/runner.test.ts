@@ -216,7 +216,9 @@ describe('createGoldenRunner rows', () => {
     await runner.run(fixtures('run'));
     expect(calls[0]?.maxTurns).toBe(2); // alpha's frontmatter
     expect(calls[1]?.maxTurns).toBe(10); // beta defaults
-    expect(calls[0]?.skillsDir).toBe(join(fixtures('run'), 'skills'));
+    // run/ has no skills/ subdir: the defaulted-and-absent dir threads
+    // through as null ("no skills", Week-4) — proven to reach the factory.
+    expect(calls[0]?.skillsDir).toBeNull();
   });
 
   it('turns a session throw into a session-error row and keeps going', async () => {
