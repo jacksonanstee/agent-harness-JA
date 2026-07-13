@@ -139,6 +139,6 @@ Everything stays on your machine. Sessions and eval runs persist to a local SQLi
 
 ## Author
 
-Jackson Anstee — [github.com/jacksonanstee](https://github.com/jacksonanstee) · [linkedin.com/in/...](https://linkedin.com/)<!-- TODO(S1 interactive): real LinkedIn URL from Jackson -->
+Jackson Anstee — [github.com/jacksonanstee](https://github.com/jacksonanstee) · [linkedin.com/in/jackson-anstee](https://www.linkedin.com/in/jackson-anstee-73738263/)
 
 If you are hiring for AI engineering, agent infrastructure, or LLM-app security roles, this repo represents how I scope, design, and ship. Reach out — I would welcome the conversation.
