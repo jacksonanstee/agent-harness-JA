@@ -8,6 +8,8 @@ This repo is **both a working tool and a documented build process.**
 - The [`process/`](./process) folder shows how it was scoped, what was cut, and what went wrong along the way.
 - The [`docs/decisions/`](./docs/decisions) folder records every non-trivial architectural choice as an ADR.
 
+Docs also render at [jacksonanstee.github.io/agent-harness-JA](https://jacksonanstee.github.io/agent-harness-JA/).
+
 Built by Jackson Anstee as a portfolio project. Feedback, questions, and scrutiny welcome.
 
 ---
@@ -35,31 +37,32 @@ For the longer rationale see [process/00-problem-framing.md](./process/00-proble
 
 ## Quick start
 
-> v1.0 is in active development. The commands below describe the target surface, not the current state. Track progress in [process/devlog/](./process/devlog/).
+> Everything below is implemented and CI-gated. npm publish is the final Week-4 step, so until then run from a clone (`npx agent-harness-ja …` resolves after publish). Requires Node ≥ 20.1. Progress: [process/devlog/](./process/devlog/).
 
 ```bash
-# Scaffold a new agent project
-npx agent-harness-ja init my-agent
-cd my-agent
+git clone https://github.com/jacksonanstee/agent-harness-JA && cd agent-harness-JA
+npm ci && npm run build
 
-# Configure
+# Configure (needed for run/eval; the red-team gate is keyless)
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Run the agent
-npx agent-harness-ja run
+node dist/cli.js run "your prompt"
 
 # Run the golden eval suite
-npx agent-harness-ja eval
+node dist/cli.js eval
 
 # Add a second-pass adversarial challenge over passed tasks (report-only; adds one model call per passed task)
-npx agent-harness-ja eval --challenge
+node dist/cli.js eval --challenge
 
 # Run the keyless red-team gate (fails on ANY drift vs the committed baseline — see docs/decisions/0019)
 npm run redteam
 
 # Export telemetry as JSONL (filter by --session / --type)
-npx agent-harness-ja telemetry export
+node dist/cli.js telemetry export
 ```
+
+A `harness init` scaffolder is planned (Week 4) but **not yet implemented** — it is deliberately the first thing cut if the week runs short.
 
 ---
 
@@ -69,7 +72,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)** — Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)** — Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)** — Six-plus ADRs covering harness positioning, license, SDK target, telemetry storage, injection-scanner approach, and skill schema.
+3. **[docs/decisions/](./docs/decisions/)** — Twenty ADRs (0001–0020) covering harness positioning, license, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, and the adversarial verifier.
 4. **[docs/architecture.md](./docs/architecture.md)** — System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)** — Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)** — How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
@@ -105,17 +108,26 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
+As of 2026-07-13:
+
 | Milestone | Status |
 |---|---|
 | Problem framing + requirements | Complete |
-| ADRs 0001–0003 | Complete |
-| Repo scaffold | In progress |
-| Harness layer (router, skills, hooks, telemetry) | Week 1–2 |
-| Security layer (injection, secrets, permissions, sandbox) | Week 2 |
-| Eval layer (golden, red-team, adversarial verify) | Week 3 |
-| Docs + launch | Week 4 |
+| Repo scaffold + CI (Node 20/22 matrix, keyless red-team gate on every PR) | Complete |
+| Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
+| Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
+| Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
+| ADRs | 0001–0020 |
+| Tests | 849 at this snapshot — [live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml) |
+| Docs polish, blog series, npm publish | Week 4 — in progress |
 
 Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
+
+---
+
+## Telemetry & privacy
+
+Everything stays on your machine. Sessions and eval runs persist to a local SQLite file (`.harness/telemetry.db`, gitignored); there is no network telemetry, no phone-home, and no external endpoint anywhere in the codebase. Secrets are redacted before anything is retained (fail-closed: if redaction errors, the write is dropped, not passed through), and findings store rule IDs and offsets, never secret bytes. Export is operator-invoked only (`telemetry export` → JSONL). There is currently no retention TTL — delete `.harness/telemetry.db` to erase history (a `telemetry purge` subcommand is on the roadmap).
 
 ---
 
@@ -127,6 +139,6 @@ Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
 
 ## Author
 
-Jackson Anstee — [github.com/...](https://github.com/) · [linkedin.com/in/...](https://linkedin.com/)
+Jackson Anstee — [github.com/jacksonanstee](https://github.com/jacksonanstee) · [linkedin.com/in/...](https://linkedin.com/)<!-- TODO(S1 interactive): real LinkedIn URL from Jackson -->
 
 If you are hiring for AI engineering, agent infrastructure, or LLM-app security roles, this repo represents how I scope, design, and ship. Reach out — I would welcome the conversation.

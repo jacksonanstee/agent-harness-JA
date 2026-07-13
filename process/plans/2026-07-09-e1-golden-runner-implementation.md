@@ -2457,7 +2457,7 @@ In the "Eval layer" section (starts `docs/architecture.md:139`), insert a new `#
 - **Owns:** producer-agnostic scoring machinery — the scorecard schema (deterministic vs volatile partitions), canonical JSON, Markdown rendering, row-text sanitization.
 - **Public API:** `toCanonicalJson(scorecard): string`; `toMarkdown(scorecard): string`; `cleanForScorecard(text, redactSecrets?): string`; the `Scorecard` / `ScorecardRow` / `FailureKind` types.
 - **Depends on:** `internal/sanitize`; security types only.
-- **Design notes:** Only the deterministic partition (`{id, pass, failureKind, reason}`, rows sorted by id) may ever be baseline-diffed (E-3); cost/turns/duration and `meta` are volatile and informational ([ADR-0017](./decisions/0017-golden-runner.md)).
+- **Design notes:** Only the deterministic partition (`{id, pass, failureKind, reason}`, rows sorted by id) may ever be baseline-diffed (E-3); cost/turns/duration and `meta` are volatile and informational ([ADR-0017](../../docs/decisions/0017-golden-runner.md)).
 ```
 
 Replace the `#### eval/golden` subsection body with:
@@ -2466,7 +2466,7 @@ Replace the `#### eval/golden` subsection body with:
 - **Owns:** running a set of golden tasks and scoring them.
 - **Public API:** `createGoldenRunner(deps)`; `runner.run(taskDir: string, opts?): Promise<Scorecard>`.
 - **Depends on:** the full harness — runs real agents through it; `eval/scorecard` for output.
-- **Design notes:** Each task is Markdown frontmatter + body (the prompt) with a sibling `<name>.oracle.mjs` module (JSDoc-typed via the exported `OracleFn`). Oracles judge the `SessionResult` self-report; per-task failures become rows with a `failureKind`; failure reasons are redacted and truncated before entering the scorecard. Shipped ([ADR-0017](./decisions/0017-golden-runner.md)).
+- **Design notes:** Each task is Markdown frontmatter + body (the prompt) with a sibling `<name>.oracle.mjs` module (JSDoc-typed via the exported `OracleFn`). Oracles judge the `SessionResult` self-report; per-task failures become rows with a `failureKind`; failure reasons are redacted and truncated before entering the scorecard. Shipped ([ADR-0017](../../docs/decisions/0017-golden-runner.md)).
 ```
 
 In `#### eval/red-team`, change the "Depends on" line to:

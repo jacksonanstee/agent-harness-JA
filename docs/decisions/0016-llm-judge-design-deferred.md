@@ -135,6 +135,11 @@ fires.
 
 ## Revisit if
 
+*(Amended 2026-07-13: two S-5 evaluation preconditions — a held-out corpus
+slice and bias-aware (quorum/calibrated) scoring — are defined in
+[eval-methodology.md § Corpus contamination](../eval-methodology.md#corpus-contamination-and-what-the-next-evaluator-must-assume);
+they bind any implementation triggered by the clauses below.)*
+
 - The Week-3 corpus pass rate falls below 90% → implement per this contract.
 - Judge cost dominates a typical run once implemented → cache verdicts on
   identical inputs (ADR-0005 revisit clause).

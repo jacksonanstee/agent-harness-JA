@@ -3,7 +3,7 @@
 How this harness measures itself: what each eval arm scores, which numbers
 gate a merge versus which are reported for a named consumer, what counts as
 a regression, and how to author new cases. The design history lives in
-[ADR-0016](./decisions/0016-eval-layer.md) (layer),
+[ADR-0016](./decisions/0016-llm-judge-design-deferred.md) (LLM judge: design locked, implementation deferred),
 [ADR-0017](./decisions/0017-golden-runner.md) (golden),
 [ADR-0018](./decisions/0018-redteam-corpus.md) (red-team),
 [ADR-0019](./decisions/0019-regression-gate.md) (regression gate), and
@@ -101,7 +101,11 @@ Baseline update flow: `npm run redteam -- --update-baseline`, review the
 diff, commit `eval/redteam/baseline.json`. Exit codes: `0`
 (`GATE_FAILURE=none`), `1` (`false-block`, `drift`, or
 `false-block+drift`), `2` (`internal` — a producer/differ bug, which no
-baseline update could ever fix). The baseline file itself is treated as
+baseline update could ever fix). `--update-baseline`'s own refusal paths
+(symlink-planted baseline/tmp path, missing parent directory, write or
+rename failure) also exit `2` with a dedicated stderr message — a Week-4
+fix; previously such failures escaped as a gate-colliding exit `1` with no
+diagnostic. The baseline file itself is treated as
 hostile input (symlink refusal, size cap, exact field allowlist,
 Map-based row pairing — ADR-0019).
 
@@ -215,3 +219,33 @@ to `starter-corpus (S-1)`). Rules that keep the corpus honest:
    `new-case` by design; the failure message says so. Run
    `npm run redteam -- --update-baseline`, review the diff (it should
    contain exactly your new rows), commit the baseline with the case.
+
+## Corpus contamination, and what the next evaluator must assume
+
+*Added 2026-07-13.*
+
+The 51-case corpus is public (committed to this repo) and its cases derive
+from the most-cited public sources in the field (Greshake et al., Willison,
+OWASP). For the **current gate this is irrelevant**: the red-team arm is
+deterministic regex scanning with no model in the loop, so a model's
+familiarity with the corpus cannot touch it. It becomes load-bearing the
+moment an LLM judge enters (the ADR-0016 S-5 decision): a judge model that
+has seen these cases — or their sources — in training will overstate
+detection. Two preconditions are therefore attached to S-5 evaluation,
+ahead of any implementation:
+
+1. **A held-out slice.** Judge detection quality must be measured on cases
+   that are not in this repo's history — freshly authored or privately
+   maintained — never on the committed corpus alone.
+2. **Bias-aware scoring.** Single-model judge scores carry known
+   position/verbosity/self-preference biases; S-5 measurement should use a
+   multi-model quorum or an explicit calibration set. This is consistent
+   with ADR-0016's tighten-only authority (a compromised judge may only
+   cause false positives, never false negatives — but the *measurement*
+   must still be honest).
+
+**Roadmap, not commitment:** the known scanner misses are paraphrase-shaped,
+which is exactly what attacker-LLM red-teaming (generative paraphrase
+mutation of existing cases) is good at producing. That is the natural
+corpus-growth mechanism when S-5 work begins; a static committed corpus is
+the v1 design, not the end state.

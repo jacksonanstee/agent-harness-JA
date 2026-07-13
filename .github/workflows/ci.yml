@@ -27,3 +27,11 @@ jobs:
       - run: npm test
       - name: Red-team gate
         run: node dist/cli.js redteam
+
+  docs-links:
+    # Node-version-independent, needs no install/build — its own fast job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docs link gate
+        run: bash scripts/check-links.sh
