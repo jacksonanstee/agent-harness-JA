@@ -1,7 +1,7 @@
 # agent-harness-JA
 
 > Most repos show the artefact; this one shows the thinking.
-> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 21 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
+> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 22 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -38,33 +38,40 @@ For the longer rationale see [process/00-problem-framing.md](./process/00-proble
 
 ## Quick start
 
-> Everything below is implemented and CI-gated. npm publish is the final Week-4 step, so until then run from a clone (`npx agent-harness-ja …` resolves after publish). Requires Node ≥ 20.1. Progress: [process/devlog/](./process/devlog/).
+> Everything below is implemented and CI-gated. Published to npm as [`agent-harness-ja`](https://www.npmjs.com/package/agent-harness-ja) with build provenance (v0.1.0). Requires Node ≥ 20.10. Progress: [process/devlog/](./process/devlog/).
+
+Fastest start, no clone: scaffold a runnable starter project and follow its printed next steps.
 
 ```bash
-git clone https://github.com/jacksonanstee/agent-harness-JA && cd agent-harness-JA
-npm ci && npm run build
+# Scaffold a starter (one skill, a committed security policy, one golden task)
+npx agent-harness-ja init my-agent
+```
+
+Or install and drive the harness directly:
+
+```bash
+npm install -g agent-harness-ja   # or: npm i agent-harness-ja for library use
 
 # Configure (needed for run/eval; the red-team gate is keyless)
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Run the agent
-node dist/cli.js run "your prompt"
+agent-harness-ja run "your prompt"
 
 # Run the golden eval suite
-node dist/cli.js eval
+agent-harness-ja eval
 
 # Add a second-pass adversarial challenge over passed tasks (report-only; adds one model call per passed task)
-node dist/cli.js eval --challenge
+agent-harness-ja eval --challenge
 
 # Run the keyless red-team gate (fails on ANY drift vs the committed baseline; see docs/decisions/0019)
-npm run redteam
+agent-harness-ja redteam
 
 # Export telemetry as JSONL (filter by --session / --type)
-node dist/cli.js telemetry export
-
-# Scaffold a starter project (one skill, a committed security policy, one golden task)
-node dist/cli.js init my-agent
+agent-harness-ja telemetry export
 ```
+
+Working from a clone instead? `npm ci && npm run build`, then use `node dist/cli.js <command>` in place of `agent-harness-ja`.
 
 `init` refuses to overwrite anything it would create (scaffold into a fresh directory), prints the exact next-step commands for a from-clone install, and the starter it produces passes its own eval in one turn. The scaffolded policy denies the network tools and its README explains the Bash route-around it deliberately leaves open, and how to close it.
 
@@ -76,7 +83,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)**: Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)**: Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)**: Twenty-one ADRs (0001–0021) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, and the init scaffolder.
+3. **[docs/decisions/](./docs/decisions/)**: Twenty-two ADRs (0001–0022) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, and the npm publish path.
 4. **[docs/architecture.md](./docs/architecture.md)**: System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)**: Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)**: How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
@@ -122,9 +129,10 @@ As of 2026-07-14:
 | Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
-| ADRs | 0001–0021 |
-| Tests | 891 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
-| Docs polish, blog series, npm publish | Week 4, in progress |
+| ADRs | 0001–0022 |
+| Tests | 899 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Docs polish + blog series | Complete (Week 4) |
+| npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
 Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
 

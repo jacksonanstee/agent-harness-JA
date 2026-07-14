@@ -1,12 +1,12 @@
 {
   "name": "agent-harness-ja",
-  "version": "0.1.0-pre",
-  "description": "A production-grade harness for LLM agents — multi-model routing, security guardrails, and adversarial evaluation. Built on the Claude Agent SDK.",
+  "version": "0.1.0",
+  "description": "A harness for LLM agents on the Claude Agent SDK: multi-model routing, security guardrails, and adversarial evaluation.",
   "license": "MIT",
   "author": "Jackson Anstee",
   "type": "module",
   "engines": {
-    "node": ">=20.1.0"
+    "node": ">=20.10.0"
   },
   "bin": {
     "agent-harness-ja": "./dist/cli.js"
@@ -27,7 +27,11 @@
     "test:coverage": "vitest run --coverage",
     "eval": "node ./dist/cli.js eval",
     "redteam": "node ./dist/cli.js redteam",
-    "check:links": "bash scripts/check-links.sh"
+    "check:links": "bash scripts/check-links.sh",
+    "prepublishOnly": "rm -rf dist && npm run build && npm test && npm run redteam"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
