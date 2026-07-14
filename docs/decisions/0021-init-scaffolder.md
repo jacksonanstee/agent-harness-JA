@@ -32,14 +32,21 @@ differentiator, and was the first feature marked for cutting).
    validity is CI-gated against the REAL loaders (skills `validate()`, both
    settings parsers, `parseTaskFile`, `loadOracle` contract, plus a live
    `git check-ignore` over a scaffolded instance), not substring checks.
-2. **Fail-closed collision policy.** Every target path is checked before
-   anything is written; any collision refuses the entire operation with the
-   full conflict list and exit 2 (the repo-wide "refused, nothing produced"
-   class, same as parse errors, missing key, and malformed settings). No
-   `--force`, no merging. Honest consequence, stated rather than hidden: the
-   target set includes `README.md` and `.gitignore`, so `init` into an
-   existing project will nearly always refuse; the practical contract is a
-   fresh directory, and the refusal message says so.
+2. **Fail-closed collision and symlink policy.** Every target path is checked
+   before anything is written; any collision, or a symlink at any path
+   component (the dir itself, an intermediate like `.harness/`, or a dangling
+   leaf), refuses the entire operation with exit 2 (the repo-wide "refused,
+   nothing produced" class, same as parse errors, missing key, and malformed
+   settings). No `--force`, no merging. The symlink refusal was added after
+   review: `existsSync` follows links, so a pre-planted `.harness` symlink
+   pointing elsewhere is invisible to a plain collision check while
+   `writeFileSync` would write the policy file through it (the review's live
+   PoC). This mirrors `refuseSymlinkedDir` in `writeScorecard`. Honest
+   consequence, stated rather than hidden: the target set includes
+   `README.md` and `.gitignore`, so `init` into an existing project will
+   nearly always refuse; the practical contract is a fresh directory, and the
+   refusal message says so (rendering the computed invocation, not a bare bin
+   name).
 3. **The starter policy denies `WebFetch` and `WebSearch` and omits
    `defaultDecision`.** Panel-arbitrated 2-1 (constraint + advocate vs
    skeptic, who argued for the full repo-qa deny list). The deny pair is the
@@ -63,11 +70,14 @@ differentiator, and was the first feature marked for cutting).
    states the rule (keyless `redteam` only; a fork PR plus a CI key plus
    in-process oracles is an exfiltration primitive).
 6. **The printed next steps compute the real invocation** from
-   `process.argv[1]` (relative path, absolute when the relative climb
-   exceeds three `..` segments, bin name only under a true bin-shim
-   invocation). Pre-publish there is no bin on PATH; printing
-   `agent-harness-ja` would be `command not found` on the success path. The
-   key step branches on whether `ANTHROPIC_API_KEY` is already set.
+   `process.argv[1]`: relative path, absolute when the relative climb exceeds
+   three `..` segments, `npx agent-harness-ja` when the script resolves inside
+   an `_npx` cache dir (the ADR-named first-contact path, whose cached
+   `dist/cli.js` is not directly re-runnable), and the bare bin name only
+   under a true bin-shim invocation. Pre-publish there is no bin on PATH;
+   printing `agent-harness-ja` would be `command not found` on the success
+   path. The same renderer feeds the collision-refusal remedy. The key step
+   branches on whether `ANTHROPIC_API_KEY` is already set.
 7. **No new missing-key preflight.** The panel's highest-value catch: all
    three reviewers independently verified that `run` and `eval` already
    hard-fail with exit 2 before any SDK call; the design draft had inherited
@@ -115,3 +125,9 @@ differentiator, and was the first feature marked for cutting).
 - **R3:** issue #29's block-on-flag posture ships for skill bodies: the
   scaffolded skill then flows through a scanning gate and the starter should
   document it.
+- **R4:** `init` is ever wired into a non-interactive, shared, or
+  multi-tenant context (a bot, a CI step, a shared `/tmp`): the
+  check-then-write race the symlink refusal narrows but does not close
+  becomes a real symlink-race file-plant primitive. It is acceptable today
+  only because `init` is a one-shot command an operator runs against a
+  directory they named themselves.

@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { INIT_FILES, INIT_TARGET_PATHS } from './init-templates.js';
-import { USAGE } from './shared.js';
+import { sanitizeForTerminal, USAGE } from './shared.js';
 
 export interface InitArgs {
   command: 'init';
@@ -38,6 +38,9 @@ export function renderInvocation(cliPath: string | undefined, targetDir: string)
   if (cliPath === undefined) return 'agent-harness-ja';
   const name = basename(cliPath);
   if (!/\.(js|mjs|cjs)$/.test(name)) return 'agent-harness-ja';
+  // Under npx the script lives in an ephemeral cache dir; a path into it is
+  // not re-runnable, but `npx agent-harness-ja` re-resolves every time.
+  if (resolve(cliPath).split(sep).includes('_npx')) return 'npx agent-harness-ja';
   const rel = relative(resolve(targetDir), resolve(cliPath));
   // A long `../../..` climb reads worse than the absolute path it encodes.
   const climbs = rel.split(sep).filter((part) => part === '..').length;
@@ -80,11 +83,51 @@ function buildOutput(dir: string, invocation: string, keyIsSet: boolean): string
   );
 }
 
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/**
+ * A pre-planted symlink anywhere on a target path (the dir itself, an
+ * intermediate like `.harness/`, or a dangling leaf like `README.md`) would
+ * redirect the write outside the scaffold: `existsSync` follows links, so a
+ * dangling link is invisible to the collision check while `writeFileSync`
+ * writes through it. Same threat class `refuseSymlinkedDir` guards for
+ * scorecards (src/cli/shared.ts); checked component-wise here because init
+ * writes six paths at three depths. The check-then-write race is still not
+ * defended (ADR-0021: local one-shot scaffolder).
+ */
+function findSymlinkedComponents(dir: string): string[] {
+  const seen = new Set<string>();
+  const violations: string[] = [];
+  const check = (path: string, label: string): void => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    if (isSymlink(path)) violations.push(label);
+  };
+  check(resolve(dir), '.');
+  for (const rel of INIT_TARGET_PATHS) {
+    const parts = rel.split('/');
+    for (let depth = 1; depth <= parts.length; depth += 1) {
+      const relPath = parts.slice(0, depth).join('/');
+      check(join(resolve(dir), ...parts.slice(0, depth)), relPath);
+    }
+  }
+  return violations;
+}
+
 /**
  * Scaffolds the starter. Fail-closed: every target path is checked before
- * anything is written; any collision refuses the whole operation (exit 2,
- * the repo-wide "refused, nothing produced" class) with zero writes. An
- * unexpected fs failure mid-write propagates to main()'s catch-all (exit 1).
+ * anything is written; any collision or symlinked path component refuses the
+ * whole operation (exit 2, the repo-wide "refused, nothing produced" class)
+ * with zero writes. An unexpected fs failure mid-write propagates to
+ * main()'s catch-all (exit 1). All printed paths pass sanitizeForTerminal:
+ * the dir name is operator-supplied and may carry terminal escapes.
  */
 export function runInit(
   args: InitArgs,
@@ -97,19 +140,34 @@ export function runInit(
   const env = options.env ?? process.env;
   const cliPath = options.cliPath ?? process.argv[1];
   const dir = args.dir;
+  const invocation = renderInvocation(cliPath, dir);
 
   if (existsSync(dir) && !statSync(dir).isDirectory()) {
-    streams.stderr(`init: ${dir} exists and is not a directory.\n`);
+    streams.stderr(sanitizeForTerminal(`init: ${dir} exists and is not a directory.\n`));
+    return 2;
+  }
+
+  const symlinked = findSymlinkedComponents(dir);
+  if (symlinked.length > 0) {
+    streams.stderr(
+      sanitizeForTerminal(
+        `init: refusing to write through symlinks in ${dir}:\n` +
+          symlinked.map((rel) => `  ${rel}`).join('\n') +
+          '\nNothing was written.\n',
+      ),
+    );
     return 2;
   }
 
   const collisions = INIT_TARGET_PATHS.filter((rel) => existsSync(join(dir, rel)));
   if (collisions.length > 0) {
     streams.stderr(
-      `init: refusing to overwrite existing files in ${dir}:\n` +
-        collisions.map((rel) => `  ${rel}`).join('\n') +
-        '\nNothing was written. Scaffold into a fresh directory instead:\n' +
-        '  agent-harness-ja init <new-dir>\n',
+      sanitizeForTerminal(
+        `init: refusing to overwrite existing files in ${dir}:\n` +
+          collisions.map((rel) => `  ${rel}`).join('\n') +
+          '\nNothing was written. Scaffold into a fresh directory instead:\n' +
+          `  ${invocation} init <new-dir>\n`,
+      ),
     );
     return 2;
   }
@@ -121,7 +179,7 @@ export function runInit(
   }
 
   streams.stdout(
-    buildOutput(dir, renderInvocation(cliPath, dir), Boolean(env.ANTHROPIC_API_KEY)),
+    sanitizeForTerminal(buildOutput(dir, invocation, Boolean(env.ANTHROPIC_API_KEY))),
   );
   return 0;
 }

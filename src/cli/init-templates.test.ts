@@ -13,9 +13,29 @@ import {
   parsePermissionSettings,
   parseSandboxSettings,
 } from '../security/index.js';
+import type { SessionResult } from '../session/index.js';
 import { validate } from '../skills/index.js';
 import { INIT_FILES, INIT_README, INIT_SETTINGS_JSON } from './init-templates.js';
 import { runInit } from './init-command.js';
+
+// Fully-typed SessionResult so a rename of any field the scaffolded oracle
+// reads (resultSubtype/numTurns/resultText) fails compilation here rather
+// than leaving the oracle silently reading undefined in every real eval.
+function sessionResult(overrides: Partial<SessionResult>): SessionResult {
+  return {
+    resultText: null,
+    resultSubtype: null,
+    sessionId: 'test-session',
+    modelChoice: { model: 'claude-sonnet-4-6', rule_id: 'test', reason: 'test' },
+    usage: null,
+    costUsd: null,
+    numTurns: null,
+    denied: [],
+    memoryEntryId: null,
+    skillErrors: [],
+    ...overrides,
+  };
+}
 
 let target: string;
 
@@ -75,23 +95,27 @@ describe('scaffolded golden task', () => {
 describe('scaffolded oracle', () => {
   it('satisfies the oracle contract and passes a grounded 1-turn answer', async () => {
     const oracle = await loadOracle(join(target, 'hello-harness.oracle.mjs'));
-    const verdict = await oracle({
-      resultSubtype: 'success',
-      numTurns: 1,
-      resultText:
-        'The policy denies WebFetch and WebSearch. Before running eval on a ' +
-        'project you did not create, read the oracle file first.',
-    } as Parameters<typeof oracle>[0]);
+    const verdict = await oracle(
+      sessionResult({
+        resultSubtype: 'success',
+        numTurns: 1,
+        resultText:
+          'The policy denies WebFetch and WebSearch. Before running eval on a ' +
+          'project you did not create, read the oracle file first.',
+      }),
+    );
     expect(verdict).toEqual({ pass: true });
   });
 
   it('fails a multi-turn answer with a plain-language turns explanation', async () => {
     const oracle = await loadOracle(join(target, 'hello-harness.oracle.mjs'));
-    const verdict = await oracle({
-      resultSubtype: 'success',
-      numTurns: 3,
-      resultText: 'The policy denies WebFetch and WebSearch. Read the oracle file.',
-    } as Parameters<typeof oracle>[0]);
+    const verdict = await oracle(
+      sessionResult({
+        resultSubtype: 'success',
+        numTurns: 3,
+        resultText: 'The policy denies WebFetch and WebSearch. Read the oracle file.',
+      }),
+    );
     expect(verdict.pass).toBe(false);
     if (!verdict.pass) {
       expect(verdict.reason).toMatch(/turn/i);
@@ -101,11 +125,13 @@ describe('scaffolded oracle', () => {
 
   it('fails an answer that misses the denied tools', async () => {
     const oracle = await loadOracle(join(target, 'hello-harness.oracle.mjs'));
-    const verdict = await oracle({
-      resultSubtype: 'success',
-      numTurns: 1,
-      resultText: 'It denies some tools. Read the oracle first.',
-    } as Parameters<typeof oracle>[0]);
+    const verdict = await oracle(
+      sessionResult({
+        resultSubtype: 'success',
+        numTurns: 1,
+        resultText: 'It denies some tools. Read the oracle first.',
+      }),
+    );
     expect(verdict.pass).toBe(false);
   });
 });

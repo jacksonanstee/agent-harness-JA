@@ -71,7 +71,8 @@ Content decisions (panel-final):
    must say this, not a bare number mismatch. Oracle contract: named export
    `oracle` returning strict `{pass, reason?}`. No package-typed JSDoc
    import in the template (nothing is installed in a scaffolded dir); plain
-   JSDoc.
+   JSDoc. [SUPERSEDED at implementation by decision-log #13: the typed
+   `OracleFn` header is kept; it resolves post-install and matches repo-qa.]
 4. **README.md** first content: quickstart (key → run → eval), full R-10
    paragraph, route-around note + tighten line + trip-the-denial prompt
    (see 1), turns-failure explainer, one sentence "if this dir sits inside a
@@ -127,7 +128,7 @@ detection of a true bin invocation can print the short form, an implementation
 detail); key step branches on whether `ANTHROPIC_API_KEY` is already set
 ("already set? skip"); the suggested `run` prompt mirrors the golden task's
 prompt so the first manual run and the eval reinforce each other; expected
-eval outcome incl. "well under a cent" cost line; one-line R-10 pointer at
+eval outcome incl. an "a few cents at most" cost line; one-line R-10 pointer at
 terminal altitude (full paragraph lives in README: differentiated altitude,
 not duplication); artefact locations corrected: run telemetry →
 `.harness/telemetry.db`, **eval scorecards → `.harness/eval/`** (eval uses an

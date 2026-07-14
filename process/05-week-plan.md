@@ -92,7 +92,7 @@ The work that turns a working repo into a portfolio piece.
   - *Designing an agent harness: harness ≠ framework*
   - *Adversarial evaluation for LLM agents: golden + red-team + two-pass*
   - *A pragmatic security model for tool-using agents*
-- [ ] `harness init` scaffolder — generates a working starter project.
+- [x] `harness init` scaffolder — generates a working starter project.
 - [ ] npm package published.
 - [ ] GitHub Pages site live and linked from README.
 - [ ] Launch:

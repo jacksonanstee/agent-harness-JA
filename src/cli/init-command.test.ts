@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
@@ -83,6 +91,19 @@ describe('renderInvocation', () => {
     const cliPath = resolve('/repo/dist/cli.js');
     const target = resolve('/a/b/c/d/e/target');
     expect(renderInvocation(cliPath, target)).toBe(`node ${cliPath}`);
+  });
+
+  it('keeps the relative form at exactly three climbs (boundary)', () => {
+    const cliPath = resolve('/repo/dist/cli.js');
+    const target = resolve('/repo/a/b/target');
+    expect(renderInvocation(cliPath, target)).toBe(
+      `node ..${sep}..${sep}..${sep}dist${sep}cli.js`,
+    );
+  });
+
+  it('prints the npx form when running from the ephemeral npx cache', () => {
+    const cliPath = resolve('/Users/x/.npm/_npx/0123abc/node_modules/agent-harness-ja/dist/cli.js');
+    expect(renderInvocation(cliPath, resolve('/anywhere'))).toBe('npx agent-harness-ja');
   });
 });
 
@@ -178,6 +199,67 @@ describe('runInit', () => {
     const streams = captureStreams();
     expect(runInit({ command: 'init', dir: target }, streams)).toBe(2);
     expect(streams.err.join('')).toContain('not a directory');
+  });
+
+  it('renders the computed invocation in the collision remedy, not the bare bin name', () => {
+    const target = join(root, 'occupied2');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'README.md'), 'existing\n');
+    const streams = captureStreams();
+    runInit({ command: 'init', dir: target }, streams, {
+      cliPath: join(root, 'dist', 'cli.js'),
+    });
+    expect(streams.err.join('')).toContain('node ');
+    expect(streams.err.join('')).toContain('init <new-dir>');
+  });
+
+  it('refuses a pre-planted symlinked intermediate dir with zero writes (review PoC)', () => {
+    const target = join(root, 'trap');
+    const victim = join(root, 'victim');
+    mkdirSync(target, { recursive: true });
+    mkdirSync(victim, { recursive: true });
+    symlinkSync(victim, join(target, '.harness'));
+    const streams = captureStreams();
+    expect(runInit({ command: 'init', dir: target }, streams)).toBe(2);
+    expect(streams.err.join('')).toContain('symlink');
+    expect(streams.err.join('')).toContain('.harness');
+    expect(existsSync(join(victim, 'settings.json'))).toBe(false);
+    expect(existsSync(join(target, 'README.md'))).toBe(false);
+  });
+
+  it('refuses a dangling leaf symlink (invisible to existsSync, followed by write)', () => {
+    const target = join(root, 'dangling');
+    mkdirSync(target, { recursive: true });
+    symlinkSync(join(root, 'nowhere', 'redirected.md'), join(target, 'README.md'));
+    const streams = captureStreams();
+    expect(runInit({ command: 'init', dir: target }, streams)).toBe(2);
+    expect(streams.err.join('')).toContain('symlink');
+    expect(existsSync(join(root, 'nowhere'))).toBe(false);
+  });
+
+  it('refuses a symlinked target dir itself', () => {
+    const real = join(root, 'real-target');
+    const link = join(root, 'link-target');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link);
+    const streams = captureStreams();
+    expect(runInit({ command: 'init', dir: link }, streams)).toBe(2);
+    expect(streams.err.join('')).toContain('symlink');
+    expect(existsSync(join(real, 'README.md'))).toBe(false);
+  });
+
+  it('strips terminal escapes from an operator-supplied dir name in all output', () => {
+    const esc = String.fromCharCode(0x1b);
+    // A real ESC byte in the dir name: the filesystem accepts it, a terminal
+    // would interpret it. Success and error paths must both strip it.
+    const evil = join(root, `evil${esc}[8m${esc}]0;PWNED`);
+    const streams = captureStreams();
+    expect(runInit({ command: 'init', dir: evil }, streams, { env: {} })).toBe(0);
+    expect(streams.out.join('')).not.toContain(esc);
+
+    const streams2 = captureStreams();
+    expect(runInit({ command: 'init', dir: evil }, streams2)).toBe(2);
+    expect(streams2.err.join('')).not.toContain(esc);
   });
 });
 
