@@ -3,7 +3,8 @@
 > **Status: Draft, awaiting author voice pass.** 2026-07-14.
 
 The most consequential architectural artefact in this repo is not a module.
-It is an eslint rule.
+It is an eslint rule: the one that fails the build if a security file
+imports from the layers above it.
 
 This post is about the one decision everything else in
 [agent-harness-JA](../../README.md) hangs off: building a *harness* rather
