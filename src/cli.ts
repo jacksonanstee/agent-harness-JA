@@ -205,7 +205,10 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
 export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
-    process.stderr.write(`${parsed.error}\n`);
+    // Parse errors echo the offending argv verbatim (e.g. an attacker-named
+    // entry pulled in by a glob); sanitize before it reaches the terminal,
+    // same as every command's own output sinks.
+    process.stderr.write(`${sanitizeForTerminal(parsed.error)}\n`);
     return 2;
   }
 

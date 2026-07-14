@@ -264,6 +264,25 @@ describe('main (pre-SDK paths)', () => {
     expect(await main(['bogus'])).toBe(2);
   });
 
+  it('sanitizes terminal escapes in a parse error before printing it', async () => {
+    const esc = String.fromCharCode(0x1b);
+    const written: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+    try {
+      // The offending arg is echoed verbatim into the parse error; an
+      // attacker-named entry (e.g. via `init *` glob) must not inject escapes.
+      expect(await main(['init', 'a', `evil${esc}[31m`])).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(written.join('')).not.toContain(esc);
+  });
+
   it('returns 2 when ANTHROPIC_API_KEY is unset', async () => {
     const saved = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;

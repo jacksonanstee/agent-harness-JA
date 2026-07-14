@@ -92,6 +92,15 @@ differentiator, and was the first feature marked for cutting).
    the package is installed, and consistency with the documented contract
    wins. (Decision log #13 note.)
 
+9. **All init output, including shared parse errors, is terminal-sanitized.**
+   The dir name and any offending argv reach the terminal through
+   `sanitizeForTerminal` (`TERMINAL_UNSAFE`: strips ESC/C1/line-separators,
+   preserves tab and newline). The `runInit` sinks wrap it directly; the
+   shared parse-error path in `main()` was also hardened after an adversarial
+   verify pass found it echoed argv verbatim (an entry pulled in by `init *`
+   could inject escapes), which incidentally hardens every command that
+   shares that path.
+
 ## Consequences
 
 - A published `npx agent-harness-ja init my-agent` produces a project that
