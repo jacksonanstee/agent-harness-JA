@@ -73,13 +73,13 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)** — Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)** — Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)** — Twenty ADRs (0001–0020) covering harness positioning, license, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, and the adversarial verifier.
+3. **[docs/decisions/](./docs/decisions/)** — Twenty ADRs (0001–0020) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, and the adversarial verifier.
 4. **[docs/architecture.md](./docs/architecture.md)** — System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)** — Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)** — How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
 7. **[src/](./src)** — The implementation. Requirement IDs from `process/01-requirements.md` are cited in code comments where they are verified.
 8. **[process/devlog/](./process/devlog/)** — Weekly retros, including what went wrong.
-9. **[docs/blog/](./docs/blog/)** — Three essays on the judgment behind the design: [harness ≠ framework](./docs/blog/harness-not-framework.md), [adversarial evaluation](./docs/blog/adversarial-evaluation.md), and [the pragmatic security model](./docs/blog/pragmatic-security-model.md). Start here if you want the reasoning without the file-by-file tour; there is also a runnable, evaluated example agent in [examples/repo-qa/](./examples/repo-qa/README.md).
+9. **[docs/blog/](./docs/blog/)** — Three essays on the judgement behind the design: [harness ≠ framework](./docs/blog/harness-not-framework.md), [adversarial evaluation](./docs/blog/adversarial-evaluation.md), and [the pragmatic security model](./docs/blog/pragmatic-security-model.md). Start here if you want the reasoning without the file-by-file tour; there is also a runnable, evaluated example agent in [examples/repo-qa/](./examples/repo-qa/README.md).
 
 The `process/` folder is the differentiator — if you only read one thing, start there.
 

@@ -104,7 +104,7 @@ review — and a disproportionate number were found *in the fixes*:
 - A case-folding hardening was caught folding in the **widening**
   direction — case-insensitive matching applied to allow rules loosens
   policy; the shipped fix folds argv0 only.
-- A symlink containment fix was caught normalizing `link/../real` textually
+- A symlink containment fix was caught normalising `link/../real` textually
   while the syscall followed the link — lexical path logic and the
   filesystem disagree, so the walk now uses raw components.
 

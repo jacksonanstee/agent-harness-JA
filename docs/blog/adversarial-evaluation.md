@@ -10,7 +10,7 @@ deterministic regression gate
 [ADR-0019](../decisions/0019-regression-gate.md)), and a two-pass
 adversarial verifier ([ADR-0020](../decisions/0020-adversarial-verifier.md)).
 The [eval methodology](../eval-methodology.md) describes how they fit. This
-post is about the two judgment calls underneath them that I'd defend in an
+post is about the two judgement calls underneath them that I'd defend in an
 interview — and one incident from this week that tested the whole apparatus.
 
 ## Gates and measurements are different machines
@@ -24,7 +24,7 @@ drift in the "good" direction.
 Failing on improvement sounds perverse until you say it plainly: an
 improvement you didn't ask for is a change you didn't review. If a
 dependency bump silently lifts detection from 92% to 94%, something about
-scanning behavior changed, and the honest response is the same as for a
+scanning behaviour changed, and the honest response is the same as for a
 regression — stop, look, then deliberately re-baseline
 (`--update-baseline` exists precisely so the change lands in a commit a
 human approved). A threshold gate ("detection ≥ 90%") would have waved both
@@ -70,7 +70,7 @@ green. Second, the reported metric is a *rate with an honest denominator*:
 `challenged / (passed − no-output)`, so tasks the adversary never got usable
 output for can't dilute the signal. In its live acceptance run the verifier
 challenged 0 of 2 passed tasks (agreed 2) for about $0.13 of adversary calls
-— an unremarkable result that is exactly the point: a report-only skeptic
+— an unremarkable result that is exactly the point: a report-only sceptic
 that mostly agrees is cheap, and the one time it doesn't will be worth every
 prior boring run.
 
@@ -113,7 +113,7 @@ costs drift with models and prices):
 
 A dogfooding hour did what no amount of additional unit testing at the same
 altitude would have: it tested the *documented contract* instead of the
-implementation's own reflection. The unit suite now pins the fixed behavior
+implementation's own reflection. The unit suite now pins the fixed behaviour
 (body injected, scanned raw, size-budgeted) — but the ordering matters. The
 eval found it; the tests keep it found.
 

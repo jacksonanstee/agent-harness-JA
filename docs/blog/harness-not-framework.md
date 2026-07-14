@@ -2,7 +2,7 @@
 
 > **Status: Draft — awaiting author voice pass.** 2026-07-14.
 
-The most consequential architectural artifact in this repo is not a module.
+The most consequential architectural artefact in this repo is not a module.
 It is an eslint rule.
 
 This post is about the one decision everything else in
@@ -61,7 +61,7 @@ messages tests your parsing; a fake that exercises the hook bridge tests the
 seam you actually ship. When a hook-ordering bug matters (pre-tool deny must
 short-circuit so post-tool never fires for that call), the fake catches it
 at unit speed, and the live smoke test exists only to confirm the real SDK
-honors the same contract.
+honours the same contract.
 
 ## Architecture as a falsifiable claim
 
@@ -106,7 +106,7 @@ isolation you don't have — is how sandboxes end up as attack documentation.
 ## The road not taken, revisited honestly
 
 Would a framework have been wrong? Not universally. If the goal were an
-ecosystem — third-party skills with behavior, community plugins, an
+ecosystem — third-party skills with behaviour, community plugins, an
 extension marketplace — the framework shape wins, and the security posture
 becomes a permissions model for *code*, which is a different (and much
 larger) project. The goal here is narrower: make one SDK's agent loop
