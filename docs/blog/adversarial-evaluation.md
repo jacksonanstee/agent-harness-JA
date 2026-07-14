@@ -5,7 +5,7 @@
 The eval layer of [agent-harness-JA](../../README.md) has three parts: a
 golden-task runner with executable oracles
 ([ADR-0017](../decisions/0017-golden-runner.md)), a red-team corpus with a
-deterministic regression gate
+regression gate that fails the build on any change in scanner behaviour
 ([ADR-0018](../decisions/0018-redteam-corpus.md),
 [ADR-0019](../decisions/0019-regression-gate.md)), and a two-pass
 adversarial verifier ([ADR-0020](../decisions/0020-adversarial-verifier.md)).
@@ -19,18 +19,19 @@ The scanner's detection rate across the 51-case red-team corpus is ~92%.
 That number appears on every scorecard and **gates nothing**. What fails CI
 is different: any *false block* (benign input blocked; `falseBlockCount`
 must be exactly zero), and any *drift* from a committed baseline, including
-drift in the "good" direction.
+drift in the "good" direction. An improvement you didn't ask for is a
+change you didn't review.
 
-Failing on improvement sounds perverse until you say it plainly: an
-improvement you didn't ask for is a change you didn't review. If a
-dependency bump silently lifts detection from 92% to 94%, something about
+Failing on improvement sounds perverse until you hold that line in mind. If
+a dependency bump silently lifts detection from 92% to 94%, something about
 scanning behaviour changed, and the honest response is the same as for a
 regression: stop, look, then deliberately re-baseline
 (`--update-baseline` exists precisely so the change lands in a commit a
 human approved). A threshold gate ("detection ≥ 90%") would have waved both
 cases through. Determinism is the property that makes the gate cheap to
-trust: the corpus is compiled in, the scanner is pure, and the whole gate
-runs keyless in seconds on every PR.
+trust: the corpus is built into the package, the scanner behaves
+identically on every run, and the whole gate runs keyless in seconds on
+every PR.
 
 The same boundary explains what the corpus records. Three cases are *known
 misses* (jailbreak-03 gets through the heuristics today) and they are
@@ -89,18 +90,20 @@ the security work the widened prompt surface required, is PR #28.
 
 The part worth dwelling on is *how* the eval caught it, because the first
 run didn't. The initial golden task ("which ADR defines the oracle
-contract?") **passed** on its first attempt: three turns, ~$0.10, the agent
-happily ignoring the skill it couldn't see and tool-hunting through the repo
-to find the answer. Right answer, wrong mechanism, green scorecard. Only
-when I tightened the task to "answer directly from the loaded skill, without
+contract?") **passed** on its first attempt. Right answer, wrong mechanism,
+green scorecard: three turns of tool-hunting through the repo, with the
+skill it was meant to answer from nowhere in its context. Only when I
+tightened the task to "answer directly from the loaded skill, without
 tools" did the truth surface: the model had no skill content at all, and the
 task failed.
 
 That is the sharpest lesson of the week: **a passing eval is a claim about
 the oracle, not just the system.** My oracle checked the answer's content;
 it could not distinguish a grounded answer from a searched one. The task
-descriptor and prompt are part of the oracle's precision. After the fix, the
-same two tasks pass in one turn each at roughly half the cost. The
+descriptor and prompt are part of the oracle's precision. Put directly: the
+eval does not test whether the system can produce the right answer; it
+tests whether it produces it the way the contract claims. After the fix,
+the same two tasks pass in one turn each at roughly half the cost. The
 before/after is visible in the scorecards (2/2, single-turn, versus the
 three-turn scavenger hunt; dollar figures here are dated and illustrative,
 costs drift with models and prices):

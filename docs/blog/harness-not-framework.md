@@ -4,7 +4,8 @@
 
 The most consequential architectural artefact in this repo is not a module.
 It is an eslint rule: the one that fails the build if a security file
-imports from the layers above it.
+imports from the layers above it. It does not describe the architecture; it
+forces the architecture to be true.
 
 This post is about the one decision everything else in
 [agent-harness-JA](../../README.md) hangs off: building a *harness* rather
@@ -16,12 +17,11 @@ and which alternatives I still think about.
 ## The distinction that matters is control flow
 
 "Framework vs library" debates usually collapse into vocabulary. The version
-that has teeth is: **who owns the loop?** A framework calls your code. You
-write plugins, handlers, subclasses, and the framework decides when they run.
-A harness wraps someone else's loop (here, the Claude Agent SDK's agentic
-loop) and confines itself to the seams that loop exposes: what goes in
-(model choice, system prompt, skills), what gets gated (pre-tool hooks), and
-what gets recorded (telemetry, memory, scorecards).
+that has teeth is: **who owns the loop?** A framework calls your code and
+decides when it runs. A harness wraps someone else's loop (here, the Claude
+Agent SDK's agentic loop) and confines itself to the seams that loop
+exposes: what goes in (model choice, system prompt, skills), what gets gated
+(pre-tool hooks), and what gets recorded (telemetry, memory, scorecards).
 
 That framing made a surprising number of downstream decisions for me:
 
@@ -29,16 +29,17 @@ That framing made a surprising number of downstream decisions for me:
   ([ADR-0006](../decisions/0006-skill-schema-markdown-frontmatter.md)):
   data, not code. The moment skills can execute, the harness becomes a
   framework with a security problem. (The eval layer's oracles *are* code,
-  and the security model says so loudly rather than gating it; see R-10 in
-  the [security model](../security-model.md). That asymmetry is deliberate:
-  eval is operator-invoked; skills load on every run.)
+  and the security model states that plainly rather than gating it; see
+  R-10 in the [security model](../security-model.md). That asymmetry is
+  deliberate: eval is operator-invoked; skills load on every run.)
 - **No abstraction over the SDK.** [ADR-0003](../decisions/0003-claude-sdk-first.md)
   targets one SDK in v1. The multi-provider version kept trying to sneak into
   designs as an "adapter layer", an abstraction tax paid up front to serve a
   second consumer that does not exist yet. The SDK enters the codebase as a
   *structural type* with a single cast at the CLI boundary
-  ([ADR-0010](../decisions/0010-sdk-session-adapter.md)); if a second SDK
-  ever lands, the seam is already the injected `query` function, not a
+  ([ADR-0010](../decisions/0010-sdk-session-adapter.md)); everywhere else it
+  is just an injected function with the right shape. If a second SDK ever
+  lands, the seam is already the injected `query` function, not a
   speculative interface hierarchy.
 - **Everything injected.** The session takes `query`, hooks, memory,
   telemetry, and both scanners as dependencies. 800+ of the repo's unit
@@ -83,7 +84,10 @@ denies on *any* pre-tool throw
 a fail-closed contract (an unknown exception in a security gate now denies
 instead of propagating), and I would not have arrived at it without the
 constraint pushing back. Good boundaries don't just prevent bad imports;
-they generate better failure semantics.
+they generate better failure semantics. The same stance recurs up the
+stack: the security layer applies it as tighten-only merging, and the eval
+layer gives its adversary report-only authority. Give a component less
+power than you think it needs, and make the failure direction the safe one.
 
 ## What a harness does not control
 
@@ -116,13 +120,20 @@ the harness shape kept the codebase small enough that the
 [three-layer diagram](../architecture.md) is the actual truth, not an
 aspiration.
 
-The cost is real too. A harness is only as expressive as the seams the SDK
-exposes. The security model's most consequential named residual risk (R-4,
-the observe-only posture, accepted because no SDK result-rewrite channel
-exists yet) is there *because* the loop isn't mine: enforcement that a
-framework would implement in a weekend waits on an upstream channel. I have
-chosen to document that boundary rather than fork my way around it, and week
-by week that choice keeps being tested. So far it has held.
+The cost is real too. A harness cannot invent control points; if the SDK
+does not expose a seam, you do not get to enforce there. The sharpest case:
+the secret redactor was built to rewrite tool output before the model reads
+it, and the SDK's post-tool hook is observe-only, so the redactor protects
+the record while the model still sees the raw secret. The enforcement code
+exists; the seam does not. That is the security model's most consequential
+named residual risk (R-4), and it is there *because* the loop isn't mine:
+enforcement a framework would implement in a weekend waits on an upstream
+channel. I have chosen to document that boundary rather than fork my way
+around it, and week by week that choice keeps being tested. So far it has
+held.
+
+If these essays share one stance, it is this: constrain power, make claims
+falsifiable, and prefer a visible limitation to a hidden capability.
 
 If you read one thing after this, read the
 [week-1 devlog](../../process/devlog/week-1.md), including the six-week

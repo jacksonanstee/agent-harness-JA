@@ -12,9 +12,10 @@ persists). There is no OS isolation underneath, and
 "what this cannot stop" section, because a sandbox that overclaims is worse
 than no sandbox: it converts your users' caution into misplaced trust.
 
-This post is about the three ideas that shaped the layer (honest gaps,
-tighten-only composition, and reviews as architecture), with live output
-where a claim can be demonstrated instead of asserted.
+This post is about the three ideas that shaped the layer: honest gaps,
+tighten-only composition, and reviews as architecture, because the process
+that ships the code is part of the security model too. Live output appears
+wherever a claim can be demonstrated instead of asserted.
 
 ## Name the gap or it will name you
 
@@ -31,8 +32,7 @@ The model's §6 chains R-4 with R-3 (ungated network egress) into the
 "critical-shaped scenario": flagged-but-not-blocked injection steers the
 model, the model has seen an unredacted secret, `WebFetch` exfiltrates it.
 That composed analysis is only possible because each half was stated
-plainly, and it is what promotes two follow-ups above everything else on the
-roadmap. Unstated gaps don't get roadmap slots.
+plainly. Unstated gaps don't get roadmap slots.
 
 This week the R-4 surface *widened*, deliberately: skill bodies now enter
 the system prompt whole (PR #28, the fix that made
@@ -47,10 +47,11 @@ implementable today. Observe-only is a posture, not a fate.
 
 ## Tighten-only, demonstrated
 
-The trust model is user > project: your machine's settings are trusted; the
-settings of a repo you just cloned are attacker-influenced input. Two merge
-rules encode it. Permission rules combine with sticky deny (a user deny
-survives any project allow,
+Tighten-only in one line: any configuration an attacker can influence may
+remove capability, never add it. The trust model is user > project. Your
+machine's settings are trusted; the settings of a repo you just cloned are
+attacker-influenced input. Two merge rules encode it. Permission rules
+combine with sticky deny (a user deny survives any project allow,
 [ADR-0014](../decisions/0014-declarative-permission-model.md)); sandbox
 allowlists combine by intersection
 ([ADR-0015](../decisions/0015-sandbox-pre-tool-gate.md)). A cloned repo can
@@ -74,21 +75,23 @@ The telemetry row underneath reads
 `denied-by-hook | Write | permission: deny Write [rule 0, project]`. The
 audit trail names the rule and the layer that fired.
 
-And building the demo taught the lesson a second time. My first policy
-denied `Write` but not `Bash`, and the agent, denied the file tool, went
-straight for `echo hello > demo.txt` through the shell. **A deny-list is not
-a boundary until the alternate routes are closed.** The repo had already
-learned this once at the infrastructure level: the "dual-table gap", where
-permissions and sandbox each kept a private tool table and four
-exfiltration-shaped tools bypassed both, fixed by a single shared table both
-gates consume. Watching the same failure shape reappear at the *policy*
-level, live, is exactly why the example ships with `Bash` denied and the
-incident written into its README.
+Building the demo taught the lesson twice. My first policy denied `Write`
+but not `Bash`; denied the file tool, the agent went straight to
+`echo hello > demo.txt`. **A deny-list is not a boundary until the
+alternate routes are closed.** The repo had already learned this once at
+the infrastructure level: the "dual-table gap", where permissions and
+sandbox each kept a private tool table and four exfiltration-shaped tools
+bypassed both, fixed by a single shared table both gates consume. Watching
+the same failure shape reappear at the *policy* level, live, is exactly why
+the example ships with `Bash` denied and the incident written into its
+README.
 
 ## Reviews are load-bearing, including on the fixes
 
 The most instructive defects in this codebase were found by adversarial
-review, and a disproportionate number were found *in the fixes*:
+review, and a disproportionate number were found *in the fixes*. Every
+example below involves a remedy: three introduced the defect, and one had
+wrongly declared it closed.
 
 - The skills loader's differential review caught a **critical RCE**: the
   frontmatter library selects its parse engine from the fence tag, so
@@ -121,7 +124,7 @@ attacker here is your own tooling), but it is the kind of friction that
 separates a security layer someone has actually operated from one that has
 only been designed.
 
-The pattern across the four review catches: **the dangerous bug is the one
+The pattern across the review catches: **the dangerous bug is the one
 introduced by the remedy**, because remedies get less scrutiny than
 features. The process here treats review as part of the security
 architecture: three independent lanes per change, an adversarial verify pass
