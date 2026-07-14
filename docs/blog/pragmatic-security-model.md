@@ -1,7 +1,5 @@
 # A pragmatic security model for tool-using agents
 
-> **Status: Draft, awaiting author voice pass.** 2026-07-14.
-
 The [security model](../security-model.md) for
 [agent-harness-JA](../../README.md) opens with a constraint most agent
 security writing avoids stating: the harness is a policy layer, not an

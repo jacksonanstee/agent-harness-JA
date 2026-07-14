@@ -1,7 +1,5 @@
 # Adversarial evaluation for LLM agents: golden + red-team + two-pass
 
-> **Status: Draft, awaiting author voice pass.** 2026-07-14.
-
 The eval layer of [agent-harness-JA](../../README.md) has three parts: a
 golden-task runner with executable oracles
 ([ADR-0017](../decisions/0017-golden-runner.md)), a red-team corpus with a

@@ -1,7 +1,5 @@
 # Designing an agent harness: harness ≠ framework
 
-> **Status: Draft, awaiting author voice pass.** 2026-07-14.
-
 The most consequential architectural artefact in this repo is not a module.
 It is an eslint rule: the one that fails the build if a security file
 imports from the layers above it. It does not describe the architecture; it
