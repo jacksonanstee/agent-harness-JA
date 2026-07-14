@@ -38,40 +38,28 @@ For the longer rationale see [process/00-problem-framing.md](./process/00-proble
 
 ## Quick start
 
-> Everything below is implemented and CI-gated. Published to npm as [`agent-harness-ja`](https://www.npmjs.com/package/agent-harness-ja) with build provenance (v0.1.0). Requires Node ≥ 20.10. Progress: [process/devlog/](./process/devlog/).
+> Everything below is implemented and CI-gated. Requires Node ≥ 20.10. Progress: [process/devlog/](./process/devlog/).
+>
+> Publishing to npm as `agent-harness-ja` (v0.1.0) via OIDC trusted publishing with build provenance ([ADR-0022](./docs/decisions/0022-npm-publish.md)); the first release is cut from [Releases](https://github.com/jacksonanstee/agent-harness-JA/releases). It runs from a clone today, and via `npx` / `npm i` once that release lands.
 
-Fastest start, no clone: scaffold a runnable starter project and follow its printed next steps.
-
-```bash
-# Scaffold a starter (one skill, a committed security policy, one golden task)
-npx agent-harness-ja init my-agent
-```
-
-Or install and drive the harness directly:
+Run from a clone (works today):
 
 ```bash
-npm install -g agent-harness-ja   # or: npm i agent-harness-ja for library use
+git clone https://github.com/jacksonanstee/agent-harness-JA && cd agent-harness-JA
+npm ci && npm run build
 
 # Configure (needed for run/eval; the red-team gate is keyless)
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Run the agent
-agent-harness-ja run "your prompt"
-
-# Run the golden eval suite
-agent-harness-ja eval
-
-# Add a second-pass adversarial challenge over passed tasks (report-only; adds one model call per passed task)
-agent-harness-ja eval --challenge
-
-# Run the keyless red-team gate (fails on ANY drift vs the committed baseline; see docs/decisions/0019)
-agent-harness-ja redteam
-
-# Export telemetry as JSONL (filter by --session / --type)
-agent-harness-ja telemetry export
+node dist/cli.js run "your prompt"
+node dist/cli.js eval                  # golden eval suite
+node dist/cli.js eval --challenge      # report-only second-pass adversarial challenge
+npm run redteam                        # keyless drift gate (see docs/decisions/0019)
+node dist/cli.js telemetry export      # JSONL; filter by --session / --type
+node dist/cli.js init my-agent         # scaffold a starter project
 ```
 
-Working from a clone instead? `npm ci && npm run build`, then use `node dist/cli.js <command>` in place of `agent-harness-ja`.
+Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
 
 `init` refuses to overwrite anything it would create (scaffold into a fresh directory), prints the exact next-step commands for a from-clone install, and the starter it produces passes its own eval in one turn. The scaffolded policy denies the network tools and its README explains the Bash route-around it deliberately leaves open, and how to close it.
 

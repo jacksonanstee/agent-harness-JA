@@ -23,6 +23,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Skip GitHub pre-releases: publish has no --tag, so a pre-release would
+    # otherwise land on the npm 'latest' dist-tag. Cut a normal release to ship.
+    if: ${{ !github.event.release.prerelease }}
     # Optional manual-approval gate: add required reviewers to this environment
     # in repo Settings -> Environments to require a click before any publish.
     environment: npm-publish
@@ -40,9 +43,12 @@ jobs:
           cache: npm
 
       # Trusted publishing (OIDC) needs npm >= 11.5.1; the Node 22 runner ships
-      # an older npm, so upgrade before publish.
+      # an older npm, so upgrade before publish. Pinned (not @latest): this is
+      # the one network pull that runs right before the OIDC publish token is
+      # used, so it gets the same pin discipline as the SHA-pinned actions.
+      # Bump deliberately; must stay >= 11.5.1.
       - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.11.0
 
       - name: Install
         run: npm ci
@@ -66,10 +72,17 @@ jobs:
 
       # Guard: the published version must match the release tag (tag vX.Y.Z),
       # so a forgotten version bump fails loudly instead of re-publishing.
+      # Release tags follow the vX.Y.Z convention, so the guard prepends 'v' to
+      # the package version. A tag without the 'v' fails closed here (safe): fix
+      # the tag, do not drop the 'v'.
+      # TAG comes in via env, never interpolated into the script body: a
+      # ${{ }} expression substituted into the shell text would let a crafted
+      # tag name inject commands into this job (which holds id-token: write).
       - name: Verify version matches release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
-          TAG="${{ github.event.release.tag_name }}"
           if [ "$PKG_VERSION" != "$TAG" ]; then
             echo "package.json version $PKG_VERSION does not match release tag $TAG" >&2
             exit 1
