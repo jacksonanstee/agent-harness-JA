@@ -280,7 +280,7 @@ A single `harness.config.ts` (or `.yaml`) at the consumer's project root defines
 - Telemetry path.
 - Eval task directories.
 
-Configuration is fully optional — every module ships sensible defaults. The starter project produced by `harness init` ships with a minimal config that runs end-to-end on a fresh machine.
+Configuration is fully optional — every module ships sensible defaults. The starter project produced by `init` (shipped, [ADR-0021](./decisions/0021-init-scaffolder.md)) carries a minimal committed config that runs end-to-end on a fresh machine: one skill, a deny-rules security policy, and one golden task whose oracle pins a single-turn skill-grounded answer.
 
 ## Cross-cutting concerns
 

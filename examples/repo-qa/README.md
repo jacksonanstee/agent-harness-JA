@@ -26,7 +26,7 @@ node ../../dist/cli.js run "Which ADR covers the permission model, and where do 
 
 The skill loads from `./skills` (the default `--skills-dir`), and the trailer
 line reports the routed model, turn count, cost, and how many tool calls were
-denied. A typical run costs well under a cent.
+denied. A typical run costs a few cents at most.
 
 ### See the security policy fire
 

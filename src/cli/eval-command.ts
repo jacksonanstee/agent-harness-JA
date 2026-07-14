@@ -105,7 +105,12 @@ export const buildAdversary =
 
 export async function runEval(args: EvalArgs): Promise<number> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    process.stderr.write('ANTHROPIC_API_KEY is not set. Export it before running eval.\n');
+    process.stderr.write(
+      'ANTHROPIC_API_KEY is not set (required for eval).\n\n' +
+        'Export it, then re-run:\n' +
+        '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
+        'Get a key at https://console.anthropic.com/settings/keys\n',
+    );
     return 2;
   }
 

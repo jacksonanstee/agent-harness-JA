@@ -24,7 +24,8 @@ export const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
   '       agent-harness-ja eval [taskDir] [--challenge]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
-  '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]';
+  '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]\n' +
+  '       agent-harness-ja init [dir]';
 
 // Deliberately separate from src/internal/sanitize.ts: model output and
 // warnings reach the user's terminal, where newline/tab are kept for

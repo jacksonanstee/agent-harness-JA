@@ -14,6 +14,8 @@ import {
 import type { SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
+import { parseInitArgs, runInit } from './cli/init-command.js';
+import type { InitArgs } from './cli/init-command.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
@@ -69,7 +71,7 @@ export interface TelemetryExportArgs {
   type: TelemetryEventType | null;
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs;
+export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs | InitArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -84,6 +86,9 @@ export function parseArgs(argv: string[]): ParseResult {
   }
   if (argv[0] === 'redteam') {
     return parseRedteamArgs(argv.slice(1));
+  }
+  if (argv[0] === 'init') {
+    return parseInitArgs(argv.slice(1));
   }
   return parseRunArgs(argv);
 }
@@ -216,9 +221,16 @@ export async function main(argv: string[]): Promise<number> {
     return runRedteamCommand(parsed.value);
   }
 
+  if (parsed.value.command === 'init') {
+    return runInit(parsed.value);
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     process.stderr.write(
-      'ANTHROPIC_API_KEY is not set. Export it before running the harness.\n',
+      'ANTHROPIC_API_KEY is not set.\n\n' +
+        'Export it, then re-run:\n' +
+        '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
+        'Get a key at https://console.anthropic.com/settings/keys\n',
     );
     return 2;
   }

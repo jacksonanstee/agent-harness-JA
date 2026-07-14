@@ -1,7 +1,7 @@
 # agent-harness-JA
 
 > Most repos show the artefact; this one shows the thinking.
-> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 20 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
+> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 21 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -61,9 +61,12 @@ npm run redteam
 
 # Export telemetry as JSONL (filter by --session / --type)
 node dist/cli.js telemetry export
+
+# Scaffold a starter project (one skill, a committed security policy, one golden task)
+node dist/cli.js init my-agent
 ```
 
-A `harness init` scaffolder is planned (Week 4) but **not yet implemented**: it is deliberately the first thing cut if the week runs short.
+`init` refuses to overwrite anything it would create (scaffold into a fresh directory), prints the exact next-step commands for a from-clone install, and the starter it produces passes its own eval in one turn. The scaffolded policy denies the network tools and its README explains the Bash route-around it deliberately leaves open, and how to close it.
 
 ---
 
@@ -120,7 +123,7 @@ As of 2026-07-14:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0020 |
-| Tests | 865 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 891 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish, blog series, npm publish | Week 4, in progress |
 
 Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
