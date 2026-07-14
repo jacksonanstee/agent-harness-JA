@@ -286,6 +286,27 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
       params.key = filter.key;
     }
     try {
+      if (filter.tag !== undefined) {
+        // Tags live in a JSON text column, so tag matching cannot happen in
+        // SQL. Reuse read() as the single definition of "which rows match this
+        // filter" — delete can then never disagree with read — and remove the
+        // matched ids in one transaction so a partial failure rolls back.
+        const deleteMatching = db.transaction((): number => {
+          const ids = read({ type: filter.type, key: filter.key, tag: filter.tag }).map((e) => e.id);
+          const stmt = db.prepare(`DELETE FROM memory_entries WHERE id = @id;`);
+          for (const id of ids) {
+            stmt.run({ id });
+          }
+          return ids.length;
+        });
+        return { ok: true, value: { deleted: deleteMatching() } };
+      }
+      if (clauses.length === 1) {
+        // Unreachable today (the guard requires type, key, or tag), but if a
+        // future MemoryFilter field is added to the guard without a clause
+        // here, fail loud instead of running an unconstrained DELETE.
+        throw new TypeError('delete filter produced no WHERE clause; refusing to wipe the table');
+      }
       const info = db.prepare(`DELETE FROM memory_entries WHERE ${clauses.join(' AND ')};`).run(params);
       return { ok: true, value: { deleted: info.changes } };
     } catch (cause: unknown) {

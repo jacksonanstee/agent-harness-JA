@@ -225,6 +225,40 @@ describe('memory: delete', () => {
     const { store } = freshStore();
     expect(() => store.delete({})).toThrow(TypeError);
   });
+
+  it('deletes by tag only the entries carrying that tag', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a', tags: ['alpha'] });
+    writeOk(store, { type: 'user', content: 'b', tags: ['beta'] });
+    writeOk(store, { type: 'project', content: 'c' });
+    const result = store.delete({ tag: 'alpha' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value.deleted).toBe(1);
+    expect(store.read().map((e) => e.content).sort()).toEqual(['b', 'c']);
+  });
+
+  it('combines tag with type so only rows matching both are deleted', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a', tags: ['alpha'] });
+    writeOk(store, { type: 'user', content: 'b', tags: ['beta'] });
+    writeOk(store, { type: 'project', content: 'c', tags: ['alpha'] });
+    const result = store.delete({ type: 'user', tag: 'alpha' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value.deleted).toBe(1);
+    expect(store.read().map((e) => e.content).sort()).toEqual(['b', 'c']);
+  });
+
+  it('tag-only delete matching nothing deletes nothing', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a', tags: ['alpha'] });
+    const result = store.delete({ tag: 'no-such-tag' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value.deleted).toBe(0);
+    expect(store.read()).toHaveLength(1);
+  });
 });
 
 describe('memory: programmer errors throw TypeError', () => {
