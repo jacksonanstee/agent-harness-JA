@@ -108,7 +108,7 @@ costs drift with models and prices):
 | run | result | turns | cost |
 |---|---|---|---|
 | pre-fix, tools allowed | pass (by tool-hunting) | 3 | $0.1001 |
-| pre-fix, "answer from the skill" | fail | — | — |
+| pre-fix, "answer from the skill" | fail | n/a | n/a |
 | post-fix | 2/2 pass | 1 per task | $0.0321 + $0.0159 |
 
 A dogfooding hour did what no amount of additional unit testing at the same
