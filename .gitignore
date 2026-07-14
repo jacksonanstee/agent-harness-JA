@@ -48,3 +48,9 @@ tmp/
 
 # Local planning scratch (never committed — internal working notes)
 tasks/
+
+# The repo-qa example commits its project settings file; runtime artifacts
+# inside its .harness/ (telemetry.db, eval scorecards) stay ignored.
+!examples/repo-qa/.harness/
+examples/repo-qa/.harness/*
+!examples/repo-qa/.harness/settings.json
