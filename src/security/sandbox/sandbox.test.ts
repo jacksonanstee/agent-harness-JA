@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSandbox,
+  isBlockedFirstToken,
   mergeSandboxLayers,
   sandboxHook,
   SandboxViolation,
@@ -101,6 +102,39 @@ describe('createSandbox commands', () => {
     expect(risky.allowCommand('/bin/zsh script')).toBe(false); // basename match
     expect(risky.allowCommand('env FOO=1 git push')).toBe(false);
     expect(risky.allowCommand('git push')).toBe(true); // legit entry unaffected
+  });
+
+  it('denies argv-passthrough exec wrappers even when allowlisted (sudo/su/timeout/nohup/…)', () => {
+    // These exec their trailing argv as a subprocess exactly like env/xargs,
+    // so allowing them defeats argv[0] analysis. They must be blocked outright
+    // even when named in the allowlist (2026-07-14 audit finding V10).
+    const risky = createSandbox({
+      commands: {
+        allow: ['sudo', 'su', 'doas', 'runuser', 'pkexec', 'timeout', 'nohup',
+          'nice', 'ionice', 'taskset', 'stdbuf', 'setsid', 'unshare', 'flock', 'time', 'git'],
+      },
+    });
+    expect(risky.allowCommand('sudo rm -rf /')).toBe(false);
+    expect(risky.allowCommand('su -c "rm -rf /"')).toBe(false);
+    expect(risky.allowCommand('doas rm -rf /')).toBe(false);
+    expect(risky.allowCommand('runuser -u root rm x')).toBe(false);
+    expect(risky.allowCommand('pkexec rm x')).toBe(false);
+    expect(risky.allowCommand('timeout 5 curl http://evil')).toBe(false);
+    expect(risky.allowCommand('nohup wget http://evil')).toBe(false);
+    expect(risky.allowCommand('nice tar czf x /')).toBe(false);
+    expect(risky.allowCommand('taskset -c 0 rm x')).toBe(false);
+    expect(risky.allowCommand('unshare -r sh')).toBe(false);
+    expect(risky.allowCommand('flock /tmp/l rm x')).toBe(false);
+    expect(risky.allowCommand('time rm x')).toBe(false);
+    expect(risky.allowCommand('git push')).toBe(true); // legit entry unaffected
+  });
+
+  it('exec-wrapper blocklist is case-proof (folds like the shell-runner list)', () => {
+    const sandbox = createSandbox({ commands: { allow: ['sudo', 'git'] } });
+    // darwin/win32: 'SUDO' case-folds into the blocklist; elsewhere 'SUDO' is a
+    // different binary that is simply not allowlisted — denied either way.
+    expect(sandbox.allowCommand('SUDO rm x')).toBe(false);
+    expect(sandbox.allowCommand('sudo rm x')).toBe(false);
   });
 
   it('denies backslash and history-expansion characters (review round)', () => {
@@ -267,5 +301,35 @@ describe('bare-name allowlist folds with the same grammar (verify-pass LOW)', ()
     const folded = process.platform === 'darwin' || process.platform === 'win32';
     expect(sandbox.allowCommand('git status')).toBe(true);
     expect(sandbox.allowCommand('GIT status')).toBe(folded);
+  });
+});
+
+describe('isBlockedFirstToken (the shared brain of enforcement AND the CLI warning)', () => {
+  it('flags shell runners and exec wrappers, from a full command or a bare entry', () => {
+    // The startup warning filters allowlist entries through this exact
+    // predicate, so it can never drift from what the gate enforces (V10 review).
+    expect(isBlockedFirstToken('sudo git push')).toBe(true); // full command
+    expect(isBlockedFirstToken('sudo')).toBe(true); // bare allowlist entry
+    expect(isBlockedFirstToken('bash')).toBe(true);
+    expect(isBlockedFirstToken('/usr/bin/sudo')).toBe(true); // path-shaped, basename
+    expect(isBlockedFirstToken('git')).toBe(false);
+    expect(isBlockedFirstToken('/usr/bin/git')).toBe(false);
+  });
+
+  it('folds case on case-insensitive platforms', () => {
+    const folded = process.platform === 'darwin' || process.platform === 'win32';
+    expect(isBlockedFirstToken('SUDO')).toBe(folded);
+  });
+});
+
+describe('path gate folds Unicode form (V11, gate level)', () => {
+  it('an NFC deny/allow decision matches an NFD tool call for the same file', () => {
+    // Rule stored NFC, tool call arrives NFD (or vice versa): same file, so the
+    // allow decision must be identical. \u escapes so the source encoding is moot.
+    const nfc = '/data/Caf\u00e9'; // e-acute as one codepoint (NFC)
+    const nfd = '/data/Cafe\u0301'; // e + combining acute (NFD)
+    const sandbox = createSandbox({ paths: { allow: [nfc] } });
+    expect(sandbox.allowPath(`${nfd}/secret.txt`)).toBe(true);
+    expect(sandbox.allowPath('/data/Other/secret.txt')).toBe(false);
   });
 });

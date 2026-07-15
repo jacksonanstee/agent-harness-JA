@@ -216,6 +216,17 @@ describe('createPermissionEvaluator', () => {
     },
   );
 
+  it('a path deny rule cannot be dodged by Unicode form (NFC/NFD), on any platform', () => {
+    // V11 gate-level regression: rule written NFC, tool call arrives NFD for the
+    // same file. NFC folding in canonicalizePath applies regardless of platform.
+    const denyDir = '/data/Caf\u00e9'; // e-acute NFC in the rule
+    const nfdCall = '/data/Cafe\u0301/secret.txt'; // e-acute NFD in the tool call
+    const evaluator = createPermissionEvaluator({
+      rules: [rule({ tool: 'Write', match: `${denyDir}/*`, decision: 'deny' })],
+    });
+    expect(evaluator.evaluate('Write', { file_path: nfdCall }).decision).toBe('deny');
+  });
+
   it('match rules gate the full path-taking tool surface via the shared table', () => {
     const evaluator = createPermissionEvaluator({
       rules: [

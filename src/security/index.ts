@@ -39,6 +39,8 @@ export type {
 } from './permissions/index.js';
 export {
   createSandbox,
+  EXEC_WRAPPER_BINARIES,
+  isBlockedFirstToken,
   loadSandboxSettingsFile,
   mergeSandboxLayers,
   parseSandboxSettings,

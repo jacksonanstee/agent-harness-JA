@@ -48,14 +48,30 @@ export const CASE_INSENSITIVE_PLATFORM =
   process.platform === 'darwin' || process.platform === 'win32';
 
 /**
- * Canonical form for path comparison: lexical resolve (collapses `.`/`..`,
- * anchors relative paths at cwd) plus case folding on case-insensitive
- * platforms. Both sides of every path comparison must go through this.
+ * Canonical form for path comparison: Unicode NFC normalization, then lexical
+ * resolve (collapses `.`/`..`, anchors relative paths at cwd), then case
+ * folding on case-insensitive platforms. Both sides of every path comparison
+ * must go through this.
+ *
+ * NFC folding closes the same "same file, different string" bypass as case
+ * folding, on the orthogonal Unicode-form axis: an accented character has
+ * byte-distinct NFC (single codepoint) and NFD (base + combining mark)
+ * encodings, so a deny rule written in one form would otherwise be dodged by a
+ * tool call in the other. Filesystems preserve whichever form was given (APFS
+ * is byte-preserving but does canonical-equivalence-aware lookup; most Linux
+ * filesystems are byte-preserving too), so a rule and a tool argument can
+ * arrive in different forms; comparing in NFC makes them agree.
+ *
+ * Normalize AFTER resolve, not before: resolve() prepends process.cwd() for a
+ * relative input, and those bytes never passed through the caller's
+ * normalize(); folding the resolved absolute string catches the cwd component
+ * too (a relative tool call from a non-NFC-stored directory would otherwise
+ * still slip the deny rule).
  */
 export function canonicalizePath(
   path: string,
   caseInsensitive: boolean = CASE_INSENSITIVE_PLATFORM,
 ): string {
-  const resolved = resolve(path);
+  const resolved = resolve(path).normalize('NFC');
   return caseInsensitive ? resolved.toLowerCase() : resolved;
 }
