@@ -9,9 +9,9 @@ import {
   mergeSandboxLayers,
   parsePermissionSettings,
   parseSandboxSettings,
+  isBlockedFirstToken,
   PermissionSettingsError,
   SandboxSettingsError,
-  SHELL_RUNNER_BINARIES,
 } from '../security/index.js';
 import type { EvaluatorOptions, SandboxConfig } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
@@ -177,14 +177,14 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
     );
   }
-  // Shell runners are DENIED by the sandbox regardless of the allowlist
-  // (SHELL_RUNNER_BINARIES blocklist); surface the conflict at startup.
-  const blocked = (sandbox.commands?.allow ?? []).filter((entry) =>
-    SHELL_RUNNER_BINARIES.includes(entry),
-  );
+  // Shell runners and argv-passthrough exec wrappers are DENIED by the sandbox
+  // regardless of the allowlist; surface the conflict at startup. Uses the same
+  // predicate the gate enforces with, so the warning never drifts from the
+  // blocklist (ADR-0015 §3).
+  const blocked = (sandbox.commands?.allow ?? []).filter((entry) => isBlockedFirstToken(entry));
   if (blocked.length > 0) {
     warnings.push(
-      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners defeat first-token enforcement and are always denied (ADR-0015 §3)`,
+      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners and exec wrappers defeat first-token enforcement and are always denied (ADR-0015 §3)`,
     );
   }
   return { permissions, sandbox, warnings };

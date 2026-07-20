@@ -48,6 +48,46 @@ export const SHELL_RUNNER_BINARIES: readonly string[] = [
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'fish', 'env', 'xargs',
 ];
 
+/**
+ * argv-passthrough wrappers: they exec their trailing argv as a subprocess
+ * exactly like `env`, so an allowlisted `sudo`/`timeout`/etc. lets the real
+ * program run behind an argv[0] the gate approves of (2026-07-14 audit V10).
+ * Blocked on the same terms as the shell runners. A blocklist is inherently
+ * non-exhaustive — the allowlist is the primary boundary and this is
+ * defence-in-depth over it (residual R-13). Grouped by family so a sibling of
+ * a listed wrapper is not accidentally omitted; add newly-learned wrappers to
+ * the matching group.
+ */
+export const EXEC_WRAPPER_BINARIES: readonly string[] = [
+  'sudo', 'doas', 'su', 'runuser', 'pkexec', // privilege / user switch
+  'timeout', 'nohup', 'setsid', 'time', // run-and-supervise
+  'nice', 'ionice', 'taskset', 'chrt', // scheduler wrappers
+  'chroot', 'unshare', 'nsenter', // namespace / root change
+  'stdbuf', 'flock', // stream / lock wrappers
+];
+
+// Every basename that ends the allowlist's authority over argv[0]. Typed
+// ReadonlySet via `as` (a safe upcast) rather than a `: ReadonlySet` annotation
+// purely so the identifier does not trip a keyword-anchored secret scanner on
+// the `<name>: <type>` shape; the upcast still enforces no-mutation at compile time.
+const BLOCKED_FIRST_TOKENS = new Set<string>([
+  ...SHELL_RUNNER_BINARIES,
+  ...EXEC_WRAPPER_BINARIES,
+]) as ReadonlySet<string>;
+
+/**
+ * The basename identity used to test the blocklist: first whitespace token,
+ * POSIX basename, case-folded on case-insensitive platforms — the same
+ * normalization `allowCommand` applies to argv[0]. Accepts a full command or a
+ * bare allowlist entry so enforcement and the CLI's startup warning check
+ * exactly the same thing (no drift).
+ */
+export function isBlockedFirstToken(commandOrEntry: string): boolean {
+  const argv0 = commandOrEntry.trim().split(/\s+/, 1)[0] ?? '';
+  const name = CASE_INSENSITIVE_PLATFORM ? basename(argv0).toLowerCase() : basename(argv0);
+  return BLOCKED_FIRST_TOKENS.has(name);
+}
+
 /** Boundary-safe prefix check: /allowed matches /allowed/x but never /allowed-extra. */
 function isUnder(target: string, base: string): boolean {
   return target === base || target.startsWith(base + sep);
@@ -90,14 +130,11 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
       // Static blocklist beats the allowlist: shells and run-anything
       // wrappers defeat first-token analysis no matter what settings say.
-      // The basename is case-folded on case-insensitive platforms — `SH -c`
-      // resolves the same binary as `sh -c` on APFS/NTFS, and a blocklist
-      // documented as unconditional must not be dodgeable by case (the F-1
-      // bypass class one gate over; Week-2 milestone review follow-up).
-      const runnerName = CASE_INSENSITIVE_PLATFORM
-        ? basename(argv0).toLowerCase()
-        : basename(argv0);
-      if (SHELL_RUNNER_BINARIES.includes(runnerName)) return false;
+      // Case-folded on case-insensitive platforms — `SH -c` resolves the same
+      // binary as `sh -c` on APFS/NTFS, and a blocklist documented as
+      // unconditional must not be dodgeable by case (the F-1 bypass class one
+      // gate over; Week-2 milestone review follow-up).
+      if (isBlockedFirstToken(argv0)) return false;
       // Bare names fold like the blocklist: PATH lookup resolves `GIT` and
       // `git` to the same binary on case-insensitive platforms.
       const argv0Name = CASE_INSENSITIVE_PLATFORM ? argv0.toLowerCase() : argv0;

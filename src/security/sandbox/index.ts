@@ -1,5 +1,7 @@
 export {
   createSandbox,
+  EXEC_WRAPPER_BINARIES,
+  isBlockedFirstToken,
   mergeSandboxLayers,
   sandboxHook,
   SandboxViolation,

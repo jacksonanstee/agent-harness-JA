@@ -42,4 +42,26 @@ describe('canonicalizePath', () => {
     const expected = process.platform === 'darwin' || process.platform === 'win32';
     expect(canonicalizePath('/A', undefined) === '/a').toBe(expected);
   });
+
+  it('folds Unicode NFC/NFD forms to one string so a rule can not be dodged by form', () => {
+    // A path with an accented char has two byte-distinct encodings: NFC
+    // (single codepoint) and NFD (base letter + combining mark). They are the
+    // same file but different strings; without normalization a deny rule
+    // written in one form is bypassed by a tool call in the other, the same
+    // "same file, different string" bug case-folding exists to close. Built
+    // from \u escapes so the precondition holds regardless of how this source
+    // file's own bytes are normalized on save.
+    const nfc = '/Caf\u00e9/secret.txt'; // e-acute as one codepoint (NFC)
+    const nfd = '/Cafe\u0301/secret.txt'; // e + combining acute (NFD)
+    expect(nfc).not.toBe(nfd); // precondition: genuinely distinct strings
+    expect(canonicalizePath(nfc, false)).toBe(canonicalizePath(nfd, false));
+    expect(canonicalizePath(nfc, true)).toBe(canonicalizePath(nfd, true));
+  });
+
+  // Note: canonicalizePath normalizes AFTER resolve() specifically so a
+  // relative input's cwd component is folded too (V10/V11 review HIGH). That
+  // path can only be exercised by changing process.cwd() to a non-NFC
+  // directory, which vitest's worker pool disallows (process.chdir throws), so
+  // it is verified by the reviewer's live repro rather than a unit test here.
 });
+
