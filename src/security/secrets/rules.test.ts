@@ -206,6 +206,11 @@ describe('ReDoS guard — every rule is linear-time on pathological input', () =
     // with no END, well past redact()'s MAX_INPUT cap (differential-review
     // finding). The input cap must keep this bounded.
     ('-----BEGIN RSA PRIVATE ' + 'KEY-----\n').repeat(40_000), // ~1.3 MB
+    // Stresses the widened \s{0,20} delimiter budget: keyword + over-budget
+    // padding with no delimiter, repeated, forcing a bounded fail at every
+    // occurrence (2026-07-15 audit remediation).
+    ('aws_sec' + 'ret_access_key' + ' '.repeat(25)).repeat(5_000),
+    ('to' + 'ken' + '\t'.repeat(25)).repeat(10_000),
   ];
 
   it.each(DEFAULT_SECRET_RULES.map((r) => r.id))(

@@ -74,6 +74,18 @@ export const SECRET_CORPUS = [
   },
   { id: 's-21', expect: 'github-oauth', text: 'gho_' + 'a1B2c3D4e5f6G7h8i9J0k1L2m3N4o5P6q7R8' },
   { id: 's-22', expect: 'pypi-upload-token', text: `pypi-AgEIcHlwaS5vcmc${'a'.repeat(60)}` },
+  {
+    // Column-aligned assignment (common in .env/config blocks): whitespace
+    // around the delimiter must not defeat the keyword anchor.
+    id: 's-23',
+    expect: 'aws-secret-access-key',
+    text: 'aws_sec' + 'ret_access_key      = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYabcd"',
+  },
+  {
+    id: 's-24',
+    expect: 'generic-keyword-secret',
+    text: 'api' + '_key\t\t\t\t= "aB3xK9pL2mQ7zW1nR5tY8vC4"',
+  },
 
   // --- benign: false-positive guards ---
   { id: 'b-01', expect: 'benign', text: 'commit 3b8f9d2e1a04c77f0b6d5e4a3c2b1a09f8e7d6c5' }, // git SHA
@@ -86,4 +98,5 @@ export const SECRET_CORPUS = [
   { id: 'b-08', expect: 'benign', text: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==' }, // short base64
   { id: 'b-09', expect: 'benign', text: 'See https://example.com/docs?q=api' + '_key for details' }, // url, no creds
   { id: 'b-10', expect: 'benign', text: 'api' + 'key without quotes = something readable here' }, // no quoted token
+  { id: 'b-11', expect: 'benign', text: 'pass' + 'word       = "changemechangeme"' }, // aligned but low entropy
 ] as const satisfies readonly SecretCase[];

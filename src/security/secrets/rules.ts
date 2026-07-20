@@ -24,8 +24,13 @@ export const DEFAULT_SECRET_RULES = [
     id: 'aws-secret-access-key',
     precision: 'heuristic',
     entropy: 3.5,
+    // \s{0,20} not \s{0,3}: column-aligned config assignments routinely pad
+    // the delimiter with more than 3 whitespace chars (\s also spans newlines;
+    // over-matching is fail-safe for a redactor). Still a single-level bounded
+    // quantifier, so linear-time per the file contract. 21+ chars of padding
+    // is an accepted known-miss: security-model.md §6 R-12.
     pattern:
-      /aws_?secret_?(?:access_?)?key['"]?\s{0,3}[:=]\s{0,3}['"]?([A-Za-z0-9/+=]{40})/i,
+      /aws_?secret_?(?:access_?)?key['"]?\s{0,20}[:=]\s{0,20}['"]?([A-Za-z0-9/+=]{40})/i,
     description: 'AWS secret access key (keyword-anchored, entropy-gated)',
   },
   {
@@ -91,6 +96,9 @@ export const DEFAULT_SECRET_RULES = [
   {
     id: 'gcp-service-account',
     precision: 'high',
+    // Keeps \s{0,3}: this anchors on serialised JSON key files, which
+    // serialisers emit with at most one space around the colon — the
+    // column-aligned-config scenario behind the \s{0,20} rules doesn't apply.
     pattern: /"private_key_id"\s{0,3}:\s{0,3}"[a-f0-9]{40}"/,
     description: 'GCP service-account private_key_id',
   },
@@ -173,8 +181,10 @@ export const DEFAULT_SECRET_RULES = [
     id: 'generic-keyword-secret',
     precision: 'heuristic',
     entropy: 3.5,
+    // \s{0,20} for the same aligned-assignment reason (and same R-12
+    // known-miss bound) as aws-secret-access-key.
     pattern:
-      /(?:api_?key|secret|token|password|passwd|pwd)['"]?\s{0,3}[:=]\s{0,3}['"]([A-Za-z0-9/+_=-]{16,64})['"]/i,
+      /(?:api_?key|secret|token|password|passwd|pwd)['"]?\s{0,20}[:=]\s{0,20}['"]([A-Za-z0-9/+_=-]{16,64})['"]/i,
     description: 'keyword-anchored secret assignment (entropy-gated)',
   },
 ] as const satisfies readonly SecretRule[];
