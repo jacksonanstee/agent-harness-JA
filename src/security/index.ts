@@ -54,12 +54,11 @@ export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
-  SECRET_CORPUS,
 } from './secrets/index.js';
+// SECRET_CORPUS / SecretCase omitted: test-only fixture, not published (ADR-0022).
 export type {
   RedactResult,
   RedactorOptions,
-  SecretCase,
   SecretFinding,
   SecretPrecision,
   SecretRedactor,

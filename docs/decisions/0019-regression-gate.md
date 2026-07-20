@@ -164,6 +164,11 @@ surveyed pattern) was rejected outright: offsetting flips net to zero.
    inherits a recorded decision point — ship the baseline in `files` with
    package-relative resolution, or document report-only usage.
    Package-relative resolution is **not** built now (YAGNI pre-publish).
+   **Resolved at publish (ADR-0022):** the report-only branch was taken. The
+   baseline is not shipped in `files`; an installed `redteam` runs the corpus
+   and prints a scorecard, and without an explicit `--baseline <path>` exits 2
+   with the context-neutral message. Package-relative baseline resolution
+   remains unbuilt.
 
 8. **Branch protection MUST (operational, recorded).** Two concurrent
    baseline-updating PRs each regenerate the baseline from different

@@ -7,8 +7,8 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "declarationMap": false,
+    "sourceMap": false,
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -29,5 +29,9 @@
     "isolatedModules": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  // secret-corpus.ts is a test-only fixture of credential-shaped strings; kept
+  // out of the published dist so the tarball carries no fake secrets to trip
+  // downstream scanners (ADR-0022). It still typechecks under tsconfig.test.json
+  // and runs under vitest.
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "src/security/secrets/secret-corpus.ts"]
 }

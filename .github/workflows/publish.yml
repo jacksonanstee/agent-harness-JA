@@ -1,0 +1,92 @@
+name: Publish
+
+# Publishes to npm via OIDC Trusted Publishing (no long-lived token) with
+# build provenance. Triggered by publishing a GitHub Release, so the human
+# gate is the release itself. See ADR-0022 for the one-time npm-side setup
+# (link the trusted publisher: npmjs.com package settings -> Trusted Publisher
+# -> GitHub Actions -> this repo + this workflow filename).
+
+on:
+  release:
+    types: [published]
+
+# Least privilege. id-token: write is required for OIDC trusted publishing and
+# for build provenance attestation; nothing here needs write to repo contents.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Skip GitHub pre-releases: publish has no --tag, so a pre-release would
+    # otherwise land on the npm 'latest' dist-tag. Cut a normal release to ship.
+    if: ${{ !github.event.release.prerelease }}
+    # Optional manual-approval gate: add required reviewers to this environment
+    # in repo Settings -> Environments to require a click before any publish.
+    environment: npm-publish
+    steps:
+      # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
+      # cannot silently swap the action out from under a publish.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; the Node 22 runner ships
+      # an older npm, so upgrade before publish. Pinned (not @latest): this is
+      # the one network pull that runs right before the OIDC publish token is
+      # used, so it gets the same pin discipline as the SHA-pinned actions.
+      # Bump deliberately; must stay >= 11.5.1.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@11.11.0
+
+      - name: Install
+        run: npm ci
+
+      # Defence in depth: the same gates prepublishOnly runs, made visible as
+      # their own steps so a failure is legible in the Actions log.
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Red-team gate
+        run: node dist/cli.js redteam
+
+      # Guard: the published version must match the release tag (tag vX.Y.Z),
+      # so a forgotten version bump fails loudly instead of re-publishing.
+      # Release tags follow the vX.Y.Z convention, so the guard prepends 'v' to
+      # the package version. A tag without the 'v' fails closed here (safe): fix
+      # the tag, do not drop the 'v'.
+      # TAG comes in via env, never interpolated into the script body: a
+      # ${{ }} expression substituted into the shell text would let a crafted
+      # tag name inject commands into this job (which holds id-token: write).
+      - name: Verify version matches release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$TAG" ]; then
+            echo "package.json version $PKG_VERSION does not match release tag $TAG" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm (provenance + OIDC)
+        run: npm publish --provenance --access public
