@@ -163,4 +163,18 @@ export default tseslint.config(
       ],
     },
   },
+  // The root barrel is the published library surface (ADR-0023). The CLI
+  // composition root (dynamic SDK import, process-level side effects) must
+  // never leak into the library import graph through it.
+  {
+    files: ['src/index.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: ['**/cli', '**/cli.js', '**/cli/**'],
+        },
+      ],
+    },
+  },
 );

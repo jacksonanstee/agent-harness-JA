@@ -2,10 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { createGoldenRunner, EvalUsageError, toMarkdown } from '../eval/index.js';
-import type { TaskSessionConfig } from '../eval/index.js';
-import { createVerifier } from '../eval/verifier/index.js';
-import type { AdversaryFn, AdversaryResult, Verifier } from '../eval/verifier/index.js';
+import { createGoldenRunner, createVerifier, EvalUsageError, toMarkdown } from '../eval/index.js';
+import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';

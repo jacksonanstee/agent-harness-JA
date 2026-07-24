@@ -14,7 +14,6 @@ export {
   validateVerdict,
 } from './golden/index.js';
 export type {
-  ChallengeFinding,
   GoldenFailureKind,
   GoldenMeta,
   GoldenRow,
@@ -50,6 +49,28 @@ export type {
   ScorecardRowCore,
   ScorecardTotalsCore,
 } from './scorecard/index.js';
+// Verifier surface (V15): the golden runner's own GoldenRunnerDeps.verifier
+// field is typed against these, so consumers wiring a custom adversary need
+// the full closure of publicly referenced types, including the enum types
+// behind ChallengeFinding. buildChallengePrompt / parseAdversaryResponse /
+// ParsedWire stay out deliberately: wire-format internals no public
+// signature references.
+export {
+  createVerifier,
+  ADVERSARY_TIMEOUT_MS,
+  CHALLENGE_CATEGORIES,
+  MAX_ADVERSARY_RESPONSE_BYTES,
+} from './verifier/index.js';
+export type {
+  AdversaryFn,
+  AdversaryResult,
+  ChallengeCategory,
+  ChallengeErrorKind,
+  ChallengeFinding,
+  ChallengeInput,
+  ChallengeStatus,
+  Verifier,
+} from './verifier/index.js';
 export {
   BaselineError,
   CATEGORIES,
