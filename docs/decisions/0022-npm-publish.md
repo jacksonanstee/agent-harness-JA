@@ -13,7 +13,7 @@ The decision here is not "should we publish" but "publish in a way where the irr
 
 ## Decisions
 
-1. **Publish from CI via OIDC trusted publishing, not a local `npm publish`.** The publish runs in `.github/workflows/publish.yml`, triggered by publishing a GitHub Release. No long-lived npm token exists anywhere: the workflow exchanges a short-lived GitHub OIDC token for a scoped publish token at run time. `permissions` is `contents: read` + `id-token: write` and nothing more. The runner's bundled npm is upgraded to latest first, because trusted publishing needs npm >= 11.5.1.
+1. **Publish from CI via OIDC trusted publishing, not a local `npm publish`.** The publish runs in `.github/workflows/publish.yml`, triggered by publishing a GitHub Release. No long-lived npm token exists anywhere: the workflow exchanges a short-lived GitHub OIDC token for a scoped publish token at run time. `permissions` is `contents: read` + `id-token: write` and nothing more (since the 2026-07-24 amendment below, `id-token: write` is confined to a dedicated publish job). The runner's bundled npm is upgraded to latest first, because trusted publishing needs npm >= 11.5.1.
    - **One-time manual precondition (operator):** link the trusted publisher on npm (package settings -> Trusted Publisher -> GitHub Actions -> this repo + `publish.yml`). Until that link exists the workflow's publish step fails closed, which is the desired direction.
 
 2. **Build provenance is emitted (`npm publish --provenance`).** The public repo plus OIDC context lets npm attach a verifiable provenance attestation tying the tarball to the exact commit and workflow that built it. The currency review flagged 2026 supply-chain attacks (Phantom-Gyp, Miasma-style forged provenance) as real; provenance is the direct countermeasure, and it is why publishing from a token-in-CI setup was rejected in favour of OIDC.
@@ -50,6 +50,17 @@ The decision here is not "should we publish" but "publish in a way where the irr
 - **Publish on tag push rather than release.** Rejected: a GitHub Release is a more deliberate human gate than a tag, and it pairs naturally with release notes.
 - **Ship the baseline for a fully-gating external `redteam`.** Deferred (ADR-0019 §7): needs package-relative resolution that no external consumer has asked for.
 - **Keep source maps, exclude via `.npmignore`.** Rejected as fragile: `files` + `.npmignore` interaction is version-dependent, and for an irreversible publish the deterministic choice (don't emit the maps) wins.
+
+## Amendment (2026-07-24): id-token confined to a dedicated publish job (audit V20)
+
+The original workflow held `id-token: write` at the workflow level, which meant GitHub injected OIDC-minting credentials (`ACTIONS_ID_TOKEN_REQUEST_TOKEN`/`_URL`) into every step of the single job, including `npm ci`, build, and test. Any compromised dependency executing during those steps could have minted an OIDC token and exchanged it for a trusted-publish token before the legitimate publish step ran. That undercut the point of decision 1: the standing-secret problem was solved, but the capability was still ambient across untrusted code execution.
+
+The workflow is now two jobs:
+
+- **`build`** (`contents: read` only): checkout, `npm ci`, lint, typecheck, build, test, red-team gate, version-tag guard, then uploads `dist/` as a short-lived artifact. All third-party code execution happens here, token-free.
+- **`publish`** (`contents: read` + `id-token: write`, gated by the `npm-publish` environment): checks out this repo's own release commit, installs pinned npm, downloads the `dist/` artifact, loud-fail-verifies the artifact landed (a missing `dist/` would otherwise pack a broken tarball, because the `files` allowlist skips absent entries silently), and runs `npm publish --provenance --access public --ignore-scripts`. `--ignore-scripts` keeps `prepublishOnly` (whose gates the build job already ran as visible steps) from pulling devDependency execution back into token scope. No `npm ci` ever runs in this job.
+
+Directory publish was kept (rather than packing in the build job and publishing the tarball) because npm's provenance generation is documented and widely exercised for directory publishes; publishing a pre-built tarball with `--provenance` is not a clearly documented path, and the publish flow is the wrong place to pioneer one. The residual is the pinned `npm install -g npm@11.11.0` pull inside the publish job, unchanged from the original design and covered by the same pin discipline.
 
 ## Revisit if
 
