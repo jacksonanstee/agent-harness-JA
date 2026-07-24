@@ -44,6 +44,46 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.CHALLENGE_CATEGORIES.length).toBeGreaterThan(0);
   });
 
+  it('has no runtime-name collision among the star-exported sub-barrels', async () => {
+    // ESM ambiguous-star semantics silently EXCLUDE any name two star
+    // sub-barrels both export, and a named re-export silently SHADOWS a
+    // same-named star export (ADR-0023 residual risk). This guard turns the
+    // silent value-level cases into a test failure. Type-only collisions
+    // remain undetectable at runtime; the ADR names that residual.
+    const starBarrels = {
+      router: await import('./router/index.js'),
+      skills: await import('./skills/index.js'),
+      hooks: await import('./hooks/index.js'),
+      memory: await import('./memory/index.js'),
+      session: await import('./session/index.js'),
+      eval: await import('./eval/index.js'),
+    };
+    const named = {
+      security: await import('./security/index.js'),
+      telemetry: await import('./telemetry/index.js'),
+    };
+    const owners = new Map<string, string>();
+    const collisions: string[] = [];
+    for (const [barrelName, mod] of Object.entries(starBarrels)) {
+      for (const exportName of Object.keys(mod)) {
+        const owner = owners.get(exportName);
+        if (owner) collisions.push(`${exportName} (${owner} vs ${barrelName})`);
+        owners.set(exportName, barrelName);
+      }
+    }
+    // Named-vs-star: only the known, deliberately aliased collision may exist.
+    for (const [barrelName, mod] of Object.entries(named)) {
+      for (const exportName of Object.keys(mod)) {
+        const owner = owners.get(exportName);
+        const isKnownAliasedPair = barrelName === 'telemetry' && exportName === 'DEFAULT_DB_PATH';
+        if (owner && !isKnownAliasedPair) {
+          collisions.push(`${exportName} (${owner} vs ${barrelName})`);
+        }
+      }
+    }
+    expect(collisions, collisions.join('; ')).toEqual([]);
+  });
+
   it('exports the type closure its own signatures reference (compile-time)', () => {
     // These compile only if the types are importable from the root barrel;
     // the runtime assertions just keep the locals used.

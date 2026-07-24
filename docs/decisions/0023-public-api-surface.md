@@ -13,7 +13,7 @@ Publish makes both mistakes semver-expensive: adding exports later is additive, 
 
 ## Decisions
 
-1. **Security and telemetry are re-exported from the root barrel by NAME, never `export *`.** ESM ambiguous-star semantics silently exclude any name two barrels both export; memory and telemetry both export `DEFAULT_DB_PATH`, so a star re-export would have vanished the constant with no error anywhere. Named re-exports turn any future collision into a compile error and keep `src/index.ts` an audited surface (the same house rule the eval barrel adopted after the E-3 review).
+1. **Security and telemetry are re-exported from the root barrel by NAME, never `export *`.** ESM ambiguous-star semantics silently exclude any name two barrels both export; memory and telemetry both export `DEFAULT_DB_PATH`, so a star re-export would have vanished the constant with no error anywhere. Named re-exports make a future *named-vs-named* collision a compile error (TS2308). That guarantee does not extend to the six sub-barrels still on `export *` (a star-vs-star collision still drops silently, and a named export silently shadows a same-named star export), so `src/index.test.ts` carries a pairwise runtime-name collision guard over all eight sub-barrels; type-only collisions remain the undetectable residual. This is a step toward, not full adoption of, the eval barrel's named-exports house rule; converting the remaining six is deliberate future work, not blocked on this fix.
 
 2. **Telemetry's `DEFAULT_DB_PATH` ships aliased as `TELEMETRY_DEFAULT_DB_PATH`.** Memory's keeps the unprefixed name because it already shipped via the memory star export; renaming it would change existing surface for no gain. The values are identical today (shared substrate, ADR-0009), but the constants are owned by different modules and may diverge. The alias preserves both identities.
 
@@ -27,9 +27,10 @@ Publish makes both mistakes semver-expensive: adding exports later is additive, 
 
 - Consumers can adopt the security layer alone from the package entry (`import { scan, redact, createSandbox } from 'agent-harness-ja'`), which docs/architecture.md has advertised since Week 2.
 - Deep imports (`agent-harness-ja/dist/...`) fail at resolution. Nothing inside the repo used them (verified: CLI, examples, and CI all run `dist/cli.js` by file path), and pre-publish there are no external consumers to break.
-- `SECRET_CORPUS` remains unexported (test-only fixture, ADR-0022); completing the barrel deliberately did not widen that decision.
+- `SECRET_CORPUS` remains unexported (test-only fixture, ADR-0022); completing the barrel deliberately did not widen that decision. The verifier's wire-format internals (`buildChallengePrompt`, `parseAdversaryResponse`, `ParsedWire`) also stay out: no public signature references them.
+- Residual risk: the six star-exported sub-barrels can still silently drop a *type-only* name two of them both export; the runtime half of that risk is test-guarded (see Decision 1), the type half is accepted until the barrel converts fully to named exports.
 
 ## Revisit if
 
-- A second build format (CJS, or a browser condition) is added; the `exports` conditions are where it lands.
+- A second build format (CJS, or a browser condition) is added; the `exports` conditions are where it lands. If a `require` condition is ever added, `types` must stay FIRST within each condition object (TS/Node take the first matching condition).
 - Subpath entries (e.g. `agent-harness-ja/security`) are requested by real consumers; add them to `exports` deliberately rather than reopening deep imports.
