@@ -391,6 +391,7 @@ not live values:
 | [0018](./decisions/0018-redteam-corpus.md) | 51-case red-team corpus; gate-vs-measurement split |
 | [0019](./decisions/0019-regression-gate.md) | Red-team regression gate; committed baseline loaded as hostile input |
 | [0020](./decisions/0020-adversarial-verifier.md) | Two-pass adversarial verifier: offline, report-only, enum-confined; adversary is injectable but zero-authority |
+| [0022](./decisions/0022-npm-publish.md) | Publish via OIDC trusted publishing with provenance; pack allowlist audited; `id-token: write` confined to a job that runs no dependency code (2026-07-24 amendment) |
 
 ## 9. OWASP Agentic Top 10 mapping
 
@@ -401,7 +402,7 @@ not live values:
 | ASI01 | Agent Goal Hijack | Heuristic injection scanner (S-1) on tool results; LLM-judge stage designed, not yet implemented. Residual: verdicts are observe-only in v1 (R-4) | ADR-0012, ADR-0016, §6 R-4/R-5 |
 | ASI02 | Tool Misuse & Exploitation | Pre-tool permission + sandbox gates, fail-closed | ADR-0014, ADR-0015, §6 R-2/R-9 |
 | ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: scalar `defaultDecision` override (R-8) | ADR-0014 §5, §6 R-8 |
-| ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. npm publish hardening is a named pending decision (Week-4 publish ADR) | ADR-0019, §3, §5 Tampering |
+| ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. Outbound: publish is OIDC trusted publishing with provenance, SHA-pinned actions, and `id-token: write` confined to a job that runs no dependency code. Residual: the approval environment is inert until reviewers are configured, and the tarball is packed at publish time rather than being the byte-identical gated artefact | ADR-0022 (+2026-07-24 amendment), ADR-0019, §3, §5 Tampering |
 | ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
 | ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Named gap: S-1 verdicts observe-only, flagged content still reaches model context | §6 R-4, §5 Tampering, ADR-0012 §9, ADR-0006 amendment |
 | ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
@@ -414,5 +415,6 @@ those sections are the single source of truth; this table is an index.
 The composed R-3+R-4 chain in §6 is the ASI01→ASI06 escalation narrative in
 this taxonomy's terms.
 
-<!-- FORWARD-REF: week4-publish-adr — ASI04 row above and ADR-0019 "Revisit if"
-     both reference the not-yet-written npm-publish ADR; update both when it lands. -->
+<!-- FORWARD-REF discharged 2026-07-24: ADR-0022 landed (and was amended for
+     audit finding V20), the ASI04 row above now cites it, and ADR-0019's
+     "Revisit if" records the report-only branch as resolved at publish. -->
