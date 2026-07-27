@@ -1189,6 +1189,55 @@ describe('createSession', () => {
       expect(cost.payload.refusalFallbackModel).not.toContain('\u001b');
     });
 
+    it('cleans and bounds stopReason too, not just its two sibling tokens', async () => {
+      // `stop_reason` is an open SDK string reaching the same three sinks as
+      // category/fallbackModel, so leaving it raw while bounding the others was
+      // an inconsistency rather than a considered exception.
+      const hostileResult: SdkMessage = {
+        type: 'result',
+        subtype: 'error_during_execution',
+        session_id: 'sdk-123',
+        num_turns: 1,
+        stop_reason: `refusal\u001b[31m\u202e${'y'.repeat(400)}`,
+      };
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, hostileResult]);
+      const deps = makeDeps(fake, { telemetry });
+      const session = createSession(deps, { skillsDir: null, turnId: 'turn-1' });
+
+      const result = await session.run('hostile stop reason');
+
+      expect(result.stopReason).not.toContain('\u001b');
+      expect(result.stopReason).not.toContain('\u202e');
+      expect(result.stopReason?.length).toBeLessThanOrEqual(101);
+
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('expected a turn-cost event');
+      expect(cost.payload.stopReason).not.toContain('\u202e');
+
+      const row = deps.memory.read({ type: 'project' })[0];
+      expect(row?.content).not.toContain('\u202e');
+    });
+
+    it('a zero-width-smuggled refusal still detects, because cleaning runs first', async () => {
+      // Direction matters: stripInvisibles DELETES zero-width chars, so
+      // 'refu<ZWSP>sal' becomes exactly 'refusal' and IS detected. Detecting
+      // more refusals is the fail-loud direction, and is deliberate.
+      const smuggled: SdkMessage = {
+        type: 'result',
+        subtype: 'error_during_execution',
+        session_id: 'sdk-123',
+        stop_reason: 'refu\u200bsal',
+      };
+      const fake = fakeQuery([INIT, smuggled]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('smuggled');
+
+      expect(result.stopReason).toBe('refusal');
+      expect(result.refusal?.source).toBe('result-stop-reason');
+    });
+
     it('strips bidi and invisible smuggling chars from the refusal tokens, and bounds them', async () => {
       // Review finding, empirically demonstrated: control-char sanitization
       // alone let U+202E (RLO) survive to the stderr line whose whole job is to

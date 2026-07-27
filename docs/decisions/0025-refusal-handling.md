@@ -58,13 +58,17 @@ refusal: {
 
 Capturing either would open a new untrusted-prose channel into two retained sinks (telemetry and the memory session summary) for diagnostic value the category and the fallback model already largely provide. ADR-0013's whole reason for redacting before persistence is that retained sinks are the expensive place to be wrong. The trade is real: an operator debugging a refusal gets a category, not a sentence.
 
-**3. The category and the fallback model are cleaned and bounded at capture.**
+**3. All three SDK tokens are cleaned and bounded at capture.**
 
-Not at each sink. Both are vendor-supplied strings that reach the result, the memory summary, the telemetry payload, and the terminal, so cleaning once at the point of capture means no sink can be added later that forgets. The telemetry store sanitizes again on write, because it is a public factory and a direct writer need not have come through the session layer.
+`api_refusal_category`, `fallback_model` and `stop_reason`, not at each sink. All three are vendor-supplied strings that reach the result, the memory summary, the telemetry payload, and the terminal, so cleaning once at the point of capture means no sink can be added later that forgets. The telemetry store sanitizes again on write, because it is a public factory and a direct writer need not have come through the session layer.
+
+`stop_reason` was left raw in the first two cuts of this change, including the cut that fixed the other two after review. It is equally an open string by the SDK's own declaration and reaches exactly the same sinks, so treating it differently was an inconsistency rather than a considered exception. Recorded because the near-miss is the useful part: a fix applied to the two fields a review named, while the third field with identical properties sat untouched two lines away.
 
 The charset contract is the same one `cleanSkillText` applies to skill text: control chars, bidi overrides, and invisible smuggling chars. The first cut of this change stripped control chars only, and the security review demonstrated empirically that a U+202E override survived capture *and* `sanitizeForTerminal` all the way to the stderr line, which is the one line whose job is to tell an operator that a different model answered. A bidi override that visually reorders a model name defeats exactly that guarantee, so the narrower charset was the wrong contract for this sink.
 
-Both values are also **bounded** (100 chars). The SDK calls the category an open string whose values "ship on the wire ahead of schema updates", so nothing in the contract bounds it, and every other persisted string in the session module is capped. An unbounded open string reaching two retained sinks was an inconsistency, not a considered exception.
+All three are also **bounded** (100 chars). The SDK calls these open strings whose values "ship on the wire ahead of schema updates", so nothing in the contract bounds them, and every other persisted string in the session module is capped.
+
+One deliberate consequence of cleaning `stop_reason` **before** the `=== 'refusal'` comparison: a zero-width-smuggled `refu<ZWSP>sal` collapses to exactly `refusal` and is therefore *detected*. That direction is chosen on purpose. Detecting a refusal that a smuggled character would otherwise have hidden is the fail-loud direction, and the value is vendor-supplied rather than attacker-supplied in the ordinary case. A test pins it so the ordering cannot be flipped by accident.
 
 **4. The exit code stays 1, and a successful fallback still exits 0.**
 

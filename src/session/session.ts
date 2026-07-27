@@ -88,25 +88,31 @@ function isModelRefusal(message: SdkMessage): message is SdkModelRefusalMessage 
 }
 
 /**
- * Cap on a refusal token before it reaches a retained sink. The SDK calls
- * `api_refusal_category` an open string ("new categories ship on the wire ahead
- * of schema updates"), so nothing in the contract bounds it to a short token,
- * and every other persisted string in this module is bounded.
+ * Cap on a short SDK-supplied token before it reaches a retained sink. The SDK
+ * calls both `api_refusal_category` and `stop_reason` open strings ("new
+ * categories ship on the wire ahead of schema updates"), so nothing in the
+ * contract bounds either to a short token, and every other persisted string in
+ * this module is bounded.
  */
-const REFUSAL_TOKEN_LIMIT = 100;
+const SDK_TOKEN_LIMIT = 100;
 
 /**
- * Same charset contract as `cleanSkillText`, for the same reason: these values
- * reach a terminal line whose whole job is to tell an operator that a DIFFERENT
- * model answered their turn, so a bidi override that visually reorders a model
- * name defeats the one guarantee the line makes. Control chars alone are not
- * enough (review finding, empirically demonstrated: U+202E survived
- * `sanitizeControlChars` and `sanitizeForTerminal` all the way to stderr).
- * Bounded too, because an open string reaching two retained sinks needs a cap.
+ * Cleans a short SDK token (`api_refusal_category`, `fallback_model`,
+ * `stop_reason`). Same charset contract as `cleanSkillText`, for the same
+ * reason: these values reach a terminal line whose whole job is to tell an
+ * operator that a DIFFERENT model answered their turn, so a bidi override that
+ * visually reorders a model name defeats the one guarantee the line makes.
+ * Control chars alone are not enough (review finding, empirically
+ * demonstrated: U+202E survived `sanitizeControlChars` and
+ * `sanitizeForTerminal` all the way to stderr). Bounded too, because an open
+ * string reaching two retained sinks needs a cap.
+ *
+ * NOT for prose: `truncate` (200 chars, redacted first) owns `resultText` and
+ * `prompt`. This is for short vendor tokens only.
  */
-function cleanRefusalToken(text: string): string {
+function cleanSdkToken(text: string): string {
   const clean = stripInvisibles(stripBidi(sanitizeControlChars(text)));
-  return clean.length > REFUSAL_TOKEN_LIMIT ? `${clean.slice(0, REFUSAL_TOKEN_LIMIT)}…` : clean;
+  return clean.length > SDK_TOKEN_LIMIT ? `${clean.slice(0, SDK_TOKEN_LIMIT)}…` : clean;
 }
 
 /**
@@ -121,11 +127,11 @@ function cleanRefusalToken(text: string): string {
 function refusalFromBanner(message: SdkModelRefusalMessage): SessionRefusal {
   const category =
     typeof message.api_refusal_category === 'string'
-      ? cleanRefusalToken(message.api_refusal_category)
+      ? cleanSdkToken(message.api_refusal_category)
       : null;
   const fallbackModel =
     message.subtype === 'model_refusal_fallback' && typeof message.fallback_model === 'string'
-      ? cleanRefusalToken(message.fallback_model)
+      ? cleanSdkToken(message.fallback_model)
       : null;
   return { source: 'system-event', category, fallbackModel };
 }
@@ -490,7 +496,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           if (message.session_id) sdkSessionId = message.session_id;
           resultText = message.result ?? null;
           resultSubtype = message.subtype ?? null;
-          stopReason = message.stop_reason ?? null;
+          // Cleaned and bounded like the banner tokens: `stop_reason` is an
+          // equally open SDK string reaching the same three sinks (result,
+          // memory summary, telemetry) plus the terminal, so leaving it raw
+          // while bounding its siblings would be an inconsistency, not a
+          // considered exception. Cleaning happens BEFORE the comparison
+          // below, deliberately: 'refu<ZWSP>sal' collapses to 'refusal' and is
+          // detected, which is the fail-loud direction.
+          stopReason =
+            typeof message.stop_reason === 'string' ? cleanSdkToken(message.stop_reason) : null;
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
