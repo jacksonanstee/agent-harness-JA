@@ -26,7 +26,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     resultText: null,
     resultSubtype: null,
     sessionId: 'test-session',
-    modelChoice: { model: 'claude-sonnet-4-6', rule_id: 'test', reason: 'test' },
+    modelChoice: { model: 'claude-sonnet-5', rule_id: 'test', reason: 'test' },
     usage: null,
     costUsd: null,
     numTurns: null,
