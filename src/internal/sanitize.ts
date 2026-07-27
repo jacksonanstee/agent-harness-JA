@@ -41,3 +41,21 @@ const INVISIBLES = /[\u200B\u200C\u200D\u2060\uFEFF\u00AD\uFE00-\uFE0F\u{E0000}-
 export function stripInvisibles(text: string): string {
   return text.replace(INVISIBLES, '');
 }
+
+/**
+ * Truncates without splitting a surrogate pair, so the result is always
+ * well-formed UTF-16 (a lone surrogate survives JSON but becomes U+FFFD through
+ * TextEncoder/Buffer, and it can reach a public API field).
+ *
+ * Hoisted from eval/scorecard (which re-exports from here) so lower layers can
+ * bound a string without an upward import, the same reason stripBidi was
+ * hoisted for issue #24.
+ */
+export function truncateWellFormed(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  const charAtBoundary = text.charCodeAt(max - 1);
+  const cutLength = charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff ? max - 1 : max;
+  return `${text.slice(0, cutLength)}…`;
+}

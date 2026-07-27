@@ -61,7 +61,14 @@ function errorMessage(cause: unknown): string {
 }
 
 function emptyVolatile(): GoldenRow['volatile'] {
-  return { costUsd: null, numTurns: null, durationMs: null, resultSubtype: null };
+  return {
+    costUsd: null,
+    numTurns: null,
+    durationMs: null,
+    resultSubtype: null,
+    refusalSource: null,
+    refusalFallbackModel: null,
+  };
 }
 
 /** A non-finite cost (NaN/Infinity, from an untrusted SDK or adversary
@@ -315,6 +322,9 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       numTurns: result.numTurns,
       durationMs: now() - startedAt,
       resultSubtype: result.resultSubtype,
+      // Already cleaned and bounded at capture (session layer).
+      refusalSource: result.refusal?.source ?? null,
+      refusalFallbackModel: result.refusal?.fallbackModel ?? null,
     };
 
     try {

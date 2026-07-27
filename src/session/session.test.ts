@@ -1189,6 +1189,69 @@ describe('createSession', () => {
       expect(cost.payload.refusalFallbackModel).not.toContain('\u001b');
     });
 
+    it('detects a refusal whose stop_reason carries a trailing smuggled char', async () => {
+      // Verify-pass finding: cleaning substitutes SPACES, so without a trim
+      // "refusal<U+202E>" became "refusal " and missed the === comparison. One
+      // trailing char disabled the entire second detection channel, which is
+      // the only channel on a CLI old enough to omit the banners.
+      for (const raw of ['refusal\u202e', '\u202erefusal', 'refusal\t', 'refusal\u00a0']) {
+        const hostile: SdkMessage = {
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 'sdk-123',
+          stop_reason: raw,
+        };
+        const fake = fakeQuery([INIT, hostile]);
+        const session = createSession(makeDeps(fake), { skillsDir: null });
+
+        const result = await session.run('smuggled trailing char');
+
+        expect(result.stopReason, `raw: ${JSON.stringify(raw)}`).toBe('refusal');
+        expect(result.refusal?.source, `raw: ${JSON.stringify(raw)}`).toBe('result-stop-reason');
+      }
+    });
+
+    it('collapses internal whitespace, so a token cannot forge a delimited field', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        fallback_model: 'claude-evil-9 fallback=claude-sonnet-5',
+        api_refusal_category: 'benign stop_reason=end_turn',
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('forgery attempt');
+
+      expect(result.refusal?.category).not.toMatch(/\s/);
+      expect(result.refusal?.fallbackModel).not.toMatch(/\s/);
+      expect(result.refusal?.fallbackModel).toContain('claude-evil-9');
+    });
+
+    it('truncates a token without splitting a surrogate pair', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        api_refusal_category: `x${'\u{1F600}'.repeat(60)}`,
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('emoji category');
+
+      // A lone surrogate survives JSON but becomes U+FFFD through
+      // TextEncoder/Buffer, and this is a public API field.
+      expect(result.refusal?.category).toBeDefined();
+      // Deliberately NOT String.prototype.isWellFormed(): that needs the ES2024
+      // lib, and a project-wide lib bump smuggled in as a "fix" had to be
+      // reverted once already. This regex is the same property, explicitly.
+      const loneSurrogate =
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+      expect(loneSurrogate.test(result.refusal?.category ?? '')).toBe(false);
+    });
+
     it('cleans and bounds stopReason too, not just its two sibling tokens', async () => {
       // `stop_reason` is an open SDK string reaching the same three sinks as
       // category/fallbackModel, so leaving it raw while bounding the others was

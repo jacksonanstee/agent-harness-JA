@@ -18,7 +18,12 @@ import type {
   SessionRefusal,
   SessionResult,
 } from './types.js';
-import { sanitizeControlChars, stripBidi, stripInvisibles } from '../internal/sanitize.js';
+import {
+  sanitizeControlChars,
+  stripBidi,
+  stripInvisibles,
+  truncateWellFormed,
+} from '../internal/sanitize.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -70,15 +75,24 @@ function isResult(message: SdkMessage): message is SdkResultMessage {
 
 /**
  * The SDK's refusal banners (ADR-0025). Absent from older CLIs, hence the
- * second channel. Typed against the message's own `subtype` union so that
- * adding a banner to one declaration and not the other is a compile error
- * rather than a silent detection gap: this Set is the runtime gate, the union
- * in types.ts is the contract, and they have to agree.
+ * second channel.
+ *
+ * Declared as an exhaustive record keyed by the message's own `subtype` union,
+ * NOT as a `ReadonlySet<...subtype>`. The set form looks like it pins the two
+ * declarations together but does not: method-parameter bivariance makes
+ * `Set<'a'|'b'>` assignable to `ReadonlySet<'a'|'b'|'c'>`, so widening the union
+ * and forgetting the runtime gate compiles clean (verified with tsc), which is
+ * precisely the silent-detection-gap direction that matters. A keyed record
+ * fails both ways: a new union member is a missing-property error, and a
+ * removed one is an excess-property error. The Set is derived from its keys so
+ * there is one source of truth and `has()` stays prototype-safe.
  */
-const REFUSAL_SUBTYPES: ReadonlySet<SdkModelRefusalMessage['subtype']> = new Set([
-  'model_refusal_no_fallback',
-  'model_refusal_fallback',
-]);
+const REFUSAL_SUBTYPE_GATE: Record<SdkModelRefusalMessage['subtype'], true> = {
+  model_refusal_no_fallback: true,
+  model_refusal_fallback: true,
+};
+
+const REFUSAL_SUBTYPES: ReadonlySet<string> = new Set(Object.keys(REFUSAL_SUBTYPE_GATE));
 
 function isModelRefusal(message: SdkMessage): message is SdkModelRefusalMessage {
   return (
@@ -111,8 +125,23 @@ const SDK_TOKEN_LIMIT = 100;
  * `prompt`. This is for short vendor tokens only.
  */
 function cleanSdkToken(text: string): string {
-  const clean = stripInvisibles(stripBidi(sanitizeControlChars(text)));
-  return clean.length > SDK_TOKEN_LIMIT ? `${clean.slice(0, SDK_TOKEN_LIMIT)}…` : clean;
+  // Trimmed because stripping substitutes SPACES: without it, `stop_reason`
+  // values like "refusal<U+202E>" clean to "refusal " and silently miss the
+  // === 'refusal' comparison, so a single trailing smuggled char disabled the
+  // whole second detection channel (verify-pass finding). Also kills the
+  // leading-space variant.
+  // Internal whitespace collapses to '_': none of these tokens legitimately
+  // contains a space ('cyber', 'claude-sonnet-5', 'end_turn'), and the two
+  // `[harness]` lines are space-delimited `key=value` pairs, so a space-bearing
+  // token could forge a sibling field. Quoting at the sink is belt-and-braces;
+  // this closes it even for a naive `grep -o 'fallback=[^ ]*'` (verify-pass
+  // finding). Runs after the strip pass, which itself substitutes spaces.
+  const clean = stripInvisibles(stripBidi(sanitizeControlChars(text)))
+    .trim()
+    .replace(/\s+/g, '_');
+  // Well-formed: a naive slice can emit a lone surrogate, and these values
+  // reach a public API field.
+  return truncateWellFormed(clean, SDK_TOKEN_LIMIT);
 }
 
 /**

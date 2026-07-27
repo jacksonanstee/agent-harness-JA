@@ -96,9 +96,12 @@ describe('root barrel (src/index.ts)', () => {
     const idOf = (v: Verifier): string => v.adversaryModelId;
     const closeOf = (s: TelemetryStore): unknown => s;
     // SessionResult.refusal is typed SessionRefusal | null, so both are in the
-    // closure this test guards. The runtime collision guard above cannot see
-    // type-only names (ADR-0023 residual), so this is the only thing proving
-    // they are reachable from the root barrel at all.
+    // closure this test guards. Note WHICH gate enforces it: vitest strips
+    // types, so the runtime assertion below is near-tautological and `npm test`
+    // proves nothing here. The real check is `npm run typecheck`, which compiles
+    // this file via tsconfig.test.json; a bogus type name from the barrel is a
+    // TS2305 there. The runtime collision guard above cannot see type-only
+    // names at all (ADR-0023 residual).
     const source: RefusalSource = 'system-event';
     const refusal: SessionRefusal = { source, category: null, fallbackModel: null };
     expect(typeof adversary).toBe('function');

@@ -17,15 +17,25 @@ Reading the pinned SDK (`@anthropic-ai/claude-agent-sdk` 0.3.201) established th
 2. **Two refusal banners exist**: `model_refusal_no_fallback` (`:3856`), where the turn ends as an error, and `model_refusal_fallback` (`:3824`), where the turn is retried on a fallback model and the swap is made persistent for the session. Both carry `api_refusal_category` and `api_refusal_explanation`. Both are documented as **"Absent from older CLIs"**.
 3. **The fallback case is the one that silently exits 0.** Issue #38 speculated that `run` might exit 0 on a refusal. For the no-fallback case that is wrong: it lands an error subtype, and `src/cli.ts` already maps any non-`success` subtype to 1. The case that genuinely exits 0 is the fallback swap, which the issue does not mention, and it is the worse of the two: the run succeeds with a real answer from a *different model*, while `SessionResult.modelChoice` and the telemetry `model` field both still report the model the router chose, and the `[harness]` line prints that routed model as fact.
 
-The harness never sets `fallbackModel` itself, but it is not the only party who can. Three channels outside the harness's control set it, and the security review of this change corrected an earlier, narrower claim here that named only the first:
+The harness never sets `fallbackModel` itself, but it is not the only party who can, and **the reachability of this is the one claim in this ADR that took three attempts to get right.** The history is recorded because the error is instructive:
 
-1. The operator's own ambient `~/.claude` configuration, which the SDK's bundled CLI reads (residual risk R-11, observed live twice).
-2. A `fallbackModel` in **managed settings**. The SDK's settings schema carries the field, and describes that schema as typically administered by enterprise administrators, so the party who enables a swap need not be the party running the harness.
-3. A `--fallback-model` CLI flag, which the SDK documents as taking precedence over both.
+- The first version said the swap was reachable "only through the ambient-configuration surface of R-11", meaning the operator's own `~/.claude`.
+- A security review said a vendor server-side path also exists. I rejected that on the grounds quoted below, and widened the claim to name enterprise-managed settings instead.
+- An adversarial verify pass then **refuted my rejection**, from the SDK typings, and it was right.
 
-The SDK additionally refers to server-side gating of the fallback path (a banner is "Not emitted when a fallback existed but was declined or gate-failed", and the category may come from a "server-gated trigger"), and does not document what that gating depends on. So this list is not claimed to be exhaustive, and R-15 says so rather than asserting a mechanism the evidence does not establish.
+The reasoning I used to reject it was a converse error. From "no local fallback configured implies the no-fallback banner", it does not follow that "the fallback banner implies a local fallback was configured". The SDK explicitly says the two banners do not partition the space: the no-fallback banner is "Not emitted when a fallback existed but was declined or **gate-failed**".
 
-What the SDK's own docs *do* pin is that a swap requires a fallback to have been configured somewhere: the no-fallback banner is emitted precisely "when the model ends the stream with `stop_reason` 'refusal' and **no fallback model is configured**". A refusal with nothing configured ends the turn as an error rather than silently substituting a model.
+And the channel is positively documented, not merely unexcluded. `PolicySettingsOrigin` includes `'remote'`; `serverManagedSettings` is "the result of fetching `/api/claude_code/settings`", feeds that `'remote'` sub-source, and is documented as "same trust level as the on-disk cache it replaces, so **non-restrictive keys flow through unfiltered**". `fallbackModel` is a member of `Settings` and is not a restrictive key (the restrictive allowlist is locks, `permissions.deny`/`ask`, and sandbox restrictions; the docs name `model` and `env` as examples of non-restrictive keys that get dropped from the *restrictive* channel). So a server-supplied settings payload can carry `fallbackModel`, cached locally as a cache rather than authored by any human on the machine.
+
+The corrected channel list, with the correction to my second attempt as well:
+
+1. The operator's own ambient `~/.claude` configuration (R-11, observed live twice).
+2. A server-supplied settings payload via the `'remote'` policy origin, authored by neither the operator nor an on-machine administrator.
+3. An on-disk enterprise managed-settings tier or MDM. Note that the SDK's *`Options.managedSettings`* channel is filtered restrictive-only and would silently drop `fallbackModel`, so it is specifically the on-disk policy tier that applies, not that option.
+
+A `--fallback-model` CLI flag also exists and the SDK documents it as taking precedence over the settings value, but it is **not** reachable through this harness: `createSession` passes only `{model, systemPrompt, maxTurns, hooks}` to `query`, with no `extraArgs`. It is named here only so the list is not mistaken for exhaustive.
+
+R-15 therefore does not claim to bound reachability at all. That is the honest position, and it is stronger than either of my first two attempts.
 
 ## Decisions
 
@@ -64,7 +74,16 @@ Capturing either would open a new untrusted-prose channel into two retained sink
 
 `stop_reason` was left raw in the first two cuts of this change, including the cut that fixed the other two after review. It is equally an open string by the SDK's own declaration and reaches exactly the same sinks, so treating it differently was an inconsistency rather than a considered exception. Recorded because the near-miss is the useful part: a fix applied to the two fields a review named, while the third field with identical properties sat untouched two lines away.
 
-The charset contract is the same one `cleanSkillText` applies to skill text: control chars, bidi overrides, and invisible smuggling chars. The first cut of this change stripped control chars only, and the security review demonstrated empirically that a U+202E override survived capture *and* `sanitizeForTerminal` all the way to the stderr line, which is the one line whose job is to tell an operator that a different model answered. A bidi override that visually reorders a model name defeats exactly that guarantee, so the narrower charset was the wrong contract for this sink.
+The charset contract is the same one `cleanSkillText` applies to skill text: control chars, bidi overrides, and invisible smuggling chars, plus a whitespace collapse and a trim that skill text does not need. The first cut stripped control chars only, and the security review demonstrated empirically that a U+202E override survived capture *and* `sanitizeForTerminal` all the way to the stderr line, which is the one line whose job is to tell an operator that a different model answered.
+
+**This narrows the spoofing channel; it does not close it.** An adversarial verify pass demonstrated four survivors, and they are named rather than implied:
+
+- **Homoglyphs.** `clаude-sonnet-5` with a Cyrillic `а` renders as a legitimate model name. No NFKC or confusable fold is applied anywhere in the harness; ADR-0012 §5 already defers exactly this class, and doing it here alone would be a partial answer in one field while the injection scanner still has the same gap.
+- **Invisible characters outside the stripped set**, for example U+2061-2064 and Arabic format marks U+0600-0605, which `stripInvisibles` does not cover.
+- **Combining marks**, excluded on purpose (they are legitimate in NFD-form accented text), so a model name can be visually smeared.
+- **Truncation semantics.** The 100-char cut is well-formed but is still a cut; a very long token is reported as a prefix.
+
+Two things *are* closed, both demonstrated: control chars and bidi no longer reach the line, and a space-bearing token can no longer forge a sibling field in the space-delimited `key=value` output (whitespace collapses at capture, and the sink quotes the value as well). The residual is a display-fidelity risk on a diagnostic line, not an enforcement gap, and it is the same normalisation debt the scanner carries.
 
 All three are also **bounded** (100 chars). The SDK calls these open strings whose values "ship on the wire ahead of schema updates", so nothing in the contract bounds them, and every other persisted string in the session module is capped.
 
@@ -91,7 +110,7 @@ A successful fallback exits **0**, deliberately, because there genuinely is an a
 - A consumer can distinguish a refusal from an empty success, and can tell whether the answer came from the routed model. That closes R-14 as a code gap and discharges ADR-0024's first "Revisit if", which removes one of the three grounds for not defaulting high-sensitivity work to Fable. The cost and retention grounds stand untouched.
 - `SessionResult` gained two required fields. Additive for consumers who read it; the `SessionResult`-typed fixtures in `src/cli/init-templates.test.ts` and `src/eval/golden/runner.test.ts` failed compilation until updated, which is the ADR-0021 blast-radius guard working as designed. Landing this before the v0.1.0 tag is what makes it cheap.
 - An operator whose ambient configuration enables a fallback model now gets a warning and a typed field instead of a quiet substitution. The harness still does not set `fallbackModel` itself.
-- The golden eval scorecard does not carry refusal information. A refusal already fails a golden oracle through its non-`success` subtype, and widening a committed artefact shape is a separate decision.
+- **The golden eval scorecard now carries the refusal channel**, reversing an earlier decision in this ADR. The original reasoning was that "a refusal already fails a golden oracle through its non-`success` subtype", and that reasoning is simply false for the fallback case: a swap reports `success` with a real answer, so the oracle passes, the row records `pass`, and `meta.models` names the routed model rather than the one that answered. That is the same defect this ADR exists to remove, at a third durable sink, found by the verify pass. `RowVolatile` gains `refusalSource` and `refusalFallbackModel`; the volatile partition is informational and never baseline-diffed, so no committed artefact shape changes and the red-team baseline is untouched.
 
 ## Verification, and its named limit
 
@@ -110,6 +129,6 @@ The normal path is also verified unregressed: `examples/repo-qa` eval stayed 2/2
 - **The SDK adds a typed refusal result subtype.** Today the harness reads an open `stop_reason` string plus two system banners. A dedicated subtype would let the CLI exit-code mapping express refusal directly, and would make decision 1's two-channel read redundant.
 - **An operator actually needs the explanation string.** The channel exists and is deliberately unread. Reversing decision 2 means routing that prose through redaction and truncation before either retained sink, the way `resultText` already is, and saying so in the security model.
 - **A refusal is observed live.** That converts the limitation above into evidence, and should be recorded here with the category the classifier returned, because the category vocabulary is an open set the harness does not control.
-- **The eval layer needs refusal in the scorecard.** It would widen a committed artefact shape and change baseline bytes, so it belongs with a scorecard-shape decision rather than being bolted on.
+- **Normalisation lands anywhere in the harness.** The homoglyph and combining-mark survivors above are the same debt ADR-0012 §5 defers for the injection scanner. Whoever closes it there should close it for these tokens in the same change, rather than this field growing a private confusable fold.
 - **Fallback swaps stop being a configuration accident.** If the harness ever sets `fallbackModel` itself, the swap becomes an intended feature and needs a routing-level decision about whether `ModelChoice` should record the model that answered rather than the model chosen.
 - **Persistence is gated on the answering model.** Raised by the security review and deliberately not built here: when `refusal.fallbackModel !== null`, the model that answered may have a different data-retention posture from the one ADR-0024 decision 1 vetted for the routed model, so that turn's retained `resultText` arguably deserves stronger redaction or a shorter TTL than the standard 30 days. It is a real lever, and it is the only one in this area the harness actually controls. It is out of scope for issue #38 because it changes retention behaviour for a whole class of turn, which is its own decision with its own blast radius, not a rider on a detection fix.

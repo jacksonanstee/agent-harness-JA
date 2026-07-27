@@ -34,6 +34,16 @@ export interface RowVolatile {
   numTurns: number | null;
   durationMs: number | null;
   resultSubtype: string | null;
+  /**
+   * Refusal detection channel (ADR-0025). Present because a refusal that was
+   * retried on a fallback model reports `resultSubtype: 'success'` with a real
+   * answer, so without this a refused turn recorded `pass` here and named the
+   * ROUTED model in meta.models: the same defect ADR-0025 removes, at a third
+   * durable sink. Null when no refusal was detected.
+   */
+  refusalSource: string | null;
+  /** Non-null means a model other than meta.models answered this task. */
+  refusalFallbackModel: string | null;
 }
 
 export type GoldenRow = ScorecardRowCore<GoldenFailureKind> & {

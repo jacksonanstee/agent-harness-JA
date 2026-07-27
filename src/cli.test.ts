@@ -97,10 +97,11 @@ describe('formatRefusalLine', () => {
       { source: 'system-event', category: 'cyber', fallbackModel: null },
       'refusal',
     );
-    expect(line).toContain('refusal');
     expect(line).toContain('system-event');
     expect(line).toContain('cyber');
-    expect(line).toContain('stop_reason=refusal');
+    // Vendor tokens are QUOTED so they cannot forge a sibling field.
+    expect(line).toContain('category="cyber"');
+    expect(line).toContain('stop_reason="refusal"');
   });
 
   it('names the answering model when the turn was swapped to a fallback', () => {
@@ -149,7 +150,36 @@ describe('formatModelClaim', () => {
       fallbackModel: 'claude-sonnet-5',
     });
     expect(claim).toContain('claude-fable-5');
-    expect(claim).toContain('answered by claude-sonnet-5');
+    expect(claim).toContain('answered by "claude-sonnet-5"');
+  });
+
+  it('a space-bearing token cannot forge a sibling field', () => {
+    // Verify-pass finding: unquoted values in a space-delimited key=value line
+    // let a category forge `fallback=`, so a naive grep reported the wrong
+    // answering model.
+    const line = formatRefusalLine(
+      {
+        source: 'system-event',
+        category: 'benign fallback=none stop_reason=end_turn',
+        fallbackModel: 'claude-evil-9',
+      },
+      'refusal',
+    );
+    expect(line).not.toBeNull();
+    // The whole hostile value sits inside ONE quoted span, so a quote-aware
+    // parse sees a single `category` field. Neutralize quoted spans and only
+    // the real `fallback=` field remains.
+    expect(line).toContain('category="benign fallback=none stop_reason=end_turn"');
+    const outsideQuotes = (line ?? '').replace(/"[^"]*"/g, '""');
+    expect([...outsideQuotes.matchAll(/fallback=/g)]).toHaveLength(1);
+    expect(line).toContain('"claude-evil-9"');
+    // Belt and braces: the session layer additionally collapses whitespace at
+    // capture, so a real SDK token cannot carry a space this far. See
+    // session.test.ts 'collapses internal whitespace'.
+    expect(formatRefusalLine(
+      { source: 'system-event', category: 'no_spaces_here', fallbackModel: null },
+      'refusal',
+    )).toContain('category="no_spaces_here"');
   });
 
   it('sanitizes the fallback model name', () => {

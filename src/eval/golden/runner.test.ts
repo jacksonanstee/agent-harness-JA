@@ -143,6 +143,49 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
 });
 
 describe('createGoldenRunner rows', () => {
+  // ADR-0025 at the third durable sink. A refusal retried on a fallback model
+  // reports resultSubtype 'success' with a real answer, so the oracle passes
+  // and the row says `pass`. Without the refusal channel the scorecard was
+  // indistinguishable from a clean run, while meta.models named the ROUTED
+  // model rather than the one that answered.
+  it('records the refusal channel on a row whose turn was answered by a fallback', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(
+        fakeResult({
+          resultSubtype: 'success',
+          stopReason: 'end_turn',
+          refusal: {
+            source: 'system-event',
+            category: 'cyber',
+            fallbackModel: 'claude-sonnet-5',
+          },
+        }),
+      ),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+      harnessVersion: '0.1.0-test',
+    });
+
+    const scorecard = await runner.run(fixtures('run'));
+    const alpha = scorecard.rows[0];
+
+    expect(alpha?.pass).toBe(true);
+    expect(alpha?.volatile.refusalSource).toBe('system-event');
+    expect(alpha?.volatile.refusalFallbackModel).toBe('claude-sonnet-5');
+  });
+
+  it('leaves the refusal channel null on an ordinary run', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+      harnessVersion: '0.1.0-test',
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    expect(scorecard.rows[0]?.volatile.refusalSource).toBeNull();
+    expect(scorecard.rows[0]?.volatile.refusalFallbackModel).toBeNull();
+  });
+
   it('scores pass/fail/parse-fail rows and keeps going (per-task isolation)', async () => {
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult()),

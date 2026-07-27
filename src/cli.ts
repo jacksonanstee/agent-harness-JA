@@ -203,15 +203,20 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
 }
 
 /**
- * Operator-facing refusal report (ADR-0025), or null when there was no refusal.
- * Pure so it is testable: the `run` path itself cannot execute under vitest
- * because it loads the real SDK.
+ * Renders a vendor-supplied token as a QUOTED, escaped field value.
  *
- * Every vendor-influenced field goes through sanitizeForTerminal. `source` is
- * the one deliberate exception: it is a harness-owned literal union, never
- * vendor input. A fourth field must be assumed vendor-influenced and sanitized
- * unless it is likewise harness-owned.
+ * The `key=value ` shape of the two `[harness]` lines is space-delimited, and
+ * these tokens are cleaned but may still contain spaces, so an unquoted value
+ * can forge sibling fields: a category of
+ * `benign fallback=none` made `grep -o 'fallback=[^ ]*'` report `none` while a
+ * different model had actually answered (verify-pass finding). JSON.stringify
+ * gives quoting plus escaping of embedded quotes in one step, so a value can no
+ * longer end a field it does not own.
  */
+function formatTokenField(value: string): string {
+  return JSON.stringify(sanitizeForTerminal(value));
+}
+
 /**
  * The stdout summary line states the routed model as fact. Under a fallback
  * swap that claim is false, and the correction used to live only on stderr, so
@@ -221,22 +226,32 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
  */
 export function formatModelClaim(routedModel: string, refusal: SessionRefusal | null): string {
   if (refusal === null || refusal.fallbackModel === null) return routedModel;
-  return `${routedModel} (answered by ${sanitizeForTerminal(refusal.fallbackModel)})`;
+  return `${routedModel} (answered by ${formatTokenField(refusal.fallbackModel)})`;
 }
 
+/**
+ * Operator-facing refusal report (ADR-0025), or null when there was no refusal.
+ * Pure so it is testable: the `run` path itself cannot execute under vitest
+ * because it loads the real SDK.
+ *
+ * Every vendor-influenced field goes through `formatTokenField` (sanitize plus
+ * quote). `source` is the one deliberate exception: it is a harness-owned
+ * literal union, never vendor input, so it is emitted bare. A fourth field must
+ * be assumed vendor-influenced and quoted unless it is likewise harness-owned.
+ */
 export function formatRefusalLine(
   refusal: SessionRefusal | null,
   stopReason: string | null,
 ): string | null {
   if (refusal === null) return null;
-  const category = sanitizeForTerminal(refusal.category ?? 'unknown');
+  const category = formatTokenField(refusal.category ?? 'unknown');
   const fallback =
     refusal.fallbackModel === null
-      ? 'none'
-      : `${sanitizeForTerminal(refusal.fallbackModel)} (ANSWERED THIS TURN, not the routed model)`;
+      ? '"none"'
+      : `${formatTokenField(refusal.fallbackModel)} (ANSWERED THIS TURN, not the routed model)`;
   return (
     `[harness] refusal: source=${refusal.source} category=${category} ` +
-    `fallback=${fallback} stop_reason=${sanitizeForTerminal(stopReason ?? 'n/a')}`
+    `fallback=${fallback} stop_reason=${formatTokenField(stopReason ?? 'n/a')}`
   );
 }
 
