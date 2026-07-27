@@ -68,9 +68,15 @@ A successful fallback exits **0**, deliberately, because there genuinely is an a
 
 ## Verification, and its named limit
 
-The refusal path is **not provoked live**, and deliberately so: doing that means crafting a prompt designed to trip a bio or cyber safety classifier. It is verified against the SDK's declared contract at a pinned version, plus scripted-stream tests that replay each banner and result shape through the real session code path. The normal path is verified live and unregressed.
+Split the claim in two, because the two halves have different evidence.
 
-This is a real gap between "tested" and "observed in production", of the same kind ADR-0012 §5 names for Unicode normalisation. It is stated here rather than left for a reader to discover, because the alternative to naming it is implying an observation that never happened.
+**The `stop_reason` channel is verified live.** A real `cli.js run` against the API on 2026-07-28 captured `stopReason: "end_turn"` from an actual SDK result message, through to both retained sinks (`refusalCategory: null`, `refusalFallbackModel: null`). So the field is really on the wire at this SDK version, the harness really reads it, and it really reaches telemetry and the memory summary. That is the part a scripted fake cannot prove.
+
+**The `'refusal'` value on that channel is not verified live, and neither banner has been observed.** Provoking a real refusal means crafting a prompt designed to trip a bio or cyber safety classifier, which is not something this repo will do to produce a test fixture. Those paths are verified against the SDK's declared contract at a pinned version, plus scripted-stream tests that replay each banner and result shape through the real session code path.
+
+So the honest summary is: the plumbing is observed, the trigger is not. That is a real gap between "tested" and "observed in production", of the same kind ADR-0012 §5 names for Unicode normalisation, and narrower than it would have been without the live run. It is stated here rather than left for a reader to discover, because the alternative to naming it is implying an observation that never happened.
+
+The normal path is also verified unregressed: `examples/repo-qa` eval stayed 2/2 at one turn each and $0.0481 against a $0.0479 baseline, and `telemetry export` over a database containing three turn-cost rows written on 2026-07-06 (none carrying the new keys) exited 0, which is decision 5 demonstrated rather than asserted.
 
 ## Revisit if
 
