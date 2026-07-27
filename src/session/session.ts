@@ -68,29 +68,64 @@ function isResult(message: SdkMessage): message is SdkResultMessage {
   return message.type === 'result';
 }
 
-/** The SDK's refusal banners (ADR-0025). Absent from older CLIs, hence the second channel. */
-const REFUSAL_SUBTYPES = new Set(['model_refusal_no_fallback', 'model_refusal_fallback']);
+/**
+ * The SDK's refusal banners (ADR-0025). Absent from older CLIs, hence the
+ * second channel. Typed against the message's own `subtype` union so that
+ * adding a banner to one declaration and not the other is a compile error
+ * rather than a silent detection gap: this Set is the runtime gate, the union
+ * in types.ts is the contract, and they have to agree.
+ */
+const REFUSAL_SUBTYPES: ReadonlySet<SdkModelRefusalMessage['subtype']> = new Set([
+  'model_refusal_no_fallback',
+  'model_refusal_fallback',
+]);
 
 function isModelRefusal(message: SdkMessage): message is SdkModelRefusalMessage {
   return (
     message.type === 'system' &&
-    REFUSAL_SUBTYPES.has((message as SdkSystemMessage).subtype)
+    REFUSAL_SUBTYPES.has((message as SdkModelRefusalMessage).subtype)
   );
+}
+
+/**
+ * Cap on a refusal token before it reaches a retained sink. The SDK calls
+ * `api_refusal_category` an open string ("new categories ship on the wire ahead
+ * of schema updates"), so nothing in the contract bounds it to a short token,
+ * and every other persisted string in this module is bounded.
+ */
+const REFUSAL_TOKEN_LIMIT = 100;
+
+/**
+ * Same charset contract as `cleanSkillText`, for the same reason: these values
+ * reach a terminal line whose whole job is to tell an operator that a DIFFERENT
+ * model answered their turn, so a bidi override that visually reorders a model
+ * name defeats the one guarantee the line makes. Control chars alone are not
+ * enough (review finding, empirically demonstrated: U+202E survived
+ * `sanitizeControlChars` and `sanitizeForTerminal` all the way to stderr).
+ * Bounded too, because an open string reaching two retained sinks needs a cap.
+ */
+function cleanRefusalToken(text: string): string {
+  const clean = stripInvisibles(stripBidi(sanitizeControlChars(text)));
+  return clean.length > REFUSAL_TOKEN_LIMIT ? `${clean.slice(0, REFUSAL_TOKEN_LIMIT)}…` : clean;
 }
 
 /**
  * Reads a banner into the surfaced shape. The category and the fallback model
  * are sanitized HERE, at capture, so every downstream sink (result, memory,
  * telemetry, terminal) inherits a clean value rather than each re-deriving it.
+ *
+ * The banner's `content` field (and `api_refusal_explanation`) are deliberately
+ * never read: both are model-authored prose, and capturing either would open a
+ * new untrusted-prose channel into two retained sinks (ADR-0025 decision 2).
  */
 function refusalFromBanner(message: SdkModelRefusalMessage): SessionRefusal {
   const category =
     typeof message.api_refusal_category === 'string'
-      ? sanitizeText(message.api_refusal_category)
+      ? cleanRefusalToken(message.api_refusal_category)
       : null;
   const fallbackModel =
     message.subtype === 'model_refusal_fallback' && typeof message.fallback_model === 'string'
-      ? sanitizeText(message.fallback_model)
+      ? cleanRefusalToken(message.fallback_model)
       : null;
   return { source: 'system-event', category, fallbackModel };
 }
@@ -509,6 +544,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         sdkSessionId,
         resultSubtype,
         stopReason,
+        refusalSource: refusal?.source ?? null,
         refusalCategory: refusal?.category ?? null,
         refusalFallbackModel: refusal?.fallbackModel ?? null,
       },

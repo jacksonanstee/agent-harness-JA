@@ -27,6 +27,16 @@ export interface TurnCostPayload {
    * refusal fields existed'.
    */
   stopReason?: string | null;
+  /**
+   * Which channel detected a refusal, or null if none did. This is the ONLY
+   * field that is non-null whenever a refusal was detected: the SDK documents
+   * `api_refusal_category` as null "when neither source carried a category
+   * (normal, not an error)", and a no-fallback banner can arrive on a result
+   * whose `stop_reason` is not 'refusal'. Without this field such a row is
+   * indistinguishable from a clean success, which is the exact defect ADR-0025
+   * exists to remove.
+   */
+  refusalSource?: string | null;
   refusalCategory?: string | null;
   /** Non-null means the answering model was NOT `model` above (a fallback swap). */
   refusalFallbackModel?: string | null;

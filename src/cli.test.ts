@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, formatRefusalLine, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { composeSecurity, formatModelClaim, formatRefusalLine, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
 import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
@@ -125,6 +125,40 @@ describe('formatRefusalLine', () => {
     );
     expect(line).not.toContain('\u001b');
     expect(line).not.toContain('\u0007');
+  });
+});
+
+describe('formatModelClaim', () => {
+  it('returns the routed model unchanged when nothing was swapped', () => {
+    expect(formatModelClaim('claude-opus-5', null)).toBe('claude-opus-5');
+    expect(
+      formatModelClaim('claude-opus-5', {
+        source: 'system-event',
+        category: 'cyber',
+        fallbackModel: null,
+      }),
+    ).toBe('claude-opus-5');
+  });
+
+  it('annotates the claim on the SAME stream when a fallback answered', () => {
+    // Without this, `run > out.txt` captured a file whose only model claim was
+    // false, with the correction on a stream the file never saw.
+    const claim = formatModelClaim('claude-fable-5', {
+      source: 'system-event',
+      category: 'cyber',
+      fallbackModel: 'claude-sonnet-5',
+    });
+    expect(claim).toContain('claude-fable-5');
+    expect(claim).toContain('answered by claude-sonnet-5');
+  });
+
+  it('sanitizes the fallback model name', () => {
+    const claim = formatModelClaim('claude-opus-5', {
+      source: 'system-event',
+      category: null,
+      fallbackModel: 'evil\u001b[31m',
+    });
+    expect(claim).not.toContain('\u001b');
   });
 });
 

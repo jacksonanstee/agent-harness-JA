@@ -17,7 +17,15 @@ Reading the pinned SDK (`@anthropic-ai/claude-agent-sdk` 0.3.201) established th
 2. **Two refusal banners exist**: `model_refusal_no_fallback` (`:3856`), where the turn ends as an error, and `model_refusal_fallback` (`:3824`), where the turn is retried on a fallback model and the swap is made persistent for the session. Both carry `api_refusal_category` and `api_refusal_explanation`. Both are documented as **"Absent from older CLIs"**.
 3. **The fallback case is the one that silently exits 0.** Issue #38 speculated that `run` might exit 0 on a refusal. For the no-fallback case that is wrong: it lands an error subtype, and `src/cli.ts` already maps any non-`success` subtype to 1. The case that genuinely exits 0 is the fallback swap, which the issue does not mention, and it is the worse of the two: the run succeeds with a real answer from a *different model*, while `SessionResult.modelChoice` and the telemetry `model` field both still report the model the router chose, and the `[harness]` line prints that routed model as fact.
 
-The harness never sets `fallbackModel`. But the SDK's bundled CLI reads the operator's ambient `~/.claude` configuration (residual risk R-11, observed live twice), so an operator's own settings can enable the swap without the harness asking for it.
+The harness never sets `fallbackModel` itself, but it is not the only party who can. Three channels outside the harness's control set it, and the security review of this change corrected an earlier, narrower claim here that named only the first:
+
+1. The operator's own ambient `~/.claude` configuration, which the SDK's bundled CLI reads (residual risk R-11, observed live twice).
+2. A `fallbackModel` in **managed settings**. The SDK's settings schema carries the field, and describes that schema as typically administered by enterprise administrators, so the party who enables a swap need not be the party running the harness.
+3. A `--fallback-model` CLI flag, which the SDK documents as taking precedence over both.
+
+The SDK additionally refers to server-side gating of the fallback path (a banner is "Not emitted when a fallback existed but was declined or gate-failed", and the category may come from a "server-gated trigger"), and does not document what that gating depends on. So this list is not claimed to be exhaustive, and R-15 says so rather than asserting a mechanism the evidence does not establish.
+
+What the SDK's own docs *do* pin is that a swap requires a fallback to have been configured somewhere: the no-fallback banner is emitted precisely "when the model ends the stream with `stop_reason` 'refusal' and **no fallback model is configured**". A refusal with nothing configured ends the turn as an error rather than silently substituting a model.
 
 ## Decisions
 
@@ -43,21 +51,36 @@ refusal: {
 
 `stopReason` is a passthrough because the SDK declares it open and new values ship on the wire ahead of schema updates; the harness branches on one known value and records the rest verbatim rather than pretending to an enum it does not control. `refusal` is derived so that "did the model refuse" is answered once, in the layer that read the stream, instead of by every consumer re-deriving it.
 
-**`api_refusal_explanation` is deliberately not captured.** The SDK documents it as unstable human prose, display only, never parse. It is model-authored text, and capturing it would open a new untrusted-prose channel into two retained sinks (telemetry and the memory session summary) for diagnostic value that the category and the fallback model already largely provide. ADR-0013's whole reason for redacting before persistence is that retained sinks are the expensive place to be wrong. The trade is real: an operator debugging a refusal gets a category, not a sentence.
+**Neither prose field is captured.** Two fields on the banners carry model-authored prose, and both are deliberately unmodelled:
 
-**3. The category and the fallback model are sanitized at capture.**
+- `api_refusal_explanation`, which the SDK documents as unstable human prose, display only, never parse.
+- `content`, which is **required** on both banners, so it is present on every refusal event, unlike the optional explanation. The security review flagged that naming only the explanation made this decision's rationale narrower than what the SDK actually exposes.
 
-Not at each sink. Both are vendor-supplied strings that reach the result, the memory summary, the telemetry payload, and the terminal, so sanitizing once at the point of capture means no sink can be added later that forgets. The telemetry store sanitizes again on write, because it is a public factory and a direct writer need not have come through the session layer.
+Capturing either would open a new untrusted-prose channel into two retained sinks (telemetry and the memory session summary) for diagnostic value the category and the fallback model already largely provide. ADR-0013's whole reason for redacting before persistence is that retained sinks are the expensive place to be wrong. The trade is real: an operator debugging a refusal gets a category, not a sentence.
+
+**3. The category and the fallback model are cleaned and bounded at capture.**
+
+Not at each sink. Both are vendor-supplied strings that reach the result, the memory summary, the telemetry payload, and the terminal, so cleaning once at the point of capture means no sink can be added later that forgets. The telemetry store sanitizes again on write, because it is a public factory and a direct writer need not have come through the session layer.
+
+The charset contract is the same one `cleanSkillText` applies to skill text: control chars, bidi overrides, and invisible smuggling chars. The first cut of this change stripped control chars only, and the security review demonstrated empirically that a U+202E override survived capture *and* `sanitizeForTerminal` all the way to the stderr line, which is the one line whose job is to tell an operator that a different model answered. A bidi override that visually reorders a model name defeats exactly that guarantee, so the narrower charset was the wrong contract for this sink.
+
+Both values are also **bounded** (100 chars). The SDK calls the category an open string whose values "ship on the wire ahead of schema updates", so nothing in the contract bounds it, and every other persisted string in the session module is capped. An unbounded open string reaching two retained sinks was an inconsistency, not a considered exception.
 
 **4. The exit code stays 1, and a successful fallback still exits 0.**
 
 A refusal with no fallback already exits 1 by virtue of its error subtype, so nothing needed to change to satisfy "it should not be 0". No new exit code was added: 0/1/2 is pinned by ADR-0018 and ADR-0019 and shared with `eval` and `redteam`, and a fourth code would widen a contract three ADRs describe in order to express something the typed surface already expresses better.
 
-A successful fallback exits **0**, deliberately, because there genuinely is an answer and a non-zero exit would be a lie about the run's outcome. What makes it not-silent is `formatRefusalLine` on stderr, which names the model that actually answered. That line is the only place the swap is visible, because the `[harness]` summary line above it reports the routed model.
+A successful fallback exits **0**, deliberately, because there genuinely is an answer and a non-zero exit would be a lie about the run's outcome. What makes it not-silent is `formatRefusalLine` on stderr, which names the model that actually answered.
 
-**5. The telemetry fields are optional for a read-path reason.**
+**The claim and its correction go to the same stream.** The architecture review pointed out that putting the correction only on stderr left `run > out.txt` capturing a file whose single model claim was false, with no trace of the swap. So the stdout summary line now annotates itself: `model=<routed> (answered by <fallback>)`. The stderr line stays, because a refusal is a diagnostic and every other diagnostic in this CLI goes to stderr; what changed is that the stdout claim no longer stands alone as a falsehood.
 
-`stopReason`, `refusalCategory` and `refusalFallbackModel` are optional on `TurnCostPayload` even though the session layer always supplies all three. `isTurnCostPayload` validates on the **read** path and throws on mismatch, so required fields would make every turn-cost row written before this change unreadable, including `telemetry export` over an operator's existing database. A present-but-wrong-typed field is still a hard failure. Both directions are pinned by tests.
+**5. The telemetry fields are flat, and optional for a read-path reason.**
+
+`stopReason`, `refusalSource`, `refusalCategory` and `refusalFallbackModel` are optional on `TurnCostPayload` even though the session layer always supplies all four. `isTurnCostPayload` validates on the **read** path and throws on mismatch, so required fields would make every turn-cost row written before this change unreadable, including `telemetry export` over an operator's existing database. A present-but-wrong-typed field is still a hard failure. Both directions are pinned by tests.
+
+**Why flat rather than a nested `refusal` object**, which is how the memory summary and `SessionResult` both carry it: this payload is validated by hand-rolled predicates rather than a schema, and it is already flat in six other fields. A nested object would need a composite predicate whose optionality states multiply (absent object, present object with absent fields, present object with null fields), for no gain in what the row can express.
+
+**`refusalSource` exists because of that flatness.** The architecture review caught that the first cut carried the category and the fallback model but not the source, and a nested object would have carried it for free. It matters because `source` is the only field that is non-null whenever a refusal was detected: the SDK documents the category as null "when neither source carried a category (**normal, not an error**)", and a no-fallback banner can arrive on a result whose `stop_reason` is not `'refusal'`. Such a row would have been indistinguishable from a clean success, which is precisely the defect this ADR exists to remove, reintroduced at the sink meant to be the durable honest record. Detecting a refusal in the session layer and then losing it in telemetry would have been the worst of both.
 
 ## Consequences
 
@@ -84,4 +107,5 @@ The normal path is also verified unregressed: `examples/repo-qa` eval stayed 2/2
 - **An operator actually needs the explanation string.** The channel exists and is deliberately unread. Reversing decision 2 means routing that prose through redaction and truncation before either retained sink, the way `resultText` already is, and saying so in the security model.
 - **A refusal is observed live.** That converts the limitation above into evidence, and should be recorded here with the category the classifier returned, because the category vocabulary is an open set the harness does not control.
 - **The eval layer needs refusal in the scorecard.** It would widen a committed artefact shape and change baseline bytes, so it belongs with a scorecard-shape decision rather than being bolted on.
-- **Fallback swaps stop being an ambient-config accident.** If the harness ever sets `fallbackModel` itself, the swap becomes an intended feature and needs a routing-level decision about whether `ModelChoice` should record the model that answered rather than the model chosen.
+- **Fallback swaps stop being a configuration accident.** If the harness ever sets `fallbackModel` itself, the swap becomes an intended feature and needs a routing-level decision about whether `ModelChoice` should record the model that answered rather than the model chosen.
+- **Persistence is gated on the answering model.** Raised by the security review and deliberately not built here: when `refusal.fallbackModel !== null`, the model that answered may have a different data-retention posture from the one ADR-0024 decision 1 vetted for the routed model, so that turn's retained `resultText` arguably deserves stronger redaction or a shorter TTL than the standard 30 days. It is a real lever, and it is the only one in this area the harness actually controls. It is out of scope for issue #38 because it changes retention behaviour for a whole class of turn, which is its own decision with its own blast radius, not a rider on a detection fix.

@@ -60,9 +60,16 @@ export interface SdkResultMessage {
  *
  * Both are documented by the SDK as absent from older CLIs, which is why
  * `SdkResultMessage.stop_reason` is read as a second, independent channel.
- * `api_refusal_explanation` is deliberately not modelled: the SDK calls it
- * unstable prose for display only, and it is model-authored text that would
- * open a new untrusted channel into two retained sinks.
+ * `api_refusal_explanation` and the banners' required `content` field are
+ * deliberately not modelled: both are model-authored prose (the SDK calls the
+ * explanation unstable, display-only) and capturing either would open a new
+ * untrusted channel into two retained sinks. ADR-0025 decision 2.
+ *
+ * `original_model` is declared but deliberately unread, which is a narrow
+ * exception to ADR-0010's "only the fields the harness reads": it is part of the
+ * banner contract this type documents, and the test fixtures set it for
+ * fidelity. The harness does NOT reconcile it against `modelChoice.model`; the
+ * answering model is reported via `fallback_model` instead.
  */
 export interface SdkModelRefusalMessage {
   type: 'system';

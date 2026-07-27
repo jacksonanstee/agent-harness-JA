@@ -4,8 +4,10 @@ import * as barrel from './index.js';
 import type {
   AdversaryFn,
   ChallengeInput,
+  RefusalSource,
   ScanResult,
   RedactResult,
+  SessionRefusal,
   TelemetryStore,
   Verifier,
 } from './index.js';
@@ -93,8 +95,15 @@ describe('root barrel (src/index.ts)', () => {
     const findingsOf = (r: RedactResult): number => r.findings.length;
     const idOf = (v: Verifier): string => v.adversaryModelId;
     const closeOf = (s: TelemetryStore): unknown => s;
+    // SessionResult.refusal is typed SessionRefusal | null, so both are in the
+    // closure this test guards. The runtime collision guard above cannot see
+    // type-only names (ADR-0023 residual), so this is the only thing proving
+    // they are reachable from the root barrel at all.
+    const source: RefusalSource = 'system-event';
+    const refusal: SessionRefusal = { source, category: null, fallbackModel: null };
     expect(typeof adversary).toBe('function');
     expect(input.taskId).toBe('t');
+    expect(refusal.source).toBe('system-event');
     expect([verdictOf, findingsOf, idOf, closeOf].every((f) => typeof f === 'function')).toBe(true);
   });
 });

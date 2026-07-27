@@ -205,9 +205,25 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
 /**
  * Operator-facing refusal report (ADR-0025), or null when there was no refusal.
  * Pure so it is testable: the `run` path itself cannot execute under vitest
- * because it loads the real SDK. Every interpolated field is vendor- or
- * model-influenced, so all of them go through sanitizeForTerminal.
+ * because it loads the real SDK.
+ *
+ * Every vendor-influenced field goes through sanitizeForTerminal. `source` is
+ * the one deliberate exception: it is a harness-owned literal union, never
+ * vendor input. A fourth field must be assumed vendor-influenced and sanitized
+ * unless it is likewise harness-owned.
  */
+/**
+ * The stdout summary line states the routed model as fact. Under a fallback
+ * swap that claim is false, and the correction used to live only on stderr, so
+ * `run > out.txt` captured a file whose single model claim was wrong with no
+ * trace of the swap (ADR-0025 decision 4). Annotating the claim keeps the
+ * correction on the same stream as the claim.
+ */
+export function formatModelClaim(routedModel: string, refusal: SessionRefusal | null): string {
+  if (refusal === null || refusal.fallbackModel === null) return routedModel;
+  return `${routedModel} (answered by ${sanitizeForTerminal(refusal.fallbackModel)})`;
+}
+
 export function formatRefusalLine(
   refusal: SessionRefusal | null,
   stopReason: string | null,
@@ -344,15 +360,14 @@ export async function main(argv: string[]): Promise<number> {
 
   const cost = result.costUsd === null ? 'n/a' : `$${result.costUsd.toFixed(4)}`;
   process.stdout.write(
-    `\n[harness] model=${result.modelChoice.model} (rule=${result.modelChoice.rule_id}) ` +
+    `\n[harness] model=${formatModelClaim(result.modelChoice.model, result.refusal)} ` +
+      `(rule=${result.modelChoice.rule_id}) ` +
       `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
       `denied=${result.denied.length} memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`,
   );
 
-  // ADR-0025: a refusal must never read as an empty success. Note this can fire
-  // alongside exit 0, when a fallback swap produced a genuine answer; the line
-  // is then the only place the model swap is visible, because the [harness]
-  // line above reports the model the ROUTER chose.
+  // ADR-0025: a refusal must never read as an empty success. This can fire
+  // alongside exit 0, when a fallback swap produced a genuine answer.
   const refusalLine = formatRefusalLine(result.refusal, result.stopReason);
   if (refusalLine !== null) process.stderr.write(`${refusalLine}\n`);
 

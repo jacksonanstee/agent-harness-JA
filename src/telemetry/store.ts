@@ -101,6 +101,7 @@ function isTurnCostPayload(value: unknown): value is TurnCostPayload {
     // Optional so rows written before ADR-0025 still validate on read; a
     // PRESENT field of the wrong type is still a hard failure.
     isOptionalStringOrNull(value.stopReason) &&
+    isOptionalStringOrNull(value.refusalSource) &&
     isOptionalStringOrNull(value.refusalCategory) &&
     isOptionalStringOrNull(value.refusalFallbackModel)
   );
@@ -159,6 +160,7 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       // Sanitized again here rather than trusting the caller: this store is a
       // public factory, so a direct writer need not have gone through session.ts.
       stopReason: sanitizeOptional(p.stopReason),
+      refusalSource: sanitizeOptional(p.refusalSource),
       refusalCategory: sanitizeOptional(p.refusalCategory),
       refusalFallbackModel: sanitizeOptional(p.refusalFallbackModel),
     };

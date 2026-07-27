@@ -9,7 +9,9 @@ export interface OracleVerdict {
 /**
  * The task author's contract: pure, deterministic, no model calls, no I/O.
  * Judges the SessionResult surface only (final text, resultSubtype, denied[],
- * usage) — not filesystem side effects (ADR-0017 named limitation). Author
+ * usage, and since ADR-0025 refusal/stopReason, which is what a safety-adjacent
+ * task should assert on), never filesystem side effects (ADR-0017 named
+ * limitation). Author
  * `.mjs` oracles with: @type {import('agent-harness-ja').OracleFn}
  */
 export type OracleFn = (result: SessionResult) => OracleVerdict | Promise<OracleVerdict>;
