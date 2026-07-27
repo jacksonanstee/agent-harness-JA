@@ -244,6 +244,68 @@ describe('createTelemetryStore.query', () => {
     ).run();
     expect(() => store.query()).toThrow(/structural validation|payload/i);
   });
+
+  // ADR-0025: the refusal fields were added to an already-shipped payload, and
+  // isTurnCostPayload runs on the READ path (it throws), so they must be
+  // OPTIONAL or every row already on disk stops being readable.
+  describe('refusal fields (ADR-0025)', () => {
+    it('round-trips the refusal fields, sanitized', () => {
+      const { store } = openStore();
+      const written = store.record({
+        type: 'turn-cost',
+        sessionId: 's1',
+        turnId: 't1',
+        payload: {
+          model: 'claude-fable-5',
+          ruleId: 'custom',
+          costUsd: 0.02,
+          numTurns: 1,
+          usage: null,
+          sdkSessionId: 'sdk-1',
+          resultSubtype: 'error_during_execution',
+          stopReason: 'refusal',
+          refusalCategory: 'cy\u001bber',
+          refusalFallbackModel: 'claude-sonnet-5',
+        },
+      });
+      expect(written.ok).toBe(true);
+
+      const rows = store.query({ type: 'turn-cost' });
+      const payload = rows[0]?.payload as {
+        stopReason: string | null;
+        refusalCategory: string | null;
+        refusalFallbackModel: string | null;
+      };
+      expect(payload.stopReason).toBe('refusal');
+      expect(payload.refusalCategory).not.toContain('\u001b');
+      expect(payload.refusalFallbackModel).toBe('claude-sonnet-5');
+    });
+
+    it('still reads a turn-cost row written before the refusal fields existed', () => {
+      const { db, store } = openStore();
+      // Byte-for-byte the pre-ADR-0025 payload shape: no refusal keys at all.
+      db.prepare(
+        `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+         VALUES ('old1', 'turn-cost', 's1', 't1', 1,
+           '{"model":"claude-sonnet-5","ruleId":"shape-build-small","costUsd":0.1,` +
+          `"numTurns":2,"usage":null,"sdkSessionId":"sdk-1","resultSubtype":"success"}');`,
+      ).run();
+      expect(() => store.query()).not.toThrow();
+      const rows = store.query({ type: 'turn-cost' });
+      expect(rows).toHaveLength(1);
+    });
+
+    it('rejects a refusal field of the wrong type', () => {
+      const { db, store } = openStore();
+      db.prepare(
+        `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+         VALUES ('bad3', 'turn-cost', 's1', 't1', 1,
+           '{"model":"m","ruleId":"r","costUsd":null,"numTurns":null,"usage":null,` +
+          `"sdkSessionId":null,"resultSubtype":null,"stopReason":42}');`,
+      ).run();
+      expect(() => store.query()).toThrow(/structural validation|payload/i);
+    });
+  });
 });
 
 describe('openTelemetryDatabase', () => {

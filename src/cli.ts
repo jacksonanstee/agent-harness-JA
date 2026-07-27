@@ -22,7 +22,7 @@ import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route } from './router/index.js';
 import { createSession } from './session/index.js';
-import type { QueryFn } from './session/index.js';
+import type { QueryFn, SessionRefusal } from './session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
@@ -202,6 +202,28 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
   }
 }
 
+/**
+ * Operator-facing refusal report (ADR-0025), or null when there was no refusal.
+ * Pure so it is testable: the `run` path itself cannot execute under vitest
+ * because it loads the real SDK. Every interpolated field is vendor- or
+ * model-influenced, so all of them go through sanitizeForTerminal.
+ */
+export function formatRefusalLine(
+  refusal: SessionRefusal | null,
+  stopReason: string | null,
+): string | null {
+  if (refusal === null) return null;
+  const category = sanitizeForTerminal(refusal.category ?? 'unknown');
+  const fallback =
+    refusal.fallbackModel === null
+      ? 'none'
+      : `${sanitizeForTerminal(refusal.fallbackModel)} (ANSWERED THIS TURN, not the routed model)`;
+  return (
+    `[harness] refusal: source=${refusal.source} category=${category} ` +
+    `fallback=${fallback} stop_reason=${sanitizeForTerminal(stopReason ?? 'n/a')}`
+  );
+}
+
 export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
@@ -326,6 +348,13 @@ export async function main(argv: string[]): Promise<number> {
       `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
       `denied=${result.denied.length} memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`,
   );
+
+  // ADR-0025: a refusal must never read as an empty success. Note this can fire
+  // alongside exit 0, when a fallback swap produced a genuine answer; the line
+  // is then the only place the model swap is visible, because the [harness]
+  // line above reports the model the ROUTER chose.
+  const refusalLine = formatRefusalLine(result.refusal, result.stopReason);
+  if (refusalLine !== null) process.stderr.write(`${refusalLine}\n`);
 
   return result.resultSubtype === 'success' ? 0 : 1;
 }

@@ -8,12 +8,14 @@ import type {
   SdkAssistantMessage,
   SdkHookCallback,
   SdkMessage,
+  SdkModelRefusalMessage,
   SdkResultMessage,
   SdkSystemMessage,
   SdkTextBlock,
   Session,
   SessionConfig,
   SessionDeps,
+  SessionRefusal,
   SessionResult,
 } from './types.js';
 import { sanitizeControlChars, stripBidi, stripInvisibles } from '../internal/sanitize.js';
@@ -64,6 +66,33 @@ function isAssistant(message: SdkMessage): message is SdkAssistantMessage {
 
 function isResult(message: SdkMessage): message is SdkResultMessage {
   return message.type === 'result';
+}
+
+/** The SDK's refusal banners (ADR-0025). Absent from older CLIs, hence the second channel. */
+const REFUSAL_SUBTYPES = new Set(['model_refusal_no_fallback', 'model_refusal_fallback']);
+
+function isModelRefusal(message: SdkMessage): message is SdkModelRefusalMessage {
+  return (
+    message.type === 'system' &&
+    REFUSAL_SUBTYPES.has((message as SdkSystemMessage).subtype)
+  );
+}
+
+/**
+ * Reads a banner into the surfaced shape. The category and the fallback model
+ * are sanitized HERE, at capture, so every downstream sink (result, memory,
+ * telemetry, terminal) inherits a clean value rather than each re-deriving it.
+ */
+function refusalFromBanner(message: SdkModelRefusalMessage): SessionRefusal {
+  const category =
+    typeof message.api_refusal_category === 'string'
+      ? sanitizeText(message.api_refusal_category)
+      : null;
+  const fallbackModel =
+    message.subtype === 'model_refusal_fallback' && typeof message.fallback_model === 'string'
+      ? sanitizeText(message.fallback_model)
+      : null;
+  return { source: 'system-event', category, fallbackModel };
 }
 
 function assistantText(message: SdkAssistantMessage): string[] {
@@ -374,6 +403,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     let resultText: string | null = null;
     let resultSubtype: string | null = null;
+    let stopReason: string | null = null;
+    let refusal: SessionRefusal | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
     let numTurns: number | null = null;
@@ -405,6 +436,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       for await (const message of stream) {
         if (isSystemInit(message) && message.session_id) {
           sdkSessionId = message.session_id;
+        } else if (isModelRefusal(message)) {
+          // Later banner wins: a turn that falls back and then refuses again
+          // must report the terminal truth, not the intermediate swap.
+          refusal = refusalFromBanner(message);
+          warn(
+            refusal.fallbackModel === null
+              ? `model refusal (category=${refusal.category ?? 'unknown'}): no fallback model ` +
+                `configured, so the turn ended without an answer`
+              : `model refusal (category=${refusal.category ?? 'unknown'}): retried on fallback ` +
+                `model ${refusal.fallbackModel}, which is NOT the routed model ${modelChoice.model}`,
+          );
         } else if (isAssistant(message)) {
           for (const text of assistantText(message)) {
             config.onText?.(text);
@@ -413,9 +455,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           if (message.session_id) sdkSessionId = message.session_id;
           resultText = message.result ?? null;
           resultSubtype = message.subtype ?? null;
+          stopReason = message.stop_reason ?? null;
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
+          // Second, independent channel: works on CLIs old enough to omit the
+          // banner. Never downgrades a banner record, which carries strictly
+          // more (category, fallback model).
+          if (stopReason === 'refusal' && refusal === null) {
+            refusal = { source: 'result-stop-reason', category: null, fallbackModel: null };
+            warn('model refused the turn (stop_reason=refusal; no refusal banner on this stream)');
+          }
         }
       }
     } catch (error: unknown) {
@@ -458,6 +508,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
               },
         sdkSessionId,
         resultSubtype,
+        stopReason,
+        refusalCategory: refusal?.category ?? null,
+        refusalFallbackModel: refusal?.fallbackModel ?? null,
       },
     });
 
@@ -483,6 +536,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         model: modelChoice.model,
         rule_id: modelChoice.rule_id,
         resultSubtype,
+        stopReason,
+        // Already sanitized at capture; no redaction pass needed because these
+        // are short vendor-supplied tokens, not model or tool prose.
+        refusal,
         resultText: truncate(redactForPersistence(resultText)),
         denied,
         failed: streamError !== null,
@@ -499,6 +556,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     return {
       resultText,
       resultSubtype,
+      stopReason,
+      refusal,
       sessionId,
       modelChoice,
       usage,

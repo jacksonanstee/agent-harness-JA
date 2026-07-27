@@ -27,6 +27,8 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
   return {
     resultText: 'alpha and beta',
     resultSubtype: 'success',
+    stopReason: 'end_turn',
+    refusal: null,
     sessionId: 's-1',
     modelChoice: { model: 'claude-sonnet-5', rule_id: 'r1', reason: 'test' },
     usage: null,
