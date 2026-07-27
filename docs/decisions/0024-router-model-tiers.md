@@ -31,13 +31,15 @@ type Model =
 
 The default table keeps the shape ADR-0007 set, refreshed to the current generation: `sensitivity: 'high'`, `shape: 'research'`, and the implicit fallthrough go to `claude-opus-5`; small review and small build go to `claude-sonnet-5`; `shape: 'lookup'` stays on `claude-haiku-4-5`. The rule IDs, thresholds, and `reason` strings are unchanged, because the `reason` strings were written at tier level (`'sensitivity=high → opus'`) rather than pinned to a version.
 
-**`claude-fable-5` is nameable but never defaulted.** It is in the union so a consumer can target it from a custom table without waiting on a release of this package. No shipped rule selects it, for three reasons that are properties of the model rather than preferences:
+**`claude-fable-5` is nameable but never defaulted.** It is in the union so a consumer can target it from a custom table without waiting on a release of this package. No shipped rule selects it, for three reasons that are properties of the model rather than preferences. All three were read from the vendor's model and migration documentation on **2026-07-27**, and all four union members were confirmed served on that date (`GET /v1/models/{id}` returned 200 for each). Per the sourcing rule below, treat these as dated facts, not standing ones:
 
 - **Cost.** Fable is $10/$50 per MTok against Opus 5 at $5/$25. Three of the six default rules (high sensitivity, research, fallthrough) resolve to the top tier, so defaulting them to Fable roughly doubles baseline spend for a harness whose stated purpose includes routing work to the cheapest model that can do it.
 - **Availability.** Fable requires 30-day data retention and is not available under zero data retention. An organisation configured for ZDR receives `400 invalid_request_error` on *every* Fable request. A default that hard-fails an entire class of consumer is not a default.
 - **Unhandled response shape.** Fable can return `stop_reason: "refusal"` from its safety classifiers. `src/session/session.ts` does not currently branch on that, so a refusal would surface as an empty or partial result rather than a handled outcome. Shipping Fable as a default before that seam exists would be shipping a known gap into the happy path.
 
 Naming it without defaulting to it separates "the harness knows this model exists" from "the harness will spend your money on it". The split is enforced by tests, not just by this prose: `route.test.ts` asserts that no `DEFAULT_ROUTING_TABLE` rule and not `FALLTHROUGH_MODEL` selects Fable, and that a custom rule can.
+
+**Scope of "cannot get there by accident".** The union is a compile-time constraint. `route()` copies `rule.model` through without a runtime membership check, and the session layer passes it verbatim to the SDK, so a JavaScript consumer or a `as Model` cast can put any string on the wire. The guarantee is over the shipped defaults and over type-checked consumers, which is what the tests pin. It is not a runtime allowlist and is not claimed as one.
 
 **2. The union stays closed.**
 
@@ -49,7 +51,7 @@ Note that the telemetry and eval layers deliberately type their model fields as 
 
 | Class | What it is | Process |
 |---|---|---|
-| **A, mechanical** | Same tier, newer version (for example Opus 5 to a later Opus) | Swap the literal in `types.ts`, `table.ts`, and the pinned tests. No ADR. Still a semver-relevant change to a published type, so note it in the PR. |
+| **A, mechanical** | Same tier, newer version (for example Opus 5 to a later Opus) | Swap the literal in `types.ts`, `table.ts`, and the pinned tests. No ADR. **After v1.0 this is a major bump**, not a footnote: renaming a union member breaks consumers who produce that literal *and* consumers who switch on it exhaustively. Pre-1.0 it is a minor. Budget for this at vendor cadence; it is the standing cost of decision 2. |
 | **B, semantic** | Adding or removing a tier, or retargeting a rule to a different tier | Requires an ADR. It changes what the harness means by a tier, not just which build serves it. |
 
 Either class, three sourcing rules:
@@ -65,6 +67,18 @@ Either class, three sourcing rules:
 - The v0.1.0 publish freezes a union that is current rather than a generation behind, which was the point of doing this before the release tag.
 - Anyone who does route to Fable inherits the refusal, retention, and cost properties listed above. That is a documented consequence of an explicit opt-in, not a silent one.
 - ADR-0007 remains the owner of the descriptor schema and the routing-table structure. This ADR supersedes only its `Model` union and the model column of its default-table listing.
+
+## Alternatives considered
+
+1. **Tier slugs with late resolution.** Route to `'haiku' | 'sonnet' | 'opus' | 'fable'` and resolve a slug to a concrete model ID at one point, the ADR-0010 session seam. This is the design that makes Class A churn vanish: a vendor version bump touches one resolution map instead of the public union, the pinned tests, and a major version. The pull is real, and the `reason` strings are already written at tier level (`'sensitivity=high → opus'`), so the vocabulary half-exists.
+
+   Rejected for v1 on three grounds. It moves a routing concern into the session adapter, whose job under ADR-0010 is SDK translation, and the router's whole claim is that a routing decision is a pure function of `(descriptor, table)` with no hidden lookup. It makes `ModelChoice.model` a slug rather than the thing that actually went on the wire, which degrades the telemetry record that ADR-0011 exists to keep honest, and the debugging question is almost always "which model actually ran", not "which tier did we mean". And it adds a second place where a model can be wrong: the slug can be right while the resolution map is stale, which is a quieter failure than the one it prevents.
+
+   Revisit this if Class A refreshes actually become frequent enough to hurt, which is a measurable trigger rather than a taste judgement. Recording it here so the next person who asks "why isn't this a tier enum?" gets an answer instead of re-opening the question.
+
+2. **Leave Fable out of the union entirely.** Rejected because the union gates nothing at runtime. A consumer wanting Fable would write `model: 'claude-fable-5' as Model`, the cast reaches the SDK identically, and the package has bought nominal friction rather than prevention while pushing an unsound cast into consumer code. Naming it and refusing to default to it is the honest version of the same posture.
+
+3. **An open union (`Model | (string & {})`).** Rejected as decision 2. It would keep autocomplete while making every refresh silent, which is the exact failure this ADR was written in response to.
 
 ## Revisit if
 

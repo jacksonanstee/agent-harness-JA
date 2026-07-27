@@ -21,7 +21,7 @@ A thin, MIT-licensed, local-first harness that wraps the Claude Agent SDK and pr
 
 | Layer | What it gives you |
 |---|---|
-| **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape), skill loading, hook runtime, telemetry, memory |
+| **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape, with Fable targetable from a custom table — [ADR-0024](./docs/decisions/0024-router-model-tiers.md)), skill loading, hook runtime, telemetry, memory |
 | **Security** | Prompt-injection scanner on tool results, secret redaction, permission model, sandbox boundaries |
 | **Evaluation** | Golden-task regression suite, red-team corpus (≥50 cases), two-pass adversarial verification |
 
@@ -108,7 +108,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
-As of 2026-07-14:
+As of 2026-07-27:
 
 | Milestone | Status |
 |---|---|
@@ -118,7 +118,7 @@ As of 2026-07-14:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0024 |
-| Tests | 899 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 924 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 

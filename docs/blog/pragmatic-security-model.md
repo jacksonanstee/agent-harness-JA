@@ -61,7 +61,9 @@ deny *rules* and deliberately omits `defaultDecision`.
 
 That example is the demonstration. Its committed `.harness/settings.json`
 denies the mutation tools, and asking the agent to write a file produces
-(costs dated/illustrative):
+(costs and model id dated/illustrative — this capture predates ADR-0024, so
+the same `shape-build-small` rule now resolves to `claude-sonnet-5`; the rule
+id and the denial behaviour it demonstrates are unchanged):
 
 ```
 DENIED
