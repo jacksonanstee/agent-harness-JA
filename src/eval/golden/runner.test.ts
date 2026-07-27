@@ -28,7 +28,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     resultText: 'alpha and beta',
     resultSubtype: 'success',
     sessionId: 's-1',
-    modelChoice: { model: 'claude-sonnet-4-6', rule_id: 'r1', reason: 'test' },
+    modelChoice: { model: 'claude-sonnet-5', rule_id: 'r1', reason: 'test' },
     usage: null,
     costUsd: 0.01,
     numTurns: 2,
@@ -185,7 +185,7 @@ describe('createGoldenRunner rows', () => {
       unpricedTasks: 1,
     });
     expect(scorecard.meta.harnessVersion).toBe('0.1.0-test');
-    expect(scorecard.meta.models).toEqual(['claude-sonnet-4-6']);
+    expect(scorecard.meta.models).toEqual(['claude-sonnet-5']);
   });
 
   it('treats a non-finite session costUsd (Infinity) as unpriced, never summed (differential-review nit N2)', async () => {
@@ -251,7 +251,7 @@ describe('createGoldenRunner rows', () => {
     expect(alpha?.reason).toContain('oracle bug');
     // The session ran (and its cost is counted in totalCostUsd) even though
     // the oracle threw, so the model it used must still surface in meta.
-    expect(scorecard.meta.models).toEqual(['claude-sonnet-4-6']);
+    expect(scorecard.meta.models).toEqual(['claude-sonnet-5']);
   });
 
   it('turns a truthy-but-not-boolean verdict into an oracle-error row', async () => {

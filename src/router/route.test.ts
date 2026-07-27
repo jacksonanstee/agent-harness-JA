@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRouter, route } from './route.js';
+import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from './table.js';
 import type {
   RoutingRule,
   TaskDescriptor,
@@ -22,19 +23,19 @@ describe('router: default table — shape routing', () => {
 
   it('routes research to opus', () => {
     const c = route({ ...base, shape: 'research' });
-    expect(c.model).toBe('claude-opus-4-8');
+    expect(c.model).toBe('claude-opus-5');
     expect(c.rule_id).toBe('shape-research');
   });
 
   it('routes small review to sonnet', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 5_000 });
-    expect(c.model).toBe('claude-sonnet-4-6');
+    expect(c.model).toBe('claude-sonnet-5');
     expect(c.rule_id).toBe('shape-review-small');
   });
 
   it('routes small build to sonnet', () => {
     const c = route({ ...base, shape: 'build', expected_tokens: 10_000 });
-    expect(c.model).toBe('claude-sonnet-4-6');
+    expect(c.model).toBe('claude-sonnet-5');
     expect(c.rule_id).toBe('shape-build-small');
   });
 
@@ -44,13 +45,13 @@ describe('router: default table — shape routing', () => {
       sensitivity: 'medium',
       expected_tokens: 100_000,
     });
-    expect(c.model).toBe('claude-opus-4-8');
+    expect(c.model).toBe('claude-opus-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
   it('escalates large review to opus via fallthrough', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 50_000 });
-    expect(c.model).toBe('claude-opus-4-8');
+    expect(c.model).toBe('claude-opus-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 });
@@ -60,7 +61,7 @@ describe('router: high sensitivity beats every shape', () => {
   for (const shape of shapes) {
     it(`high + ${shape} → opus`, () => {
       const c = route({ ...base, shape, sensitivity: 'high' });
-      expect(c.model).toBe('claude-opus-4-8');
+      expect(c.model).toBe('claude-opus-5');
       expect(c.rule_id).toBe('sensitivity-high');
     });
   }
@@ -70,25 +71,25 @@ describe('router: token threshold boundaries', () => {
   it('review at 19_999 tokens → sonnet', () => {
     expect(
       route({ ...base, shape: 'review', expected_tokens: 19_999 }).model,
-    ).toBe('claude-sonnet-4-6');
+    ).toBe('claude-sonnet-5');
   });
 
   it('review at exactly 20_000 tokens → fallthrough opus', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 20_000 });
-    expect(c.model).toBe('claude-opus-4-8');
+    expect(c.model).toBe('claude-opus-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
   it('build at 49_999 tokens → sonnet', () => {
     expect(
       route({ ...base, shape: 'build', expected_tokens: 49_999 }).model,
-    ).toBe('claude-sonnet-4-6');
+    ).toBe('claude-sonnet-5');
   });
 
   it('build at exactly 50_000 tokens → fallthrough opus', () => {
     expect(
       route({ ...base, shape: 'build', expected_tokens: 50_000 }).model,
-    ).toBe('claude-opus-4-8');
+    ).toBe('claude-opus-5');
   });
 });
 
@@ -142,7 +143,7 @@ describe('router: custom table', () => {
 
   it('falls through to opus when no custom rule matches', () => {
     const c = createRouter({ table: [] }).route(base);
-    expect(c.model).toBe('claude-opus-4-8');
+    expect(c.model).toBe('claude-opus-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
@@ -159,12 +160,12 @@ describe('router: custom table', () => {
       {
         id: 'after-buggy',
         match: () => true,
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         reason: 'after-buggy reached',
       },
     ];
     const c = createRouter({ table }).route(base);
-    expect(c.model).toBe('claude-sonnet-4-6');
+    expect(c.model).toBe('claude-sonnet-5');
     expect(c.rule_id).toBe('after-buggy');
   });
 
@@ -232,6 +233,37 @@ describe('router: contract locks (issue #2)', () => {
     expect(hit.model).toBe('claude-haiku-4-5');
     const miss = router.route(base);
     expect(miss.rule_id).toBe('fallthrough');
+  });
+});
+
+describe('router: Fable is nameable but never defaulted (ADR-0024)', () => {
+  // ADR-0024 decision 1: `claude-fable-5` is a member of the Model union so a
+  // consumer can target it from a custom table, but no shipped default rule
+  // selects it. Defaulting to it would roughly double baseline cost ($10/$50
+  // vs Opus 5 at $5/$25) and hard-fail zero-data-retention orgs, which get a
+  // 400 on every Fable request. These two tests are the lock: prose in an ADR
+  // does not stop someone quietly adding it to the table.
+  it('no shipped default rule selects fable', () => {
+    const defaulted = DEFAULT_ROUTING_TABLE.map((r) => r.model);
+    expect(defaulted).not.toContain('claude-fable-5');
+  });
+
+  it('the implicit fallthrough does not select fable', () => {
+    expect(FALLTHROUGH_MODEL).not.toBe('claude-fable-5');
+  });
+
+  it('a custom rule can name fable and routes to it', () => {
+    const table: RoutingRule[] = [
+      {
+        id: 'opt-in-fable',
+        match: (d) => d.sensitivity === 'high',
+        model: 'claude-fable-5',
+        reason: 'custom: escalate high sensitivity to fable',
+      },
+    ];
+    const c = createRouter({ table }).route({ ...base, sensitivity: 'high' });
+    expect(c.model).toBe('claude-fable-5');
+    expect(c.rule_id).toBe('opt-in-fable');
   });
 });
 

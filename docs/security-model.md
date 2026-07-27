@@ -275,6 +275,18 @@ exfiltrating agent reaches for first — are gated since the dual-table fix,
 including the bare-directory case (`Glob(path='/secrets')` vs `/secrets/*`,
 a verify-pass finding).
 
+**Model choice is a disclosure dimension, not only a cost one (2026-07-27,
+ADR-0024).** The provider-pluggability note below blocks a cross-provider
+adversary because primary output may carry un-rewritten secrets (R-4) into a
+trust domain with no redaction gate. The same reasoning applies *within*
+provider: `claude-fable-5` is nameable from a custom routing table and
+requires 30-day data retention, so a consumer who opts into it converts their
+retention posture and composes that with R-4 — a flagged-but-unredacted
+secret in a Fable-routed turn is retained vendor-side for 30 days. No shipped
+default rule selects it (ADR-0024 decision 1), so this is reachable only by
+explicit opt-in, which is why it is a documented consequence rather than a
+control. See R-14.
+
 ### Denial of service — resource exhaustion via hostile input
 
 Hostile input can be pathological as well as persuasive. Every injection rule
@@ -321,6 +333,7 @@ R-1/R-2 rather than half-solved.
 | R-11 | The SDK's bundled Claude Code runtime reads ambient user-level configuration outside the harness's assembly of the system prompt — operator machine config can surface in agent output, unfiltered by S-1/S-2 and invisible to the harness (observed live, 2026-07-14, while dogfooding `examples/repo-qa`) | Low (today; rises with multi-user or PII-bearing deployments) | The harness is a policy layer around the SDK, not an isolator (§1); no SDK channel exists to suppress or inspect the bundled runtime's config surface. Named so operators know the system prompt is not fully self-contained | ADR-0003, ADR-0010; [docs/blog/harness-not-framework.md](./blog/harness-not-framework.md) |
 | R-12 | Keyword-anchored secret rules bound delimiter whitespace at 20 chars (widened from 3 after a 2026-07-14 audit finding): an assignment padded with 21+ whitespace characters between keyword and value still evades redaction, and the deliberately excluded unanchored generic rule (ADR-0013) means no other rule backstops it | Low | Any fixed bound has an edge; 20 covers realistic column-aligned config, and every widening trades a little false-positive surface. The pattern stays a single-level bounded quantifier per the linear-time contract | ADR-0013; `src/security/secrets/rules.ts` |
 | R-13 | The command gate's exec-wrapper blocklist (shells plus `sudo`/`timeout`/`nohup`/… ) is necessarily non-exhaustive: an argv-passthrough wrapper nobody has enumerated still runs if an operator allowlists it | Medium | A blocklist over an allowlist is defence-in-depth, not the boundary — the allowlist decides which programs run at all, and the blocklist only catches known wrappers an operator allowlisted by mistake (added 2026-07-15, audit finding V10) | ADR-0015 §3 |
+| R-14 | The session layer does not branch on `stop_reason: "refusal"`: a model-side refusal resolves as an ordinary `SessionResult` with empty/partial `resultText`, which a consumer cannot distinguish from an empty success. Reachable today only by opting into `claude-fable-5` from a custom table (no default rule selects it), and the opt-in motive — hard or sensitive work — is exactly what trips a refusal classifier | Low (today; opt-in only) | Integrity-of-signal, not an enforcement bypass: every security gate is pre-tool and none depends on result text. Contradicts the repo's loud-failure posture, so it is tracked as code work rather than accepted permanently — see [issue #38](https://github.com/jacksonanstee/agent-harness-JA/issues/38) and ADR-0024 "Revisit if" | ADR-0024, ADR-0010; `src/session/session.ts` |
 
 The single most important honest statement in this document is **R-4**: in
 v1, a malicious tool result that the scanner flags still reaches the model,

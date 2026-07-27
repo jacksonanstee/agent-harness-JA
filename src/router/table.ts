@@ -4,7 +4,7 @@ export const DEFAULT_ROUTING_TABLE: readonly RoutingRule[] = [
   {
     id: 'sensitivity-high',
     match: (d) => d.sensitivity === 'high',
-    model: 'claude-opus-4-8',
+    model: 'claude-opus-5',
     reason: 'sensitivity=high → opus',
   },
   {
@@ -16,25 +16,25 @@ export const DEFAULT_ROUTING_TABLE: readonly RoutingRule[] = [
   {
     id: 'shape-research',
     match: (d) => d.shape === 'research',
-    model: 'claude-opus-4-8',
+    model: 'claude-opus-5',
     reason: 'shape=research → opus',
   },
   {
     id: 'shape-review-small',
     match: (d) => d.shape === 'review' && d.expected_tokens < 20_000,
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     reason: 'shape=review + tokens<20k → sonnet',
   },
   {
     id: 'shape-build-small',
     match: (d) => d.shape === 'build' && d.expected_tokens < 50_000,
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     reason: 'shape=build + tokens<50k → sonnet',
   },
 ];
 
 /** Implicit last rule. Catches large-context or unclassified work and escalates to opus. */
 export const FALLTHROUGH_RULE_ID = 'fallthrough' as const;
-export const FALLTHROUGH_MODEL = 'claude-opus-4-8' as const;
+export const FALLTHROUGH_MODEL = 'claude-opus-5' as const;
 export const FALLTHROUGH_REASON =
   'fallthrough → opus (large context or unclassified)';
