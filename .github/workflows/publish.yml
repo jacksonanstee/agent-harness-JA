@@ -5,30 +5,36 @@ name: Publish
 # gate is the release itself. See ADR-0022 for the one-time npm-side setup
 # (link the trusted publisher: npmjs.com package settings -> Trusted Publisher
 # -> GitHub Actions -> this repo + this workflow filename).
+#
+# Two jobs on purpose (ADR-0022 amendment, audit finding V20): GitHub injects
+# OIDC-minting credentials into EVERY step of a job that holds id-token: write,
+# so a single job would let dependency code running during npm ci / build /
+# test mint a publish token before the publish step ever ran. The build job
+# runs all of that with contents: read only; the publish job holds id-token
+# and runs no dependency code (no npm ci, --ignore-scripts), its one
+# disclosed exception being the pinned npm self-upgrade.
 
 on:
   release:
     types: [published]
 
-# Least privilege. id-token: write is required for OIDC trusted publishing and
-# for build provenance attestation; nothing here needs write to repo contents.
+# Least privilege default for all jobs; the publish job alone widens to
+# id-token: write (job-level permissions REPLACE this block, so it restates
+# contents: read for its checkout).
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     # Skip GitHub pre-releases: publish has no --tag, so a pre-release would
-    # otherwise land on the npm 'latest' dist-tag. Cut a normal release to ship.
+    # otherwise land on the npm 'latest' dist-tag. Cut a normal release to
+    # ship. The publish job needs this one, so skipping here skips both.
     if: ${{ !github.event.release.prerelease }}
-    # Optional manual-approval gate: add required reviewers to this environment
-    # in repo Settings -> Environments to require a click before any publish.
-    environment: npm-publish
     steps:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
       # cannot silently swap the action out from under a publish.
@@ -39,22 +45,36 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
           cache: npm
 
-      # Trusted publishing (OIDC) needs npm >= 11.5.1; the Node 22 runner ships
-      # an older npm, so upgrade before publish. Pinned (not @latest): this is
-      # the one network pull that runs right before the OIDC publish token is
-      # used, so it gets the same pin discipline as the SHA-pinned actions.
-      # Bump deliberately; must stay >= 11.5.1.
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@11.11.0
+      # Guard: the published version must match the release tag (tag vX.Y.Z),
+      # so a forgotten version bump fails loudly instead of re-publishing.
+      # Release tags follow the vX.Y.Z convention, so the guard prepends 'v' to
+      # the package version. A tag without the 'v' fails closed here (safe): fix
+      # the tag, do not drop the 'v'.
+      # Runs first, before the several minutes of install/build/test: it needs
+      # only the checkout and node, and a forgotten bump is the likeliest
+      # reason a release run should stop.
+      # TAG comes in via env, never interpolated into the script body: a
+      # ${{ }} expression substituted into the shell text would let a crafted
+      # tag name inject commands into this workflow.
+      - name: Verify version matches release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$TAG" ]; then
+            echo "package.json version $PKG_VERSION does not match release tag $TAG" >&2
+            exit 1
+          fi
 
       - name: Install
         run: npm ci
 
-      # Defence in depth: the same gates prepublishOnly runs, made visible as
-      # their own steps so a failure is legible in the Actions log.
+      # Defence in depth, and a superset of prepublishOnly (which runs build,
+      # test and redteam only): every gate runs as its own step so a failure is
+      # legible in the Actions log. Keep this list in sync with ci.yml; it is
+      # deliberately duplicated rather than shared (ADR-0022 amendment).
       - name: Lint
         run: npm run lint
 
@@ -70,23 +90,82 @@ jobs:
       - name: Red-team gate
         run: node dist/cli.js redteam
 
-      # Guard: the published version must match the release tag (tag vX.Y.Z),
-      # so a forgotten version bump fails loudly instead of re-publishing.
-      # Release tags follow the vX.Y.Z convention, so the guard prepends 'v' to
-      # the package version. A tag without the 'v' fails closed here (safe): fix
-      # the tag, do not drop the 'v'.
-      # TAG comes in via env, never interpolated into the script body: a
-      # ${{ }} expression substituted into the shell text would let a crafted
-      # tag name inject commands into this job (which holds id-token: write).
-      - name: Verify version matches release tag
-        env:
-          TAG: ${{ github.event.release.tag_name }}
+      # The only channel from build to publish. Retention outlives a plausible
+      # manual-approval delay on the npm-publish environment below: if the
+      # artifact expires before an approver clicks, download-artifact fails and
+      # the release has to be re-run in full. Keep this comfortably longer than
+      # the approval SLA if required reviewers are ever enabled.
+      - name: Upload built dist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    runs-on: ubuntu-latest
+    # INVARIANT: no `if: always()` here. A failed or skipped build (including
+    # the pre-release skip) must skip this job, which the default success()
+    # condition on needs gives us.
+    needs: build
+    # Manual-approval gate. GitHub auto-creates a referenced environment with
+    # NO protection rules, so this is inert until required reviewers are added
+    # in repo Settings -> Environments. See ADR-0022 residuals: with trusted
+    # publishing, "can cut a release on this repo" is the whole publish
+    # authority, and this reviewer is the only independent check on it.
+    environment: npm-publish
+    # The ONLY job holding id-token: write. It runs no dependency code:
+    # checkout is this repo's own release commit, there is no npm ci, and
+    # --ignore-scripts keeps prepublishOnly (clean rebuild + gates, which the
+    # build job already ran as visible steps) from pulling devDependency
+    # execution back into token scope. The one disclosed exception is the
+    # pinned npm self-upgrade below (ADR-0022 amendment residual).
+    # Job permissions REPLACE the workflow block, so contents: read is
+    # restated for the checkout.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # INVARIANT: no `cache: npm` in this job. A cache restore inside token
+      # scope is a poisoning channel from lower-privileged workflows that can
+      # write the shared cache. This job installs nothing it could cache.
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; the Node 22 runner ships
+      # an older npm, so upgrade before publish. Pinned (not @latest): this is
+      # the one network pull that runs in the job holding the OIDC publish
+      # capability, so it gets the same pin discipline as the SHA-pinned
+      # actions. Bump deliberately; must stay >= 11.5.1.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@11.11.0
+
+      # INVARIANT: no `github-token` or `run-id` inputs here. Without them this
+      # action can only read artifacts from THIS run, which is what makes the
+      # build -> publish handoff unforgeable (artifacts are immutable once
+      # finalised, and only this run's build job could have written them).
+      - name: Download built dist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # Loud-fail guard: if the artifact did not land, `npm publish` from this
+      # directory would pack a tarball WITHOUT dist/ (the files allowlist just
+      # skips missing entries) and ship a broken package. Checking the two
+      # entry points npm's own pack machinery will include makes that
+      # impossible to miss.
+      - name: Verify build artifact landed
         run: |
-          PKG_VERSION="v$(node -p "require('./package.json').version")"
-          if [ "$PKG_VERSION" != "$TAG" ]; then
-            echo "package.json version $PKG_VERSION does not match release tag $TAG" >&2
-            exit 1
-          fi
+          test -s dist/index.js
+          test -s dist/cli.js
 
       - name: Publish to npm (provenance + OIDC)
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --ignore-scripts
