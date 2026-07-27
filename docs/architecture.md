@@ -133,7 +133,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
 - **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`.
 - **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
-- **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output.
+- **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)).
 
 ### Eval layer
 

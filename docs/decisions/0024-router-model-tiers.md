@@ -36,6 +36,7 @@ The default table keeps the shape ADR-0007 set, refreshed to the current generat
 - **Cost.** Fable is $10/$50 per MTok against Opus 5 at $5/$25. Three of the six default rules (high sensitivity, research, fallthrough) resolve to the top tier, so defaulting them to Fable roughly doubles baseline spend for a harness whose stated purpose includes routing work to the cheapest model that can do it.
 - **Availability.** Fable requires 30-day data retention and is not available under zero data retention. An organisation configured for ZDR receives `400 invalid_request_error` on *every* Fable request. A default that hard-fails an entire class of consumer is not a default.
 - **Unhandled response shape.** Fable can return `stop_reason: "refusal"` from its safety classifiers. `src/session/session.ts` does not currently branch on that, so a refusal would surface as an empty or partial result rather than a handled outcome. Shipping Fable as a default before that seam exists would be shipping a known gap into the happy path.
+  > **Amendment 2026-07-28 ([ADR-0025](./0025-refusal-handling.md)):** this ground no longer holds. The session layer surfaces a refusal on `SessionResult.refusal` / `stopReason`, for every model. The paragraph above is kept as the record of why Fable was not defaulted on 2026-07-27; the cost and availability grounds are unaffected and are sufficient on their own.
 
 Naming it without defaulting to it separates "the harness knows this model exists" from "the harness will spend your money on it". The split is enforced by tests, not just by this prose: `route.test.ts` asserts that no `DEFAULT_ROUTING_TABLE` rule and not `FALLTHROUGH_MODEL` selects Fable, and that a custom rule can.
 
@@ -82,7 +83,7 @@ Either class, three sourcing rules:
 
 ## Revisit if
 
-- **`stop_reason: "refusal"` gets handled in the session layer.** That removes the third objection to defaulting high-sensitivity work to Fable, at which point the cost and retention trade-offs can be weighed on their own.
+- ~~**`stop_reason: "refusal"` gets handled in the session layer.**~~ That removes the third objection to defaulting high-sensitivity work to Fable, at which point the cost and retention trade-offs can be weighed on their own. **Discharged 2026-07-28 by [ADR-0025](./0025-refusal-handling.md)**: the session layer now surfaces a refusal as a distinguishable outcome for every model. The third objection in decision 1 is spent; the cost and availability objections stand unchanged, so the nameable-not-defaulted split holds on those two grounds alone.
 - **A tier is retired upstream.** Removal is Class B and forces a decision about what the vacated rules target.
 - **A real consumer needs a model the closed union does not name.** The cheap fix is adding the member; reopening the closed-union decision should require the additive fix having actually failed them.
 - **The tier count stops matching the routing thesis.** The three defaulted tiers exist because they map onto cheap-lookup, routine-work, and hard-reasoning. If the vendor's line-up stops supporting that split, the table needs rethinking rather than renumbering.
