@@ -17,6 +17,29 @@ export interface TurnCostPayload {
   sdkSessionId: string | null;
   /** SDK result subtype ('success', 'error_max_turns', …) or null on stream error. */
   resultSubtype: string | null;
+  /**
+   * Refusal fields (ADR-0025). OPTIONAL, not because a writer may omit them —
+   * the session layer always supplies all three — but because
+   * `isTurnCostPayload` also validates on the READ path and throws on a
+   * mismatch. Required fields here would make every turn-cost row written
+   * before ADR-0025 unreadable, including `telemetry export` over an existing
+   * database. See store.test.ts 'still reads a turn-cost row written before the
+   * refusal fields existed'.
+   */
+  stopReason?: string | null;
+  /**
+   * Which channel detected a refusal, or null if none did. This is the ONLY
+   * field that is non-null whenever a refusal was detected: the SDK documents
+   * `api_refusal_category` as null "when neither source carried a category
+   * (normal, not an error)", and a no-fallback banner can arrive on a result
+   * whose `stop_reason` is not 'refusal'. Without this field such a row is
+   * indistinguishable from a clean success, which is the exact defect ADR-0025
+   * exists to remove.
+   */
+  refusalSource?: string | null;
+  refusalCategory?: string | null;
+  /** Non-null means the answering model was NOT `model` above (a fallback swap). */
+  refusalFallbackModel?: string | null;
 }
 
 /**

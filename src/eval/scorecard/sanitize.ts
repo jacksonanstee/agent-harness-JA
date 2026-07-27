@@ -1,5 +1,5 @@
 import type { RedactResult } from '../../security/index.js';
-import { sanitizeControlChars, stripBidi } from '../../internal/sanitize.js';
+import { sanitizeControlChars, stripBidi, truncateWellFormed } from '../../internal/sanitize.js';
 
 /** Stored-reason cap; toMarkdown truncates further for table cells. */
 export const MAX_REASON_LENGTH = 500;
@@ -49,16 +49,13 @@ export function escapeCell(text: string, max = 120): string {
 
 /**
  * Truncate to at most `max` chars plus an ellipsis, never bisecting a
- * surrogate pair: if a high surrogate (0xD800–0xDBFF) sits at the truncation
+ * surrogate pair: if a high surrogate (0xD800-0xDBFF) sits at the truncation
  * boundary, cut one earlier so the output stays well-formed. Every truncation
- * of scorecard text must go through this — a naive slice at ANY boundary
- * (not just this module's cap) can emit a lone surrogate.
+ * of scorecard text must go through this: a naive slice at ANY boundary (not
+ * just this module's cap) can emit a lone surrogate.
+ *
+ * Implementation hoisted to src/internal/sanitize.ts (2026-07-28) so the
+ * session layer can bound SDK tokens without an upward import; re-exported here
+ * so every existing eval consumer and its tests are unchanged.
  */
-export function truncateWellFormed(text: string, max: number): string {
-  if (text.length <= max) {
-    return text;
-  }
-  const charAtBoundary = text.charCodeAt(max - 1);
-  const cutLength = charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff ? max - 1 : max;
-  return `${text.slice(0, cutLength)}…`;
-}
+export { truncateWellFormed };

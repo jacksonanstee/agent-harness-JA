@@ -41,7 +41,14 @@ const passRow: GoldenRow = {
   pass: true,
   failureKind: null,
   reason: null,
-  volatile: { costUsd: 0.05, numTurns: 3, durationMs: 8200, resultSubtype: 'success' },
+  volatile: {
+    costUsd: 0.05,
+    numTurns: 3,
+    durationMs: 8200,
+    resultSubtype: 'success',
+    refusalSource: null,
+    refusalFallbackModel: null,
+  },
 };
 
 const failRow: GoldenRow = {
@@ -49,7 +56,14 @@ const failRow: GoldenRow = {
   pass: false,
   failureKind: 'oracle-fail',
   reason: 'expected "pong" | got\nsomething else',
-  volatile: { costUsd: null, numTurns: null, durationMs: null, resultSubtype: null },
+  volatile: {
+    costUsd: null,
+    numTurns: null,
+    durationMs: null,
+    resultSubtype: null,
+    refusalSource: null,
+    refusalFallbackModel: null,
+  },
 };
 
 function sectionFixture(overrides?: Partial<VerificationSection>): VerificationSection {

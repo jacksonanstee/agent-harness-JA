@@ -4,8 +4,10 @@ import * as barrel from './index.js';
 import type {
   AdversaryFn,
   ChallengeInput,
+  RefusalSource,
   ScanResult,
   RedactResult,
+  SessionRefusal,
   TelemetryStore,
   Verifier,
 } from './index.js';
@@ -93,8 +95,18 @@ describe('root barrel (src/index.ts)', () => {
     const findingsOf = (r: RedactResult): number => r.findings.length;
     const idOf = (v: Verifier): string => v.adversaryModelId;
     const closeOf = (s: TelemetryStore): unknown => s;
+    // SessionResult.refusal is typed SessionRefusal | null, so both are in the
+    // closure this test guards. Note WHICH gate enforces it: vitest strips
+    // types, so the runtime assertion below is near-tautological and `npm test`
+    // proves nothing here. The real check is `npm run typecheck`, which compiles
+    // this file via tsconfig.test.json; a bogus type name from the barrel is a
+    // TS2305 there. The runtime collision guard above cannot see type-only
+    // names at all (ADR-0023 residual).
+    const source: RefusalSource = 'system-event';
+    const refusal: SessionRefusal = { source, category: null, fallbackModel: null };
     expect(typeof adversary).toBe('function');
     expect(input.taskId).toBe('t');
+    expect(refusal.source).toBe('system-event');
     expect([verdictOf, findingsOf, idOf, closeOf].every((f) => typeof f === 'function')).toBe(true);
   });
 });

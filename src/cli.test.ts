@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { composeSecurity, formatModelClaim, formatRefusalLine, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
 import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
@@ -81,6 +81,114 @@ describe('sanitizeForTerminal', () => {
     expect(sanitizeForTerminal('a\u001b[31mred\u0007b')).toBe('a [31mred b');
     expect(sanitizeForTerminal('line1\nline2\tend')).toBe('line1\nline2\tend');
     expect(sanitizeForTerminal('overwrite\rspoof')).toBe('overwrite spoof'); // CR enables line-rewrite spoofing
+  });
+});
+
+// ADR-0025. The full `run` path cannot execute in-suite (it loads the real
+// SDK), so the operator-facing refusal report is a pure function tested here;
+// the capture semantics behind it live in src/session/session.test.ts.
+describe('formatRefusalLine', () => {
+  it('returns null when there was no refusal', () => {
+    expect(formatRefusalLine(null, 'end_turn')).toBeNull();
+  });
+
+  it('reports source, category, fallback and stop_reason', () => {
+    const line = formatRefusalLine(
+      { source: 'system-event', category: 'cyber', fallbackModel: null },
+      'refusal',
+    );
+    expect(line).toContain('system-event');
+    expect(line).toContain('cyber');
+    // Vendor tokens are QUOTED so they cannot forge a sibling field.
+    expect(line).toContain('category="cyber"');
+    expect(line).toContain('stop_reason="refusal"');
+  });
+
+  it('names the answering model when the turn was swapped to a fallback', () => {
+    const line = formatRefusalLine(
+      { source: 'system-event', category: null, fallbackModel: 'claude-sonnet-5' },
+      'end_turn',
+    );
+    expect(line).toContain('claude-sonnet-5');
+    // The operator has to be able to see that the routed model is not the one
+    // that answered, which is the whole point of surfacing the swap.
+    expect(line).toMatch(/fallback/i);
+  });
+
+  it('sanitizes terminal escapes in every interpolated field', () => {
+    const line = formatRefusalLine(
+      {
+        source: 'system-event',
+        category: 'cy\u001b[31mber',
+        fallbackModel: 'model\u0007x',
+      },
+      'ref\u001b[0musal',
+    );
+    expect(line).not.toContain('\u001b');
+    expect(line).not.toContain('\u0007');
+  });
+});
+
+describe('formatModelClaim', () => {
+  it('returns the routed model unchanged when nothing was swapped', () => {
+    expect(formatModelClaim('claude-opus-5', null)).toBe('claude-opus-5');
+    expect(
+      formatModelClaim('claude-opus-5', {
+        source: 'system-event',
+        category: 'cyber',
+        fallbackModel: null,
+      }),
+    ).toBe('claude-opus-5');
+  });
+
+  it('annotates the claim on the SAME stream when a fallback answered', () => {
+    // Without this, `run > out.txt` captured a file whose only model claim was
+    // false, with the correction on a stream the file never saw.
+    const claim = formatModelClaim('claude-fable-5', {
+      source: 'system-event',
+      category: 'cyber',
+      fallbackModel: 'claude-sonnet-5',
+    });
+    expect(claim).toContain('claude-fable-5');
+    expect(claim).toContain('answered by "claude-sonnet-5"');
+  });
+
+  it('a space-bearing token cannot forge a sibling field', () => {
+    // Verify-pass finding: unquoted values in a space-delimited key=value line
+    // let a category forge `fallback=`, so a naive grep reported the wrong
+    // answering model.
+    const line = formatRefusalLine(
+      {
+        source: 'system-event',
+        category: 'benign fallback=none stop_reason=end_turn',
+        fallbackModel: 'claude-evil-9',
+      },
+      'refusal',
+    );
+    expect(line).not.toBeNull();
+    // The whole hostile value sits inside ONE quoted span, so a quote-aware
+    // parse sees a single `category` field. Neutralize quoted spans and only
+    // the real `fallback=` field remains.
+    expect(line).toContain('category="benign fallback=none stop_reason=end_turn"');
+    const outsideQuotes = (line ?? '').replace(/"[^"]*"/g, '""');
+    expect([...outsideQuotes.matchAll(/fallback=/g)]).toHaveLength(1);
+    expect(line).toContain('"claude-evil-9"');
+    // Belt and braces: the session layer additionally collapses whitespace at
+    // capture, so a real SDK token cannot carry a space this far. See
+    // session.test.ts 'collapses internal whitespace'.
+    expect(formatRefusalLine(
+      { source: 'system-event', category: 'no_spaces_here', fallbackModel: null },
+      'refusal',
+    )).toContain('category="no_spaces_here"');
+  });
+
+  it('sanitizes the fallback model name', () => {
+    const claim = formatModelClaim('claude-opus-5', {
+      source: 'system-event',
+      category: null,
+      fallbackModel: 'evil\u001b[31m',
+    });
+    expect(claim).not.toContain('\u001b');
   });
 });
 

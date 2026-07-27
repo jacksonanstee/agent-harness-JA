@@ -1023,4 +1023,374 @@ describe('createSession', () => {
       await expect(session.run('hi')).resolves.toBeDefined();
     });
   });
+
+  // Issue #38 / ADR-0025. Three channels are read because no single one is
+  // sufficient: the banners are absent from older CLIs, and `stop_reason` alone
+  // carries neither the category nor the fallback model.
+  describe('refusal handling (ADR-0025)', () => {
+    const REFUSAL_ERROR_RESULT: SdkMessage = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      session_id: 'sdk-123',
+      num_turns: 1,
+      total_cost_usd: 0.02,
+      stop_reason: 'refusal',
+    };
+
+    it('no fallback: reports the refusal from the banner, with null resultText', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        original_model: 'claude-fable-5',
+        api_refusal_category: 'cyber',
+        session_id: 'sdk-123',
+      };
+      const warnings: string[] = [];
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), {
+        skillsDir: null,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      const result = await session.run('something the classifier dislikes');
+
+      expect(result.refusal).toEqual({
+        source: 'system-event',
+        category: 'cyber',
+        fallbackModel: null,
+      });
+      expect(result.stopReason).toBe('refusal');
+      // The banner's prose must never be laundered into the field that means
+      // "the answer".
+      expect(result.resultText).toBeNull();
+      expect(result.resultSubtype).toBe('error_during_execution');
+      expect(warnings.some((w) => w.includes('refusal'))).toBe(true);
+    });
+
+    it('fallback swap: records the answering model, which is NOT the routed one', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        original_model: 'claude-fable-5',
+        fallback_model: 'claude-sonnet-5',
+        api_refusal_category: 'cyber',
+        session_id: 'sdk-123',
+      };
+      const success: SdkMessage = {
+        type: 'result',
+        subtype: 'success',
+        result: 'answer from the fallback',
+        session_id: 'sdk-123',
+        num_turns: 1,
+        total_cost_usd: 0.03,
+        stop_reason: 'end_turn',
+      };
+      const warnings: string[] = [];
+      const fake = fakeQuery([INIT, ASSISTANT, banner, success]);
+      const session = createSession(makeDeps(fake), {
+        skillsDir: null,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      const result = await session.run('hard question');
+
+      expect(result.refusal?.fallbackModel).toBe('claude-sonnet-5');
+      expect(result.refusal?.source).toBe('system-event');
+      // The run genuinely succeeded, so the subtype and the answer stand; the
+      // point is that the swap is no longer silent.
+      expect(result.resultSubtype).toBe('success');
+      expect(result.resultText).toBe('answer from the fallback');
+      expect(result.stopReason).toBe('end_turn');
+      expect(warnings.some((w) => w.includes('claude-sonnet-5'))).toBe(true);
+    });
+
+    it('older CLI with no banner: falls back to stop_reason on the result', async () => {
+      const fake = fakeQuery([INIT, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('refused');
+
+      expect(result.refusal).toEqual({
+        source: 'result-stop-reason',
+        category: null,
+        fallbackModel: null,
+      });
+    });
+
+    it('never downgrades a banner record to the thinner result-derived one', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        api_refusal_category: 'bio',
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('refused');
+
+      expect(result.refusal?.source).toBe('system-event');
+      expect(result.refusal?.category).toBe('bio');
+    });
+
+    it('ordinary success: stopReason is captured and refusal stays null', async () => {
+      const success: SdkMessage = { ...(RESULT as object), stop_reason: 'end_turn' } as SdkMessage;
+      const fake = fakeQuery([INIT, ASSISTANT, success]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('hello');
+
+      expect(result.refusal).toBeNull();
+      expect(result.stopReason).toBe('end_turn');
+    });
+
+    it('absent stop_reason yields null, not undefined', async () => {
+      const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('hello');
+
+      expect(result.stopReason).toBeNull();
+      expect(result.refusal).toBeNull();
+    });
+
+    it('sanitizes the category, and persists the refusal to memory and telemetry', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        fallback_model: 'claude-sonnet-5\u001b[31m',
+        api_refusal_category: 'cy\u001b[31mber\u0007',
+        session_id: 'sdk-123',
+      };
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const deps = makeDeps(fake, { telemetry });
+      const session = createSession(deps, { skillsDir: null, turnId: 'turn-1' });
+
+      const result = await session.run('refused');
+
+      // Sanitized at capture, so every downstream sink inherits a clean value.
+      expect(result.refusal?.category).not.toContain('\u001b');
+      expect(result.refusal?.category).not.toContain('\u0007');
+      expect(result.refusal?.fallbackModel).not.toContain('\u001b');
+
+      const row = deps.memory.read({ type: 'project' })[0];
+      const content = JSON.parse(row?.content ?? '{}') as {
+        stopReason: string | null;
+        refusal: { category: string | null; fallbackModel: string | null } | null;
+      };
+      expect(content.stopReason).toBe('refusal');
+      expect(content.refusal?.category).not.toContain('\u001b');
+
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('expected a turn-cost event');
+      expect(cost.payload.stopReason).toBe('refusal');
+      expect(cost.payload.refusalCategory).not.toContain('\u001b');
+      expect(cost.payload.refusalFallbackModel).not.toContain('\u001b');
+    });
+
+    it('detects a refusal whose stop_reason carries a trailing smuggled char', async () => {
+      // Verify-pass finding: cleaning substitutes SPACES, so without a trim
+      // "refusal<U+202E>" became "refusal " and missed the === comparison. One
+      // trailing char disabled the entire second detection channel, which is
+      // the only channel on a CLI old enough to omit the banners.
+      for (const raw of ['refusal\u202e', '\u202erefusal', 'refusal\t', 'refusal\u00a0']) {
+        const hostile: SdkMessage = {
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 'sdk-123',
+          stop_reason: raw,
+        };
+        const fake = fakeQuery([INIT, hostile]);
+        const session = createSession(makeDeps(fake), { skillsDir: null });
+
+        const result = await session.run('smuggled trailing char');
+
+        expect(result.stopReason, `raw: ${JSON.stringify(raw)}`).toBe('refusal');
+        expect(result.refusal?.source, `raw: ${JSON.stringify(raw)}`).toBe('result-stop-reason');
+      }
+    });
+
+    it('collapses internal whitespace, so a token cannot forge a delimited field', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        fallback_model: 'claude-evil-9 fallback=claude-sonnet-5',
+        api_refusal_category: 'benign stop_reason=end_turn',
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('forgery attempt');
+
+      expect(result.refusal?.category).not.toMatch(/\s/);
+      expect(result.refusal?.fallbackModel).not.toMatch(/\s/);
+      expect(result.refusal?.fallbackModel).toContain('claude-evil-9');
+    });
+
+    it('truncates a token without splitting a surrogate pair', async () => {
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        api_refusal_category: `x${'\u{1F600}'.repeat(60)}`,
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('emoji category');
+
+      // A lone surrogate survives JSON but becomes U+FFFD through
+      // TextEncoder/Buffer, and this is a public API field.
+      expect(result.refusal?.category).toBeDefined();
+      // Deliberately NOT String.prototype.isWellFormed(): that needs the ES2024
+      // lib, and a project-wide lib bump smuggled in as a "fix" had to be
+      // reverted once already. This regex is the same property, explicitly.
+      const loneSurrogate =
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+      expect(loneSurrogate.test(result.refusal?.category ?? '')).toBe(false);
+    });
+
+    it('cleans and bounds stopReason too, not just its two sibling tokens', async () => {
+      // `stop_reason` is an open SDK string reaching the same three sinks as
+      // category/fallbackModel, so leaving it raw while bounding the others was
+      // an inconsistency rather than a considered exception.
+      const hostileResult: SdkMessage = {
+        type: 'result',
+        subtype: 'error_during_execution',
+        session_id: 'sdk-123',
+        num_turns: 1,
+        stop_reason: `refusal\u001b[31m\u202e${'y'.repeat(400)}`,
+      };
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, hostileResult]);
+      const deps = makeDeps(fake, { telemetry });
+      const session = createSession(deps, { skillsDir: null, turnId: 'turn-1' });
+
+      const result = await session.run('hostile stop reason');
+
+      expect(result.stopReason).not.toContain('\u001b');
+      expect(result.stopReason).not.toContain('\u202e');
+      expect(result.stopReason?.length).toBeLessThanOrEqual(101);
+
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('expected a turn-cost event');
+      expect(cost.payload.stopReason).not.toContain('\u202e');
+
+      const row = deps.memory.read({ type: 'project' })[0];
+      expect(row?.content).not.toContain('\u202e');
+    });
+
+    it('a zero-width-smuggled refusal still detects, because cleaning runs first', async () => {
+      // Direction matters: stripInvisibles DELETES zero-width chars, so
+      // 'refu<ZWSP>sal' becomes exactly 'refusal' and IS detected. Detecting
+      // more refusals is the fail-loud direction, and is deliberate.
+      const smuggled: SdkMessage = {
+        type: 'result',
+        subtype: 'error_during_execution',
+        session_id: 'sdk-123',
+        stop_reason: 'refu\u200bsal',
+      };
+      const fake = fakeQuery([INIT, smuggled]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('smuggled');
+
+      expect(result.stopReason).toBe('refusal');
+      expect(result.refusal?.source).toBe('result-stop-reason');
+    });
+
+    it('strips bidi and invisible smuggling chars from the refusal tokens, and bounds them', async () => {
+      // Review finding, empirically demonstrated: control-char sanitization
+      // alone let U+202E (RLO) survive to the stderr line whose whole job is to
+      // tell an operator a DIFFERENT model answered. A bidi override there
+      // defeats that guarantee visually, so these tokens get the same charset
+      // contract as skill text.
+      const banner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        fallback_model: `claude-sonnet-5\u202egnol-yrev`,
+        api_refusal_category: `cy\u200bber${'x'.repeat(500)}`,
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, banner, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('refused');
+
+      expect(result.refusal?.fallbackModel).not.toContain('\u202e');
+      expect(result.refusal?.category).not.toContain('\u200b');
+      // Zero-width chars are DELETED, not spaced (they occupy no visual width).
+      expect(result.refusal?.category?.startsWith('cyber')).toBe(true);
+      // Bounded: an open string must not reach a retained sink unbounded.
+      expect(result.refusal?.category?.length).toBeLessThanOrEqual(101);
+    });
+
+    it('records the refusal in telemetry even when the banner carries no category', async () => {
+      // The SDK documents api_refusal_category as "null when neither source
+      // carried a category (normal, not an error)", so this is an ordinary
+      // state, not drift. Without refusalSource the row would be byte-identical
+      // in meaning to a clean success, which reintroduces the very defect
+      // ADR-0025 exists to remove, at the sink meant to be the durable record.
+      const bareBanner: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        session_id: 'sdk-123',
+      };
+      const nonRefusalResult: SdkMessage = {
+        type: 'result',
+        subtype: 'error_during_execution',
+        session_id: 'sdk-123',
+        num_turns: 1,
+        stop_reason: 'end_turn',
+      };
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, bareBanner, nonRefusalResult]);
+      const deps = makeDeps(fake, { telemetry });
+      const session = createSession(deps, { skillsDir: null, turnId: 'turn-1' });
+
+      const result = await session.run('refused');
+
+      expect(result.refusal?.source).toBe('system-event');
+      expect(result.refusal?.category).toBeNull();
+
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('expected a turn-cost event');
+      // The single field that is non-null whenever a refusal was detected.
+      expect(cost.payload.refusalSource).toBe('system-event');
+      expect(cost.payload.refusalCategory).toBeNull();
+      expect(cost.payload.stopReason).toBe('end_turn');
+
+      const row = deps.memory.read({ type: 'project' })[0];
+      const content = JSON.parse(row?.content ?? '{}') as {
+        refusal: { source: string } | null;
+      };
+      expect(content.refusal?.source).toBe('system-event');
+    });
+
+    it('a later banner wins, so a fallback that then refuses reports the terminal truth', async () => {
+      const swap: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_fallback',
+        fallback_model: 'claude-sonnet-5',
+        api_refusal_category: 'cyber',
+        session_id: 'sdk-123',
+      };
+      const thenRefused: SdkMessage = {
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        original_model: 'claude-sonnet-5',
+        api_refusal_category: 'cyber',
+        session_id: 'sdk-123',
+      };
+      const fake = fakeQuery([INIT, swap, thenRefused, REFUSAL_ERROR_RESULT]);
+      const session = createSession(makeDeps(fake), { skillsDir: null });
+
+      const result = await session.run('refused twice');
+
+      expect(result.refusal?.fallbackModel).toBeNull();
+      expect(result.refusal?.source).toBe('system-event');
+    });
+  });
 });

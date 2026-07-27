@@ -67,6 +67,11 @@ function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+/** Absent is allowed (older rows); present-but-wrong-typed is not. */
+function isOptionalStringOrNull(value: unknown): value is string | null | undefined {
+  return value === undefined || isStringOrNull(value);
+}
+
 function isFiniteOrNull(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value));
 }
@@ -92,7 +97,13 @@ function isTurnCostPayload(value: unknown): value is TurnCostPayload {
     isFiniteOrNull(value.numTurns) &&
     (value.usage === null || isTurnUsage(value.usage)) &&
     isStringOrNull(value.sdkSessionId) &&
-    isStringOrNull(value.resultSubtype)
+    isStringOrNull(value.resultSubtype) &&
+    // Optional so rows written before ADR-0025 still validate on read; a
+    // PRESENT field of the wrong type is still a hard failure.
+    isOptionalStringOrNull(value.stopReason) &&
+    isOptionalStringOrNull(value.refusalSource) &&
+    isOptionalStringOrNull(value.refusalCategory) &&
+    isOptionalStringOrNull(value.refusalFallbackModel)
   );
 }
 
@@ -125,6 +136,15 @@ function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
 }
 
 /**
+ * Preserves absence: an omitted optional field stays omitted once serialized
+ * (JSON.stringify drops undefined), so an old-shape write stays old-shape.
+ */
+function sanitizeOptional(value: string | null | undefined): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  return sanitizeText(value);
+}
+
+/**
  * Sanitizes the attacker-influenceable string fields of a validated payload.
  * Returns a new object (immutability: callers' inputs are never mutated).
  */
@@ -137,6 +157,12 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       ruleId: sanitizeText(p.ruleId),
       sdkSessionId: p.sdkSessionId === null ? null : sanitizeText(p.sdkSessionId),
       resultSubtype: p.resultSubtype === null ? null : sanitizeText(p.resultSubtype),
+      // Sanitized again here rather than trusting the caller: this store is a
+      // public factory, so a direct writer need not have gone through session.ts.
+      stopReason: sanitizeOptional(p.stopReason),
+      refusalSource: sanitizeOptional(p.refusalSource),
+      refusalCategory: sanitizeOptional(p.refusalCategory),
+      refusalFallbackModel: sanitizeOptional(p.refusalFallbackModel),
     };
   }
   if (event.type === 'tool-trace') {

@@ -43,11 +43,48 @@ export interface SdkResultMessage {
   num_turns?: number;
   total_cost_usd?: number;
   usage?: SdkUsage;
+  /**
+   * Why the model stopped. The SDK declares this on BOTH result variants
+   * (success and error) as an open `string | null`; declared optional here so
+   * drift yields null rather than undefined-typed-as-string. `'refusal'` is the
+   * value this harness branches on (ADR-0025).
+   */
+  stop_reason?: string | null;
+}
+
+/**
+ * The SDK's two refusal banners (ADR-0025). `model_refusal_no_fallback` ends the
+ * turn as an error; `model_refusal_fallback` means the turn was retried on
+ * `fallback_model` and the swap was made persistent for the session, so the
+ * answering model is NOT the one the router chose.
+ *
+ * Both are documented by the SDK as absent from older CLIs, which is why
+ * `SdkResultMessage.stop_reason` is read as a second, independent channel.
+ * `api_refusal_explanation` and the banners' required `content` field are
+ * deliberately not modelled: both are model-authored prose (the SDK calls the
+ * explanation unstable, display-only) and capturing either would open a new
+ * untrusted channel into two retained sinks. ADR-0025 decision 2.
+ *
+ * `original_model` is declared but deliberately unread, which is a narrow
+ * exception to ADR-0010's "only the fields the harness reads": it is part of the
+ * banner contract this type documents, and the test fixtures set it for
+ * fidelity. The harness does NOT reconcile it against `modelChoice.model`; the
+ * answering model is reported via `fallback_model` instead.
+ */
+export interface SdkModelRefusalMessage {
+  type: 'system';
+  subtype: 'model_refusal_no_fallback' | 'model_refusal_fallback';
+  original_model?: string;
+  fallback_model?: string;
+  /** Open string: new categories ship on the wire ahead of schema updates. */
+  api_refusal_category?: string | null;
+  session_id?: string;
 }
 
 export type SdkMessage =
   | SdkSystemMessage
   | SdkAssistantMessage
+  | SdkModelRefusalMessage
   | SdkResultMessage
   | { type: string };
 
@@ -145,10 +182,43 @@ export interface DeniedToolCall {
   reason: string;
 }
 
+/**
+ * Which channel the refusal was detected on. `system-event` is the richer one
+ * (it can carry a category and a fallback model); `result-stop-reason` is the
+ * fallback channel that still works on CLIs old enough to omit the banner.
+ */
+export type RefusalSource = 'result-stop-reason' | 'system-event';
+
+/**
+ * A model-side refusal, surfaced so a consumer can tell it apart from an empty
+ * success (ADR-0025, residual risk R-14).
+ */
+export interface SessionRefusal {
+  source: RefusalSource;
+  /** Refusal category ('cyber', 'bio', …), sanitized at capture. Null when the channel carried none. */
+  category: string | null;
+  /**
+   * The model the turn was retried on, when the SDK reported a persistent
+   * fallback swap. Non-null here means the answer did NOT come from
+   * `SessionResult.modelChoice.model` (ADR-0025 §4).
+   */
+  fallbackModel: string | null;
+}
+
 export interface SessionResult {
   resultText: string | null;
   /** SDK result subtype, e.g. 'success' or 'error_max_turns'; null if no result message arrived. */
   resultSubtype: string | null;
+  /** Raw SDK `stop_reason` passthrough; null if absent or no result message arrived. */
+  stopReason: string | null;
+  /**
+   * Non-null when the model refused. Distinguishing a refusal from an empty
+   * success is the whole point (ADR-0025): `resultText` stays null on a refusal
+   * and the banner's prose is never laundered into it. Note that a *successful*
+   * fallback still reports `resultSubtype: 'success'` with a real answer, so
+   * `refusal !== null` does not by itself mean the run failed.
+   */
+  refusal: SessionRefusal | null;
   /** SDK session id when the stream provided one, else the harness-generated id. */
   sessionId: string;
   modelChoice: ModelChoice;

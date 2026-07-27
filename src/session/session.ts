@@ -8,15 +8,22 @@ import type {
   SdkAssistantMessage,
   SdkHookCallback,
   SdkMessage,
+  SdkModelRefusalMessage,
   SdkResultMessage,
   SdkSystemMessage,
   SdkTextBlock,
   Session,
   SessionConfig,
   SessionDeps,
+  SessionRefusal,
   SessionResult,
 } from './types.js';
-import { sanitizeControlChars, stripBidi, stripInvisibles } from '../internal/sanitize.js';
+import {
+  sanitizeControlChars,
+  stripBidi,
+  stripInvisibles,
+  truncateWellFormed,
+} from '../internal/sanitize.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -64,6 +71,98 @@ function isAssistant(message: SdkMessage): message is SdkAssistantMessage {
 
 function isResult(message: SdkMessage): message is SdkResultMessage {
   return message.type === 'result';
+}
+
+/**
+ * The SDK's refusal banners (ADR-0025). Absent from older CLIs, hence the
+ * second channel.
+ *
+ * Declared as an exhaustive record keyed by the message's own `subtype` union,
+ * NOT as a `ReadonlySet<...subtype>`. The set form looks like it pins the two
+ * declarations together but does not: method-parameter bivariance makes
+ * `Set<'a'|'b'>` assignable to `ReadonlySet<'a'|'b'|'c'>`, so widening the union
+ * and forgetting the runtime gate compiles clean (verified with tsc), which is
+ * precisely the silent-detection-gap direction that matters. A keyed record
+ * fails both ways: a new union member is a missing-property error, and a
+ * removed one is an excess-property error. The Set is derived from its keys so
+ * there is one source of truth and `has()` stays prototype-safe.
+ */
+const REFUSAL_SUBTYPE_GATE: Record<SdkModelRefusalMessage['subtype'], true> = {
+  model_refusal_no_fallback: true,
+  model_refusal_fallback: true,
+};
+
+const REFUSAL_SUBTYPES: ReadonlySet<string> = new Set(Object.keys(REFUSAL_SUBTYPE_GATE));
+
+function isModelRefusal(message: SdkMessage): message is SdkModelRefusalMessage {
+  return (
+    message.type === 'system' &&
+    REFUSAL_SUBTYPES.has((message as SdkModelRefusalMessage).subtype)
+  );
+}
+
+/**
+ * Cap on a short SDK-supplied token before it reaches a retained sink. The SDK
+ * calls both `api_refusal_category` and `stop_reason` open strings ("new
+ * categories ship on the wire ahead of schema updates"), so nothing in the
+ * contract bounds either to a short token, and every other persisted string in
+ * this module is bounded.
+ */
+const SDK_TOKEN_LIMIT = 100;
+
+/**
+ * Cleans a short SDK token (`api_refusal_category`, `fallback_model`,
+ * `stop_reason`). Same charset contract as `cleanSkillText`, for the same
+ * reason: these values reach a terminal line whose whole job is to tell an
+ * operator that a DIFFERENT model answered their turn, so a bidi override that
+ * visually reorders a model name defeats the one guarantee the line makes.
+ * Control chars alone are not enough (review finding, empirically
+ * demonstrated: U+202E survived `sanitizeControlChars` and
+ * `sanitizeForTerminal` all the way to stderr). Bounded too, because an open
+ * string reaching two retained sinks needs a cap.
+ *
+ * NOT for prose: `truncate` (200 chars, redacted first) owns `resultText` and
+ * `prompt`. This is for short vendor tokens only.
+ */
+function cleanSdkToken(text: string): string {
+  // Trimmed because stripping substitutes SPACES: without it, `stop_reason`
+  // values like "refusal<U+202E>" clean to "refusal " and silently miss the
+  // === 'refusal' comparison, so a single trailing smuggled char disabled the
+  // whole second detection channel (verify-pass finding). Also kills the
+  // leading-space variant.
+  // Internal whitespace collapses to '_': none of these tokens legitimately
+  // contains a space ('cyber', 'claude-sonnet-5', 'end_turn'), and the two
+  // `[harness]` lines are space-delimited `key=value` pairs, so a space-bearing
+  // token could forge a sibling field. Quoting at the sink is belt-and-braces;
+  // this closes it even for a naive `grep -o 'fallback=[^ ]*'` (verify-pass
+  // finding). Runs after the strip pass, which itself substitutes spaces.
+  const clean = stripInvisibles(stripBidi(sanitizeControlChars(text)))
+    .trim()
+    .replace(/\s+/g, '_');
+  // Well-formed: a naive slice can emit a lone surrogate, and these values
+  // reach a public API field.
+  return truncateWellFormed(clean, SDK_TOKEN_LIMIT);
+}
+
+/**
+ * Reads a banner into the surfaced shape. The category and the fallback model
+ * are sanitized HERE, at capture, so every downstream sink (result, memory,
+ * telemetry, terminal) inherits a clean value rather than each re-deriving it.
+ *
+ * The banner's `content` field (and `api_refusal_explanation`) are deliberately
+ * never read: both are model-authored prose, and capturing either would open a
+ * new untrusted-prose channel into two retained sinks (ADR-0025 decision 2).
+ */
+function refusalFromBanner(message: SdkModelRefusalMessage): SessionRefusal {
+  const category =
+    typeof message.api_refusal_category === 'string'
+      ? cleanSdkToken(message.api_refusal_category)
+      : null;
+  const fallbackModel =
+    message.subtype === 'model_refusal_fallback' && typeof message.fallback_model === 'string'
+      ? cleanSdkToken(message.fallback_model)
+      : null;
+  return { source: 'system-event', category, fallbackModel };
 }
 
 function assistantText(message: SdkAssistantMessage): string[] {
@@ -374,6 +473,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     let resultText: string | null = null;
     let resultSubtype: string | null = null;
+    let stopReason: string | null = null;
+    let refusal: SessionRefusal | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
     let numTurns: number | null = null;
@@ -405,6 +506,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       for await (const message of stream) {
         if (isSystemInit(message) && message.session_id) {
           sdkSessionId = message.session_id;
+        } else if (isModelRefusal(message)) {
+          // Later banner wins: a turn that falls back and then refuses again
+          // must report the terminal truth, not the intermediate swap.
+          refusal = refusalFromBanner(message);
+          warn(
+            refusal.fallbackModel === null
+              ? `model refusal (category=${refusal.category ?? 'unknown'}): no fallback model ` +
+                `configured, so the turn ended without an answer`
+              : `model refusal (category=${refusal.category ?? 'unknown'}): retried on fallback ` +
+                `model ${refusal.fallbackModel}, which is NOT the routed model ${modelChoice.model}`,
+          );
         } else if (isAssistant(message)) {
           for (const text of assistantText(message)) {
             config.onText?.(text);
@@ -413,9 +525,25 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           if (message.session_id) sdkSessionId = message.session_id;
           resultText = message.result ?? null;
           resultSubtype = message.subtype ?? null;
+          // Cleaned and bounded like the banner tokens: `stop_reason` is an
+          // equally open SDK string reaching the same three sinks (result,
+          // memory summary, telemetry) plus the terminal, so leaving it raw
+          // while bounding its siblings would be an inconsistency, not a
+          // considered exception. Cleaning happens BEFORE the comparison
+          // below, deliberately: 'refu<ZWSP>sal' collapses to 'refusal' and is
+          // detected, which is the fail-loud direction.
+          stopReason =
+            typeof message.stop_reason === 'string' ? cleanSdkToken(message.stop_reason) : null;
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
+          // Second, independent channel: works on CLIs old enough to omit the
+          // banner. Never downgrades a banner record, which carries strictly
+          // more (category, fallback model).
+          if (stopReason === 'refusal' && refusal === null) {
+            refusal = { source: 'result-stop-reason', category: null, fallbackModel: null };
+            warn('model refused the turn (stop_reason=refusal; no refusal banner on this stream)');
+          }
         }
       }
     } catch (error: unknown) {
@@ -458,6 +586,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
               },
         sdkSessionId,
         resultSubtype,
+        stopReason,
+        refusalSource: refusal?.source ?? null,
+        refusalCategory: refusal?.category ?? null,
+        refusalFallbackModel: refusal?.fallbackModel ?? null,
       },
     });
 
@@ -483,6 +615,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         model: modelChoice.model,
         rule_id: modelChoice.rule_id,
         resultSubtype,
+        stopReason,
+        // Already sanitized at capture; no redaction pass needed because these
+        // are short vendor-supplied tokens, not model or tool prose.
+        refusal,
         resultText: truncate(redactForPersistence(resultText)),
         denied,
         failed: streamError !== null,
@@ -499,6 +635,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     return {
       resultText,
       resultSubtype,
+      stopReason,
+      refusal,
       sessionId,
       modelChoice,
       usage,
