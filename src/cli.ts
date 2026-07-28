@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   composeSecurity,
+  escapeJsonText,
   hookRecordToTelemetryInput,
   sanitizeForTerminal,
   SettingsLoadError,
@@ -186,15 +187,28 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     if (args.sessionId !== null) filter.sessionId = args.sessionId;
     if (args.type !== null) filter.type = args.type;
     const events = store.query(filter);
-    // Stored payload strings are sanitized on write and JSON.stringify escapes
-    // any remaining control characters, but stdout still gets a terminal
-    // sanitize pass — defense in depth against future schema drift.
+    // JSON.stringify escapes C0 controls and lone surrogates and NOTHING ELSE:
+    // U+007F, the whole C1 block, U+2028/U+2029 and every bidi/invisible
+    // character reach the output RAW (swept, cli/shared.test.ts). Neither is
+    // `sessionId`/`turnId` sanitized on the write path (record() sanitizes only
+    // the payload), so a hostile id arrives here verbatim. escapeJsonText
+    // re-encodes each of those as a `\uXXXX` JSON escape: valid JSON that
+    // parses back to the identical value, so the export stays lossless for
+    // machine consumers while the file is safe to `cat`.
+    //
+    // Applied ONCE to the whole body so the two sinks are byte-identical. The
+    // previous stdout-only `sanitizeForTerminal` pass was both insufficient
+    // (bidi passed straight through) and lossy (it substituted a space, so the
+    // stdout copy of a row parsed to a DIFFERENT value than the --out copy).
+    // It is not kept as a second pass: JSON_TEXT_UNSAFE is derived from
+    // TERMINAL_UNSAFE, so it is a superset by construction and the pass would
+    // be a no-op. The containment test enforces that instead.
     const lines = events.map((event) => JSON.stringify(event)).join('\n');
-    const body = events.length > 0 ? `${lines}\n` : '';
+    const body = escapeJsonText(events.length > 0 ? `${lines}\n` : '');
     if (args.out !== null) {
       writeFileSync(args.out, body);
     } else {
-      process.stdout.write(sanitizeForTerminal(body));
+      process.stdout.write(body);
     }
     return 0;
   } finally {

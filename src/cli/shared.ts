@@ -36,6 +36,63 @@ export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
 }
 
+/**
+ * Everything TERMINAL_UNSAFE covers PLUS the invisible/reordering classes that
+ * must never reach a JSONL file raw. DERIVED from TERMINAL_UNSAFE.source, not
+ * re-typed: escapeJsonText REPLACES sanitizeForTerminal on the export path, so
+ * it has to be a strict superset, and a second hand-copied edition of those
+ * ranges is exactly how the two would drift apart unnoticed.
+ *
+ * A PROPERTY, not a list. src/internal/sanitize.ts lost U+2065 to a
+ * hand-enumerated invisible class; \p{Default_Ignorable_Code_Point} is a
+ * swept-verified superset of that file's BIDI_CONTROLS (shared.test.ts), so
+ * naming the bidi ranges again here would add a second place to get wrong and
+ * no coverage. U+FFF9-FFFB are Cf but NOT default-ignorable, so they are named
+ * explicitly, mirroring INVISIBLES.
+ *
+ * NOT widened to \p{Cf}: the 29 code points in Cf but not here are Arabic
+ * number signs, Kaithi/Brahmi number joiners and Egyptian hieroglyph format
+ * controls, all legitimate script content that neither reorders nor hides
+ * text. TAB and LF are deliberately absent: JSON.stringify escapes both INSIDE
+ * a string, and a raw LF is the JSONL record delimiter.
+ */
+export const JSON_TEXT_UNSAFE = new RegExp(
+  `[${TERMINAL_UNSAFE.source.slice(1, -1)}\\p{Default_Ignorable_Code_Point}\\uFFF9-\\uFFFB]`,
+  'gu',
+);
+
+/**
+ * Re-encodes every JSON_TEXT_UNSAFE character in ALREADY-SERIALIZED JSON as a
+ * `\uXXXX` escape. Lossless: such an escape is valid JSON and JSON.parse
+ * returns the identical value, so machine consumers are unaffected while
+ * `cat`ing the file is safe. This is OUTPUT ENCODING. It deliberately does not
+ * change what is stored, and it belongs beside TERMINAL_UNSAFE rather than in
+ * src/internal/sanitize.ts.
+ *
+ * PRECONDITION: `json` MUST be JSON.stringify output (or a `\n`-join of such).
+ * Correctness rests on JSON.stringify having already doubled every literal
+ * backslash, which makes any backslash run preceding a target even-length so
+ * the inserted escape always starts fresh. Fed raw text, a lone `\` before a
+ * target yields `\\uXXXX`, which reads back as a backslash followed by the
+ * literal text `uXXXX`: silent corruption.
+ *
+ * Four-digit `\uXXXX` per UTF-16 CODE UNIT, NOT escapePathUnsafe's braced
+ * `\u{HEX}`: JSON has no braced form, so an astral target must be emitted as
+ * its surrogate PAIR: U+E0001 becomes the escape pair DB40 then DC01, which
+ * JSON.parse recombines. The `for` loop over `.length` is load-bearing: a
+ * spread or for-of iterates CODE POINTS and would emit ONE five-hex-digit
+ * escape for U+E0001, which JSON.parse reads as U+E000 plus a literal 1.
+ */
+export function escapeJsonText(json: string): string {
+  return json.replace(JSON_TEXT_UNSAFE, (match) => {
+    let out = '';
+    for (let index = 0; index < match.length; index += 1) {
+      out += `\\u${match.charCodeAt(index).toString(16).padStart(4, '0').toUpperCase()}`;
+    }
+    return out;
+  });
+}
+
 /** Filesystem-safe scorecard timestamp (spec: arbiter condition 2 — no colons). */
 export function scorecardFilename(nowMs: number): string {
   const stamp = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-');

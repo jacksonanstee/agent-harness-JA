@@ -317,6 +317,110 @@ describe('main (telemetry export)', () => {
     return path;
   }
 
+  // Escape literals only, never raw bytes in test source: this repo has already
+  // shipped a defect from asserting on the escaped TEXT of a hostile string
+  // rather than the raw BYTES it carried.
+  const RLO = '\u202E';
+  const ZWSP = '\u200B';
+  const LINE_SEPARATOR = '\u2028';
+  const DEL = '\u007F';
+  const CSI = '\u009B';
+  const HOSTILE_CHARS: readonly string[] = [RLO, ZWSP, LINE_SEPARATOR, DEL, CSI];
+  // sessionId is NOT sanitized on the write path (record() sanitizes only the
+  // payload), so this arrives at the exporter verbatim.
+  const HOSTILE_SESSION = `s${RLO}${LINE_SEPARATOR}${DEL}${CSI}1`;
+  // A payload field that IS sanitized on write, proving the point the deleted
+  // comment got wrong: sanitizeText spaces control chars but passes bidi and
+  // zero-width characters through untouched.
+  const HOSTILE_REASON = `x${ZWSP}`;
+
+  function hostileDb(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-hostile-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    const store = createTelemetryStore(db);
+    store.record({
+      type: 'hook-event',
+      sessionId: HOSTILE_SESSION,
+      turnId: 't1',
+      ts: 100,
+      payload: { kind: 'hook-fired', event: 'session-start', handlersFired: 0 },
+    });
+    store.record({
+      type: 'hook-event',
+      sessionId: 's2',
+      turnId: 't2',
+      ts: 200,
+      payload: { kind: 'hook-error', event: 'stop', reason: HOSTILE_REASON, handlerIndex: 0 },
+    });
+    db.close();
+    return path;
+  }
+
+  function outPath(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-hostile-out-'));
+    tmpDirs.push(dir);
+    return join(dir, 'events.jsonl');
+  }
+
+  async function exportToStdout(dbPath: string): Promise<{ code: number; written: string }> {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      const code = await main(['telemetry', 'export', '--db', dbPath]);
+      return { code, written: chunks.join('') };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('writes no raw bidi or invisible byte to --out', async () => {
+    const path = hostileDb();
+    const out = outPath();
+    expect(await main(['telemetry', 'export', '--db', path, '--out', out])).toBe(0);
+    // Byte level, not string level: a string comparison against escaped text
+    // is the assertion that cannot fail.
+    const bytes = readFileSync(out);
+    for (const char of HOSTILE_CHARS) {
+      const label = `U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}`;
+      expect(bytes.includes(Buffer.from(char, 'utf8')), label).toBe(false);
+    }
+  });
+
+  it('writes no raw bidi or invisible byte to stdout', async () => {
+    const path = hostileDb();
+    const { code, written } = await exportToStdout(path);
+    expect(code).toBe(0);
+    for (const char of HOSTILE_CHARS) {
+      const label = `U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}`;
+      expect(Buffer.from(written, 'utf8').includes(Buffer.from(char, 'utf8')), label).toBe(false);
+    }
+  });
+
+  it('emits byte-identical output to --out and stdout for the same query', async () => {
+    const path = hostileDb();
+    const out = outPath();
+    expect(await main(['telemetry', 'export', '--db', path, '--out', out])).toBe(0);
+    const { code, written } = await exportToStdout(path);
+    expect(code).toBe(0);
+    expect(readFileSync(out, 'utf8')).toBe(written);
+  });
+
+  it('exports rows whose values survive JSON.parse unchanged', async () => {
+    const path = hostileDb();
+    const out = outPath();
+    expect(await main(['telemetry', 'export', '--db', path, '--out', out])).toBe(0);
+    const lines = readFileSync(out, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    const events = lines.map((line) => JSON.parse(line) as TelemetryEvent);
+    expect(events[0]?.sessionId).toBe(HOSTILE_SESSION);
+    expect((events[1]?.payload as { reason?: string }).reason).toBe(HOSTILE_REASON);
+  });
+
   it('writes JSONL to stdout by default', async () => {
     const path = seededDb();
     const chunks: string[] = [];
