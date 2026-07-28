@@ -10,9 +10,13 @@ import type { Migration } from './runner.js';
  * The three indexes are recreated because DROP TABLE takes its indexes with it.
  *
  * Rebuilding this table? Add a byte-diff test to ddl-drift.test.ts comparing
- * your migration's output against the immediately preceding one's, with only
- * your declared intentional change normalised away — see the
- * "rebuilds telemetry_events identically to m002…" test for the pattern.
+ * your migration's output against the immediately preceding one's. Two
+ * things get normalised away before the comparison, not one: your declared
+ * intentional change, AND the CREATE TABLE "x" table-name quoting artefact
+ * that ALTER TABLE … RENAME introduces on every such rebuild (not just
+ * yours). See the "rebuilds telemetry_events identically to m002…" test's
+ * own comment for the exact normalisation — that comment is authoritative;
+ * treat this paragraph as a pointer to it, not a substitute.
  */
 export const M003_DDL = `
 CREATE TABLE telemetry_events_new (

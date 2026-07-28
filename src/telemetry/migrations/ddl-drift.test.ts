@@ -6,20 +6,40 @@ import { TELEMETRY_EVENT_TYPES } from '../store.js';
 import { M001_DDL } from './m001-memory-baseline.js';
 import { MIGRATIONS, runMigrations } from './index.js';
 
-// Dual-ownership drift guards (ADR-0011 §3, review finding F3/F5). This file's
-// mandate covers any hand-copied DDL parity, by either of two mechanisms:
-//   - a named constant pair (e.g. M001_DDL vs MEMORY_BASELINE_DDL, or a CHECK
-//     list vs TELEMETRY_EVENT_TYPES) that must stay in sync — the test
-//     re-derives the invariant directly from both sides; or
-//   - a live schema snapshot diffed against another live snapshot (e.g. one
-//     migrated database's sqlite_master.sql against another's), for cases
-//     where there is no named constant on either side, only the effective
-//     schema each migration produces.
-// The mandate applies whether the two sides are cross-module (this table's
-// DDL vs another module's constant) or intra-module (one migration's DDL vs
-// the migration immediately before it, e.g. m002 vs m003). Either way,
-// divergence fails loudly here instead of silently forking the effective
-// schema.
+// Dual-ownership drift guards (ADR-0011 §3, review finding F3/F5). This
+// file's mandate is hand-copied DDL parity — cross-module (this table's DDL
+// vs another module's constant) or intra-module (one migration's DDL vs the
+// migration immediately before it, e.g. m002 vs m003).
+//
+// Coverage here is per-pinned-pair, not automatic: nothing in the runner,
+// CI, or lint ties "a migration rebuilds a table" to "a byte-diff test
+// exists". Each new hand-copied pair needs its own test added to this file,
+// or that pair drifts silently — this file only catches divergence for
+// pairs someone has actually pinned.
+//
+// Three different mechanisms are in use below, matched to what each pair
+// actually offers — they are not interchangeable, and skimming the wrong one
+// as a template for a new pair produces a weaker guard than intended:
+//   - Byte-identical re-derivation, when both sides are directly comparable
+//     exported text (M001_DDL vs MEMORY_BASELINE_DDL): the test asserts
+//     equality on the two constants directly.
+//   - Inclusion-only checking, when one side is a list of values and the
+//     other is a CHECK clause with no separately exported member list
+//     (TELEMETRY_EVENT_TYPES vs telemetry_events' CHECK): the test confirms
+//     every listed value is accepted and one bogus value is rejected. That
+//     establishes TELEMETRY_EVENT_TYPES ⊆ what the CHECK accepts, but not
+//     the converse — it cannot detect the CHECK accepting a value the list
+//     doesn't have. (See the caveat on that test, below — this is exactly
+//     how 'skill-drop' entered the CHECK undetected.)
+//   - Live schema-snapshot diffing, when neither side is a single
+//     text-comparable DDL constant. For the m002↔m003 pair this is not
+//     because no constant is exported — M003_DDL is a named export — but
+//     because a table-rebuild migration's DDL is a multi-statement script
+//     (CREATE, INSERT/SELECT, DROP, ALTER, indexes), not text-comparable to
+//     a plain CREATE TABLE, and the migration compared against it (m002)
+//     exports no DDL constant at all. Here the test runs both migrations
+//     against a live database and diffs the resulting sqlite_master.sql
+//     instead.
 
 describe('dual-owned schema constants', () => {
   it('migration 001 is byte-identical to memory ensureSchema DDL', () => {
@@ -56,6 +76,14 @@ describe('dual-owned schema constants', () => {
   // payload DEFAULT, or lost a column would pass every other test here.
   // m003 is also the FIRST table rebuild, so m004 will copy its shape: the
   // guard has to exist now, not after the pattern has propagated.
+  //
+  // This guard compares schema TEXT (sqlite_master.sql), so it cannot catch
+  // a future rebuild that forgets to copy rowid: a fresh-rowid rebuild
+  // produces a byte-identical CREATE TABLE statement — the CREATE TABLE
+  // syntax has no rowid clause to differ on. That property is covered
+  // separately, by m003.test.ts's row-preservation test (the one with the
+  // seeded rowid gap). This test and that one are not redundant; each covers
+  // something the other can't see.
   it('rebuilds telemetry_events identically to m002 except for the widened CHECK', () => {
     const beforeDb = new Database(':memory:');
     const afterDb = new Database(':memory:');
