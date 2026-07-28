@@ -58,7 +58,7 @@ jobs:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
       # cannot silently swap the action out from under a publish.
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # TAG comes in via env, never interpolated into the script body: a
       # ${{ }} expression substituted into the shell text would let a crafted
@@ -112,13 +112,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # INVARIANT: no `cache: npm` in this job. A cache restore inside token
       # scope is a poisoning channel from lower-privileged workflows that can
       # write the shared cache. This job installs nothing it could cache.
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
