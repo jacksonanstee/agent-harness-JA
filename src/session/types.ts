@@ -273,10 +273,28 @@ export interface DroppedSkill {
    */
   path: string;
   /**
-   * True when `path` above contains at least one `\u{...}` or `\\` escape,
-   * i.e. the raw path was not already printable ASCII-safe. See
-   * `escapePathUnsafe`'s doc comment for why escaping (not deletion) is the
-   * right transform for this field.
+   * OUT-OF-BAND marker: true when the RAW path carried at least one
+   * control/bidi/invisible character that `escapePathUnsafe` escaped.
+   * It describes the PRE-IMAGE, not the `path` string above. Mirrors
+   * SkillDropPayload.pathHasEscapes (telemetry/types.ts), which is the same
+   * flag under the same contract. See `escapePathUnsafe`'s doc comment for
+   * why escaping (not deletion) is the right transform for this field.
+   *
+   * Two things a consumer must not get wrong:
+   *
+   * Backslash-doubling alone does NOT set it. Doubling is lossless
+   * formatting applied unconditionally so that a file literally named
+   * `\u{200B}` cannot forge a real escape; it neutralises nothing, and on
+   * win32 every separator doubles, so flagging those would make the signal
+   * useless. `escapePathUnsafe('C:\Users\f.md')` reports `escaped: false`
+   * (asserted in sanitize.test.ts).
+   *
+   * Do NOT re-derive it by scanning `path` for `\u{`. Besides the forgery
+   * problem (a legitimately named file can contain that literal text), the
+   * stored path is truncated AFTER escaping and `boundSkillDropPath` drops a
+   * straddling token whole, so a stored path can legitimately contain zero
+   * escape tokens while this flag is correctly true. A re-derived value
+   * would silently disagree with the recorded one.
    */
   pathHasEscapes: boolean;
   reason: SkillDropReason;

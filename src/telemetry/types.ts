@@ -157,6 +157,13 @@ export interface SkillDropPayload {
    * requiring a consumer to re-derive it by scanning for `\u{` substrings —
    * which a legitimately named file could also contain (see
    * `escapePathUnsafe`'s anti-forgery doc comment).
+   *
+   * Being a property of the PRE-IMAGE, it deliberately survives truncation:
+   * `boundSkillDropPath` drops a cut-straddling token whole, so a stored
+   * `path` may contain no escape token at all while this flag is correctly
+   * true. That is not a desync — re-deriving from the stored string is the
+   * bug. Backslash-doubling alone never sets it (it neutralises nothing);
+   * see DroppedSkill.pathHasEscapes for the full contract.
    */
   pathHasEscapes: boolean;
   reason: SkillDropReason;

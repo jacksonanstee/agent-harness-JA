@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { escapePathUnsafe } from '../internal/sanitize.js';
+
 import {
   boundSkillDropName,
   boundSkillDropPath,
@@ -568,6 +570,59 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     // Guarded behaviour: the whole partial token is dropped, so the kept
     // tail starts at the token's END (the 'q' suffix), never mid-token.
     expect(result.value.startsWith('…q')).toBe(true);
+  });
+
+  // Contract pin for pathHasEscapes (3-agent review of ebf3041, convergent
+  // finding). The flag describes the RAW PRE-IMAGE, not the stored string.
+  // Those two genuinely diverge: escaping happens at the session capture
+  // site, truncation happens here, and the token-guard above drops a
+  // straddling token WHOLE — so a stored path can carry zero escape tokens
+  // while the recorded flag is correctly true. This test exists so that
+  // anyone "fixing" the apparent inconsistency by re-deriving the flag from
+  // the stored string breaks a test instead of silently inverting it.
+  it('pathHasEscapes describes the pre-image, so it survives a truncation that drops the only escape token', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    // Same geometry as the token-split test above: the naive cut lands
+    // strictly inside the escaped token, so the guard drops it entirely.
+    const rawPath = 'p'.repeat(cap - 4) + String.fromCodePoint(0x200b) + 'q'.repeat(cap - 3);
+
+    const escaped = escapePathUnsafe(rawPath);
+    // The capture site records pathHasEscapes from THIS call, before bounding.
+    expect(escaped.escaped).toBe(true);
+    expect(escaped.value).toContain('\\u{200B}');
+
+    const bounded = boundSkillDropPath(escaped.value);
+    expect(bounded.truncated).toBe(true);
+    // The only token is gone from what actually gets persisted.
+    expect(bounded.value).not.toContain('\\u{');
+
+    // Round-trip the resulting flag/path combination through the real store.
+    // It must be ACCEPTED and read back intact: a validator cross-check that
+    // "helpfully" rejected pathHasEscapes:true alongside a token-free path
+    // would throw here, be downgraded to a warning by recordTelemetry, and
+    // silently drop exactly the rows most worth having.
+    const { store } = openStore();
+    const result = store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: {
+        name: 'helper',
+        path: bounded.value,
+        pathTruncated: bounded.truncated,
+        pathHasEscapes: escaped.escaped,
+        reason: 'injection-block' as const,
+        channels: ['body'],
+        ruleIds: [],
+      },
+    });
+    expect(result.ok).toBe(true);
+
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(1);
+    const payload = rows[0]?.payload as { path: string; pathHasEscapes: boolean };
+    expect(payload.pathHasEscapes).toBe(true);
+    expect(payload.path).not.toContain('\\u{');
   });
 
   it('boundSkillDropName returns a short name unchanged', () => {
