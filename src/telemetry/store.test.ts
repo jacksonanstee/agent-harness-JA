@@ -10,6 +10,7 @@ import {
   boundSkillDropPath,
   createTelemetryStore,
   openTelemetryDatabase,
+  SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
 } from './store.js';
 import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_MAX } from './types.js';
@@ -152,6 +153,27 @@ describe('createTelemetryStore.record', () => {
         payload: { kind: 'not-a-kind', event: 'pre-tool' },
       } as unknown as TelemetryEventInput),
     ).toThrow(TypeError);
+  });
+
+  // REGRESSION for round-2 review Finding 2 (LOW). `typeof NaN === 'number'`
+  // and `typeof Infinity === 'number'`, so the old `typeof === 'number'` check
+  // let a NaN handlerIndex pass write-time validation; JSON.stringify then
+  // writes NaN as `null`, and the read-back's re-validation (the same
+  // function) rejects it — the same write-passes/read-fails asymmetry as the
+  // sparse-array bug, one field over. `Number.isInteger` rejects NaN/Infinity
+  // pre-write, same gate as the array fix, so this asserts row count zero,
+  // not just that record() throws.
+  it('rejects a NaN handlerIndex before writing anything (typeof NaN is "number", but JSON.stringify writes NaN as null)', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'hook-event',
+        sessionId: 's1',
+        turnId: 't1',
+        payload: { kind: 'hook-fired', event: 'pre-tool', handlerIndex: Number.NaN },
+      }),
+    ).toThrow(TypeError);
+    expect(store.query({ type: 'hook-event' })).toHaveLength(0);
   });
 
   it('maps SQLITE_CONSTRAINT to a tagged constraint error', () => {
@@ -464,6 +486,16 @@ describe('skill-drop events', () => {
     expect([...TELEMETRY_EVENT_TYPES].sort()).toEqual(
       ['hook-event', 'skill-drop', 'tool-trace', 'turn-cost'],
     );
+  });
+
+  // Sibling of the TELEMETRY_EVENT_TYPES test above (round-2 review Finding
+  // 3): the type system already enforces exactness both directions for
+  // SkillDropReason (SKILL_DROP_REASON_PRESENCE's Record<SkillDropReason,
+  // true> and SKILL_DROP_REASON_SET.has in isSkillDropPayload), so this is
+  // not closing a real gap — it closes the PATTERN gap, so the asymmetry
+  // doesn't read as an oversight to a future reader comparing the two ratchets.
+  it('SKILL_DROP_REASONS covers every member of the union', () => {
+    expect([...SKILL_DROP_REASONS].sort()).toEqual(['injection-block', 'prompt-budget']);
   });
 });
 

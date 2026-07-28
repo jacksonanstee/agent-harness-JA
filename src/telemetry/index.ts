@@ -4,6 +4,7 @@ export {
   createTelemetryStore,
   openTelemetryDatabase,
   DEFAULT_DB_PATH,
+  SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
 } from './store.js';
 export { MIGRATIONS, runMigrations, type Migration } from './migrations/index.js';

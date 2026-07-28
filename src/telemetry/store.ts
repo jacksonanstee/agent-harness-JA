@@ -153,8 +153,16 @@ function isHookEventPayload(value: unknown): value is HookEventPayload {
     typeof value.event === 'string' &&
     (value.tool === undefined || typeof value.tool === 'string') &&
     (value.reason === undefined || typeof value.reason === 'string') &&
-    (value.handlerIndex === undefined || typeof value.handlerIndex === 'number') &&
-    (value.handlersFired === undefined || typeof value.handlersFired === 'number')
+    // Number.isInteger, not `typeof === 'number'`: the same write-passes/
+    // read-fails asymmetry as the sparse-array class above — `typeof NaN` and
+    // `typeof Infinity` are both 'number', so both used to pass here, then
+    // JSON.stringify writes NaN/Infinity as `null`, and the read-back's
+    // re-validation (this same function) rejects the `null`. The transaction
+    // now makes that fail-safe (nothing commits) rather than fail-open, but
+    // it was still a silently lost event with a misleading error, so this
+    // closes it at the same pre-write gate as the array fix.
+    (value.handlerIndex === undefined || Number.isInteger(value.handlerIndex)) &&
+    (value.handlersFired === undefined || Number.isInteger(value.handlersFired))
   );
 }
 
@@ -172,7 +180,12 @@ const SKILL_DROP_REASON_PRESENCE: Record<SkillDropReason, true> = {
   'prompt-budget': true,
 };
 
-const SKILL_DROP_REASONS: ReadonlySet<string> = new Set(Object.keys(SKILL_DROP_REASON_PRESENCE));
+// Mirrors TELEMETRY_EVENT_TYPES/EVENT_TYPE_SET above: an exported array for
+// callers/tests that need the exact member list (round-2 review Finding 3 —
+// the sibling ratchet had a runtime "covers every member" test and this one
+// didn't), plus an internal Set for the O(1) membership check below.
+export const SKILL_DROP_REASONS = Object.keys(SKILL_DROP_REASON_PRESENCE) as readonly SkillDropReason[];
+const SKILL_DROP_REASON_SET: ReadonlySet<string> = new Set(SKILL_DROP_REASONS);
 
 /**
  * First array-bearing payload in this store: elements are validated, not just
@@ -230,7 +243,7 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     value.path.length <= SKILL_DROP_PATH_MAX &&
     typeof value.pathTruncated === 'boolean' &&
     typeof value.reason === 'string' &&
-    SKILL_DROP_REASONS.has(value.reason) &&
+    SKILL_DROP_REASON_SET.has(value.reason) &&
     isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&
     isBoundedStringArray(value.ruleIds, SKILL_DROP_RULE_IDS_MAX, SKILL_DROP_RULE_ID_MAX)
   );
@@ -472,6 +485,18 @@ export function createTelemetryStore(db: Database.Database): TelemetryStore {
    * since one throwing row fails the whole query) went undetected until an
    * operator ran `telemetry export` weeks later. Wrapping means `ok: false`
    * now always means "nothing was written."
+   *
+   * COST, named rather than left implicit: every write now pays one extra
+   * SELECT, a `JSON.parse`, and a full structural re-validation
+   * (`isPayloadForType` again, via `rowToEvent`) beyond the INSERT itself,
+   * plus the transaction's own BEGIN/COMMIT (or ROLLBACK) overhead. Accepted
+   * trade: this defends against the row and its in-memory source diverging at
+   * the DB layer — another writer, a trigger, a relaxed migration — not
+   * against the write-path validator (`assertValidInput`), which already ran
+   * before `insertAndReadBack` is ever called. That divergence class has now
+   * bitten this file twice (the sparse-array case above, then a NaN
+   * handlerIndex in isHookEventPayload) in two review rounds, which is why
+   * the cost is paid unconditionally rather than only for skill-drop.
    */
   const insertAndReadBack = db.transaction(
     (row: {

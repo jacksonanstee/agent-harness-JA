@@ -77,20 +77,35 @@ export interface HookEventPayload {
 export type SkillDropReason = 'injection-block' | 'prompt-budget';
 
 /**
- * Bounds shared by the CAPTURE site (session) and the READ-path validator.
- * They must be the same constants, not two sets of literals: assertValidInput
- * runs BEFORE sanitizePayload on the write path, so a capture site that capped
- * differently would trip the store's own validator and silently lose rows.
+ * These are the VALIDATION bound: `isSkillDropPayload` (src/telemetry/store.ts)
+ * rejects any field longer (or, for the two `*_MAX` array caps, larger) than
+ * its limit. They are shared by the CAPTURE site (session) and the READ-path
+ * validator and must be the same constants, not two sets of literals:
+ * assertValidInput runs BEFORE sanitizePayload on the write path, so a
+ * capture site that capped differently would trip the store's own validator
+ * and silently lose rows.
  *
- * ⚠️ THESE ARE TOTAL STORED LENGTH, INCLUDING THE ELLIPSIS.
- * `truncateWellFormed`/`truncateTailWellFormed` bound the CONTENT at `max` and
- * then append (or prepend) a U+2026, so a truncated value is `max + 1` units —
- * pinned behaviour, asserted at src/eval/scorecard/sanitize.test.ts. The
- * capture site therefore passes `CAP - 1` as the truncator's `max`. Getting
- * this backwards makes every truncated row fail isSkillDropPayload, throw in
- * assertValidInput, and get downgraded to a warning by recordTelemetry — i.e.
- * the pathological long attacker-controlled paths, the rows most worth having,
- * are exactly the ones silently lost.
+ * `name` and `path` specifically must be bounded through `boundSkillDropName`
+ * / `boundSkillDropPath` (src/telemetry/store.ts, re-exported from
+ * src/telemetry/index.ts) rather than truncated manually — do not call
+ * `truncateWellFormed`/`truncateTailWellFormed` directly against
+ * SKILL_DROP_NAME_MAX/SKILL_DROP_PATH_MAX. The reason is the ⚠️ below; the
+ * four array caps (CHANNELS/CHANNEL/RULE_IDS/RULE_ID) are plain count/length
+ * limits with no truncation semantics, so no equivalent helper exists or is
+ * needed for them — a caller enforces those simply by not exceeding them.
+ *
+ * ⚠️ SKILL_DROP_NAME_MAX/SKILL_DROP_PATH_MAX ARE TOTAL STORED LENGTH,
+ * INCLUDING THE ELLIPSIS — this is why the two helpers exist rather than
+ * "just pass the cap to the truncator." Truncators bound the CONTENT at `max`
+ * and then append (or prepend) a U+2026, so a truncated value is `max + 1`
+ * units — pinned behaviour, asserted at src/eval/scorecard/sanitize.test.ts.
+ * `boundSkillDropName`/`boundSkillDropPath` own the resulting `CAP - 1`
+ * arithmetic (and, for `path`, the truncated-flag derivation) so no caller
+ * re-derives it by hand: getting that arithmetic backwards makes every
+ * truncated row fail isSkillDropPayload, throw in assertValidInput, and get
+ * downgraded to a warning by recordTelemetry — i.e. the pathological long
+ * attacker-controlled paths, the rows most worth having, are exactly the ones
+ * silently lost.
  */
 export const SKILL_DROP_NAME_MAX = 200;
 export const SKILL_DROP_PATH_MAX = 1024;
