@@ -1,0 +1,38 @@
+version: 2
+
+# Closes the follow-up recorded in ADR-0022 R5. Every third-party action in
+# this repo is pinned by full commit SHA (supply-chain hardening: a moved tag
+# cannot swap an action out from under a publish), and a SHA pin never floats.
+# Without this file nothing proposed those bumps, so the pins would have aged
+# silently on the workflow that publishes to npm.
+#
+# SCOPE, stated so the residual stays honest: this updates `uses:` action pins
+# only. It does NOT touch the `npm install -g npm@11.11.0` pin in publish.yml,
+# because Dependabot does not parse versions out of `run:` shell lines — that
+# one is still a deliberate manual bump, exactly as R5 says.
+#
+# Deliberately NOT enabling the npm ecosystem here. Runtime deps include a
+# native module (better-sqlite3) and the Agent SDK, where an unattended version
+# bump is a real behavioural risk on a package about to publish; those stay a
+# considered upgrade rather than a bot PR. Revisit if dependency drift ever
+# becomes the thing that breaks a build.
+updates:
+  - package-ecosystem: github-actions
+    # "/" is the whole repo for this ecosystem: it covers .github/workflows/,
+    # including the shared gates.yml that both CI and the publish path call.
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR for all action bumps rather than one per action. Each still has to
+    # pass the same required checks as any other PR, and reviewing the SHA
+    # changes together makes an unexpected one easier to spot.
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
