@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 // checks than PR CI. The rule was held by a "keep this list in sync" comment,
 // and the comment lost. gates.yml now makes that failure mode impossible by
 // construction; these tests pin the invariants construction alone does not:
-// that both callers actually delegate, and that the gate ORDER holds.
+// that both callers actually delegate, that the gate ORDER holds, and that the
+// security topology of the publish path stays as ADR-0022 describes it.
 //
 // Honest limitation: this is the weaker cousin of the byte-identity precedent
 // in src/telemetry/migrations/ddl-drift.test.ts, which compares two real
@@ -16,8 +17,8 @@ import { describe, expect, it } from 'vitest';
 // devDependencies (gray-matter's js-yaml is transitive and undeclared, and its
 // public API only parses frontmatter), so extraction here is line-based — i.e.
 // a proxy parser, exactly the shape DEC-0016 warns about. A proxy that finds
-// nothing reads green, so `extractRunCommands` asserts anchors and throws
-// rather than returning a silently empty list.
+// nothing reads green, so every extractor below throws rather than returning a
+// silently empty result, and the assertions guard against the -1 sentinel.
 
 const repoFile = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf8');
 
@@ -36,61 +37,111 @@ const CANONICAL: ReadonlyArray<readonly [RegExp, string]> = [
 const canonicalise = (command: string): string | null =>
   CANONICAL.find(([pattern]) => pattern.test(command))?.[1] ?? null;
 
+const isComment = (line: string): boolean => /^\s*#/.test(line);
+
 /**
- * Returns the ordered `run:` commands of a top-level job in a workflow file.
- * Handles both `run: cmd` and block form (`run: |`). Deliberately narrow: it
- * throws when it cannot find the job at all, so a restructured workflow fails
- * the suite instead of quietly matching nothing.
+ * Drops whole-line comments so a structural check cannot match the PROSE that
+ * describes an invariant instead of the config that implements it. Caught in
+ * review: `gates.yml`'s comments legitimately contain the strings
+ * "id-token: write" and "secrets: inherit" while explaining that neither may
+ * appear, and publish.yml's say "no `cache: npm` in this job".
+ * Deliberately whole-line only — stripping trailing comments too would risk
+ * removing real config, whereas a whole-line comment is never config, and a
+ * violation smuggled onto a line with a trailing comment still gets caught.
  */
-const extractRunCommands = (yaml: string, jobName: string): string[] => {
+const stripComments = (yaml: string): string =>
+  yaml
+    .split('\n')
+    .filter((line) => !isComment(line))
+    .join('\n');
+
+/**
+ * Returns the body lines of a top-level job. Throws when the job cannot be
+ * found, so a restructured workflow fails the suite instead of quietly
+ * matching nothing.
+ *
+ * A job ends at the next line indented exactly two spaces that is neither
+ * blank nor a comment — comments must be skipped explicitly, because `#` is
+ * non-whitespace and would otherwise read as the next job key and truncate the
+ * body early (a silent under-read, which is the failure mode this file exists
+ * to avoid). Trailing comments belonging to the following job are dropped.
+ */
+const extractJobBody = (yaml: string, jobName: string): string[] => {
   const lines = yaml.split('\n');
   const start = lines.findIndex((line) => line === `  ${jobName}:`);
   if (start === -1) {
     throw new Error(`ci-drift extractor lost job "${jobName}" — the workflow moved, update this test`);
   }
-  // A top-level job ends at the next line indented exactly two spaces that is
-  // not a comment or blank.
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^ {2}\S/.test(lines[i]!)) {
+    const line = lines[i]!;
+    if (/^ {2}\S/.test(line) && !isComment(line)) {
       end = i;
       break;
     }
   }
+  const body = lines.slice(start + 1, end);
+  while (body.length > 0 && (isComment(body[body.length - 1]!) || body[body.length - 1]!.trim() === '')) {
+    body.pop();
+  }
+  return body;
+};
 
+/** Ordered `run:` commands of a job. Handles both `run: cmd` and block form (`run: |`). */
+const extractRunCommands = (yaml: string, jobName: string): string[] => {
+  const body = extractJobBody(yaml, jobName);
   const commands: string[] = [];
-  for (let i = start + 1; i < end; i += 1) {
-    const match = /^\s*(?:- )?run:\s*(.*)$/.exec(lines[i]!);
+  for (let i = 0; i < body.length; i += 1) {
+    const match = /^\s*(?:- )?run:\s*(.*)$/.exec(body[i]!);
     if (!match) continue;
     const inline = match[1]!.trim();
-    if (inline !== '|' && inline !== '|-' && inline !== '>' && inline !== '>-') {
+    if (!['|', '|-', '>', '>-'].includes(inline)) {
       commands.push(inline);
       continue;
     }
-    // Block scalar: take the more-indented lines that follow.
-    const blockIndent = /^(\s*)/.exec(lines[i]!)![1]!.length;
-    for (let j = i + 1; j < end; j += 1) {
-      const body = lines[j]!;
-      if (body.trim() === '') continue;
-      const indent = /^(\s*)/.exec(body)![1]!.length;
-      if (indent <= blockIndent) break;
-      commands.push(body.trim());
+    const blockIndent = /^(\s*)/.exec(body[i]!)![1]!.length;
+    for (let j = i + 1; j < body.length; j += 1) {
+      const line = body[j]!;
+      if (line.trim() === '') continue;
+      if (/^(\s*)/.exec(line)![1]!.length <= blockIndent) break;
+      commands.push(line.trim());
       i = j;
     }
   }
   return commands;
 };
 
+/** Ordered `uses:` values of a job. Anchored, so a commented-out call does not count. */
+const extractUses = (yaml: string, jobName: string): string[] =>
+  extractJobBody(yaml, jobName)
+    .map((line) => /^\s*(?:- )?uses:\s*(\S+)\s*$/.exec(line)?.[1] ?? null)
+    .filter((value): value is string => value !== null);
+
 const gatesYaml = repoFile('.github/workflows/gates.yml');
 const publishYaml = repoFile('.github/workflows/publish.yml');
 const ciYaml = repoFile('.github/workflows/ci.yml');
+const allWorkflows = [
+  ['gates.yml', gatesYaml],
+  ['ci.yml', ciYaml],
+  ['publish.yml', publishYaml],
+] as const;
 const packageJson = JSON.parse(repoFile('package.json')) as { scripts: Record<string, string> };
 
+const SHARED_WORKFLOW = './.github/workflows/gates.yml';
 const GATE_NAMES = ['lint', 'typecheck', 'build', 'test', 'redteam'] as const;
+/** ADR-0022 decision 5: the floor prepublishOnly must never drop below. */
+const PREPUBLISH_FLOOR = ['lint', 'typecheck', 'build', 'test', 'redteam'] as const;
 
 describe('CI gate sequence (ADR-0022 R6)', () => {
   const buildTest = extractRunCommands(gatesYaml, 'build-test');
   const gateOrder = buildTest.map(canonicalise).filter((name): name is string => name !== null);
+
+  /** Index of a gate, asserted present first so a missing gate cannot pass via the -1 sentinel. */
+  const indexOfGate = (gate: string): number => {
+    const index = gateOrder.indexOf(gate);
+    expect(index, `gates.yml no longer runs the ${gate} gate`).toBeGreaterThanOrEqual(0);
+    return index;
+  };
 
   it('the extractor still finds the gate sequence (fails closed if the workflow is restructured)', () => {
     expect(
@@ -109,8 +160,8 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     // src/eval/redteam/baseline-e2e.test.ts documents that `npm test` running
     // before the red-team gate is what makes the vitest e2e the first failure
     // surface on baseline drift. Nothing else pins this order in YAML.
-    expect(gateOrder.indexOf('build')).toBeLessThan(gateOrder.indexOf('test'));
-    expect(gateOrder.indexOf('test')).toBeLessThan(gateOrder.indexOf('redteam'));
+    expect(indexOfGate('build')).toBeLessThan(indexOfGate('test'));
+    expect(indexOfGate('test')).toBeLessThan(indexOfGate('redteam'));
   });
 
   it('still runs the docs-links gate that R6 fired over', () => {
@@ -118,8 +169,15 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
   });
 
   it('both CI and the publish path delegate to the one shared definition', () => {
-    expect(ciYaml).toContain('uses: ./.github/workflows/gates.yml');
-    expect(publishYaml).toContain('uses: ./.github/workflows/gates.yml');
+    expect(extractUses(ciYaml, 'test')).toContain(SHARED_WORKFLOW);
+    expect(extractUses(publishYaml, 'gates')).toContain(SHARED_WORKFLOW);
+  });
+
+  it('CI still runs the full Node matrix (the engines >=20.10 claim rests on the Node 20 leg)', () => {
+    // ci.yml passes no `node-versions`, so it takes gates.yml's default. An
+    // override there could silently drop Node 20 and nothing else would notice.
+    expect(extractJobBody(ciYaml, 'test').join('\n')).not.toMatch(/node-versions:/);
+    expect(gatesYaml).toContain(`default: '["20","22"]'`);
   });
 
   it('the publish workflow defines no gates of its own (re-inlining would revive R6)', () => {
@@ -131,25 +189,94 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     }
   });
 
-  it('prepublishOnly is an ordered subset of the workflow gates (never stricter)', () => {
+  it('prepublishOnly is an ordered subset of the workflow gates, and never drops below its floor', () => {
     // ADR-0022 decision 4's invariant is directional: the workflow is the
     // stricter of the two and that direction is the safe one. Equality would
-    // force pointless reconciliation of `npm ci` and `rm -rf dist`.
+    // force pointless reconciliation of `npm ci` and `rm -rf dist`. A subset
+    // check alone has no floor, though — gutting prepublishOnly would read
+    // green — so the floor is asserted separately.
     const segments = packageJson.scripts.prepublishOnly!.split('&&').map((part) => part.trim());
-    const prepublishGates = segments.map((segment) => {
-      const name = canonicalise(segment);
-      if (name === null) {
-        throw new Error(`ci-drift does not recognise prepublishOnly command "${segment}" — add it to CANONICAL`);
-      }
-      return name;
+    const prepublishGates = segments
+      .map((segment) => {
+        const name = canonicalise(segment);
+        if (name === null) {
+          throw new Error(`ci-drift does not recognise prepublishOnly command "${segment}" — add it to CANONICAL`);
+        }
+        return name;
+      })
       // 'clean' has no workflow counterpart: a fresh runner has nothing to clean.
-    }).filter((name) => name !== 'clean');
+      .filter((name) => name !== 'clean');
+
+    for (const gate of PREPUBLISH_FLOOR) {
+      expect(prepublishGates, `prepublishOnly no longer runs the ${gate} gate`).toContain(gate);
+    }
 
     let cursor = 0;
     for (const gate of prepublishGates) {
       const found = gateOrder.indexOf(gate, cursor);
-      expect(found, `prepublishOnly runs "${gate}", which the workflow gates do not run in that order`).toBeGreaterThanOrEqual(0);
+      expect(
+        found,
+        `prepublishOnly runs "${gate}", which the workflow gates do not run in that order`,
+      ).toBeGreaterThanOrEqual(0);
       cursor = found + 1;
     }
+  });
+});
+
+// The V20 split (ADR-0022, 2026-07-24 amendment) keeps OIDC-minting capability
+// away from every line of dependency code. Its guarantees were recorded only as
+// INVARIANT comments in the workflows, which is the same posture that let R6
+// happen. These pin the load-bearing ones.
+describe('publish path security topology (ADR-0022 V20)', () => {
+  it('id-token: write appears exactly once, in the inline publish job', () => {
+    const holders = allWorkflows.filter(([, yaml]) => stripComments(yaml).includes('id-token: write'));
+    expect(holders.map(([name]) => name)).toEqual(['publish.yml']);
+    expect(stripComments(publishYaml).match(/id-token: write/g)).toHaveLength(1);
+    expect(stripComments(extractJobBody(publishYaml, 'publish').join('\n'))).toContain('id-token: write');
+  });
+
+  it('no workflow passes secrets to the jobs that execute dependency code', () => {
+    for (const [name, yaml] of allWorkflows) {
+      expect(stripComments(yaml), `${name} passes secrets into a called workflow`).not.toMatch(
+        /secrets:\s*inherit/,
+      );
+    }
+  });
+
+  it('the shared gates workflow is callable only, never directly triggerable', () => {
+    // A `push`/`pull_request`/`workflow_dispatch` trigger here would run the
+    // gates outside any caller's permission cap.
+    const bare = stripComments(gatesYaml);
+    const triggers = bare.slice(bare.indexOf('\non:')).split('\njobs:')[0]!;
+    expect(triggers).toContain('workflow_call:');
+    for (const forbidden of ['push:', 'pull_request:', 'pull_request_target:', 'workflow_dispatch:', 'workflow_run:']) {
+      expect(triggers, `gates.yml gained a ${forbidden} trigger`).not.toContain(forbidden);
+    }
+  });
+
+  it('caller jobs grant the shared workflow no job-level permissions', () => {
+    // A called workflow can only downgrade what the caller job holds, so the
+    // caller staying silent (inheriting workflow-level `contents: read`) is
+    // what keeps the gates out of token scope. This is the single barrier.
+    for (const [name, yaml, job] of [
+      ['ci.yml', ciYaml, 'test'],
+      ['publish.yml', publishYaml, 'gates'],
+    ] as const) {
+      expect(
+        stripComments(extractJobBody(yaml, job).join('\n')),
+        `${name} job "${job}" now grants explicit permissions to the shared workflow`,
+      ).not.toMatch(/^\s*permissions:/m);
+    }
+  });
+
+  it('the publish job neither restores a cache nor reaches outside its own run', () => {
+    const publishJob = stripComments(extractJobBody(publishYaml, 'publish').join('\n'));
+    // A cache restore inside token scope is a poisoning channel from
+    // lower-privileged workflows that can write the shared cache.
+    expect(publishJob).not.toMatch(/cache:\s*npm/);
+    // Without github-token/run-id, download-artifact can only read THIS run,
+    // which is what makes the gates -> publish handoff unforgeable.
+    expect(publishJob).not.toMatch(/github-token:/);
+    expect(publishJob).not.toMatch(/run-id:/);
   });
 });

@@ -67,10 +67,17 @@ jobs:
       # The fix is never `overwrite: true`: that restores mutability and a real
       # last-writer-wins race, which would break the unforgeability argument
       # the publish job's download step depends on.
+      # LEGS comes in via env rather than being interpolated into the script
+      # body. It is a GitHub-computed integer and not attacker-influenced, so
+      # this is hygiene rather than a fix: it keeps "nothing is ever
+      # interpolated into a run: body" true of every workflow in this repo,
+      # which makes the rule greppable instead of case-by-case.
       - name: 'Guard: upload-dist requires a single-version matrix'
         if: ${{ inputs.upload-dist && strategy.job-total != 1 }}
+        env:
+          LEGS: ${{ strategy.job-total }}
         run: |
-          echo "upload-dist=true with ${{ strategy.job-total }} matrix legs would race on the 'dist' artifact name" >&2
+          echo "upload-dist=true with $LEGS matrix legs would race on the 'dist' artifact name" >&2
           exit 1
 
       - name: Checkout
