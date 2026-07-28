@@ -246,12 +246,30 @@ export type SkillDropReason =
   | 'prompt-budget';
 
 /**
- * Which of the three scan points (ADR-0026) blocked a skill. `session.ts`
- * authors these three literals — nothing else does — so the union lives
- * here, at the origin, mirroring its sibling `SkillDropReason` above.
- * Telemetry's structural mirror (`SkillDropPayload.channels`,
- * src/telemetry/types.ts) stays `string[]`: narrowing the origin type does
- * not obligate every structural mirror to narrow too.
+ * Which scan point (ADR-0026) blocked a skill. `session.ts` is the only author
+ * of these literals, so the union lives here at the origin, mirroring its
+ * sibling `SkillDropReason` above. Telemetry's structural mirror
+ * (`SkillDropPayload.channels`, src/telemetry/types.ts) stays `string[]`:
+ * narrowing the origin type does not obligate every structural mirror to
+ * narrow too.
+ *
+ * ADDING A MEMBER HAS TWO CONSEQUENCES — one the compiler catches, one it
+ * cannot:
+ *
+ * 1. `SKILL_DROP_CHANNEL_TEXT` (session.ts) is a `Record` over this union, so
+ *    a new member is a COMPILE ERROR at the scan site. Deliberate: the array
+ *    literal it replaced compiled clean and left the new channel unscanned.
+ * 2. `SKILL_DROP_CHANNELS_MAX` (src/telemetry/types.ts) hand-copies this
+ *    union's CARDINALITY, and no compiler can see that link — layering forbids
+ *    telemetry importing session, so nothing derives one from the other. Leave
+ *    it stale and a drop naming the new channel exceeds the cap, fails
+ *    `isSkillDropPayload`, throws in `assertValidInput`, and `recordTelemetry`
+ *    downgrades it to a single stderr warning: the row is gone and the suite
+ *    is green. `session.test.ts` re-derives the equality — bump the cap in the
+ *    same commit as the union.
+ *
+ * Member ORDER is observable: it is the scan order, the order of
+ * `DroppedSkill.channels`, and the order the drop warning joins them in.
  */
 export type SkillDropChannel = 'description' | 'body' | 'assembled section';
 

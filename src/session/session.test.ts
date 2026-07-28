@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
+import { SKILL_DROP_CHANNEL_MAX, SKILL_DROP_CHANNELS_MAX } from '../telemetry/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
 import { scan } from '../security/index.js';
 import type { RedactResult, ScanResult } from '../security/index.js';
@@ -17,7 +18,7 @@ import {
   sandboxHook,
 } from '../security/index.js';
 import { sanitizeControlChars, stripBidi, stripInvisibles } from '../internal/sanitize.js';
-import { createSession } from './session.js';
+import { createSession, SKILL_DROP_CHANNELS } from './session.js';
 import type {
   QueryFn,
   QueryOptions,
@@ -1893,5 +1894,55 @@ describe('createSession', () => {
       expect(result.refusal?.fallbackModel).toBeNull();
       expect(result.refusal?.source).toBe('system-event');
     });
+  });
+});
+
+// DRIFT GUARDS (issue #46). Two modules must agree about SkillDropChannel and
+// the compiler can only see one of them.
+//
+// These live session-side because that is the ONLY side that lints: eslint's
+// no-restricted-imports blocks src/telemetry/** from importing **/session/*
+// (the direction src/layering.test.ts proves), while session may import
+// telemetry. A telemetry-side version of this file is not a style preference,
+// it fails `npm run lint`. Not in layering.test.ts either: that file's mandate
+// is proving the eslint rules fire, not asserting cross-module constants.
+describe('SkillDropChannel drift guards', () => {
+  // Sibling of store.test.ts's 'TELEMETRY_EVENT_TYPES covers every member of
+  // the union'. Unlike that one, this asserts IN ORDER rather than sorted:
+  // channel order is observable behaviour (scan order, DroppedSkill.channels,
+  // and the order the drop warning joins them in), so a reorder must be a
+  // visible edit rather than a silent one.
+  it('SKILL_DROP_CHANNELS lists every member of the union, in scan order', () => {
+    expect([...SKILL_DROP_CHANNELS]).toEqual(['description', 'body', 'assembled section']);
+  });
+
+  // THE cross-module guard. SKILL_DROP_CHANNELS_MAX (src/telemetry/types.ts)
+  // hand-copies this union's cardinality with no derivation on either side.
+  // Leave it stale after adding a channel and a drop naming the new one
+  // exceeds the cap, fails isSkillDropPayload, throws in assertValidInput, and
+  // recordTelemetry downgrades it to one stderr warning: row gone, suite green.
+  // Exact equality, not `<=` — `<=` stays green when the cap drifts UPWARDS,
+  // i.e. when it silently stops meaning what its name says.
+  it('SKILL_DROP_CHANNELS_MAX equals the SkillDropChannel cardinality', () => {
+    expect(
+      SKILL_DROP_CHANNELS_MAX,
+      'SkillDropChannel (src/session/types.ts) and SKILL_DROP_CHANNELS_MAX ' +
+        '(src/telemetry/types.ts) disagree — bump the cap in the same commit as the union',
+    ).toBe(SKILL_DROP_CHANNELS.length);
+  });
+
+  // The other way a new channel silently loses its row: the per-element NAME
+  // cap. A channel longer than SKILL_DROP_CHANNEL_MAX fails the same
+  // validator, by a different clause, with the same downgrade-to-a-warning
+  // ending. The length floor is not decoration — a loop over an empty list is
+  // vacuously green, which is a defect class this repo has already shipped.
+  it('every channel name fits SKILL_DROP_CHANNEL_MAX', () => {
+    expect(SKILL_DROP_CHANNELS.length).toBeGreaterThan(0);
+    for (const channel of SKILL_DROP_CHANNELS) {
+      expect(
+        channel.length,
+        `channel "${channel}" exceeds SKILL_DROP_CHANNEL_MAX`,
+      ).toBeLessThanOrEqual(SKILL_DROP_CHANNEL_MAX);
+    }
   });
 });

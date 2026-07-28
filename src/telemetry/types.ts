@@ -94,6 +94,15 @@ export type SkillDropReason = 'injection-block' | 'prompt-budget';
  * limits with no truncation semantics, so no equivalent helper exists or is
  * needed for them — a caller enforces those simply by not exceeding them.
  *
+ * `SKILL_DROP_CHANNELS_MAX` is not a free-standing budget: it is the
+ * CARDINALITY of the `SkillDropChannel` union (src/session/types.ts), because
+ * `DroppedSkill.channels` can name at most every channel once. Nothing here
+ * derives it — layering forbids telemetry importing session — so it is
+ * hand-copied by necessity and guarded from the other side instead, by the
+ * drift test in src/session/session.test.ts. Grow the union without bumping
+ * this and the widest drops fail `isSkillDropPayload`, get downgraded to a
+ * warning by `recordTelemetry`, and vanish.
+ *
  * ⚠️ SKILL_DROP_NAME_MAX/SKILL_DROP_PATH_MAX ARE TOTAL STORED LENGTH,
  * INCLUDING THE ELLIPSIS — this is why the two helpers exist rather than
  * "just pass the cap to the truncator." Truncators bound the CONTENT at `max`

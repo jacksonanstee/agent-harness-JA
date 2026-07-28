@@ -245,6 +245,41 @@ function skillSection(skill: Skill): { name: string; section: string } {
   return { name, section: body === '' ? header : `${header}\n\n${body}` };
 }
 
+/**
+ * Exhaustive BY CONSTRUCTION over SkillDropChannel — the EVENT_TYPE_PRESENCE
+ * idiom (src/telemetry/store.ts), generalised from a `true` marker to the
+ * accessor that yields the text each channel scans. The array literal this
+ * replaced was MEMBERSHIP-typed: widening SkillDropChannel and forgetting the
+ * literal compiled clean, and the new channel was then never scanned — a
+ * silent hole in an ENFORCED control (ADR-0026), with a green suite. A
+ * missing key here is now a compile error.
+ *
+ * Key ORDER is load-bearing, not cosmetic: it is the order channels are
+ * scanned in, the order they appear in DroppedSkill.channels, and the order
+ * the drop warning joins them in ("... its body and assembled section").
+ * Pinned by session.test.ts.
+ *
+ * Accessors stay EAGER — every channel is scanned for every skill and the
+ * results are filtered afterwards. Do not short-circuit on the first blocking
+ * channel: DroppedSkill.channels is meant to name every channel that blocked.
+ */
+const SKILL_DROP_CHANNEL_TEXT: Record<SkillDropChannel, (skill: Skill) => string> = {
+  description: (skill) => skill.description,
+  body: (skill) => skill.body,
+  'assembled section': (skill) => skillSection(skill).section,
+};
+
+/**
+ * The channel list, DERIVED — never hand-written. Its length is the union's
+ * cardinality, which telemetry hand-copies as SKILL_DROP_CHANNELS_MAX
+ * (src/telemetry/types.ts). Layering forbids telemetry importing session, so
+ * nothing can derive one from the other and the two can only be compared from
+ * this side; session.test.ts re-derives the equality.
+ */
+export const SKILL_DROP_CHANNELS = Object.keys(
+  SKILL_DROP_CHANNEL_TEXT,
+) as readonly SkillDropChannel[];
+
 function buildSystemPrompt(skills: Skill[]): {
   prompt: string | undefined;
   droppedSkills: DroppedSkill[];
@@ -337,14 +372,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // ASSEMBLED scan catches what the cleaner would create (space-splicing),
       // plus the name channel and phrases split across fields. Neither alone
       // is sufficient — see skillSection's comment and ADR-0026.
-      const channels: { channel: SkillDropChannel; scan: ScanResult | null }[] = [
-        { channel: 'description', scan: scanSkillChannel(`skill "${label}" description`, skill.description) },
-        { channel: 'body', scan: scanSkillChannel(`skill "${label}" body`, skill.body) },
-        {
-          channel: 'assembled section',
-          scan: scanSkillChannel(`skill "${label}" assembled section`, skillSection(skill).section),
-        },
-      ];
+      // The scan LABEL is derived from the channel name so the two cannot
+      // drift; today's three labels are already exactly `skill "<name>"
+      // <channel>`. It reaches the operator via runInjectionScan's
+      // "injection scan <verdict> on <label> output" warning.
+      const channels: { channel: SkillDropChannel; scan: ScanResult | null }[] =
+        SKILL_DROP_CHANNELS.map((channel) => ({
+          channel,
+          scan: scanSkillChannel(`skill "${label}" ${channel}`, SKILL_DROP_CHANNEL_TEXT[channel](skill)),
+        }));
       const blocking = channels.filter((c) => blocksSkill(c.scan));
       if (blocking.length === 0) {
         injectableSkills.push(skill);
