@@ -225,6 +225,10 @@ The sequence below traces what happens when the user sends a message to a harnes
    ▼
 3. skills.load() returns relevant skills                 [harness]
    → skill manifest logged
+   → each skill scanned (raw fields + assembled section);
+     a high-confidence block keeps it OUT of the system
+     prompt and is reported in result.droppedSkills
+     [ADR-0026 — the one enforced model-facing gate]
    │
    ▼
 4. hooks.fire('session-start')                           [harness]

@@ -26,7 +26,9 @@ explicit: a sandbox that overclaims is worse than no sandbox.
 The enforcement points are steps 8–11 of the tool-call flow in
 [architecture.md](./architecture.md#data-flow-a-single-agent-turn):
 permissions → sandbox → injection scan → secret redaction, with telemetry
-recording at every step.
+recording at every step. One further enforcement point sits earlier, at prompt
+assembly (step 3): a skill whose content trips a high-confidence injection
+block is kept out of the system prompt entirely ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)).
 
 Defaults are deliberately conservative where cheap (fail-closed on ambiguity,
 sticky deny, intersection merges) and honest where enforcement is not yet
@@ -119,7 +121,7 @@ character-insertion smuggling — the re-scan triggers on *any* smuggling
 character because two interleaved zero-widths defeat plaintext rules
 (ADR-0012 §5, a review HIGH). Known evasions are named rather than papered
 over: NFKC-normalization tricks and homoglyphs are deferred to the semantic
-judge (ADR-0016), and the scanner is observe-only in v1 (R-4).
+judge (ADR-0016), and the scanner is observe-only in v1 for tool output (R-4); the skill channel is enforced (ADR-0026).
 
 The judge itself is a spoofing target — content arguing "this is safe" to the
 model evaluating it. ADR-0016's tighten-only rule bounds the blast radius.

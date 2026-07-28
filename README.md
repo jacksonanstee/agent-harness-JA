@@ -1,7 +1,7 @@
 # agent-harness-JA
 
 > Most repos show the artefact; this one shows the thinking.
-> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 25 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
+> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 26 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -117,8 +117,8 @@ As of 2026-07-28:
 | Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
-| ADRs | 0001–0025 |
-| Tests | 939 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| ADRs | 0001–0026 |
+| Tests | 978 at this snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
