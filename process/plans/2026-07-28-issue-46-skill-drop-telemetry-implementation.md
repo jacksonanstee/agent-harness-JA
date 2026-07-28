@@ -818,6 +818,16 @@ git commit -m "feat(telemetry): add skill-drop event type with element-validated
 
 ### Task 4: `channels` on `DroppedSkill`, and one path charset
 
+> **⚠️ SUPERSEDED IN PART — READ BEFORE USING ANY CODE BELOW. Task 4 is COMPLETE; this section is kept as the record of what was planned, not as instructions.**
+>
+> The path transform below (`cleanSkillText(skill.path)`, i.e. strip-and-delete) was **reversed by a user ruling during implementation**. What shipped is `escapePathUnsafe` — **escape, not delete** — at both capture sites (`src/session/session.ts:308` and `:400`), landing across commits `ebf3041`, `5d4b0d3` and `f284828`.
+>
+> Consequences that the text below does NOT reflect:
+> - A new required field **`pathHasEscapes: boolean`** exists on BOTH `DroppedSkill` and `SkillDropPayload`. It describes the **RAW PRE-IMAGE**, so it deliberately survives a truncation that removes the last escape token. Never re-derive it by scanning the stored string.
+> - Backslash-doubling runs BEFORE substitution, so a literal backslash in a filename cannot forge an escape. Doubling alone does **not** set `pathHasEscapes`.
+> - **Step 8's mutation instruction below is inverted** — reverting to `stripBidi(sanitizeText(...))` is a revert to the rejected design, not a mutation of the shipped one.
+> - Residual **R-j**: tail truncation is inherently lossy, so two paths differing only before the cut remain indistinguishable. This is NOT a defect of the escape guard (proved with pure-ASCII paths). Candidate fix, deferred: store a digest of the full escaped path.
+
 Two changes to the session's drop data, kept separate from the recording work so a reviewer can accept or reject them independently.
 
 **Files:**
@@ -1025,6 +1035,9 @@ describe('skill-drop telemetry (issue #46)', () => {
       name: 'helper',
       path: '/skills/helper.md',
       pathTruncated: false,
+      // Required field (telemetry/types.ts). `toEqual` is exact, so omitting it
+      // fails. False here: this path has nothing to escape.
+      pathHasEscapes: false,
       reason: 'injection-block',
       channels: ['body', 'assembled section'],
       ruleIds: ['ignore-previous'],
@@ -1166,33 +1179,31 @@ Immediately after the moved `const droppedSkills = [...blockedSkills, ...budgetD
     // a bounded PROJECTION of that array, not a copy: name/path/ruleIds are
     // capped here because a malicious cloned repo is in scope (security-model)
     // and this sink is durable and exportable.
-    // The SKILL_DROP_* caps are TOTAL STORED LENGTH and the truncators append
-    // an ellipsis ON TOP of their `max`, so every budget here is CAP - 1.
-    // Passing CAP directly yields CAP + 1 units, fails the store's read
-    // validator, throws in assertValidInput, and recordTelemetry downgrades
-    // that to a warning — silently losing exactly the oversized attacker-
-    // controlled rows this record exists to capture.
-    // `name` and `path` go through the telemetry helpers, which own the CAP-1
+    //
+    // `name` and `path` go through the telemetry helpers, which own the cap
     // arithmetic AND the truncated-flag derivation. Do NOT hand-roll it here:
     // the caps are TOTAL stored length while the truncators bound CONTENT and
-    // append an ellipsis, so passing CAP directly yields CAP+1 units, fails the
-    // store's read validator, and recordTelemetry downgrades that to a warning
-    // — silently losing exactly the oversized attacker-controlled rows this
-    // record exists to capture. `pathTruncated` must come from the SAME call
-    // that truncates, never from a second independent comparison.
+    // append an ellipsis, so passing a cap directly yields cap+1 units, fails
+    // the store's read validator, throws in assertValidInput, and
+    // recordTelemetry downgrades that to a warning — silently losing exactly
+    // the oversized attacker-controlled rows this record exists to capture.
+    // `pathTruncated` must come from the SAME call that truncates, never from
+    // a second independent comparison.
     //
     // `channels` and `ruleIds` have no helper (they are arrays, and their
-    // element caps are not the disambiguator), so their budgets are spelled
-    // out with the same -1 and the same reason.
+    // element caps are not the disambiguator), so their element budgets are
+    // spelled out as CAP - 1 for the same ellipsis reason.
     const channelBudget = SKILL_DROP_CHANNEL_MAX - 1;
     const ruleIdBudget = SKILL_DROP_RULE_ID_MAX - 1;
 
     for (const dropped of droppedSkills) {
       // TAIL-preserving: a path's disambiguating part is its filename.
-      // `dropped.path` is already cleanSkillText'd at capture (Task 4), so the
-      // required STRIP-then-TRUNCATE order holds: truncating first would let an
-      // attacker spend the whole budget on invisible characters that a later
-      // strip would erase, blanking their own audit row.
+      // `dropped.path` is already ESCAPED at capture by escapePathUnsafe
+      // (Task 4, session.ts:308 and :400) — escaped, NOT deleted, so the
+      // pre-image is recoverable. That satisfies the required
+      // TRANSFORM-then-TRUNCATE order: truncating first would let an attacker
+      // spend the whole budget on characters a later transform rewrites,
+      // blanking their own audit row.
       const boundedPath = boundSkillDropPath(dropped.path);
       recordTelemetry({
         type: 'skill-drop',
@@ -1204,10 +1215,26 @@ Immediately after the moved `const droppedSkills = [...blockedSkills, ...budgetD
           // Out-of-band, because the in-band ellipsis is attacker-forgeable,
           // and taken from the helper so it cannot disagree with `path`.
           pathTruncated: boundedPath.truncated,
+          // Carried straight through from capture. It describes the RAW
+          // PRE-IMAGE, so it deliberately survives a truncation that drops the
+          // last escape token — do NOT re-derive it by scanning `path`.
+          pathHasEscapes: dropped.pathHasEscapes,
           reason: dropped.reason,
-          channels: dropped.channels
-            .slice(0, SKILL_DROP_CHANNELS_MAX)
-            .map((channel) => truncateWellFormed(channel, channelBudget)),
+          // NOT sliced, deliberately, and this asymmetry with ruleIds below is
+          // the point. `channels` is a CLOSED union whose cardinality the
+          // session-side drift guards prove equal to SKILL_DROP_CHANNELS_MAX,
+          // so an over-length array is unreachable unless that guard has
+          // already failed. Slicing here would silently write a row missing a
+          // channel — hiding the very drift the guards exist to catch, and
+          // contradicting the failure mode documented in session/types.ts and
+          // telemetry/types.ts ("exceeds the cap, fails isSkillDropPayload,
+          // row gone, one stderr warning"). Losing the row loudly beats
+          // keeping a quietly incomplete one.
+          channels: dropped.channels.map((channel) =>
+            truncateWellFormed(channel, channelBudget),
+          ),
+          // Sliced, because these come from a CALLER-SUPPLIED scanner and are
+          // bounded by nothing — see the flood test in Step 1.
           ruleIds: dropped.ruleIds
             .slice(0, SKILL_DROP_RULE_IDS_MAX)
             .map((ruleId) => truncateWellFormed(ruleId, ruleIdBudget)),
@@ -1216,7 +1243,7 @@ Immediately after the moved `const droppedSkills = [...blockedSkills, ...budgetD
     }
 ```
 
-Add the imports: `truncateWellFormed` from `../internal/sanitize.js` (for the array element caps only), and `boundSkillDropName`, `boundSkillDropPath`, `SKILL_DROP_CHANNELS_MAX`, `SKILL_DROP_CHANNEL_MAX`, `SKILL_DROP_RULE_IDS_MAX`, `SKILL_DROP_RULE_ID_MAX` from `../telemetry/index.js`. `truncateTailWellFormed` is NOT imported here — `boundSkillDropPath` calls it internally, which is the point.
+Add the imports: `truncateWellFormed` from `../internal/sanitize.js` (for the array element caps only), and `boundSkillDropName`, `boundSkillDropPath`, `SKILL_DROP_CHANNEL_MAX`, `SKILL_DROP_RULE_IDS_MAX`, `SKILL_DROP_RULE_ID_MAX` from `../telemetry/index.js`. `truncateTailWellFormed` is NOT imported here — `boundSkillDropPath` calls it internally, which is the point. `SKILL_DROP_CHANNELS_MAX` is deliberately NOT imported: the channel array is not sliced (see the comment above), and importing it here would invite someone to reinstate the slice.
 
 - [ ] **Step 5: Run and verify green**
 
@@ -1232,9 +1259,16 @@ Expected: FAIL.
 
 - [ ] **Step 7: Verify the tail-truncation pin RED under mutation**
 
-Temporarily swap `truncateTailWellFormed(dropped.path, …)` for `truncateWellFormed(dropped.path, …)`.
+The record loop no longer calls a truncator directly — it calls `boundSkillDropPath`, which owns the tail projection. So mutate the helper, not the call site: in `src/telemetry/store.ts`, temporarily swap `truncateTailWellFormed` for `truncateWellFormed` inside `boundSkillDropPath`.
 Run: `npx vitest run src/session/session.test.ts -t "keeps the TAIL"`
 Expected: FAIL (`endsWith('/verylast.md')` is false).
+**Restore** and re-run green.
+
+- [ ] **Step 7b: Verify the `pathHasEscapes` pass-through RED under mutation**
+
+Temporarily hard-code `pathHasEscapes: false` in the record loop.
+Run: `npx vitest run src/session/session.test.ts -t "skill-drop telemetry"`
+Expected: FAIL — a drop whose path carried an escape now reports it did not. If NOTHING fails, the Step 1 tests do not cover the true case and you must add one before proceeding: this field is the whole point of the Task 4 fix round.
 **Restore** and re-run green.
 
 - [ ] **Step 8: Full gate and commit**
@@ -1320,7 +1354,7 @@ git commit -m "docs(cli): enumerate valid --type values in usage and document sk
 The repo's standard: when marking one stale claim, sweep the whole file for the same class. Do not update one line of three.
 
 **Files:**
-- Modify: `docs/decisions/0011-telemetry.md`
+- Modify: `docs/decisions/0011-telemetry-store-and-migrations.md`
 - Modify: `docs/decisions/0026-skill-channel-block-on-flag.md` (the residual paragraph, ~line 51)
 - Modify: `docs/architecture.md:274`
 - Modify: `docs/security-model.md` (§4 audit-trail wording)
@@ -1337,9 +1371,11 @@ Add a dated amendment matching the file's existing amendment style, covering:
 7. The stderr-ordering change from the reorder.
 8. **The caps are TOTAL stored length, and why:** the truncators append an ellipsis on top of their `max`, so the capture site passes `CAP - 1`. Getting this backwards silently drops every truncated row. State that the store round-trip test pins it.
 9. **`pathTruncated` and why it is out-of-band:** U+2026 is a legal filename character and skill paths are attacker-authored, so a file named `…foo.md` is byte-identical to a genuinely truncated path — the in-band marker is forgeable in both directions (fake truncation, and collision between a short path and a truncated long one). Record that `name` deliberately has no equivalent flag: it is a display label, not the disambiguator.
-10. **The required STRIP-then-TRUNCATE order.** Truncating before stripping lets an attacker fill the tail with invisible characters, so the whole retained budget is spent on content a later strip erases — blanking their own audit row. Our order is already correct (`cleanSkillText` at capture in Task 4, truncation at the record loop in Task 5); document it so a future refactor cannot silently invert it.
+10. **The required TRANSFORM-then-TRUNCATE order.** Truncating first lets an attacker fill the tail with characters a later transform rewrites, so the whole retained budget is spent on content that vanishes — blanking their own audit row. Our order is already correct; document it so a future refactor cannot silently invert it. **Write `escapePathUnsafe`, NOT `cleanSkillText`** — the delete-based design was reversed by a user ruling during implementation (see the SUPERSEDED banner on Task 4). Paths are ESCAPED, so the pre-image is recoverable; `name`, `description`, `body` and `ruleIds` are still `cleanSkillText`'d. Document `pathHasEscapes` as a **pre-image** property that survives truncation, and state explicitly that re-deriving it by scanning the stored path is the bug, not the fix.
 11. **A STANDING RULE for future migrations, written where an m004 author will find it** (architect HIGH, round 3). m003 is the project's first table rebuild and hand-copies m002's columns; the drift guard added for it is an example, not a rule, and nothing prompts the next author to write one. Add to ADR-0011's "Revisit if" section, in the same shape as the existing m001/memory entry: *"Any migration that rebuilds an existing table must add a byte-diff test in `ddl-drift.test.ts` comparing its output against the immediately preceding migration's, with only that migration's declared intentional change normalised away."* Note also that the rebuild's rowid must be copied explicitly, and why (see m003's DDL comment). **The ADR entry is necessary but NOT sufficient** (architect, round 4): the rowid rule is already discoverable because it lives inline in `m003-skill-drop-type.ts`, the file an m004 author will literally copy, whereas an ADR requires them to think to consult it first. The drift-guard rule must get the same code-adjacent treatment — a line in m003's docblock and in `index.ts`'s "append new migrations here" registry comment — in addition to the ADR. Also state in the amendment that `ddl-drift.test.ts`'s mandate has widened from cross-module dual ownership to any hand-copied DDL parity, cross- or intra-module, so the file's scope is declared rather than inferred from its accumulated contents.
-12. Residuals **R-h** (input-borne lone surrogates make the two retained sinks disagree; `truncateWellFormed`'s "always well-formed" doc is an overclaim) and **R-i** (unvalidated `max`), both named rather than fixed.
+12. Residuals **R-h** (input-borne lone surrogates make the two retained sinks disagree; `truncateWellFormed`'s "always well-formed" doc is an overclaim), **R-i** (unvalidated `max`), **R-j** (tail truncation is inherently lossy, so two paths differing only before the cut stay indistinguishable; candidate fix = digest of the full escaped path) and **R-k** (`sessionId`/`turnId` are sanitised NOWHERE on the write path and reach SQLite raw — neutralised at the export sink only). For R-k, record the bound security review established: those ids are not attacker-reachable in the shipped CLI flow (always `randomUUID()` or caller-supplied via `SessionConfig`), so the exposure is for a direct library consumer of `createTelemetryStore` that bypasses `session.ts`, and `runTelemetryExport` is the only shipped reader of those columns. All four named rather than fixed.
+
+13. **The export is ESCAPED, not terminal-sanitised — amend decision item 8, which is now FALSE.** ADR-0011 item 8 currently reads "one `JSON.stringify(event)` per line, stdout by default (terminal-sanitized)". Commit `5ffad52` removed that pass outright. This is the only doc drift on this branch already published in git rather than sitting in unshipped process files, so it cannot wait for a future ADR. Record: `escapeJsonText` replaced `sanitizeForTerminal` on the export path rather than joining it, because the escape charset is a strict superset by construction and keeping both was a provable no-op that was *also* lossy (the old pass substituted a space, so the stdout copy of a row parsed to a DIFFERENT value than the `--out` copy); `--out` and stdout are now byte-identical, pinned by a test. Item 9's "The CLI's `TERMINAL_UNSAFE` stays separate" also needs widening — there are now three charsets, and the third derives from the second. Note the encoder's home: `src/internal/sanitize.ts`, NOT the cli layer, because eslint blocks `src/eval/**` from importing `src/cli/**` and `src/eval/scorecard` writes durable JSON through the same class of sink (tracked as its own issue).
 
 **Do not overclaim.** Write "the drift pin cannot observe throwing runs, so placement is pinned by the ordering test instead" — not "unfixable by a test", which is false; a fixture-keyed variant is writable.
 

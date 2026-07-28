@@ -282,3 +282,87 @@ pieces are mutually dependent (the writer without m003 dies at the CHECK; m003 w
 widens a constraint nothing uses; the ratchet is what makes the widening land safely) — and found
 no cause to overrule the single-change decision. Splitting would ship the lockout with less
 accompanying value.
+
+---
+
+## 7. Superseded during implementation (added 2026-07-29)
+
+This section is **appended, not merged into §2-§5 above**. Those sections record the design that
+went through the three-reviewer brainstorming gate and was approved; rewriting them in place would
+destroy the record of approved-versus-shipped, which is the only reason this document exists.
+Where the two disagree, **the text below governs and §2 is historical**.
+
+### S-1. Paths are ESCAPED, not deleted (reverses §2.3 and §4 decision 3)
+
+§2.3 specifies `stripInvisibles` / `cleanSkillText` at both path capture sites. During Task 4 the
+user ruled that reversed: deleting invisible characters from a path makes two different hostile
+paths collapse to the same stored string (the "benign twin" collision), which defeats the
+disambiguation the record exists for.
+
+**Shipped:** `escapePathUnsafe` at `src/session/session.ts:308` and `:400` (commits `ebf3041`,
+`5d4b0d3`, `f284828`). Braced `\u{HEX}` form. Backslash-doubling runs FIRST, so a file literally
+named `\u{200B}` cannot be read back as though it contained a real U+200B.
+
+Verified rather than asserted: injectivity across 1.4M + 54k brute-force sweeps with zero
+collisions; `PATH_ESCAPE_TARGETS` proven equivalent to `CONTROL_CHARS | BIDI_CONTROLS | INVISIBLES`
+across the full BMP plus astral.
+
+`name`, `description`, `body` and `ruleIds` are still `cleanSkillText`'d. Only `path` changed.
+
+### S-2. Two new required payload fields (extends §2.1)
+
+§2.1's `SkillDropPayload` is missing both:
+
+- **`pathTruncated: boolean`** — out-of-band, because U+2026 is a legal filename character, so a
+  file named `…foo.md` is byte-identical to a genuinely truncated path and the in-band ellipsis is
+  forgeable in both directions. `name` deliberately has no equivalent: it is a display label, not
+  the disambiguator.
+- **`pathHasEscapes: boolean`** — a property of the **RAW PRE-IMAGE**, not of the stored string. It
+  therefore SURVIVES a truncation that removes the only escape token, and re-deriving it by
+  scanning the stored path is the bug rather than the fix. Backslash-doubling alone does not set
+  it.
+
+### S-3. The JSONL export is escaped, not terminal-sanitised (not contemplated in §2.6)
+
+Dogfooding during Task 4 found `telemetry export` writing raw bidi and invisible characters to a
+durable file. Commit `5ffad52` replaced the stdout-only `sanitizeForTerminal` pass with
+`escapeJsonText` on both sinks. The old pass was simultaneously insufficient (bidi passed straight
+through) and lossy (it substituted a space, so the stdout copy of a row parsed to a DIFFERENT value
+than the `--out` copy). `--out` and stdout are now byte-identical, pinned by a test.
+
+Charset is `\p{Default_Ignorable_Code_Point}`-derived, not hand-typed — this file's own §2.3 records
+`INVISIBLES` losing U+2065 to a hand-enumerated class twice. Independently reproduced at 4,242
+members.
+
+Commit `389a7fa` then moved the encoder to `src/internal/sanitize.ts`: eslint blocks `src/eval/**`
+from importing `src/cli/**`, and `src/eval/scorecard/sanitize.ts` writes durable JSON through the
+same class of sink with the weaker charset, so a cli-layer home put the fix permanently out of
+reach of its second consumer. That second consumer is tracked as its own issue, NOT fixed here.
+
+### S-4. Channel list is exhaustive by construction (extends §2.4's ratchet reasoning)
+
+The array literal driving the ADR-0026 scan was membership-typed, not exhaustive: adding a union
+member compiled clean and left the new channel silently unscanned (verified live — typecheck exit 0,
+1026/1026 green). Commit `a8e9767` makes it a `Record` over the union, so a missing key is TS2741.
+`SKILL_DROP_CHANNELS_MAX` cannot be compiler-linked because layering forbids `telemetry` importing
+`session`, so three session-side drift guards re-derive the equality.
+
+Consequence for Task 5: the record loop does **not** slice `channels`. Slicing would silently write
+a row missing a channel and hide the drift the guards exist to catch. `ruleIds` IS sliced — it comes
+from a caller-supplied scanner and is bounded by nothing.
+
+### S-5. Residuals beyond §5's R-a..R-g
+
+- **R-h** — input-borne lone surrogates make the two retained sinks disagree (SQLite says U+FFFD,
+  the export says `\udc00`). `truncateWellFormed`'s "always well-formed" doc is an overclaim.
+- **R-i** — unvalidated `max` (NaN) on the truncators.
+- **R-j** — tail truncation is INHERENTLY lossy, so two paths differing only before the cut remain
+  indistinguishable. A security review graded this CRITICAL against the escape guard; that was
+  **re-graded** after the control was re-run with the guard removed and pure-ASCII paths collided
+  identically. Not a defect of the guard. Candidate fix, deferred: store a digest of the full
+  escaped path.
+- **R-k** — `sessionId`/`turnId` are sanitised NOWHERE on the write path and reach SQLite raw;
+  S-3 neutralises them at the export sink only. Bounded by security review: not attacker-reachable
+  in the shipped CLI flow (always `randomUUID()` or caller-supplied via `SessionConfig`), so the
+  exposure is for a direct library consumer bypassing `session.ts`, and `runTelemetryExport` is the
+  only shipped reader of those columns.
