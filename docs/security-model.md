@@ -9,7 +9,9 @@
 > 2026-07-13; see §5 Tampering) and a same-day amendment for the skill-content
 > sanitization fix (issue #24: bidi-stripped diagnostics, invisible-char
 > stripping + observe-only scan of skill descriptions before the system
-> prompt — see §5 Tampering, §9 ASI06). This document says
+> prompt — see §5 Tampering, §9 ASI06), and a 2026-07-28 amendment for the skill
+channel becoming ENFORCED rather than observe-only (ADR-0026 — see §1, the §5
+Update, R-4 in §6, and §9 ASI06). This document says
 > what the layer defends, against whom, and — just as deliberately — what
 > it does not. Claims here are anchored to shipped code and to incidents
 > found and fixed in review, not to intentions.
@@ -117,9 +119,15 @@ scanner (S-1): 17 detectors across 5 families (15 linear-time regex rules
 plus 2 structural hidden-unicode detectors living in the pipeline), verdict
 lattice
 (any high-confidence hit → `block`, medium → `ask`), strip-and-rescan against
-character-insertion smuggling — the re-scan triggers on *any* smuggling
-character because two interleaved zero-widths defeat plaintext rules
-(ADR-0012 §5, a review HIGH). Known evasions are named rather than papered
+character-insertion smuggling — the re-scan triggers on any character in the
+enumerated smuggling set, because two interleaved zero-widths defeat plaintext
+rules (ADR-0012 §5, a review HIGH). That set is a **list, not a property**: it
+is hand-maintained alongside the sanitiser's own strip set in a different file,
+and on 2026-07-28 a review PoC found a class in neither (U+2061–2064 invisible
+math operators, U+206A–206F, U+180E, U+FFF9–FFFB, U+1D173–1D17A) that both
+survived cleaning into the system prompt and defeated the plaintext rules.
+Both sets were widened and the gap is pinned by a regression test, but the
+honest statement is that completeness here is maintained, not guaranteed. Known evasions are named rather than papered
 over: NFKC-normalization tricks and homoglyphs are deferred to the semantic
 judge (ADR-0016), and the scanner is observe-only in v1 for tool output (R-4); the skill channel is enforced (ADR-0026).
 
@@ -209,7 +217,7 @@ session continues on the remaining skills. Enforcement covers the description as
 well as the body, because otherwise the payload simply moves there at identical
 authority. What remains accepted is narrower, and named honestly in ADR-0026:
 the premise above — that a legitimate skill has no reason to contain
-scanner-flagged phrasing — is FALSE for three high-confidence rules
+scanner-flagged phrasing — is FALSE for several high-confidence rules
 (`markdown-image-exfil` catches a shields.io badge, the chat-template rules catch
 a skill that *documents* injection, and `do-not-tell-user` catches
 instruction-shaped prose that skills legitimately contain), so real

@@ -457,7 +457,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
      * text evades enforcement, having already warned.
      */
     function scanSkillChannel(label: string, text: string): ScanResult | null {
-      return (runInjectionScan(label, text) as ScanResult | null) ?? null;
+      return runInjectionScan(label, text) as ScanResult | null;
     }
 
     function runInjectionScan(tool: string, output: unknown): unknown {

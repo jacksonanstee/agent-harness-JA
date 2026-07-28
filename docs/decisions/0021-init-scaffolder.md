@@ -131,7 +131,7 @@ differentiator, and was the first feature marked for cutting).
   global install.
 - **R2:** a second starter variant is requested (`--template`): that is the
   moment to design template selection, not before.
-- **R3:** issue #29's block-on-flag posture ships for skill bodies: the
+- **R3:** issue #29's block-on-flag posture ships for skill bodies: the **FIRED 2026-07-28 (ADR-0026). The starter README does not yet document the gate — tracked with the scaffolder backlog, not done here.**
   scaffolded skill then flows through a scanning gate and the starter should
   document it.
 - **R4:** `init` is ever wired into a non-interactive, shared, or

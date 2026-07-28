@@ -22,7 +22,7 @@ A thin, MIT-licensed, local-first harness that wraps the Claude Agent SDK and pr
 | Layer | What it gives you |
 |---|---|
 | **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape, with Fable targetable from a custom table — [ADR-0024](./docs/decisions/0024-router-model-tiers.md)), skill loading, hook runtime, telemetry, memory |
-| **Security** | Prompt-injection scanner on tool results, secret redaction, permission model, sandbox boundaries |
+| **Security** | Prompt-injection scanner on tool results (observe-only) and on skill content (enforced: a flagged skill is kept out of the system prompt), secret redaction, permission model, sandbox boundaries |
 | **Evaluation** | Golden-task regression suite, red-team corpus (≥50 cases), two-pass adversarial verification |
 
 ## What this is not

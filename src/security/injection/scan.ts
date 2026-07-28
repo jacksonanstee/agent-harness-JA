@@ -29,14 +29,22 @@ const TAG_CHARS = /[\u{E0000}-\u{E007F}]/gu;
  * Stripped before the re-scan pass so a smuggled phrase is revealed; stripping
  * (not reporting) keeps false positives low, since combining marks are
  * legitimate in NFD-form accented text.
+ *
+ * This is a LIST, not a property: completeness is maintained by hand, in sync
+ * with the sanitiser's INVISIBLES in src/internal/sanitize.ts. Widened
+ * 2026-07-28 after a review PoC found a class in neither set (U+2061-2064,
+ * U+206A-206F, U+180E, U+FFF9-FFFB, U+1D173-1D17A) that both survived cleaning
+ * into the system prompt and defeated the plaintext rules.
  */
+const SMUGGLING_CHARS =
 // eslint-disable-next-line no-misleading-character-class
-const SMUGGLING_CHARS = /[\u200B\u200C\u200D\u2060\uFEFF\u00AD\u0300-\u036F\uFE00-\uFE0F\u202A-\u202E\u2066-\u2069\u{E0100}-\u{E01EF}\u{E0000}-\u{E007F}]/gu;
+  /[\u200B\u200C\u200D\u2060-\u2064\u206A-\u206F\uFEFF\u00AD\u180E\uFFF9-\uFFFB\u0300-\u036F\uFE00-\uFE0F\u202A-\u202E\u2066-\u2069\u{1D173}-\u{1D17A}\u{E0100}-\u{E01EF}\u{E0000}-\u{E007F}]/gu;
 /**
  * Lone joiners are legitimate (emoji ZWJ sequences, Indic scripts); a run of
  * three or more zero-width characters is reported as a `zero-width-run` hit.
- * The re-scan pass triggers on ANY smuggling char, so a two-char interruption
- * is still revealed without inflating false positives.
+ * The re-scan pass triggers on any char in the enumerated SMUGGLING_CHARS set,
+ * so a two-char interruption is still revealed without inflating false
+ * positives.
  */
 const ZERO_WIDTH_THRESHOLD = 3;
 

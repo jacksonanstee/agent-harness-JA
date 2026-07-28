@@ -271,7 +271,7 @@ The sequence below traces what happens when the user sends a message to a harnes
     → turn cost, tokens, cache hit/miss logged
 ```
 
-Every step's output is recorded in `telemetry` with a turn-scoped correlation ID, so a full trace can be reconstructed after the fact.
+Every step's output is recorded in `telemetry` with a turn-scoped correlation ID, so a full trace can be reconstructed after the fact — with one honest exception: a skill dropped at step 3 is reported in `SessionResult.droppedSkills` and warned about, but not yet recorded durably ([issue #46](https://github.com/jacksonanstee/agent-harness-JA/issues/46)).
 
 ## Configuration model
 
