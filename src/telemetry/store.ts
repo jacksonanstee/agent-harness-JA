@@ -6,6 +6,7 @@ import { MIGRATIONS, runMigrations } from './migrations/index.js';
 import type {
   HookEventPayload,
   RecordResult,
+  SkillDropPayload,
   TelemetryError,
   TelemetryEvent,
   TelemetryEventInput,
@@ -16,9 +17,32 @@ import type {
   TurnCostPayload,
   TurnUsage,
 } from './types.js';
+import {
+  SKILL_DROP_CHANNEL_MAX,
+  SKILL_DROP_CHANNELS_MAX,
+  SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_MAX,
+  SKILL_DROP_RULE_ID_MAX,
+  SKILL_DROP_RULE_IDS_MAX,
+} from './types.js';
 import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
 
-export const TELEMETRY_EVENT_TYPES = ['turn-cost', 'tool-trace', 'hook-event'] as const satisfies readonly TelemetryEventType[];
+/**
+ * Exhaustive BY CONSTRUCTION. The previous
+ * `as const satisfies readonly TelemetryEventType[]` checked MEMBERSHIP only:
+ * widening TelemetryEventType and forgetting this array compiled clean, and
+ * then EVENT_TYPE_SET rejected every write of the new type at
+ * assertValidInput — which recordTelemetry downgrades to a warning, so the
+ * feature would be silently dead. A missing key here is now a compile error.
+ */
+const EVENT_TYPE_PRESENCE: Record<TelemetryEventType, true> = {
+  'turn-cost': true,
+  'tool-trace': true,
+  'hook-event': true,
+  'skill-drop': true,
+};
+
+export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonly TelemetryEventType[];
 export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
@@ -129,10 +153,52 @@ function isHookEventPayload(value: unknown): value is HookEventPayload {
   );
 }
 
+const SKILL_DROP_REASONS: ReadonlySet<string> = new Set(['injection-block', 'prompt-budget']);
+
+/** First array-bearing payload in this store: elements are validated, not just
+ *  the container, because a direct writer need not have gone through session.ts. */
+function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((item) => typeof item === 'string' && item.length <= maxLen)
+  );
+}
+
+function isSkillDropPayload(value: unknown): value is SkillDropPayload {
+  return (
+    isObject(value) &&
+    typeof value.name === 'string' &&
+    value.name.length <= SKILL_DROP_NAME_MAX &&
+    typeof value.path === 'string' &&
+    value.path.length <= SKILL_DROP_PATH_MAX &&
+    typeof value.pathTruncated === 'boolean' &&
+    typeof value.reason === 'string' &&
+    SKILL_DROP_REASONS.has(value.reason) &&
+    isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&
+    isBoundedStringArray(value.ruleIds, SKILL_DROP_RULE_IDS_MAX, SKILL_DROP_RULE_ID_MAX)
+  );
+}
+
 function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
-  if (type === 'turn-cost') return isTurnCostPayload(payload);
-  if (type === 'tool-trace') return isToolTracePayload(payload);
-  return isHookEventPayload(payload);
+  switch (type) {
+    case 'turn-cost':
+      return isTurnCostPayload(payload);
+    case 'tool-trace':
+      return isToolTracePayload(payload);
+    case 'hook-event':
+      return isHookEventPayload(payload);
+    case 'skill-drop':
+      return isSkillDropPayload(payload);
+    default: {
+      // `payload` is unknown here, so the old unguarded fall-through gave NO
+      // compile-time protection: a fifth type would have been validated
+      // against the hook-event shape. Exhaustiveness is on the DISCRIMINANT,
+      // which does type-check — a new type without a case fails to compile.
+      const exhaustive: never = type;
+      return exhaustive;
+    }
+  }
 }
 
 /**
@@ -171,6 +237,18 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       ...p,
       tool: sanitizeText(p.tool),
       resultSummary: p.resultSummary === null ? null : sanitizeText(p.resultSummary),
+    };
+  }
+  if (event.type === 'skill-drop') {
+    const p = event.payload;
+    // sanitizeText is a 1:1 space substitution, so lengths are preserved and
+    // the caps validated above still hold after sanitization.
+    return {
+      ...p,
+      name: sanitizeText(p.name),
+      path: sanitizeText(p.path),
+      channels: p.channels.map(sanitizeText),
+      ruleIds: p.ruleIds.map(sanitizeText),
     };
   }
   const p = event.payload;

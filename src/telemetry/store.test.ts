@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createTelemetryStore, openTelemetryDatabase } from './store.js';
+import { createTelemetryStore, openTelemetryDatabase, TELEMETRY_EVENT_TYPES } from './store.js';
+import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_MAX } from './types.js';
 import type { TelemetryEventInput, TelemetryStore } from './types.js';
 
 let dbs: Database.Database[] = [];
@@ -305,6 +306,105 @@ describe('createTelemetryStore.query', () => {
       ).run();
       expect(() => store.query()).toThrow(/structural validation|payload/i);
     });
+  });
+});
+
+describe('skill-drop events', () => {
+  const validPayload = {
+    name: 'helper',
+    path: '/skills/helper.md',
+    pathTruncated: false,
+    reason: 'injection-block' as const,
+    channels: ['body', 'assembled section'],
+    ruleIds: ['markdown-image-exfil'],
+  };
+
+  // THE REGRESSION TEST FOR THE CAP-SEMANTICS BUG. An earlier draft of this
+  // plan passed CAP (not CAP - 1) to the truncators, so every truncated value
+  // came out CAP + 1 units, failed this validator, threw, and was downgraded
+  // to a warning — the row vanished while the run stayed green. Asserting
+  // "truncation happened" would NOT have caught it; only asserting the row is
+  // actually RECORDED does.
+  it('records a row whose fields were truncated at the cap (not silently rejects it)', () => {
+    const { store } = openStore();
+    const result = store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: {
+        ...validPayload,
+        name: 'n'.repeat(SKILL_DROP_NAME_MAX - 1) + '…',
+        path: '…' + 'p'.repeat(SKILL_DROP_PATH_MAX - 1),
+        pathTruncated: true,
+      },
+    });
+    expect(result.ok).toBe(true);
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(1);
+    expect((rows[0]?.payload as { pathTruncated: boolean }).pathTruncated).toBe(true);
+  });
+
+  it('records and reads back a skill-drop row', () => {
+    const { store } = openStore();
+    const result = store.record({ type: 'skill-drop', sessionId: 's', turnId: 't', payload: validPayload });
+    expect(result.ok).toBe(true);
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload).toEqual(validPayload);
+  });
+
+  it('rejects a payload whose ruleIds contain a non-string', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, ruleIds: [42] } as never,
+      }),
+    ).toThrow(/not a valid skill-drop payload/);
+  });
+
+  it('rejects a payload with too many ruleIds', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, ruleIds: Array.from({ length: 33 }, (_, i) => `r${i}`) },
+      }),
+    ).toThrow(/not a valid skill-drop payload/);
+  });
+
+  it('rejects an unknown reason', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, reason: 'because' as never },
+      }),
+    ).toThrow(/not a valid skill-drop payload/);
+  });
+
+  it('sanitizes control characters inside the ruleIds array', () => {
+    const { store } = openStore();
+    store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: { ...validPayload, ruleIds: ['rule\u0007id'] },
+    });
+    const rows = store.query({ type: 'skill-drop' });
+    expect((rows[0]?.payload as { ruleIds: string[] }).ruleIds).toEqual(['rule id']);
+  });
+
+  it('TELEMETRY_EVENT_TYPES covers every member of the union', () => {
+    expect([...TELEMETRY_EVENT_TYPES].sort()).toEqual(
+      ['hook-event', 'skill-drop', 'tool-trace', 'turn-cost'],
+    );
   });
 });
 

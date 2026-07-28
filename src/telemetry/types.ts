@@ -1,4 +1,4 @@
-export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event';
+export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop';
 
 export interface TurnUsage {
   inputTokens: number;
@@ -69,6 +69,66 @@ export interface HookEventPayload {
   handlersFired?: number;
 }
 
+/**
+ * Structural mirror of session's SkillDropReason. Deliberately NOT imported
+ * from src/session — telemetry is a leaf below harness (layering.test.ts), the
+ * same rule that makes HookEventKind a structural mirror of hooks' kinds.
+ */
+export type SkillDropReason = 'injection-block' | 'prompt-budget';
+
+/**
+ * Bounds shared by the CAPTURE site (session) and the READ-path validator.
+ * They must be the same constants, not two sets of literals: assertValidInput
+ * runs BEFORE sanitizePayload on the write path, so a capture site that capped
+ * differently would trip the store's own validator and silently lose rows.
+ *
+ * ⚠️ THESE ARE TOTAL STORED LENGTH, INCLUDING THE ELLIPSIS.
+ * `truncateWellFormed`/`truncateTailWellFormed` bound the CONTENT at `max` and
+ * then append (or prepend) a U+2026, so a truncated value is `max + 1` units —
+ * pinned behaviour, asserted at src/eval/scorecard/sanitize.test.ts. The
+ * capture site therefore passes `CAP - 1` as the truncator's `max`. Getting
+ * this backwards makes every truncated row fail isSkillDropPayload, throw in
+ * assertValidInput, and get downgraded to a warning by recordTelemetry — i.e.
+ * the pathological long attacker-controlled paths, the rows most worth having,
+ * are exactly the ones silently lost.
+ */
+export const SKILL_DROP_NAME_MAX = 200;
+export const SKILL_DROP_PATH_MAX = 1024;
+export const SKILL_DROP_CHANNELS_MAX = 3;
+export const SKILL_DROP_CHANNEL_MAX = 64;
+export const SKILL_DROP_RULE_IDS_MAX = 32;
+export const SKILL_DROP_RULE_ID_MAX = 64;
+
+/**
+ * `path` is bounded TAIL-first (see truncateTailWellFormed): skill names are
+ * not unique and only the path disambiguates, and a path's distinguishing part
+ * is its filename. `ruleIds` is bounded in BOTH count and element length
+ * because `SessionDeps.scanInjection` is caller-supplied code, not the shipped
+ * rule table — the rule-table bound described in scan.ts does not apply here.
+ */
+export interface SkillDropPayload {
+  name: string;
+  path: string;
+  /**
+   * OUT-OF-BAND truncation marker for `path`. The in-band ellipsis cannot be
+   * trusted: U+2026 is a legal filename character and skill paths are
+   * attacker-authored (a malicious cloned repo is in scope per the security
+   * model), so a file literally named '…foo.md' is byte-identical to a
+   * genuinely truncated path. That lets an attacker forge "the real path is
+   * longer" and send an analyst to the wrong file, or collide a short path
+   * with a truncated long one — defeating the single job `path` exists for.
+   *
+   * `name` deliberately does NOT get an equivalent flag: it is a display
+   * label, is not unique, and is not the disambiguator. Scope choice, not
+   * oversight.
+   */
+  pathTruncated: boolean;
+  reason: SkillDropReason;
+  /** Scanned channels that blocked the skill; empty for 'prompt-budget'. */
+  channels: string[];
+  ruleIds: string[];
+}
+
 interface TelemetryEventBase {
   id: string;
   /** Harness-generated session id — stable across hook/session/tool events. */
@@ -82,7 +142,8 @@ interface TelemetryEventBase {
 export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'turn-cost'; payload: TurnCostPayload })
   | (TelemetryEventBase & { type: 'tool-trace'; payload: ToolTracePayload })
-  | (TelemetryEventBase & { type: 'hook-event'; payload: HookEventPayload });
+  | (TelemetryEventBase & { type: 'hook-event'; payload: HookEventPayload })
+  | (TelemetryEventBase & { type: 'skill-drop'; payload: SkillDropPayload });
 
 interface TelemetryInputBase {
   sessionId: string;
@@ -95,7 +156,8 @@ interface TelemetryInputBase {
 export type TelemetryEventInput =
   | (TelemetryInputBase & { type: 'turn-cost'; payload: TurnCostPayload })
   | (TelemetryInputBase & { type: 'tool-trace'; payload: ToolTracePayload })
-  | (TelemetryInputBase & { type: 'hook-event'; payload: HookEventPayload });
+  | (TelemetryInputBase & { type: 'hook-event'; payload: HookEventPayload })
+  | (TelemetryInputBase & { type: 'skill-drop'; payload: SkillDropPayload });
 
 export interface TelemetryFilter {
   sessionId?: string;
