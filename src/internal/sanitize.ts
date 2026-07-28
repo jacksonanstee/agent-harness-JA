@@ -71,3 +71,25 @@ export function truncateWellFormed(text: string, max: number): string {
   const cutLength = charAtBoundary >= 0xd800 && charAtBoundary <= 0xdbff ? max - 1 : max;
   return `${text.slice(0, cutLength)}…`;
 }
+
+/**
+ * Tail-preserving counterpart to truncateWellFormed, for fields whose
+ * DISAMBIGUATING content is at the end — `path` above all, which exists
+ * precisely because skill names are not unique (session/types.ts).
+ * Head-truncating a path keeps the shared directory prefix and throws away
+ * the filename, i.e. destroys the one thing the field is for.
+ *
+ * The surrogate guard is the MIRROR of truncateWellFormed's. That function
+ * guards the trailing cut edge against a lone HIGH surrogate; a tail slice can
+ * BEGIN with a lone LOW surrogate whose high half was cut. A lone surrogate
+ * survives JSON and reaches a persisted, exportable sink, so it is dropped.
+ */
+export function truncateTailWellFormed(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  const start = text.length - max;
+  const firstKept = text.charCodeAt(start);
+  const from = firstKept >= 0xdc00 && firstKept <= 0xdfff ? start + 1 : start;
+  return `…${text.slice(from)}`;
+}
