@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import type { TaskDescriptor } from '../router/index.js';
 import type { Skill } from '../skills/index.js';
+import {
+  boundSkillDropName,
+  boundSkillDropPath,
+  SKILL_DROP_CHANNEL_MAX,
+  SKILL_DROP_RULE_ID_MAX,
+  SKILL_DROP_RULE_IDS_MAX,
+} from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 import type { ScanResult } from '../security/index.js';
 import type {
@@ -438,6 +445,89 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
+    // Placed ABOVE the session-start fire deliberately (issue #46). Two
+    // reasons: `deps.hooks.fire('session-start')` below is NOT try/caught
+    // (unlike the pre-tool fire), so an injected runtime that throws would
+    // otherwise lose every drop record; and recording here makes skill-drop
+    // rows sort BEFORE the session-start row under the store's default
+    // `ORDER BY ts ASC`, which is a truthful trace rather than an excused one.
+    // Consequence to keep in mind: operator-visible stderr ordering changed —
+    // budget-drop warnings now precede session-start hook-error warnings.
+    //
+    // Only the skills that survived the injection gate are offered to the
+    // budget pass, so the two drop reasons stay distinct and a blocked skill
+    // never consumes budget a legitimate one could have used.
+    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
+      buildSystemPrompt(injectableSkills);
+    for (const dropped of budgetDropped) {
+      warn(
+        `skill "${dropped.name}" (${dropped.path}) dropped from the system ` +
+          `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
+      );
+    }
+    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
+
+    // Iterates the EXACT array returned as SessionResult.droppedSkills, so the
+    // durable record and the programmatic surface cannot drift. The payload is
+    // a bounded PROJECTION of that array, not a copy: name/path/ruleIds are
+    // capped because a malicious cloned repo is in scope (security-model) and
+    // this sink is durable and exportable.
+    //
+    // `name` and `path` go through the telemetry helpers, which own the cap
+    // arithmetic AND the truncated-flag derivation. Do NOT hand-roll it here:
+    // the caps are TOTAL stored length while the truncators bound CONTENT and
+    // append an ellipsis, so passing a cap directly yields cap+1 units, fails
+    // the store's read validator, throws in assertValidInput, and
+    // recordTelemetry downgrades that to a warning — silently losing exactly
+    // the oversized attacker-controlled rows this record exists to capture.
+    const channelBudget = SKILL_DROP_CHANNEL_MAX - 1;
+    const ruleIdBudget = SKILL_DROP_RULE_ID_MAX - 1;
+
+    for (const dropped of droppedSkills) {
+      // TAIL-preserving: a path's disambiguating part is its filename.
+      // `dropped.path` is already ESCAPED at capture by escapePathUnsafe —
+      // escaped, NOT deleted, so the pre-image stays recoverable. That
+      // satisfies the required TRANSFORM-then-TRUNCATE order: truncating first
+      // would let an attacker spend the whole budget on characters a later
+      // transform rewrites, blanking their own audit row.
+      const boundedPath = boundSkillDropPath(dropped.path);
+      recordTelemetry({
+        type: 'skill-drop',
+        sessionId: harnessSessionId,
+        turnId,
+        payload: {
+          name: boundSkillDropName(dropped.name),
+          path: boundedPath.value,
+          // Out-of-band, because the in-band ellipsis is attacker-forgeable,
+          // and taken from the helper so it cannot disagree with `path`.
+          pathTruncated: boundedPath.truncated,
+          // Carried straight through from capture. It describes the RAW
+          // PRE-IMAGE, so it deliberately survives a truncation that drops the
+          // last escape token — do NOT re-derive it by scanning `path`.
+          pathHasEscapes: dropped.pathHasEscapes,
+          reason: dropped.reason,
+          // NOT sliced, deliberately, and the asymmetry with ruleIds is the
+          // point. `channels` is a CLOSED union whose cardinality the
+          // session-side drift guards prove equal to SKILL_DROP_CHANNELS_MAX,
+          // so an over-length array is unreachable unless that guard has
+          // already failed. Slicing would silently write a row missing a
+          // channel — hiding the very drift the guards exist to catch, and
+          // contradicting the failure mode documented in types.ts on both
+          // sides ("exceeds the cap, fails isSkillDropPayload, row gone, one
+          // stderr warning"). Losing the row loudly beats keeping a quietly
+          // incomplete one.
+          channels: dropped.channels.map((channel) =>
+            truncateWellFormed(channel, channelBudget),
+          ),
+          // Sliced, because these come from a CALLER-SUPPLIED scanner
+          // (SessionDeps.scanInjection) and are bounded by nothing.
+          ruleIds: dropped.ruleIds
+            .slice(0, SKILL_DROP_RULE_IDS_MAX)
+            .map((ruleId) => truncateWellFormed(ruleId, ruleIdBudget)),
+        },
+      });
+    }
+
     function stringifyForScan(output: unknown): string {
       if (typeof output === 'string') return output;
       // Cycle-safe: a tool returning a live object with a circular reference
@@ -650,19 +740,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let costUsd: number | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
-
-    // Only the skills that survived the injection gate are offered to the
-    // budget pass, so the two drop reasons stay distinct and a blocked skill
-    // never consumes budget a legitimate one could have used.
-    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
-      buildSystemPrompt(injectableSkills);
-    for (const dropped of budgetDropped) {
-      warn(
-        `skill "${dropped.name}" (${dropped.path}) dropped from the system ` +
-          `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
-      );
-    }
-    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
 
     try {
       // Steps 5-14: the SDK turn.
