@@ -9,29 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  # The gate sequence lives in gates.yml, which the publish path calls too
+  # (ADR-0022 R6). Adding a gate there adds it to both paths at once, which is
+  # the point: the deploy gate can no longer drift weaker than the PR gate.
+  #
+  # This job is named `test` so its check contexts read `test / build-test (20)`
+  # and `test / docs-links`. Renaming it renames the required status checks in
+  # branch protection — update those in the same change or every PR blocks.
+  #
+  # No `secrets: inherit` (see the gates.yml invariants).
   test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20, 22]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
-      - name: Red-team gate
-        run: node dist/cli.js redteam
-
-  docs-links:
-    # Node-version-independent, needs no install/build — its own fast job.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Docs link gate
-        run: bash scripts/check-links.sh
+    uses: ./.github/workflows/gates.yml
