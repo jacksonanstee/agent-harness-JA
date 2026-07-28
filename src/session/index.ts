@@ -1,6 +1,7 @@
 export { createSession } from './session.js';
 export type {
   DeniedToolCall,
+  DroppedSkill,
   QueryFn,
   QueryOptions,
   RefusalSource,
@@ -19,5 +20,6 @@ export type {
   SessionConfig,
   SessionDeps,
   SessionRefusal,
+  SkillDropReason,
   SessionResult,
 } from './types.js';

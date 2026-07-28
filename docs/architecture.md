@@ -104,7 +104,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** discovery, validation, and loading of skill files.
 - **Public API:** `load(dir: string): LoadResult` (amended 2026-07-05 — see ADR-0006 amendment), `validate(file: string): ValidationResult`.
 - **Depends on:** `gray-matter` for frontmatter parsing, `ajv` for schema validation.
-- **Design notes:** Markdown + YAML frontmatter; see [ADR-0006](./decisions/0006-skill-schema-markdown-frontmatter.md). Week-4 hardening (PR #25) added a breadth cap (`MAX_SCAN_ENTRIES` 10k), a diamond-symlink diagnostic, a pinned walk order, and partial-EACCES handling on top of the existing per-entry realpath containment. Skill manifests may declare `requires.tools`; in v1 this is **declarative metadata only** — nothing reads or enforces it yet. The named follow-up is to intersect a loaded skill's declared tools with the permission evaluator (the ADR-0015 intersection idiom: loading a skill may tighten the tool surface, never widen it).
+- **Design notes:** Markdown + YAML frontmatter; see [ADR-0006](./decisions/0006-skill-schema-markdown-frontmatter.md). Week-4 hardening (PR #25) added a breadth cap (`MAX_SCAN_ENTRIES` 10k), a diamond-symlink diagnostic, a pinned walk order, and partial-EACCES handling on top of the existing per-entry realpath containment. Skill descriptions and bodies are scanned before assembly and a high-confidence block keeps the whole skill out of the system prompt ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)) — the one channel where the harness enforces model-facing verdicts rather than only observing them, since it assembles this prompt itself. Skill manifests may declare `requires.tools`; in v1 this is **declarative metadata only** — nothing reads or enforces it yet. The named follow-up is to intersect a loaded skill's declared tools with the permission evaluator (the ADR-0015 intersection idiom: loading a skill may tighten the tool surface, never widen it).
 
 #### `harness/hooks`
 
@@ -225,6 +225,10 @@ The sequence below traces what happens when the user sends a message to a harnes
    ▼
 3. skills.load() returns relevant skills                 [harness]
    → skill manifest logged
+   → each skill scanned (raw fields + assembled section);
+     a high-confidence block keeps it OUT of the system
+     prompt and is reported in result.droppedSkills
+     [ADR-0026 — the one enforced model-facing gate]
    │
    ▼
 4. hooks.fire('session-start')                           [harness]
@@ -267,7 +271,7 @@ The sequence below traces what happens when the user sends a message to a harnes
     → turn cost, tokens, cache hit/miss logged
 ```
 
-Every step's output is recorded in `telemetry` with a turn-scoped correlation ID, so a full trace can be reconstructed after the fact.
+Every step's output is recorded in `telemetry` with a turn-scoped correlation ID, so a full trace can be reconstructed after the fact — with one honest exception: a skill dropped at step 3 is reported in `SessionResult.droppedSkills` and warned about, but not yet recorded durably ([issue #46](https://github.com/jacksonanstee/agent-harness-JA/issues/46)).
 
 ## Configuration model
 

@@ -228,6 +228,34 @@ export interface SessionResult {
   denied: DeniedToolCall[];
   memoryEntryId: string | null;
   skillErrors: SkillError[];
+  /**
+   * Skills that loaded but were kept OUT of the system prompt (ADR-0026).
+   * Reported structurally, not only as a warning, so an eval oracle can
+   * assert enforcement without scraping stderr. A dropped skill is still
+   * present in the loader's result — the drop is a prompt-assembly decision,
+   * not a load failure, which is why it is not a `SkillError`.
+   */
+  droppedSkills: DroppedSkill[];
+}
+
+/** Why a loaded skill did not reach the system prompt. */
+export type SkillDropReason =
+  /** Injection scan returned a high-confidence `block` on its description or body. */
+  | 'injection-block'
+  /** Aggregate skill budget exhausted before this skill (pre-existing behaviour). */
+  | 'prompt-budget';
+
+export interface DroppedSkill {
+  name: string;
+  /**
+   * Absolute source path. Carried because skill NAMES are not unique — the
+   * loader applies no cross-file uniqueness constraint, so two files may
+   * both declare `name: helper` and only the path disambiguates them.
+   */
+  path: string;
+  reason: SkillDropReason;
+  /** Rule ids that triggered the block; empty for `prompt-budget`. */
+  ruleIds: string[];
 }
 
 export interface Session {

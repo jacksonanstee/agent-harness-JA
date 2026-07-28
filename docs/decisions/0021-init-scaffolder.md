@@ -133,7 +133,9 @@ differentiator, and was the first feature marked for cutting).
   moment to design template selection, not before.
 - **R3:** issue #29's block-on-flag posture ships for skill bodies: the
   scaffolded skill then flows through a scanning gate and the starter should
-  document it.
+  document it. **FIRED 2026-07-28 ([ADR-0026](./0026-skill-channel-block-on-flag.md)).
+  The starter README does not yet document the gate — tracked with the
+  scaffolder backlog, not done here.**
 - **R4:** `init` is ever wired into a non-interactive, shared, or
   multi-tenant context (a bot, a CI step, a shared `/tmp`): the
   check-then-write race the symlink refusal narrows but does not close

@@ -133,6 +133,8 @@ fires.
    layer dependency; already resolved in architecture.md toward direct SDK
    injection.
 
+**Note (2026-07-28):** the judge's tighten-only escalation now has enforcement teeth on one channel. Since [ADR-0026](./0026-skill-channel-block-on-flag.md), a `block` on skill content drops the skill from the system prompt, so a judge that escalates `ask`→`block` there would refuse a skill outright rather than merely warn. That widens the false-positive surface and should be a deliberate decision when the judge lands.
+
 ## Revisit if
 
 *(Amended 2026-07-13: two S-5 evaluation preconditions — a held-out corpus

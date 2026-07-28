@@ -9,7 +9,9 @@
 > 2026-07-13; see §5 Tampering) and a same-day amendment for the skill-content
 > sanitization fix (issue #24: bidi-stripped diagnostics, invisible-char
 > stripping + observe-only scan of skill descriptions before the system
-> prompt — see §5 Tampering, §9 ASI06). This document says
+> prompt — see §5 Tampering, §9 ASI06), and a 2026-07-28 amendment for the skill
+channel becoming ENFORCED rather than observe-only (ADR-0026 — see §1, the §5
+Update, R-4 in §6, and §9 ASI06). This document says
 > what the layer defends, against whom, and — just as deliberately — what
 > it does not. Claims here are anchored to shipped code and to incidents
 > found and fixed in review, not to intentions.
@@ -26,11 +28,13 @@ explicit: a sandbox that overclaims is worse than no sandbox.
 The enforcement points are steps 8–11 of the tool-call flow in
 [architecture.md](./architecture.md#data-flow-a-single-agent-turn):
 permissions → sandbox → injection scan → secret redaction, with telemetry
-recording at every step.
+recording at every step. One further enforcement point sits earlier, at prompt
+assembly (step 3): a skill whose content trips a high-confidence injection
+block is kept out of the system prompt entirely ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)).
 
 Defaults are deliberately conservative where cheap (fail-closed on ambiguity,
 sticky deny, intersection merges) and honest where enforcement is not yet
-possible (S-1/S-2 are observe-only in v1 — see §6, residual risk R-4).
+possible (S-1/S-2 are observe-only in v1 for tool output — see §6, residual risk R-4 — with one deliberate exception: the harness-owned skill channel is ENFORCED since 2026-07-28, ADR-0026).
 
 ## 2. Attacker model
 
@@ -115,11 +119,22 @@ scanner (S-1): 17 detectors across 5 families (15 linear-time regex rules
 plus 2 structural hidden-unicode detectors living in the pipeline), verdict
 lattice
 (any high-confidence hit → `block`, medium → `ask`), strip-and-rescan against
-character-insertion smuggling — the re-scan triggers on *any* smuggling
-character because two interleaved zero-widths defeat plaintext rules
-(ADR-0012 §5, a review HIGH). Known evasions are named rather than papered
+character-insertion smuggling — the re-scan triggers on any character in the
+enumerated smuggling set, because two interleaved zero-widths defeat plaintext
+rules (ADR-0012 §5, a review HIGH). That set is now a **property, not a list**
+(`\p{Default_Ignorable_Code_Point}`, `\p{Cf}`, `\p{Mn}`, `\p{Me}`), which is
+the second correction it took to get right. On 2026-07-28 a review found a
+class in neither this set nor the sanitiser's (U+2061–2064, U+206A–206F,
+U+180E, U+FFF9–FFFB, U+1D173–1D17A) that both survived cleaning into the system
+prompt and defeated the plaintext rules; the first fix enumerated exactly those
+code points, and a follow-up review immediately found U+2065 — the single gap
+between the range just added and the bidi range — still open, along with ~1,700
+combining marks. Enumerating a class one proof-of-concept at a time does not
+converge. The property form closes it by construction and tracks ICU, and a
+test sweeps every code point in the class (6,080 of them) rather than a
+sample. Known evasions are named rather than papered
 over: NFKC-normalization tricks and homoglyphs are deferred to the semantic
-judge (ADR-0016), and the scanner is observe-only in v1 (R-4).
+judge (ADR-0016), and the scanner is observe-only in v1 for tool output (R-4); the skill channel is enforced (ADR-0026).
 
 The judge itself is a spoofing target — content arguing "this is safe" to the
 model evaluating it. ADR-0016's tighten-only rule bounds the blast radius.
@@ -199,6 +214,23 @@ for this channel specifically — unlike arbitrary tool output, a legitimate
 skill has no reason to contain scanner-flagged override phrasing, and unlike
 tool output the harness owns this channel, so blocking is implementable
 without an SDK rewrite channel.
+
+**Update 2026-07-28 ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)): that follow-up shipped, and this
+risk acceptance is largely discharged.** A high-confidence `block` on a skill's
+description or body now keeps the whole skill out of the system prompt; the
+session continues on the remaining skills. Enforcement covers the description as
+well as the body, because otherwise the payload simply moves there at identical
+authority. What remains accepted is narrower, and named honestly in ADR-0026:
+the premise above — that a legitimate skill has no reason to contain
+scanner-flagged phrasing — is FALSE for several high-confidence rules
+(`markdown-image-exfil` catches a shields.io badge, the chat-template rules catch
+a skill that quotes a chat template, the override-phrasing rules catch a skill
+that *documents* injection, and `do-not-tell-user` catches
+instruction-shaped prose that skills legitimately contain), so real
+false-positive drops are possible and the remedy is editing the skill file —
+which degrades to forking for a third-party pack. Enforcement is also a property
+of the COMPOSITION, not the session: `scanInjection` is optional, and a consumer
+who omits it gets no enforcement at all.
 
 **The adversarial verifier's adversary reads attacker-influenceable content
 and is itself injectable (ADR-0020, E-4).** Two payloads reach the
@@ -324,7 +356,7 @@ R-1/R-2 rather than half-solved.
 | R-1 | Symlink inside an allowed directory pointing outside defeats the path gate | High (targeted) | `realpath` is impure, needs existence fallbacks, still TOCTOU-racy; documented over half-solved | ADR-0015 §2, revisit-if |
 | R-2 | Interpreter-as-wrapper (`node -e`, `python -c`) and argv-level exec when the interpreter is allowlisted | Medium | argv[0] honesty: the gate bounds which program starts; containment beyond that needs an OS sandbox | ADR-0015 §3 |
 | R-3 | Network egress ungated (`WebFetch`/`WebSearch` absent from the tool table) | Medium | Needs a URL/domain dimension, not a path prefix; deliberate exclusion over false claim | ADR-0015 revisit-if |
-| R-4 | Model-facing enforcement gap: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. Widened 2026-07-14: skill bodies enter the system prompt whole (unconditional, session-start) under the same observe-only posture | High | No SDK result-rewrite channel exists yet; harness data plane (persist/emit) is covered. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel is the named follow-up (§5) | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
+| R-4 | Model-facing enforcement gap for TOOL OUTPUT: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. NARROWED 2026-07-28 (ADR-0026): the skill channel — descriptions and bodies, which enter the system prompt at system-prompt authority — is now ENFORCED, because R-4's no-rewrite-channel rationale never applied to a prompt the harness assembles itself. A high-confidence block drops the whole skill | High | No SDK result-rewrite channel exists yet; harness data plane (persist/emit) is covered. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel SHIPPED 2026-07-28 (ADR-0026), with its accepted false-positive classes named there; enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
 | R-5 | LLM judge is injectable once implemented | Low (bounded) | Tighten-only authority converts compromise into false positives at worst | ADR-0016 §2 |
 | R-6 | Path canonicalization conflates distinct files that share a canonical form: case folding on opt-in case-sensitive volumes (darwin/win32), and NFC folding of a file that genuinely differs only by Unicode form (added 2026-07-15, audit finding V11, to close the NFC/NFD deny-rule bypass) | Low | Both fold toward "same file → same string"; the bypasses they close (`/ETC/passwd`, NFC-vs-NFD deny dodge) were live-verified, and both conflation cases are rare and fail toward stricter for deny rules | ADR-0015 §2 |
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
@@ -395,6 +427,7 @@ not live values:
 | [0020](./decisions/0020-adversarial-verifier.md) | Two-pass adversarial verifier: offline, report-only, enum-confined; adversary is injectable but zero-authority |
 | [0022](./decisions/0022-npm-publish.md) | Publish via OIDC trusted publishing with provenance; pack allowlist audited; `id-token: write` confined to a job that runs no dependency code (2026-07-24 amendment); gate sequence shared via one `workflow_call` workflow so the deploy path cannot drift weaker than CI (2026-07-28 amendment, R6) |
 | [0025](./decisions/0025-refusal-handling.md) | A refusal is a distinguishable outcome, not an empty success; two detection channels; model-authored refusal prose deliberately not retained (R-14, R-15) |
+| [0026](./decisions/0026-skill-channel-block-on-flag.md) | Skill channel is ENFORCED, not observe-only: a high-confidence block drops the whole skill from the system prompt (scoped exception to R-4, since the harness assembles this prompt itself); accepted false-positive classes named |
 
 ## 9. OWASP Agentic Top 10 mapping
 
@@ -407,7 +440,7 @@ not live values:
 | ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: scalar `defaultDecision` override (R-8) | ADR-0014 §5, §6 R-8 |
 | ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader symlink containment. Outbound: publish is OIDC trusted publishing with provenance, SHA-pinned actions, and `id-token: write` confined to a job that runs no dependency code — the gates it depends on run from a shared `workflow_call` workflow whose jobs are capped by the permissions of the *calling* job (a callee can only downgrade, never elevate) and by its own `contents: read` declaration, so the deploy path runs the same checks as PR CI and no more privilege. Residual: the approval environment is inert until reviewers are configured, the tarball is packed at publish time rather than being the byte-identical gated artefact, and no Dependabot config exists so no pin auto-updates | ADR-0022 (+2026-07-24, 2026-07-28 amendments), ADR-0019, §3, §5 Tampering |
 | ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
-| ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Named gap: S-1 verdicts observe-only, flagged content still reaches model context | §6 R-4, §5 Tampering, ADR-0012 §9, ADR-0006 amendment |
+| ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Since 2026-07-28 a high-confidence block DROPS the whole skill from the prompt (ADR-0026); the observe-only gap now applies to tool output only | §6 R-4, §5 Tampering, ADR-0012 §9, ADR-0006 amendment |
 | ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
 | ASI08 | Cascading Agent Failures | Fail-closed posture; drift gate fails red rather than degrading | §1, ADR-0015, ADR-0019 |
 | ASI09 | Human-Agent Trust Exploitation | Named gap: no control. The §5 spoofing detectors defend the agent from impersonated authority (the ASI01 direction), not the human from over-trusting agent output; the harness ships no mechanism that flags persuasive output or requires independent validation before human approval | §5 Spoofing (contrast) |

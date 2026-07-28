@@ -37,6 +37,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     denied: [],
     memoryEntryId: null,
     skillErrors: [],
+    droppedSkills: [],
     ...overrides,
   };
 }

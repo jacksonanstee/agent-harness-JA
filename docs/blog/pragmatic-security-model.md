@@ -43,6 +43,8 @@ drop), and the follow-up is filed, with the observation that unlike tool
 output, the harness *owns* prompt assembly, so blocking a flagged skill is
 implementable today. Observe-only is a posture, not a fate.
 
+> **Update, 2026-07-28:** that follow-up shipped. A high-confidence block on a skill's content now keeps the whole skill out of the system prompt ([ADR-0026](../decisions/0026-skill-channel-block-on-flag.md)). Writing it also turned up the more interesting bug: the scanner read the raw text while the prompt received a *cleaned* copy, and cleaning substitutes spaces for control characters — so one invisible byte could split a phrase past the scanner and have it reassembled, intact, for the model. The fix is to scan the string you actually send.
+
 ## Tighten-only, demonstrated
 
 Tighten-only in one line: any configuration an attacker can influence may
