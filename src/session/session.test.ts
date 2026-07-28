@@ -6,6 +6,7 @@ import { route } from '../router/index.js';
 import {
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,
+  SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_NAME_MAX,
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_IDS_MAX,
@@ -2123,5 +2124,106 @@ describe('skill-drop telemetry (issue #46)', () => {
       ruleIds: string[];
     };
     expect(payload.ruleIds).toHaveLength(SKILL_DROP_RULE_IDS_MAX);
+  });
+
+  it('truncates each ruleId ELEMENT, not just the array length', async () => {
+    // The array-length cap and the per-element cap are separate guards, and
+    // only the first was pinned: dropping the element truncation entirely left
+    // every other test green (code review, mutation `.map((id) => id)`).
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    const telemetry = fakeTelemetry();
+    const longId = 'r'.repeat(SKILL_DROP_RULE_ID_MAX * 3);
+    const longIdScan = (text: string): ScanResult =>
+      text.includes('ignore all prior rules')
+        ? { verdict: 'block', rule_ids: [longId], excerpts: [], suspicious: false }
+        : { verdict: 'pass', rule_ids: [], excerpts: [], suspicious: false };
+    const session = createSession(
+      makeDeps(fake, {
+        telemetry,
+        scanInjection: longIdScan,
+        loadSkills: () => ({ skills: [hostile], errors: [] }),
+      }),
+      { skillsDir: '/skills' },
+    );
+    await session.run('hi');
+
+    const payload = telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+      ruleIds: string[];
+    };
+    expect(payload).toBeDefined();
+    expect(payload.ruleIds).toHaveLength(1);
+    // Cap is TOTAL stored length: the ellipsis is inside the budget, so a
+    // truncated element lands exactly ON the cap and passes the store validator.
+    expect(payload.ruleIds[0]?.length).toBe(SKILL_DROP_RULE_ID_MAX);
+    expect(payload.ruleIds[0]).not.toBe(longId);
+  });
+
+  it('writes a DISTINCT row per drop when several skills drop for different reasons', async () => {
+    // The single-drop tests cannot distinguish "record every dropped skill"
+    // from "record only the first". toHaveLength(droppedSkills.length) and
+    // toHaveLength(1) collapse into the same assertion when there is one drop,
+    // and a `droppedSkills.slice(0, 1)` mutation survived all five (code
+    // review). This is the commit's headline claim, so it needs N > 1.
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    const telemetry = fakeTelemetry();
+    // Two skills, both injection-blocked, distinguishable by name and path.
+    const first = { ...hostile, name: 'alpha', path: '/skills/alpha.md' };
+    const second = { ...hostile, name: 'beta', path: '/skills/beta.md' };
+    const session = createSession(
+      makeDeps(fake, {
+        telemetry,
+        scanInjection: blockingScan,
+        loadSkills: () => ({ skills: [first, second], errors: [] }),
+      }),
+      { skillsDir: '/skills' },
+    );
+    const result = await session.run('hi');
+
+    const drops = telemetry.events.filter((e) => e.type === 'skill-drop');
+    expect(result.droppedSkills).toHaveLength(2);
+    expect(drops).toHaveLength(2);
+    // Order and per-row identity: a loop that records only the first, or that
+    // records the same skill twice, fails here.
+    expect(drops.map((d) => (d.payload as { name: string }).name)).toEqual(['alpha', 'beta']);
+    expect(drops.map((d) => (d.payload as { path: string }).path)).toEqual([
+      '/skills/alpha.md',
+      '/skills/beta.md',
+    ]);
+  });
+
+  it('emits budget-drop warnings BEFORE session-start hook-error warnings', async () => {
+    // The reorder changed operator-visible stderr ordering. That consequence is
+    // documented in three places and was pinned by none: the existing ordering
+    // test covers the telemetry row, and the warn loop is separable from the
+    // record loop (architect).
+    const warnings: string[] = [];
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    const hooks = createHookRuntime();
+    hooks.register('session-start', () => {
+      throw new Error('boom');
+    });
+    const big = {
+      ...hostile,
+      body: 'x'.repeat(300_000),
+      description: 'benign',
+      name: 'oversized',
+      path: '/skills/oversized.md',
+    };
+    const session = createSession(
+      makeDeps(fake, {
+        hooks,
+        loadSkills: () => ({ skills: [big], errors: [] }),
+      }),
+      { skillsDir: '/skills', onWarning: (w) => warnings.push(w) },
+    );
+    await session.run('hi');
+
+    const budgetIndex = warnings.findIndex((w) => w.includes('aggregate skill budget'));
+    const hookIndex = warnings.findIndex((w) => w.includes('session-start hook error'));
+    // Both floors are load-bearing: -1 is less than any real index, so a bare
+    // `budgetIndex < hookIndex` passes vacuously when either warning is absent.
+    expect(budgetIndex).toBeGreaterThanOrEqual(0);
+    expect(hookIndex).toBeGreaterThanOrEqual(0);
+    expect(budgetIndex).toBeLessThan(hookIndex);
   });
 });

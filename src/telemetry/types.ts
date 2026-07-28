@@ -89,10 +89,23 @@ export type SkillDropReason = 'injection-block' | 'prompt-budget';
  * / `boundSkillDropPath` (src/telemetry/store.ts, re-exported from
  * src/telemetry/index.ts) rather than truncated manually — do not call
  * `truncateWellFormed`/`truncateTailWellFormed` directly against
- * SKILL_DROP_NAME_MAX/SKILL_DROP_PATH_MAX. The reason is the ⚠️ below; the
- * four array caps (CHANNELS/CHANNEL/RULE_IDS/RULE_ID) are plain count/length
- * limits with no truncation semantics, so no equivalent helper exists or is
- * needed for them — a caller enforces those simply by not exceeding them.
+ * SKILL_DROP_NAME_MAX/SKILL_DROP_PATH_MAX. The reason is the ⚠️ below.
+ *
+ * The four array caps have no helper, but they are NOT uniform, and the
+ * difference is what the shipped capture site actually does:
+ *   - CHANNELS_MAX / CHANNEL_MAX are pure limits. `channels` is harness-
+ *     authored from a closed union, so the capture site passes it through
+ *     whole — neither sliced nor element-truncated. Both are guarded from the
+ *     session side, the only side that lints: cardinality by the drift guards,
+ *     element length by session.test.ts's `every channel name fits` test.
+ *   - RULE_IDS_MAX / RULE_ID_MAX DO carry truncation semantics at the capture
+ *     site, because rule ids come from a caller-supplied `scanInjection` and
+ *     are bounded by nothing. The array is sliced to RULE_IDS_MAX and each
+ *     element truncated to RULE_ID_MAX **- 1**, per the ⚠️ below.
+ * Do not "simplify" that to `truncateWellFormed(id, SKILL_DROP_RULE_ID_MAX)`:
+ * the truncators append an ellipsis ON TOP of `max`, so that yields RULE_ID_MAX
+ * + 1 units, fails isSkillDropPayload, throws in assertValidInput, and
+ * recordTelemetry downgrades it to one stderr warning — the row is lost.
  *
  * `SKILL_DROP_CHANNELS_MAX` is not a free-standing budget: it is the
  * CARDINALITY of the `SkillDropChannel` union (src/session/types.ts), because

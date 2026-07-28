@@ -5,7 +5,6 @@ import type { Skill } from '../skills/index.js';
 import {
   boundSkillDropName,
   boundSkillDropPath,
-  SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
 } from '../telemetry/index.js';
@@ -480,7 +479,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // the store's read validator, throws in assertValidInput, and
     // recordTelemetry downgrades that to a warning — silently losing exactly
     // the oversized attacker-controlled rows this record exists to capture.
-    const channelBudget = SKILL_DROP_CHANNEL_MAX - 1;
     const ruleIdBudget = SKILL_DROP_RULE_ID_MAX - 1;
 
     for (const dropped of droppedSkills) {
@@ -516,9 +514,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // sides ("exceeds the cap, fails isSkillDropPayload, row gone, one
           // stderr warning"). Losing the row loudly beats keeping a quietly
           // incomplete one.
-          channels: dropped.channels.map((channel) =>
-            truncateWellFormed(channel, channelBudget),
-          ),
+          // Passed through WHOLE: not sliced, not element-truncated. Unlike
+          // ruleIds below, channels is harness-authored from a closed union,
+          // so it is not attacker-influenced at all. Truncating an element
+          // would silently rewrite a value while the count above deliberately
+          // fails loud — two opposite philosophies on one field. Both halves
+          // are guarded from the session side, the only side that lints:
+          // cardinality by the drift guards, element length by the
+          // `every channel name fits SKILL_DROP_CHANNEL_MAX` test.
+          channels: [...dropped.channels],
           // Sliced, because these come from a CALLER-SUPPLIED scanner
           // (SessionDeps.scanInjection) and are bounded by nothing.
           ruleIds: dropped.ruleIds
