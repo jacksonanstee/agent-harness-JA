@@ -1349,7 +1349,7 @@ Replace the "A drop leaves no durable record, and that is a real gap" paragraph 
 
 - [ ] **Step 3: Replace (do not delete) the architecture.md caveat**
 
-`docs/architecture.md:274` currently ends with "…but not yet recorded durably ([issue #46](…))". Replace the caveat — deleting it outright substitutes a new overclaim for a retired one, because `deps.telemetry` is optional and `recordTelemetry` downgrades a failed write to a warning. Suggested wording:
+`docs/architecture.md:274` currently ends with "…but not yet recorded durably ([issue #46](https://github.com/jacksonanstee/agent-harness-JA/issues/46))". Replace the caveat — deleting it outright substitutes a new overclaim for a retired one, because `deps.telemetry` is optional and `recordTelemetry` downgrades a failed write to a warning. Suggested wording:
 
 ```markdown
 Every step's output is recorded in `telemetry` with a turn-scoped correlation
