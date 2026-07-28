@@ -5,14 +5,42 @@
  * names, hook reasons, error messages, persisted text) cannot carry terminal
  * escapes or log injection. Zero-dependency leaf: importable from any module.
  *
- * The CLI's TERMINAL_UNSAFE in src/cli.ts is deliberately separate — it keeps
- * newline/tab for readable terminal output, a different charset contract.
+ * TERMINAL_UNSAFE below is deliberately a SEPARATE charset from CONTROL_CHARS —
+ * it keeps newline/tab for readable terminal output, a different contract.
  */
 const CONTROL_CHARS = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/g;
 
 export function sanitizeControlChars(text: string): string {
   return text.replace(CONTROL_CHARS, ' ');
 }
+
+/**
+ * CONTROL_CHARS minus TAB and LF: model output and warnings reach the user's
+ * terminal, where newline/tab are kept for readability while ANSI/OSC escape
+ * introducers and C1 controls are stripped.
+ *
+ * Lives HERE rather than beside its only caller (`sanitizeForTerminal`, in
+ * src/cli/shared.ts) because JSON_TEXT_UNSAFE below derives from it, and this
+ * file is the zero-dep leaf every layer may import. Leaving the charset in the
+ * cli layer put the JSON encoder out of reach of src/eval/**, which eslint
+ * blocks from importing src/cli/** — see the header on escapeJsonText.
+ */
+const C0_ALL = '\\x00-\\x1F';
+const C0_KEEPING_TAB_LF = '\\x00-\\x08\\x0B-\\x1F';
+
+/* c8 ignore next 6 -- unreachable unless CONTROL_CHARS is reshaped; the throw
+   exists so that reshaping fails at module load instead of silently yielding a
+   TERMINAL_UNSAFE that still contains TAB and LF. A no-op .replace() would
+   leave newlines being stripped from CLI output AND the JSONL record separator
+   being escaped by JSON_TEXT_UNSAFE below. */
+if (!CONTROL_CHARS.source.includes(C0_ALL)) {
+  throw new Error('CONTROL_CHARS no longer contains the C0 range TERMINAL_UNSAFE carves TAB/LF out of');
+}
+
+export const TERMINAL_UNSAFE = new RegExp(
+  CONTROL_CHARS.source.replace(C0_ALL, C0_KEEPING_TAB_LF),
+  'g',
+);
 
 // Bidi overrides/embeddings (U+202A\u2013202E), isolates (U+2066\u20132069), and the
 // LRM/RLM/ALM marks \u2014 the Trojan-Source charset (CVE-2021-42574). Kept
@@ -158,4 +186,66 @@ export function escapePathUnsafe(path: string): { value: string; escaped: boolea
       return `\\u{${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`;
     });
   return { value, escaped };
+}
+
+/**
+ * Everything TERMINAL_UNSAFE covers PLUS the invisible/reordering classes that
+ * must never reach a JSONL file raw. DERIVED from TERMINAL_UNSAFE.source, not
+ * re-typed: escapeJsonText REPLACES sanitizeForTerminal on the export path, so
+ * it has to be a strict superset, and a second hand-copied edition of those
+ * ranges is exactly how the two would drift apart unnoticed.
+ *
+ * A PROPERTY, not a list. INVISIBLES above lost U+2065 to a hand-enumerated
+ * class twice; \p{Default_Ignorable_Code_Point} is a swept-verified superset of
+ * this file's BIDI_CONTROLS, so naming the bidi ranges again here would add a
+ * second place to get wrong and no coverage. U+FFF9-FFFB are Cf but NOT
+ * default-ignorable, so they are named explicitly, mirroring INVISIBLES.
+ *
+ * NOT widened to \p{Cf}: the 29 code points in Cf but not here are Arabic and
+ * Syriac number/abbreviation marks, Kaithi number signs and Egyptian hieroglyph
+ * format controls, all legitimate script content that neither reorders nor
+ * hides text. TAB and LF are deliberately absent (TERMINAL_UNSAFE carves them
+ * out): JSON.stringify escapes both INSIDE a string, and a raw LF is the JSONL
+ * record delimiter, so escaping it would corrupt the file's line structure.
+ */
+export const JSON_TEXT_UNSAFE = new RegExp(
+  `[${TERMINAL_UNSAFE.source.slice(1, -1)}\\p{Default_Ignorable_Code_Point}\\uFFF9-\\uFFFB]`,
+  'gu',
+);
+
+/**
+ * Re-encodes every JSON_TEXT_UNSAFE character in ALREADY-SERIALIZED JSON as a
+ * `\uXXXX` escape. Lossless: such an escape is valid JSON and JSON.parse
+ * returns the identical value, so machine consumers are unaffected while
+ * `cat`ing the file is safe. This is OUTPUT ENCODING: it deliberately does not
+ * change what is stored.
+ *
+ * Lives in this zero-dep leaf, NOT beside its first caller in src/cli/shared.ts.
+ * eslint blocks src/eval/** from importing src/cli/**, and src/eval/scorecard
+ * writes durable JSON through the same class of sink, so a cli-layer home would
+ * put this encoder permanently out of reach of the second consumer that needs
+ * it. Sibling encoder escapePathUnsafe above, same file, same reason.
+ *
+ * PRECONDITION: `json` MUST be JSON.stringify output (or a `\n`-join of such).
+ * Correctness rests on JSON.stringify having already doubled every literal
+ * backslash, which makes any backslash run preceding a target even-length so
+ * the inserted escape always starts fresh. Fed raw text, a lone `\` before a
+ * target yields `\\uXXXX`, which reads back as a backslash followed by the
+ * literal text `uXXXX`: silent corruption.
+ *
+ * Four-digit `\uXXXX` per UTF-16 CODE UNIT, NOT escapePathUnsafe's braced
+ * `\u{HEX}`: JSON has no braced form, so an astral target must be emitted as
+ * its surrogate PAIR: U+E0001 becomes the escape pair DB40 then DC01, which
+ * JSON.parse recombines. The `for` loop over `.length` is load-bearing: a
+ * spread or for-of iterates CODE POINTS and would emit ONE five-hex-digit
+ * escape for U+E0001, which JSON.parse reads as U+E000 plus a literal 1.
+ */
+export function escapeJsonText(json: string): string {
+  return json.replace(JSON_TEXT_UNSAFE, (match) => {
+    let out = '';
+    for (let index = 0; index < match.length; index += 1) {
+      out += `\\u${match.charCodeAt(index).toString(16).padStart(4, '0').toUpperCase()}`;
+    }
+    return out;
+  });
 }

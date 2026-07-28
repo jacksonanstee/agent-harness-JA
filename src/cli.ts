@@ -6,12 +6,12 @@ import { pathToFileURL } from 'node:url';
 
 import {
   composeSecurity,
-  escapeJsonText,
   hookRecordToTelemetryInput,
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
 } from './cli/shared.js';
+import { escapeJsonText } from './internal/sanitize.js';
 import type { SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
@@ -189,7 +189,7 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     const events = store.query(filter);
     // JSON.stringify escapes C0 controls and lone surrogates and NOTHING ELSE:
     // U+007F, the whole C1 block, U+2028/U+2029 and every bidi/invisible
-    // character reach the output RAW (swept, cli/shared.test.ts). Neither is
+    // character reach the output RAW (swept, internal/sanitize.test.ts). Neither is
     // `sessionId`/`turnId` sanitized on the write path (record() sanitizes only
     // the payload), so a hostile id arrives here verbatim. escapeJsonText
     // re-encodes each of those as a `\uXXXX` JSON escape: valid JSON that
