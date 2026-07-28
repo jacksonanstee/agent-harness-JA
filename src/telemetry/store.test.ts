@@ -342,6 +342,7 @@ describe('skill-drop events', () => {
     name: 'helper',
     path: '/skills/helper.md',
     pathTruncated: false,
+    pathHasEscapes: false,
     reason: 'injection-block' as const,
     channels: ['body', 'assembled section'],
     ruleIds: ['markdown-image-exfil'],
@@ -413,6 +414,21 @@ describe('skill-drop events', () => {
         sessionId: 's',
         turnId: 't',
         payload: { ...validPayload, reason: 'because' as never },
+      }),
+    ).toThrow(/not a valid skill-drop payload/);
+  });
+
+  // Regression for review Finding 2: pathHasEscapes must be validated the
+  // same way its sibling pathTruncated already is — present but wrong-typed
+  // is a hard failure, not a silently-coerced row.
+  it('rejects a pathHasEscapes of the wrong type', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, pathHasEscapes: 'true' as never },
       }),
     ).toThrow(/not a valid skill-drop payload/);
   });
@@ -520,6 +536,38 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(result.truncated).toBe(true);
     expect(result.value).toHaveLength(SKILL_DROP_PATH_MAX);
     expect(result.value.startsWith('…')).toBe(true);
+  });
+
+  // Regression for review Finding 2: the input here has ALREADY been through
+  // escapePathUnsafe (session.ts capture site), so it can contain an
+  // `\u{HEX}` token. A naive tail-cut (truncateTailWellFormed alone) has no
+  // notion of that token grammar and can slice one in half.
+  it('boundSkillDropPath does not split an escapePathUnsafe token in half — drops the whole token instead of a fragment', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const escapeSeq = '\\u{200B}'; // 8 chars: exactly what escapePathUnsafe emits for a real U+200B
+    // Positioned so the NAIVE tail-cut (path.length - cap) lands strictly
+    // inside the escape sequence, 5 characters in — this arithmetic holds
+    // for any cap: naiveFrom = path.length - cap = (2*cap + 1) - cap =
+    // cap + 1, and the sequence spans [cap - 4, cap + 4), so cap + 1 is
+    // always inside it.
+    const prefix = 'p'.repeat(cap - 4);
+    const suffix = 'q'.repeat(cap - 3);
+    const path = prefix + escapeSeq + suffix;
+    const naiveFrom = path.length - cap;
+    // Sanity: the naive cut really does land inside the token (offset 5 of
+    // 8), or this test proves nothing.
+    expect(naiveFrom).toBe(prefix.length + 5);
+
+    const result = boundSkillDropPath(path);
+    expect(result.truncated).toBe(true);
+    expect(result.value.length).toBeLessThanOrEqual(SKILL_DROP_PATH_MAX);
+    // The naive (unguarded) cut would keep the fragment '0B}' — the token's
+    // last 3 characters — which reads as ordinary text, not as a truncated
+    // escape. The guard must not produce it.
+    expect(result.value.startsWith('…0B}')).toBe(false);
+    // Guarded behaviour: the whole partial token is dropped, so the kept
+    // tail starts at the token's END (the 'q' suffix), never mid-token.
+    expect(result.value.startsWith('…q')).toBe(true);
   });
 
   it('boundSkillDropName returns a short name unchanged', () => {

@@ -245,24 +245,55 @@ export type SkillDropReason =
   /** Aggregate skill budget exhausted before this skill (pre-existing behaviour). */
   | 'prompt-budget';
 
+/**
+ * Which of the three scan points (ADR-0026) blocked a skill. `session.ts`
+ * authors these three literals — nothing else does — so the union lives
+ * here, at the origin, mirroring its sibling `SkillDropReason` above.
+ * Telemetry's structural mirror (`SkillDropPayload.channels`,
+ * src/telemetry/types.ts) stays `string[]`: narrowing the origin type does
+ * not obligate every structural mirror to narrow too.
+ */
+export type SkillDropChannel = 'description' | 'body' | 'assembled section';
+
 export interface DroppedSkill {
   name: string;
   /**
-   * Absolute source path. Carried because skill NAMES are not unique — the
-   * loader applies no cross-file uniqueness constraint, so two files may
-   * both declare `name: helper` and only the path disambiguates them.
+   * Absolute source path, run through `escapePathUnsafe` (src/internal/
+   * sanitize.ts) rather than deleted/space-substituted like `name`. Carried
+   * because skill NAMES are not unique — the loader applies no cross-file
+   * uniqueness constraint, so two files may both declare `name: helper` and
+   * only the path disambiguates them. Escaping, not stripping, matters here
+   * specifically because of that: an invisible character renders as nothing
+   * whether it is present or deleted, so deleting it buys no visibility
+   * while destroying the one thing this field exists for — a hostile
+   * `/skills/he<U+200B>lper.md` would otherwise collapse onto a benign
+   * `/skills/helper.md` and misdirect an operator, following the drop
+   * warning's own remediation instruction, to edit the wrong file (round-1
+   * fix, issue #46 Finding 1).
    */
   path: string;
+  /**
+   * True when `path` above contains at least one `\u{...}` or `\\` escape,
+   * i.e. the raw path was not already printable ASCII-safe. See
+   * `escapePathUnsafe`'s doc comment for why escaping (not deletion) is the
+   * right transform for this field.
+   */
+  pathHasEscapes: boolean;
   reason: SkillDropReason;
   /**
-   * Which scanned channels blocked the skill ('description', 'body',
-   * 'assembled section'); empty for 'prompt-budget'. Carried because the
-   * stderr warning names the channel and, without this, the durable telemetry
-   * record would be strictly LESS informative than the transient warning it
-   * exists to replace (issue #46).
+   * Which scanned channels blocked the skill; empty for 'prompt-budget'.
+   * Carried because the stderr warning names the channel and, without this,
+   * the durable telemetry record would be strictly LESS informative than the
+   * transient warning it exists to replace (issue #46).
    */
-  channels: string[];
-  /** Rule ids that triggered the block; empty for `prompt-budget`. */
+  channels: SkillDropChannel[];
+  /**
+   * Rule ids that triggered the block, cleaned at capture (`cleanSkillText`,
+   * session.ts) — unlike `path`, a rule id identifies nothing on disk, so
+   * deletion is the right transform here, the same as for `name`. Empty for
+   * `prompt-budget`. `scanInjection` is caller-supplied (`SessionDeps`), not
+   * the shipped rule table, so a rule id is untrusted input like any other.
+   */
   ruleIds: string[];
 }
 

@@ -27,6 +27,7 @@ import {
   SKILL_DROP_RULE_IDS_MAX,
 } from './types.js';
 import {
+  PATH_ESCAPE_SEQUENCE,
   sanitizeControlChars as sanitizeText,
   truncateTailWellFormed,
   truncateWellFormed,
@@ -220,10 +221,36 @@ function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number):
  * whether it fired — and a hand-copied `CAP - 1` in each is a silent-inversion
  * risk: get the sign wrong and every oversized attacker-controlled path (the
  * rows most worth having) fails isSkillDropPayload and vanishes as a warning.
+ *
+ * The input here has ALREADY been through `escapePathUnsafe` (session.ts
+ * capture site, round-1 fix issue #46 Finding 1) — escape THEN truncate, not
+ * the other order, so the cap bounds what is actually stored rather than a
+ * pre-image that can grow past it during escaping. That ordering creates a
+ * hazard `truncateTailWellFormed` alone does not guard: a raw tail-cut can
+ * land INSIDE one of `escapePathUnsafe`'s own tokens (`\\` or `\u{HEX}`,
+ * `PATH_ESCAPE_SEQUENCE`), keeping a fragment like `00B}rest.md` that reads as
+ * ordinary text containing digits and a brace, not as a truncated escape.
+ * Guarded by nudging the cut FORWARD — dropping the whole partial token
+ * rather than keeping a fragment of it — which only ever trims MORE, never
+ * less, so the result never exceeds the cap this function exists to enforce.
  */
 export function boundSkillDropPath(path: string): { value: string; truncated: boolean } {
-  const truncated = path.length > SKILL_DROP_PATH_MAX - 1;
-  return { value: truncateTailWellFormed(path, SKILL_DROP_PATH_MAX - 1), truncated };
+  const cap = SKILL_DROP_PATH_MAX - 1;
+  const truncated = path.length > cap;
+  if (!truncated) return { value: path, truncated };
+  const naiveFrom = path.length - cap;
+  let effectiveMax = cap;
+  PATH_ESCAPE_SEQUENCE.lastIndex = 0;
+  for (let m = PATH_ESCAPE_SEQUENCE.exec(path); m !== null; m = PATH_ESCAPE_SEQUENCE.exec(path)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (naiveFrom > start && naiveFrom < end) {
+      effectiveMax = path.length - end;
+      break;
+    }
+    if (start >= naiveFrom) break; // tokens run in order; nothing earlier remains
+  }
+  return { value: truncateTailWellFormed(path, effectiveMax), truncated };
 }
 
 /**
@@ -242,6 +269,7 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     typeof value.path === 'string' &&
     value.path.length <= SKILL_DROP_PATH_MAX &&
     typeof value.pathTruncated === 'boolean' &&
+    typeof value.pathHasEscapes === 'boolean' &&
     typeof value.reason === 'string' &&
     SKILL_DROP_REASON_SET.has(value.reason) &&
     isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&

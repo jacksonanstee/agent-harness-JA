@@ -19,8 +19,10 @@ import type {
   SessionDeps,
   SessionRefusal,
   SessionResult,
+  SkillDropChannel,
 } from './types.js';
 import {
+  escapePathUnsafe,
   sanitizeControlChars,
   stripBidi,
   stripInvisibles,
@@ -264,9 +266,15 @@ function buildSystemPrompt(skills: Skill[]): {
     // +2 counts the `\n\n` join separator, so the cap is exact, not soft —
     // otherwise ~20k minimal skills overrun the budget ~15% via separators.
     if (section.length + 2 > remaining) {
+      // ESCAPED, not cleaned like `name` above — see escapePathUnsafe's doc
+      // comment (src/internal/sanitize.ts) and DroppedSkill.path's (deleting
+      // an invisible character here would misdirect an operator to a
+      // byte-identical benign twin, since skill names are not unique).
+      const { value: path, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
       droppedSkills.push({
         name,
-        path: cleanSkillText(skill.path),
+        path,
+        pathHasEscapes,
         reason: 'prompt-budget',
         channels: [],
         ruleIds: [],
@@ -329,7 +337,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // ASSEMBLED scan catches what the cleaner would create (space-splicing),
       // plus the name channel and phrases split across fields. Neither alone
       // is sufficient — see skillSection's comment and ADR-0026.
-      const channels = [
+      const channels: { channel: SkillDropChannel; scan: ScanResult | null }[] = [
         { channel: 'description', scan: scanSkillChannel(`skill "${label}" description`, skill.description) },
         { channel: 'body', scan: scanSkillChannel(`skill "${label}" body`, skill.body) },
         {
@@ -343,18 +351,21 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         continue;
       }
       // Deduped across channels: the same rule firing on more than one is one
-      // reason, not three.
-      const ruleIds = [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))];
-      // cleanSkillText (bidi + control + invisible stripped), matching the
-      // loader's treatment of SkillError.file: a reversed or zero-width-
-      // padded filename in the ONE message that tells the operator which
-      // file to edit would point them at the wrong one (Trojan Source, issue
-      // #24), and this field is about to become a durable, exported
-      // telemetry row (issue #46) where the same smuggling risk applies.
-      const safePath = cleanSkillText(skill.path);
+      // reason, not three. Cleaned (deleted, not escaped) with cleanSkillText:
+      // `scanInjection` is caller-supplied (SessionDeps), not the shipped
+      // rule table, so a rule id is untrusted the same way a path or name is
+      // — but unlike `path`, a rule id identifies nothing on disk, so
+      // deletion loses nothing worth keeping.
+      const ruleIds = [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))].map(cleanSkillText);
+      // ESCAPED, not cleaned: deleting an invisible character here would
+      // misdirect an operator to a byte-identical benign twin, since skill
+      // names are not unique (escapePathUnsafe's doc comment, src/internal/
+      // sanitize.ts; DroppedSkill.path's, round-1 fix issue #46 Finding 1).
+      const { value: safePath, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
       blockedSkills.push({
         name: label,
         path: safePath,
+        pathHasEscapes,
         reason: 'injection-block',
         channels: blocking.map((b) => b.channel),
         ruleIds,

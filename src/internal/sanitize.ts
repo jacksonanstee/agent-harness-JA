@@ -93,3 +93,69 @@ export function truncateTailWellFormed(text: string, max: number): string {
   const from = firstKept >= 0xdc00 && firstKept <= 0xdfff ? start + 1 : start;
   return `…${text.slice(from)}`;
 }
+
+/**
+ * Every character `escapePathUnsafe` below turns into a `\u{HEX}` escape,
+ * DERIVED from CONTROL_CHARS ∪ BIDI_CONTROLS ∪ INVISIBLES above rather than
+ * hand-copied — this file already lost one code point (U+2065) to a
+ * hand-enumerated class (see INVISIBLES's comment), so a fourth manually
+ * typed copy of the same charset is the exact failure mode being avoided.
+ */
+const PATH_ESCAPE_TARGETS = new RegExp(
+  `[${CONTROL_CHARS.source.slice(1, -1)}${BIDI_CONTROLS.source.slice(1, -1)}${INVISIBLES.source.slice(1, -1)}]`,
+  'gu',
+);
+
+/**
+ * Matches one whole escape sequence `escapePathUnsafe` can produce: a
+ * doubled backslash (`\\`, from a literal backslash in the input) or a
+ * braced code-point escape (`\u{HEX}`, uppercase hex, from a character
+ * PATH_ESCAPE_TARGETS matched). Exported so a caller that TRUNCATES an
+ * already-escaped string (telemetry/store.ts's `boundSkillDropPath`) can
+ * avoid cutting one in half — this file owns the escape grammar, so the
+ * truncator does not re-derive it and the two cannot drift apart.
+ */
+export const PATH_ESCAPE_SEQUENCE = /\\\\|\\u\{[0-9A-F]+\}/g;
+
+/**
+ * Escapes every character that would otherwise be deleted or space-
+ * substituted out of a filesystem path (PATH_ESCAPE_TARGETS), so the result
+ * is printable ASCII-safe text that still IDENTIFIES the file. Deleting or
+ * substituting is wrong here, unlike for `name` (cleanSkillText, session.ts):
+ * an invisible character renders as nothing either way, so removing it buys
+ * no visibility while destroying the only thing that distinguishes two
+ * paths — letting a hostile `/skills/he<U+200B>lper.md` collapse onto a
+ * benign `/skills/helper.md` and misdirect an operator, following the drop
+ * warning's own instruction, to edit the wrong file (round-1 fix, issue #46
+ * Finding 1). Bidi is escaped too, not merely neutralised: Trojan Source is a
+ * REORDERING attack (space-substitution already defeats it, per stripBidi),
+ * but escaping is strictly more informative than substitution for no extra
+ * cost, so one transform covers both threat classes instead of two.
+ *
+ * `escaped` is reported OUT OF BAND (mirrors `pathTruncated`,
+ * telemetry/types.ts's SkillDropPayload, and the same ellipsis-forgery
+ * argument) because the escape text itself is expressible in a real
+ * filename; backslashes are doubled FIRST — before any `\u{...}` is
+ * injected — so a file literally named `\u{200B}` cannot be read back as
+ * though it contained a real U+200B: the doubling runs first, so the
+ * backslash it introduces is never itself re-escaped, and a real backslash
+ * in the input is always distinguishable from one this function introduced.
+ *
+ * Braced `\u{...}` form, not four-digit `\uXXXX`: astral default-ignorables
+ * (the U+E0000-E007F / U+E0100-E01EF tag/variation-selector blocks) need
+ * more than four hex digits, and the braced form is unambiguous either way —
+ * no risk of an adjacent literal hex digit being read as part of the escape.
+ * `u` flag on PATH_ESCAPE_TARGETS: astral code points match as one whole
+ * code point (`codePointAt(0)` below then reads the full value), not as two
+ * lone surrogate halves each producing a bogus separate escape.
+ */
+export function escapePathUnsafe(path: string): { value: string; escaped: boolean } {
+  let escaped = false;
+  const value = path
+    .replace(/\\/g, '\\\\')
+    .replace(PATH_ESCAPE_TARGETS, (ch) => {
+      escaped = true;
+      return `\\u{${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`;
+    });
+  return { value, escaped };
+}

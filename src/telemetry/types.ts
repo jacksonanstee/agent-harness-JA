@@ -123,6 +123,17 @@ export const SKILL_DROP_RULE_ID_MAX = 64;
  */
 export interface SkillDropPayload {
   name: string;
+  /**
+   * ALREADY ESCAPED (not merely cleaned) by the capture site, mirroring
+   * session.ts's `DroppedSkill.path` / `escapePathUnsafe` (src/internal/
+   * sanitize.ts) one layer down: deleting an invisible character here would
+   * be lossy in exactly the way `pathTruncated` below exists to prevent for
+   * truncation — a hostile `/skills/he<U+200B>lper.md` must not read back
+   * byte-identical to a benign `/skills/helper.md` (round-1 fix, issue #46
+   * Finding 1). `isSkillDropPayload` (store.ts) validates shape, not
+   * content, so a direct writer that skips escaping is not rejected here —
+   * same trust boundary as every other string field on this payload.
+   */
   path: string;
   /**
    * OUT-OF-BAND truncation marker for `path`. The in-band ellipsis cannot be
@@ -138,6 +149,16 @@ export interface SkillDropPayload {
    * oversight.
    */
   pathTruncated: boolean;
+  /**
+   * OUT-OF-BAND marker mirroring `pathTruncated`, for the same reason: `path`
+   * above went through `escapePathUnsafe` at capture, and whether it needed
+   * to (i.e. whether the raw path carried a control/bidi/invisible
+   * character) is itself a signal worth keeping structural rather than
+   * requiring a consumer to re-derive it by scanning for `\u{` substrings —
+   * which a legitimately named file could also contain (see
+   * `escapePathUnsafe`'s anti-forgery doc comment).
+   */
+  pathHasEscapes: boolean;
   reason: SkillDropReason;
   /** Scanned channels that blocked the skill; empty for 'prompt-budget'. */
   channels: string[];
