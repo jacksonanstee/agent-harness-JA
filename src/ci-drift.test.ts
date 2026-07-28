@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -48,6 +48,13 @@ const isComment = (line: string): boolean => /^\s*#/.test(line);
  * Deliberately whole-line only — stripping trailing comments too would risk
  * removing real config, whereas a whole-line comment is never config, and a
  * violation smuggled onto a line with a trailing comment still gets caught.
+ *
+ * Known limitation (round-2 review): this is YAML-context-blind, so a `#` line
+ * inside a `run: |` block scalar is a shell comment yet reads as YAML
+ * commentary and gets dropped. Since every consumer below is a `not.toMatch`,
+ * dropping text can only make a check PASS — the unsafe direction. No workflow
+ * currently has such a line. If one is ever added, scope the strip to
+ * non-block-scalar regions rather than trusting this.
  */
 const stripComments = (yaml: string): string =>
   yaml
@@ -117,19 +124,59 @@ const extractUses = (yaml: string, jobName: string): string[] =>
     .map((line) => /^\s*(?:- )?uses:\s*(\S+)\s*$/.exec(line)?.[1] ?? null)
     .filter((value): value is string => value !== null);
 
-const gatesYaml = repoFile('.github/workflows/gates.yml');
-const publishYaml = repoFile('.github/workflows/publish.yml');
-const ciYaml = repoFile('.github/workflows/ci.yml');
-const allWorkflows = [
-  ['gates.yml', gatesYaml],
-  ['ci.yml', ciYaml],
-  ['publish.yml', publishYaml],
-] as const;
+/** Top-level job names of a workflow, in file order. */
+const extractJobNames = (yaml: string): string[] => {
+  const bare = stripComments(yaml);
+  const jobsAt = bare.indexOf('\njobs:');
+  if (jobsAt === -1) {
+    throw new Error('ci-drift extractor found no jobs: block — the workflow moved, update this test');
+  }
+  return bare
+    .slice(jobsAt + 1)
+    .split('\n')
+    .map((line) => /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line)?.[1] ?? null)
+    .filter((name): name is string => name !== null);
+};
+
+const WORKFLOW_DIR = '.github/workflows';
+// Enumerated from disk, never hardcoded: a repo-level invariant asserted over a
+// fixed file list is only an invariant about those files, and a new workflow
+// would escape every check below (round-2 review finding).
+const allWorkflows: ReadonlyArray<readonly [string, string]> = readdirSync(join(process.cwd(), WORKFLOW_DIR))
+  .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
+  .sort()
+  .map((name) => [name, repoFile(`${WORKFLOW_DIR}/${name}`)] as const);
+
+const workflow = (name: string): string => {
+  const found = allWorkflows.find(([file]) => file === name);
+  if (!found) throw new Error(`ci-drift expected ${WORKFLOW_DIR}/${name} to exist`);
+  return found[1];
+};
+
+const gatesYaml = workflow('gates.yml');
+const publishYaml = workflow('publish.yml');
+const ciYaml = workflow('ci.yml');
 const packageJson = JSON.parse(repoFile('package.json')) as { scripts: Record<string, string> };
 
 const SHARED_WORKFLOW = './.github/workflows/gates.yml';
+// Tolerant of the spellings YAML permits for the same meaning. Round-2 review
+// demonstrated live bypasses of the exact-literal versions: `id-token:  write`
+// (two spaces) and `cache: 'npm'` (quoted) both parse identically and both
+// slipped through. A pin that only catches the canonical spelling manufactures
+// confidence, which is worse than no pin.
+const ID_TOKEN_GRANT = /id-token:\s*['"]?write/g;
+const NPM_CACHE = /cache:\s*['"]?npm/;
+const SECRETS_INHERIT = /secrets:\s*['"]?inherit/;
+
 const GATE_NAMES = ['lint', 'typecheck', 'build', 'test', 'redteam'] as const;
-/** ADR-0022 decision 5: the floor prepublishOnly must never drop below. */
+/**
+ * ADR-0022 decision 5 *as amended 2026-07-28*: the floor prepublishOnly must
+ * never drop below. Deliberately a separate literal from GATE_NAMES even though
+ * the two currently coincide — they answer different questions (what the
+ * workflow must run, versus what prepublishOnly must not lose). Aliasing them
+ * would silently convert decision 4's directional invariant into forced
+ * equality, so a workflow-only gate could never be added again.
+ */
 const PREPUBLISH_FLOOR = ['lint', 'typecheck', 'build', 'test', 'redteam'] as const;
 
 describe('CI gate sequence (ADR-0022 R6)', () => {
@@ -180,12 +227,24 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     expect(gatesYaml).toContain(`default: '["20","22"]'`);
   });
 
+  it('the publish workflow has exactly the three expected jobs', () => {
+    // Pinned so a new inline job cannot appear without this test being updated
+    // — which is what makes the "no gates of its own" check below exhaustive
+    // rather than a check of one job (round-2 review finding).
+    expect(extractJobNames(publishYaml)).toEqual(['verify-tag', 'gates', 'publish']);
+  });
+
   it('the publish workflow defines no gates of its own (re-inlining would revive R6)', () => {
-    // The publish job legitimately runs `npm install -g npm@...` and
-    // `npm publish`, neither of which canonicalises to a gate.
-    const publishJobCommands = extractRunCommands(publishYaml, 'publish').map(canonicalise);
-    for (const gate of GATE_NAMES) {
-      expect(publishJobCommands, `publish.yml re-inlined the ${gate} gate`).not.toContain(gate);
+    // Every inline job, not just `publish`: re-inlining a gate into verify-tag
+    // would revive R6 just as surely. `gates` is the delegating caller and has
+    // no steps of its own. The publish job legitimately runs
+    // `npm install -g npm@...` and `npm publish`, neither of which
+    // canonicalises to a gate.
+    for (const job of extractJobNames(publishYaml).filter((name) => name !== 'gates')) {
+      const commands = extractRunCommands(publishYaml, job).map(canonicalise);
+      for (const gate of GATE_NAMES) {
+        expect(commands, `publish.yml job "${job}" re-inlined the ${gate} gate`).not.toContain(gate);
+      }
     }
   });
 
@@ -228,19 +287,29 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
 // INVARIANT comments in the workflows, which is the same posture that let R6
 // happen. These pin the load-bearing ones.
 describe('publish path security topology (ADR-0022 V20)', () => {
-  it('id-token: write appears exactly once, in the inline publish job', () => {
-    const holders = allWorkflows.filter(([, yaml]) => stripComments(yaml).includes('id-token: write'));
-    expect(holders.map(([name]) => name)).toEqual(['publish.yml']);
-    expect(stripComments(publishYaml).match(/id-token: write/g)).toHaveLength(1);
-    expect(stripComments(extractJobBody(publishYaml, 'publish').join('\n'))).toContain('id-token: write');
+  it('grants id-token: write exactly once across every workflow, in the inline publish job', () => {
+    // Counted over the whole directory rather than per-file, so this also
+    // catches a WORKFLOW-level grant in a caller (which would be inherited by
+    // the gates job and is invisible to a job-body check), and any grant in a
+    // workflow file added later.
+    const grants = allWorkflows.flatMap(([name, yaml]) =>
+      (stripComments(yaml).match(ID_TOKEN_GRANT) ?? []).map(() => name),
+    );
+    expect(grants, 'id-token: write must be granted exactly once, in publish.yml').toEqual(['publish.yml']);
+    expect(stripComments(extractJobBody(publishYaml, 'publish').join('\n'))).toMatch(ID_TOKEN_GRANT);
   });
 
   it('no workflow passes secrets to the jobs that execute dependency code', () => {
+    // Covers `secrets: inherit`. Explicit named forwarding (`secrets:\n  X: ...`)
+    // is not matched here, but is a two-file change: gates.yml declares no
+    // `on.workflow_call.secrets`, so a caller forwarding a named secret fails at
+    // load time until gates.yml is edited too. That declaration is pinned below.
     for (const [name, yaml] of allWorkflows) {
-      expect(stripComments(yaml), `${name} passes secrets into a called workflow`).not.toMatch(
-        /secrets:\s*inherit/,
-      );
+      expect(stripComments(yaml), `${name} passes secrets into a called workflow`).not.toMatch(SECRETS_INHERIT);
     }
+    expect(stripComments(gatesYaml), 'gates.yml now accepts secrets from callers').not.toMatch(
+      /^\s*secrets:/m,
+    );
   });
 
   it('the shared gates workflow is callable only, never directly triggerable', () => {
@@ -273,7 +342,7 @@ describe('publish path security topology (ADR-0022 V20)', () => {
     const publishJob = stripComments(extractJobBody(publishYaml, 'publish').join('\n'));
     // A cache restore inside token scope is a poisoning channel from
     // lower-privileged workflows that can write the shared cache.
-    expect(publishJob).not.toMatch(/cache:\s*npm/);
+    expect(publishJob).not.toMatch(NPM_CACHE);
     // Without github-token/run-id, download-artifact can only read THIS run,
     // which is what makes the gates -> publish handoff unforgeable.
     expect(publishJob).not.toMatch(/github-token:/);
