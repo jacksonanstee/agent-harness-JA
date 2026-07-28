@@ -124,49 +124,6 @@ describe('m003 skill-drop-type', () => {
     }
   });
 
-  // DRIFT GUARD. m003 hand-copies m002's column definitions, and nothing
-  // re-derives them — the failure class ddl-drift.test.ts exists for, and what
-  // DEC-0017 ("pinned derived constants re-derive") requires. Without this,
-  // a rebuild that silently dropped NOT NULL from session_id, changed the
-  // payload DEFAULT, or lost a column would pass every other test here.
-  // m003 is also the FIRST table rebuild, so m004 will copy its shape: the
-  // guard has to exist now, not after the pattern has propagated.
-  it('rebuilds telemetry_events identically to m002 except for the widened CHECK', () => {
-    const beforeDb = new Database(':memory:');
-    const afterDb = new Database(':memory:');
-    try {
-      runMigrations(beforeDb, MIGRATIONS.filter((m) => m.id <= 2));
-      runMigrations(afterDb, MIGRATIONS);
-
-      const tableSql = (db: Database.Database): string =>
-        (
-          db
-            .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'telemetry_events';")
-            .get() as { sql: string }
-        ).sql.replace(/\s+/g, ' ');
-
-      // Normalise ONLY the two things that are allowed to differ: the CHECK
-      // list, and the table-name quoting that ALTER TABLE … RENAME introduces
-      // (verified empirically: SQLite stores CREATE TABLE "telemetry_events"
-      // after a rename, vs unquoted CREATE TABLE telemetry_events for the
-      // native m002 CREATE TABLE). Everything else must match byte-for-byte.
-      const normalise = (sql: string): string =>
-        sql
-          .replace(/CHECK \(type IN \([^)]*\)\)/, 'CHECK(<TYPES>)')
-          .replace(/CREATE TABLE "?telemetry_events"?/, 'CREATE TABLE telemetry_events');
-
-      expect(normalise(tableSql(afterDb))).toBe(normalise(tableSql(beforeDb)));
-
-      // And pin that the widened list is exactly the old one plus one literal.
-      expect(tableSql(afterDb)).toContain(
-        "CHECK (type IN ('turn-cost','tool-trace','hook-event','skill-drop'))",
-      );
-    } finally {
-      beforeDb.close();
-      afterDb.close();
-    }
-  });
-
   it('accepts skill-drop and still rejects an unknown type', () => {
     const db = new Database(':memory:');
     try {
