@@ -7,9 +7,10 @@ import { CORPUS } from './corpus.js';
 import { runRedteam } from './runner.js';
 import { REDTEAM_ARM_LABEL } from './types.js';
 
-// CI runs `npm test` before the redteam gate step, so on drift THIS test is
-// the first failure surface — its assertion messages must be the same
-// classified report the CLI prints, never a raw multi-KB JSON diff.
+// CI runs `npm test` before the redteam gate step (gates.yml, pinned by
+// src/ci-drift.test.ts), so on drift THIS test is the first failure surface —
+// its assertion messages must be the same classified report the CLI prints,
+// never a raw multi-KB JSON diff.
 describe('committed baseline (eval/redteam/baseline.json)', () => {
   const fresh = normalizeForBaseline(
     runRedteam(CORPUS, scan, { armLabel: REDTEAM_ARM_LABEL, now: () => 0 }),

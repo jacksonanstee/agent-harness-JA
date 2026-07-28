@@ -9,7 +9,8 @@ import { describe, expect, it } from 'vitest';
 // package.json declares an `exports` map, so every resolution below exercises
 // the shipped map itself. createRequire gives plain Node resolution, immune to
 // vitest's resolver. Resolution targets dist/, so a build must exist; CI runs
-// build before test (ci.yml), same order as prepublishOnly. Deliberately NOT
+// build before test (gates.yml, pinned by src/ci-drift.test.ts), same order as
+// prepublishOnly. Deliberately NOT
 // skipIf(dist missing): a skipped gate reads green, and if CI's build step
 // ever disappeared these assertions must fail, not vanish (DEC-0016). The
 // precheck below exists only to make the local no-build failure self-explain.

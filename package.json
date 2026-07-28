@@ -35,7 +35,7 @@
     "eval": "node ./dist/cli.js eval",
     "redteam": "node ./dist/cli.js redteam",
     "check:links": "bash scripts/check-links.sh",
-    "prepublishOnly": "rm -rf dist && npm run build && npm test && npm run redteam"
+    "prepublishOnly": "rm -rf dist && npm run lint && npm run typecheck && npm run build && npm test && npm run redteam"
   },
   "publishConfig": {
     "access": "public"

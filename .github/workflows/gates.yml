@@ -1,0 +1,123 @@
+name: Gates
+
+# THE single definition of the gate sequence. Called by ci.yml (every PR and
+# push to main) and by publish.yml (every release). Extracted per ADR-0022
+# residual R6, which fired when the docs-links gate was added to ci.yml and
+# not to the publish build job: the deploy path was running strictly fewer
+# checks than PR CI. One definition means that can no longer happen.
+#
+# INVARIANT: workflow_call is the only trigger. This is not directly
+# dispatchable and must not gain `push`, `pull_request` or `workflow_dispatch`.
+#
+# INVARIANT: callers must never pass `secrets: inherit`. These jobs execute
+# dependency code (npm ci, build, test); handing them every repo secret would
+# undo the whole point of the V20 two-job split in publish.yml.
+#
+# INVARIANT: callers reference this file as `./.github/workflows/gates.yml`.
+# A local `./` reference resolves to the SAME commit as the caller, so there is
+# no movable ref to pin. Do not "harden" it to an owner/repo@sha form: that
+# would freeze the gates at a foreign commit and reintroduce a ref-confusion
+# surface that the same-commit property does not have.
+
+on:
+  workflow_call:
+    inputs:
+      node-versions:
+        description: 'JSON array of Node major versions to run the build/test matrix on.'
+        type: string
+        default: '["20","22"]'
+      upload-dist:
+        description: 'Upload dist/ as a run-scoped artifact. Only the publish path needs this.'
+        type: boolean
+        default: false
+
+# Least privilege. A called workflow can only ever DOWNGRADE the permissions
+# the calling job holds, never elevate them, so these jobs cannot obtain
+# id-token: write even if this file asked for it. That is what keeps every
+# line of dependency code out of OIDC token scope.
+permissions:
+  contents: read
+
+jobs:
+  # Node-version-independent, needs no install or build. Its own job so a
+  # broken doc link is reported in seconds rather than behind a full install.
+  docs-links:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
+      # cannot silently swap the action out from under a run. This file is on
+      # the publish critical path, so it inherits publish.yml's pin discipline
+      # rather than ci.yml's previous tag pinning.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Docs link gate
+        run: bash scripts/check-links.sh
+
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ${{ fromJSON(inputs.node-versions) }}
+    steps:
+      # Fail fast on a caller misconfiguration rather than at upload time.
+      # Artifacts are immutable and run-scoped, so two matrix legs uploading
+      # the name 'dist' collide with a 409 — loud, but only after the full
+      # install/build/test, and on the publish path that means mid-release.
+      # The fix is never `overwrite: true`: that restores mutability and a real
+      # last-writer-wins race, which would break the unforgeability argument
+      # the publish job's download step depends on.
+      - name: 'Guard: upload-dist requires a single-version matrix'
+        if: ${{ inputs.upload-dist && strategy.job-total != 1 }}
+        run: |
+          echo "upload-dist=true with ${{ strategy.job-total }} matrix legs would race on the 'dist' artifact name" >&2
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # ORDERING IS LOAD-BEARING: build before test before redteam.
+      # src/exports-map.test.ts resolves against dist/ and deliberately does not
+      # skip when dist/ is missing (a skipped gate reads green, DEC-0016), so it
+      # needs the build first. src/eval/redteam/baseline-e2e.test.ts documents
+      # that `npm test` running before the redteam gate is what makes the vitest
+      # e2e the first failure surface on baseline drift, with the CLI second.
+      # src/ci-drift.test.ts pins this order mechanically. Every gate is its own
+      # step so a failure is legible in the Actions log at a glance.
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Red-team gate
+        run: node dist/cli.js redteam
+
+      # The only channel from the gates to the publish job. Retention outlives a
+      # plausible manual-approval delay on the npm-publish environment: if the
+      # artifact expires before an approver clicks, download-artifact fails and
+      # the release has to be re-run in full. Keep this comfortably longer than
+      # the approval SLA if required reviewers are ever enabled.
+      - name: Upload built dist
+        if: ${{ inputs.upload-dist }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 5
