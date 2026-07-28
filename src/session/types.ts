@@ -254,6 +254,14 @@ export interface DroppedSkill {
    */
   path: string;
   reason: SkillDropReason;
+  /**
+   * Which scanned channels blocked the skill ('description', 'body',
+   * 'assembled section'); empty for 'prompt-budget'. Carried because the
+   * stderr warning names the channel and, without this, the durable telemetry
+   * record would be strictly LESS informative than the transient warning it
+   * exists to replace (issue #46).
+   */
+  channels: string[];
   /** Rule ids that triggered the block; empty for `prompt-budget`. */
   ruleIds: string[];
 }

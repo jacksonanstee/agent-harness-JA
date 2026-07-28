@@ -264,7 +264,13 @@ function buildSystemPrompt(skills: Skill[]): {
     // +2 counts the `\n\n` join separator, so the cap is exact, not soft —
     // otherwise ~20k minimal skills overrun the budget ~15% via separators.
     if (section.length + 2 > remaining) {
-      droppedSkills.push({ name, path: stripBidi(sanitizeControlChars(skill.path)), reason: 'prompt-budget', ruleIds: [] });
+      droppedSkills.push({
+        name,
+        path: cleanSkillText(skill.path),
+        reason: 'prompt-budget',
+        channels: [],
+        ruleIds: [],
+      });
       continue;
     }
     remaining -= section.length + 2;
@@ -339,13 +345,20 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // Deduped across channels: the same rule firing on more than one is one
       // reason, not three.
       const ruleIds = [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))];
-      // Bidi-stripped as well as control-stripped, matching the loader's
-      // treatment of SkillError.file: a reversed filename in the ONE message
-      // that tells the operator which file to edit would point them at the
-      // wrong one (Trojan Source, issue #24). sanitizeControlChars alone does
-      // not remove bidi.
-      const safePath = stripBidi(sanitizeText(skill.path));
-      blockedSkills.push({ name: label, path: safePath, reason: 'injection-block', ruleIds });
+      // cleanSkillText (bidi + control + invisible stripped), matching the
+      // loader's treatment of SkillError.file: a reversed or zero-width-
+      // padded filename in the ONE message that tells the operator which
+      // file to edit would point them at the wrong one (Trojan Source, issue
+      // #24), and this field is about to become a durable, exported
+      // telemetry row (issue #46) where the same smuggling risk applies.
+      const safePath = cleanSkillText(skill.path);
+      blockedSkills.push({
+        name: label,
+        path: safePath,
+        reason: 'injection-block',
+        channels: blocking.map((b) => b.channel),
+        ruleIds,
+      });
       warn(
         `skill "${label}" (${safePath}) dropped from the system prompt: ` +
           `injection scan blocked its ${blocking.map((b) => b.channel).join(' and ')} ` +
