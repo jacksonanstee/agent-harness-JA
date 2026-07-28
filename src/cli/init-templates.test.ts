@@ -35,6 +35,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     denied: [],
     memoryEntryId: null,
     skillErrors: [],
+    droppedSkills: [],
     ...overrides,
   };
 }

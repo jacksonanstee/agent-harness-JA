@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { TaskDescriptor } from '../router/index.js';
 import type { Skill } from '../skills/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
+import type { ScanResult } from '../security/index.js';
 import type {
   DeniedToolCall,
+  DroppedSkill,
   SdkAssistantMessage,
   SdkHookCallback,
   SdkMessage,
@@ -188,9 +190,28 @@ function assistantText(message: SdkAssistantMessage): string[] {
  */
 const MAX_SKILL_PROMPT_CHARS = 256_000;
 
+/**
+ * Hidden-unicode rule that does NOT justify dropping a skill (ADR-0026).
+ * `cleanSkillText` already strips tag characters before this sink, so a
+ * block whose ONLY hit is this rule would refuse a skill over characters
+ * that could never reach the model — pure false-positive cost for zero
+ * marginal benefit. Nothing is lost: the scanner strips and rescans, so tag
+ * chars concealing a real payload still fire that payload's plaintext rule,
+ * and the block then stands on that rule instead.
+ */
+const STRIPPED_BEFORE_PROMPT_RULE_IDS: readonly string[] = ['unicode-tag-chars'];
+
+/** True when a verdict should keep a skill out of the prompt. */
+function blocksSkill(scan: ScanResult | null): boolean {
+  // `ask` (medium confidence) never drops: too broad for a channel the
+  // operator authored. Enforcement is high-confidence only.
+  if (scan === null || scan.verdict !== 'block') return false;
+  return scan.rule_ids.some((id) => !STRIPPED_BEFORE_PROMPT_RULE_IDS.includes(id));
+}
+
 function buildSystemPrompt(skills: Skill[]): {
   prompt: string | undefined;
-  droppedSkills: string[];
+  droppedSkills: DroppedSkill[];
 } {
   if (skills.length === 0) return { prompt: undefined, droppedSkills: [] };
   // The body IS the skill (ADR-0006: "This is what the agent reads when the
@@ -198,7 +219,7 @@ function buildSystemPrompt(skills: Skill[]): {
   // Same charset contract as the header: control/bidi/invisible chars are
   // stripped; the injection scan runs on the RAW body before this.
   const sections: string[] = [];
-  const droppedSkills: string[] = [];
+  const droppedSkills: DroppedSkill[] = [];
   let remaining = MAX_SKILL_PROMPT_CHARS;
   for (const skill of skills) {
     const name = cleanSkillText(skill.name);
@@ -210,7 +231,7 @@ function buildSystemPrompt(skills: Skill[]): {
     // +2 counts the `\n\n` join separator, so the cap is exact, not soft —
     // otherwise ~20k minimal skills overrun the budget ~15% via separators.
     if (section.length + 2 > remaining) {
-      droppedSkills.push(name);
+      droppedSkills.push({ name, path: skill.path, reason: 'prompt-budget', ruleIds: [] });
       continue;
     }
     remaining -= section.length + 2;
@@ -247,16 +268,46 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     for (const error of loadResult.errors) {
       warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
     }
-    // Skill descriptions enter the system prompt (buildSystemPrompt), so scan
-    // them like any other untrusted channel (ASI06 context-poisoning path that
-    // previously bypassed the scanner entirely). Observe-only — same v1
-    // posture as tool results (R-4): a hostile description warns, never
-    // blocks. buildSystemPrompt independently strips control/bidi/invisible
-    // chars (not combining marks — see cleanSkillText); the scan runs on the
-    // raw text first, so stripping cannot hide anything from it.
+    // Skill descriptions and bodies enter the system prompt at system-prompt
+    // authority (buildSystemPrompt), so scan them like any other untrusted
+    // channel (ASI06 context-poisoning path that previously bypassed the
+    // scanner entirely). buildSystemPrompt independently strips control/bidi/
+    // invisible chars (not combining marks — see cleanSkillText); the scan
+    // runs on the raw text first, so stripping cannot hide anything from it.
+    //
+    // ENFORCED, not observe-only (ADR-0026), unlike tool results: R-4's
+    // rationale is that no SDK result-rewrite channel exists, but the harness
+    // assembles this prompt itself, so refusing to inject is implementable
+    // here. A high-confidence block on EITHER channel drops the whole skill —
+    // description as well as body, because otherwise the payload just moves
+    // to the description, which lands at the same authority.
+    const injectableSkills: Skill[] = [];
+    const blockedSkills: DroppedSkill[] = [];
     for (const skill of loadResult.skills) {
-      runInjectionScan(`skill "${cleanSkillText(skill.name)}" description`, skill.description);
-      runInjectionScan(`skill "${cleanSkillText(skill.name)}" body`, skill.body);
+      const label = cleanSkillText(skill.name);
+      const description = scanSkillChannel(`skill "${label}" description`, skill.description);
+      const body = scanSkillChannel(`skill "${label}" body`, skill.body);
+      const blocking = [
+        ...(blocksSkill(description) ? [{ channel: 'description', scan: description }] : []),
+        ...(blocksSkill(body) ? [{ channel: 'body', scan: body }] : []),
+      ];
+      if (blocking.length === 0) {
+        injectableSkills.push(skill);
+        continue;
+      }
+      blockedSkills.push({
+        name: label,
+        path: skill.path,
+        reason: 'injection-block',
+        // Deduped across channels: the same rule firing on both is one reason.
+        ruleIds: [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))],
+      });
+      warn(
+        `skill "${label}" (${sanitizeText(skill.path)}) dropped from the system prompt: ` +
+          `injection scan blocked its ${blocking.map((b) => b.channel).join(' and ')} ` +
+          `(rules: ${[...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))].map(sanitizeText).join(', ')}). ` +
+          `Edit the skill file to remove the flagged content if this is a false positive.`,
+      );
     }
 
     const harnessSessionId = generateId();
@@ -349,6 +400,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Scans the full tool output; returns the ScanResult (structural — the
     // hook payload types it `unknown` to avoid a hooks→security import) or
     // null when no scanner is injected. Never throws into the hot path.
+    /**
+     * Typed view of runInjectionScan for the skill channel, where the verdict
+     * is acted on rather than merely warned about (ADR-0026).
+     *
+     * A null result means "no scanner injected" OR "the scanner threw", and
+     * both fail OPEN — the skill is injected. Failing closed would let a
+     * custom `scanInjection` that crashes on some input deny every skill,
+     * and `scanInjection` is arbitrary caller-supplied code. The shipped
+     * scan() is throw-hardened (safeMatch), so the residual is narrow and is
+     * recorded in ADR-0026: a custom scanner that crashes on attacker-shaped
+     * text evades enforcement, having already warned.
+     */
+    function scanSkillChannel(label: string, text: string): ScanResult | null {
+      return (runInjectionScan(label, text) as ScanResult | null) ?? null;
+    }
+
     function runInjectionScan(tool: string, output: unknown): unknown {
       if (deps.scanInjection === undefined) return null;
       try {
@@ -480,13 +547,18 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let numTurns: number | null = null;
     let streamError: unknown = null;
 
-    const { prompt: systemPrompt, droppedSkills } = buildSystemPrompt(loadResult.skills);
-    for (const name of droppedSkills) {
+    // Only the skills that survived the injection gate are offered to the
+    // budget pass, so the two drop reasons stay distinct and a blocked skill
+    // never consumes budget a legitimate one could have used.
+    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
+      buildSystemPrompt(injectableSkills);
+    for (const dropped of budgetDropped) {
       warn(
-        `skill "${name}" dropped from the system prompt: aggregate skill budget ` +
-          `(${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
+        `skill "${dropped.name}" (${sanitizeText(dropped.path)}) dropped from the system ` +
+          `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
       );
     }
+    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
 
     try {
       // Steps 5-14: the SDK turn.
@@ -645,6 +717,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       denied,
       memoryEntryId,
       skillErrors: loadResult.errors,
+      droppedSkills,
     };
   }
 

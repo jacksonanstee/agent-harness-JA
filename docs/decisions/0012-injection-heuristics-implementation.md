@@ -69,7 +69,7 @@ building it.
    (`src/internal/sanitize.ts`), truncated (120 chars), deduped, and capped
    (10). `rule_ids` is **not** capped by the excerpt budget — under-reporting
    which rules fired would mislead audit/telemetry consumers.
-9. **Session wiring observes only.** The scanner runs on the **full** tool
+9. **Session wiring observes only.** *(Scoped 2026-07-28 by [ADR-0026](./0026-skill-channel-block-on-flag.md): this decision still governs TOOL OUTPUT, whose enforcement remains blocked on an SDK rewrite channel. It no longer governs the harness-owned skill channel, where a high-confidence block now drops the skill from the system prompt.)* The scanner runs on the **full** tool
    output (not the truncated telemetry summary) and its `ScanResult` feeds the
    post-tool hook's `scan` field (architecture step 10). Block/ask verdicts
    warn; the run continues. **Enforcement (`on_block` redact/drop/error) is
@@ -106,4 +106,4 @@ building it.
 - A telemetry event type for scan verdicts is wanted → new `telemetry_events`
   CHECK-constraint migration (currently scan results ride only the hook payload
   + warnings).
-- Enforcement is needed before S-2 → revisit the observe-only decision (§9).
+- Enforcement is needed before S-2 → revisit the observe-only decision (§9). **FIRED 2026-07-28 for the skill channel only — see [ADR-0026](./0026-skill-channel-block-on-flag.md). Still open for tool output.**

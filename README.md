@@ -71,7 +71,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)**: Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)**: Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)**: Twenty-five ADRs (0001–0025) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, and refusal handling.
+3. **[docs/decisions/](./docs/decisions/)**: Twenty-six ADRs (0001–0026) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, and block-on-flag enforcement for the skill channel.
 4. **[docs/architecture.md](./docs/architecture.md)**: System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)**: Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)**: How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
