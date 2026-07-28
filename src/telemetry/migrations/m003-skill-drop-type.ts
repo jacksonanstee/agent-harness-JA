@@ -8,6 +8,11 @@ import type { Migration } from './runner.js';
  * back rather than leaving a half-renamed table.
  *
  * The three indexes are recreated because DROP TABLE takes its indexes with it.
+ *
+ * Rebuilding this table? Add a byte-diff test to ddl-drift.test.ts comparing
+ * your migration's output against the immediately preceding one's, with only
+ * your declared intentional change normalised away — see the
+ * "rebuilds telemetry_events identically to m002…" test for the pattern.
  */
 export const M003_DDL = `
 CREATE TABLE telemetry_events_new (

@@ -6,15 +6,32 @@ import { TELEMETRY_EVENT_TYPES } from '../store.js';
 import { M001_DDL } from './m001-memory-baseline.js';
 import { MIGRATIONS, runMigrations } from './index.js';
 
-// Dual-ownership drift guards (ADR-0011 §3, review finding F3/F5): these
-// constants are hand-copied pairs; each test re-derives the invariant so
-// divergence fails loudly instead of silently forking the effective schema.
+// Dual-ownership drift guards (ADR-0011 §3, review finding F3/F5). This file's
+// mandate covers any hand-copied DDL parity, by either of two mechanisms:
+//   - a named constant pair (e.g. M001_DDL vs MEMORY_BASELINE_DDL, or a CHECK
+//     list vs TELEMETRY_EVENT_TYPES) that must stay in sync — the test
+//     re-derives the invariant directly from both sides; or
+//   - a live schema snapshot diffed against another live snapshot (e.g. one
+//     migrated database's sqlite_master.sql against another's), for cases
+//     where there is no named constant on either side, only the effective
+//     schema each migration produces.
+// The mandate applies whether the two sides are cross-module (this table's
+// DDL vs another module's constant) or intra-module (one migration's DDL vs
+// the migration immediately before it, e.g. m002 vs m003). Either way,
+// divergence fails loudly here instead of silently forking the effective
+// schema.
 
 describe('dual-owned schema constants', () => {
   it('migration 001 is byte-identical to memory ensureSchema DDL', () => {
     expect(M001_DDL).toBe(MEMORY_BASELINE_DDL);
   });
 
+  // "Exactly" is deliberately not literal right now: the CHECK also admits
+  // 'skill-drop' (m003) while TELEMETRY_EVENT_TYPES still lists only the
+  // three original values, and this test never probes 'skill-drop'. That gap
+  // closes when the type-level change lands (issue #46 follow-up) — until
+  // then, green here means "the three listed types still work," not "the
+  // CHECK and TELEMETRY_EVENT_TYPES are in sync."
   it('the telemetry_events CHECK constraint accepts exactly TELEMETRY_EVENT_TYPES', () => {
     const db = new Database(':memory:');
     try {
