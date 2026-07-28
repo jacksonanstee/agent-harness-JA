@@ -22,27 +22,32 @@ const ZERO_WIDTH = /[\u200B\u200C\u200D\u2060\uFEFF\u00AD]/gu;
 const TAG_CHARS = /[\u{E0000}-\u{E007F}]/gu;
 /**
  * Characters an attacker can interleave between letters to defeat plaintext
- * pattern matching while leaving rendered text visually unchanged: zero-width
- * chars, combining marks (U+0300-036F), variation selectors (U+FE00-FE0F,
- * U+E0100-E01EF), bidi format/override + isolate controls (U+202A-202E,
- * U+2066-2069 -- the "Trojan Source" class, CVE-2021-42574), and tag chars.
+ * pattern matching while leaving rendered text visually unchanged: default-
+ * ignorable code points (zero-width chars, variation selectors, tag chars,
+ * bidi format/override + isolate controls -- the "Trojan Source" class,
+ * CVE-2021-42574), other format chars, and combining/enclosing marks.
  * Stripped before the re-scan pass so a smuggled phrase is revealed; stripping
  * (not reporting) keeps false positives low, since combining marks are
  * legitimate in NFD-form accented text.
  *
- * This is a LIST, not a property: completeness is maintained by hand, in sync
- * with the sanitiser's INVISIBLES in src/internal/sanitize.ts. Widened
- * 2026-07-28 after a review PoC found a class in neither set (U+2061-2064,
- * U+206A-206F, U+180E, U+FFF9-FFFB, U+1D173-1D17A) that both survived cleaning
- * into the system prompt and defeated the plaintext rules.
+ * Expressed as Unicode PROPERTIES, not an enumeration (2026-07-28, round 3).
+ * Two prior rounds patched the exact code points each PoC used and left the
+ * adjacent holes: U+2065 fell in the single-code-point gap between
+ * U+2060-2064 and the bidi range and remained a working bypass. Properties
+ * close the class by construction and track ICU rather than a hand-edited
+ * list. \p{Cf} is included as well as \p{Default_Ignorable_Code_Point}
+ * because some format chars (Arabic number signs, Egyptian hieroglyph
+ * controls) are Cf but not default-ignorable. Stripping here is TRANSIENT —
+ * for the re-scan only, never from content — which is why this set can be
+ * far broader than the sanitiser's INVISIBLES.
  */
 const SMUGGLING_CHARS =
 // eslint-disable-next-line no-misleading-character-class
-  /[\u200B\u200C\u200D\u2060-\u2064\u206A-\u206F\uFEFF\u00AD\u180E\uFFF9-\uFFFB\u0300-\u036F\uFE00-\uFE0F\u202A-\u202E\u2066-\u2069\u{1D173}-\u{1D17A}\u{E0100}-\u{E01EF}\u{E0000}-\u{E007F}]/gu;
+  /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Mn}\p{Me}\uFFF9-\uFFFB]/gu;
 /**
  * Lone joiners are legitimate (emoji ZWJ sequences, Indic scripts); a run of
  * three or more zero-width characters is reported as a `zero-width-run` hit.
- * The re-scan pass triggers on any char in the enumerated SMUGGLING_CHARS set,
+ * The re-scan pass triggers on any char matching SMUGGLING_CHARS,
  * so a two-char interruption is still revealed without inflating false
  * positives.
  */

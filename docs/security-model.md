@@ -121,13 +121,18 @@ lattice
 (any high-confidence hit → `block`, medium → `ask`), strip-and-rescan against
 character-insertion smuggling — the re-scan triggers on any character in the
 enumerated smuggling set, because two interleaved zero-widths defeat plaintext
-rules (ADR-0012 §5, a review HIGH). That set is a **list, not a property**: it
-is hand-maintained alongside the sanitiser's own strip set in a different file,
-and on 2026-07-28 a review PoC found a class in neither (U+2061–2064 invisible
-math operators, U+206A–206F, U+180E, U+FFF9–FFFB, U+1D173–1D17A) that both
-survived cleaning into the system prompt and defeated the plaintext rules.
-Both sets were widened and the gap is pinned by a regression test, but the
-honest statement is that completeness here is maintained, not guaranteed. Known evasions are named rather than papered
+rules (ADR-0012 §5, a review HIGH). That set is now a **property, not a list**
+(`\p{Default_Ignorable_Code_Point}`, `\p{Cf}`, `\p{Mn}`, `\p{Me}`), which is
+the second correction it took to get right. On 2026-07-28 a review found a
+class in neither this set nor the sanitiser's (U+2061–2064, U+206A–206F,
+U+180E, U+FFF9–FFFB, U+1D173–1D17A) that both survived cleaning into the system
+prompt and defeated the plaintext rules; the first fix enumerated exactly those
+code points, and a follow-up review immediately found U+2065 — the single gap
+between the range just added and the bidi range — still open, along with ~1,700
+combining marks. Enumerating a class one proof-of-concept at a time does not
+converge. The property form closes it by construction and tracks ICU, and a
+test sweeps every code point in the class (6,080 of them) rather than a
+sample. Known evasions are named rather than papered
 over: NFKC-normalization tricks and homoglyphs are deferred to the semantic
 judge (ADR-0016), and the scanner is observe-only in v1 for tool output (R-4); the skill channel is enforced (ADR-0026).
 
@@ -219,7 +224,8 @@ authority. What remains accepted is narrower, and named honestly in ADR-0026:
 the premise above — that a legitimate skill has no reason to contain
 scanner-flagged phrasing — is FALSE for several high-confidence rules
 (`markdown-image-exfil` catches a shields.io badge, the chat-template rules catch
-a skill that *documents* injection, and `do-not-tell-user` catches
+a skill that quotes a chat template, the override-phrasing rules catch a skill
+that *documents* injection, and `do-not-tell-user` catches
 instruction-shaped prose that skills legitimately contain), so real
 false-positive drops are possible and the remedy is editing the skill file —
 which degrades to forking for a third-party pack. Enforcement is also a property

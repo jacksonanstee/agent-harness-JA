@@ -35,16 +35,20 @@ export function stripBidi(text: string): string {
 // excluded because they are legitimate in NFD-form accented text \u2014 the
 // scanner strips them only transiently for its re-scan pass, never from
 // content. Keep the two charsets in sync when either changes.
-// Widened 2026-07-28 (round-2 review PoC): U+2061-2064 invisible math
-// operators, U+206A-206F deprecated format, U+180E, U+FFF9-FFFB interlinear
-// annotation and U+1D173-1D17A musical formatting were in NEITHER this set nor
-// the scanner's, so they survived into the system prompt AND defeated the
-// plaintext rules on both scan passes: `ignore <U+2064>all previous
-// instructions` scored `pass` and rendered to a reader as a clean injection.
-// Pinned by a regression test in src/session/session.test.ts.
+// A PROPERTY, not a list (2026-07-28, round-3 review). Two earlier rounds
+// enumerated the exact code points each PoC used and left the holes beside
+// them: U+2065 sat in the one-code-point gap between U+2060-2064 and the bidi
+// range and was still a working bypass. \p{Default_Ignorable_Code_Point}
+// covers the class by construction. U+FFF9-FFFB (interlinear annotation) are
+// Cf but NOT default-ignorable, so they are named explicitly; deleting them
+// merges annotation text into the base text, which is the one visible
+// content change here and is accepted (Unicode discourages them in open
+// interchange). Deliberately NOT \p{Mn}: combining marks are legitimate NFD
+// content, and the scanner strips them only transiently for its re-scan.
+// Swept exhaustively by src/session/session.test.ts.
 const INVISIBLES =
 // eslint-disable-next-line no-misleading-character-class -- the joiners/VS ARE the payload chars being stripped, same suppression as the scanner's SMUGGLING_CHARS
-  /[\u200B\u200C\u200D\u2060-\u2064\u206A-\u206F\uFEFF\u00AD\u180E\uFFF9-\uFFFB\uFE00-\uFE0F\u{1D173}-\u{1D17A}\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+  /[\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB]/gu;
 
 export function stripInvisibles(text: string): string {
   return text.replace(INVISIBLES, '');
