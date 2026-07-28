@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createTelemetryStore, openTelemetryDatabase, TELEMETRY_EVENT_TYPES } from './store.js';
+import {
+  boundSkillDropName,
+  boundSkillDropPath,
+  createTelemetryStore,
+  openTelemetryDatabase,
+  TELEMETRY_EVENT_TYPES,
+} from './store.js';
 import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_MAX } from './types.js';
 import type { TelemetryEventInput, TelemetryStore } from './types.js';
 
@@ -389,6 +395,59 @@ describe('skill-drop events', () => {
     ).toThrow(/not a valid skill-drop payload/);
   });
 
+  // REGRESSION for round-1 review Finding 1 (HIGH). `Array.prototype.every`
+  // (and `.map`, in sanitizePayload) SKIP holes — they walk HasProperty, not
+  // indices — but `JSON.stringify` does NOT: it materialises each hole as
+  // `null`. A sparse array used to pass this validator, get stored as
+  // `["r1",null]`, and then fail the SAME validator on the read-back inside
+  // record() — by which point, before Finding 1's transaction fix, the row
+  // had already been committed. isBoundedStringArray now uses an indexed
+  // loop, which reads a hole as `undefined` and rejects it before any write
+  // is attempted; asserting only `toThrow` would not distinguish "rejected
+  // before writing" from "rejected after writing," so this also asserts zero
+  // rows exist — the row count, not just the error, is the actual bug.
+  it('rejects a sparse ruleIds array before writing anything (holes survive .every/.map, JSON.stringify turns them into null)', () => {
+    const { store } = openStore();
+    const sparse: string[] = [];
+    sparse[0] = 'a';
+    sparse[2] = 'c'; // no index 1: a genuine hole, not an explicit undefined
+    expect(sparse.length).toBe(3); // sanity: the hole is real, not optimized away
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, ruleIds: sparse },
+      }),
+    ).toThrow(/not a valid skill-drop payload/);
+    expect(store.query({ type: 'skill-drop' })).toHaveLength(0);
+  });
+
+  // REGRESSION for round-1 review Finding 1 (HIGH), Part B: the insert and
+  // the read-back re-validation now run in ONE db.transaction, so a
+  // rowToEvent failure AFTER the insert rolls the insert back. The sparse-
+  // array case above is now caught before any write happens (Part A), so it
+  // can no longer exercise this path — this test forces a post-insert,
+  // pre-return failure directly (an AFTER INSERT trigger corrupts the row
+  // that was just written) to prove the rollback mechanism itself, not just
+  // the one bug it was built to fix. `ok: false` alone would not have caught
+  // the original bug — the row stayed committed while `ok` was false — so
+  // this asserts the row count instead.
+  it('rolls back the insert if the post-write read-back fails validation (ok:false must mean nothing was written)', () => {
+    const { db, store } = openStore();
+    db.exec(`
+      CREATE TRIGGER corrupt_skill_drop
+      AFTER INSERT ON telemetry_events
+      WHEN NEW.type = 'skill-drop'
+      BEGIN
+        UPDATE telemetry_events SET payload = 'not json' WHERE id = NEW.id;
+      END;
+    `);
+    const result = store.record({ type: 'skill-drop', sessionId: 's', turnId: 't', payload: validPayload });
+    expect(result.ok).toBe(false);
+    expect(store.query({ type: 'skill-drop' })).toHaveLength(0);
+  });
+
   it('sanitizes control characters inside the ruleIds array', () => {
     const { store } = openStore();
     store.record({
@@ -405,6 +464,41 @@ describe('skill-drop events', () => {
     expect([...TELEMETRY_EVENT_TYPES].sort()).toEqual(
       ['hook-event', 'skill-drop', 'tool-trace', 'turn-cost'],
     );
+  });
+});
+
+// REGRESSION for round-1 review Finding 3 (HIGH). The caps in types.ts are
+// documented as TOTAL stored length including the ellipsis, while the
+// truncators bound CONTENT and then append one — so a caller must pass
+// `CAP - 1`, and getting that arithmetic backwards silently drops exactly the
+// oversized, attacker-controlled rows this feature exists to capture. These
+// pin the boundary the helpers exist to make impossible to get wrong: a
+// maximally-long input comes out at exactly the cap, not cap + 1.
+describe('boundSkillDropPath / boundSkillDropName', () => {
+  it('boundSkillDropPath returns a short path unchanged with truncated: false', () => {
+    expect(boundSkillDropPath('/skills/helper.md')).toEqual({
+      value: '/skills/helper.md',
+      truncated: false,
+    });
+  });
+
+  it('boundSkillDropPath bounds a maximally-long path at exactly SKILL_DROP_PATH_MAX units (not MAX + 1)', () => {
+    const longPath = 'p'.repeat(SKILL_DROP_PATH_MAX * 2);
+    const result = boundSkillDropPath(longPath);
+    expect(result.truncated).toBe(true);
+    expect(result.value).toHaveLength(SKILL_DROP_PATH_MAX);
+    expect(result.value.startsWith('…')).toBe(true);
+  });
+
+  it('boundSkillDropName returns a short name unchanged', () => {
+    expect(boundSkillDropName('helper')).toBe('helper');
+  });
+
+  it('boundSkillDropName bounds a maximally-long name at exactly SKILL_DROP_NAME_MAX units (not MAX + 1)', () => {
+    const longName = 'n'.repeat(SKILL_DROP_NAME_MAX * 2);
+    const result = boundSkillDropName(longName);
+    expect(result).toHaveLength(SKILL_DROP_NAME_MAX);
+    expect(result.endsWith('…')).toBe(true);
   });
 });
 

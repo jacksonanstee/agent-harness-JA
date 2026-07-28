@@ -1,4 +1,6 @@
 export {
+  boundSkillDropName,
+  boundSkillDropPath,
   createTelemetryStore,
   openTelemetryDatabase,
   DEFAULT_DB_PATH,

@@ -7,6 +7,7 @@ import type {
   HookEventPayload,
   RecordResult,
   SkillDropPayload,
+  SkillDropReason,
   TelemetryError,
   TelemetryEvent,
   TelemetryEventInput,
@@ -25,7 +26,11 @@ import {
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
 } from './types.js';
-import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
+import {
+  sanitizeControlChars as sanitizeText,
+  truncateTailWellFormed,
+  truncateWellFormed,
+} from '../internal/sanitize.js';
 
 /**
  * Exhaustive BY CONSTRUCTION. The previous
@@ -153,16 +158,67 @@ function isHookEventPayload(value: unknown): value is HookEventPayload {
   );
 }
 
-const SKILL_DROP_REASONS: ReadonlySet<string> = new Set(['injection-block', 'prompt-budget']);
+/**
+ * Exhaustive BY CONSTRUCTION, same shape as EVENT_TYPE_PRESENCE above and for
+ * the same reason: a hand-copied `Set(['injection-block', 'prompt-budget'])`
+ * is a MEMBERSHIP check, not a completeness check. This is the exact bug this
+ * task fixed for TELEMETRY_EVENT_TYPES, one file down — a set built from a
+ * literal list compiles clean when SkillDropReason grows a third member and
+ * nobody updates the literal, and the new reason is silently dead-lettered by
+ * assertValidInput. A missing key here is now a compile error.
+ */
+const SKILL_DROP_REASON_PRESENCE: Record<SkillDropReason, true> = {
+  'injection-block': true,
+  'prompt-budget': true,
+};
 
-/** First array-bearing payload in this store: elements are validated, not just
- *  the container, because a direct writer need not have gone through session.ts. */
+const SKILL_DROP_REASONS: ReadonlySet<string> = new Set(Object.keys(SKILL_DROP_REASON_PRESENCE));
+
+/**
+ * First array-bearing payload in this store: elements are validated, not just
+ * the container, because a direct writer need not have gone through session.ts.
+ *
+ * Indexed loop, NOT `.every`: `Array.prototype.every` (and `.map`, in
+ * sanitizePayload's skill-drop branch) SKIP holes — they walk HasProperty, not
+ * indices — so a sparse array (e.g. `ruleIds[2] = 'x'` with no index 0 or 1
+ * set) passes this check and passes the `.map` in sanitizePayload unchanged.
+ * `JSON.stringify` does NOT skip holes: it materialises each one as `null`.
+ * That row then INSERTs successfully, and only fails re-validation on the
+ * read-back inside record() (rowToEvent's structural check), by which point
+ * the write already happened — see the transaction wrapping the insert and
+ * read-back in createTelemetryStore. Reading `value[i]` on a hole returns
+ * `undefined`, which fails `typeof item !== 'string'` here, so this indexed
+ * loop rejects the sparse array BEFORE either the write or the `.map`.
+ */
 function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maxItems &&
-    value.every((item) => typeof item === 'string' && item.length <= maxLen)
-  );
+  if (!Array.isArray(value) || value.length > maxItems) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const item: unknown = value[i];
+    if (typeof item !== 'string' || item.length > maxLen) return false;
+  }
+  return true;
+}
+
+/**
+ * Bakes the CAP-1 truncator arithmetic (see types.ts's SKILL_DROP_*_MAX doc
+ * comment) into one place so no caller re-derives it. Task 5's capture site
+ * needs this arithmetic in two independent spots — the truncation call and
+ * the separate `pathTruncated` derivation, since neither truncator reports
+ * whether it fired — and a hand-copied `CAP - 1` in each is a silent-inversion
+ * risk: get the sign wrong and every oversized attacker-controlled path (the
+ * rows most worth having) fails isSkillDropPayload and vanishes as a warning.
+ */
+export function boundSkillDropPath(path: string): { value: string; truncated: boolean } {
+  const truncated = path.length > SKILL_DROP_PATH_MAX - 1;
+  return { value: truncateTailWellFormed(path, SKILL_DROP_PATH_MAX - 1), truncated };
+}
+
+/**
+ * `name` has no truncated-flag counterpart (see SkillDropPayload.pathTruncated's
+ * doc comment for why `path` needs one and `name` deliberately doesn't).
+ */
+export function boundSkillDropName(name: string): string {
+  return truncateWellFormed(name, SKILL_DROP_NAME_MAX - 1);
 }
 
 function isSkillDropPayload(value: unknown): value is SkillDropPayload {
@@ -399,6 +455,39 @@ export function createTelemetryStore(db: Database.Database): TelemetryStore {
   const insert = db.prepare(INSERT_SQL);
   const selectById = db.prepare('SELECT * FROM telemetry_events WHERE id = @id;');
 
+  /**
+   * Insert and read-back as ONE transaction, defined once and reused (per
+   * better-sqlite3's guidance) rather than wrapped fresh on every call.
+   *
+   * rowToEvent's read-back re-validation can throw on a row that passed
+   * isPayloadForType in memory but serializes differently — the sparse-array
+   * case above is the one this task found and closed pre-write, but that fix
+   * is per-field; this closes the CLASS for every field, present and future.
+   * Before this wrapped the two statements, that throw happened AFTER
+   * insert.run had already committed (better-sqlite3 auto-commits a bare
+   * statement outside an explicit transaction), so record() returned
+   * `ok: false` while the bad row stayed in the table — and recordTelemetry
+   * downgrades `ok: false` to one stderr warning, so the corrupted row (and,
+   * via store.query()'s unconditional rowToEvent map, every OTHER row too,
+   * since one throwing row fails the whole query) went undetected until an
+   * operator ran `telemetry export` weeks later. Wrapping means `ok: false`
+   * now always means "nothing was written."
+   */
+  const insertAndReadBack = db.transaction(
+    (row: {
+      id: string;
+      type: TelemetryEventInput['type'];
+      sessionId: string;
+      turnId: string;
+      ts: number;
+      payload: string;
+    }): TelemetryEvent => {
+      insert.run(row);
+      const stored = selectById.get({ id: row.id });
+      return rowToEvent(stored);
+    },
+  );
+
   function record(event: TelemetryEventInput): RecordResult {
     assertValidInput(event);
     const row = {
@@ -410,9 +499,8 @@ export function createTelemetryStore(db: Database.Database): TelemetryStore {
       payload: JSON.stringify(sanitizePayload(event)),
     };
     try {
-      insert.run(row);
-      const stored = selectById.get({ id: row.id });
-      return { ok: true, value: rowToEvent(stored) };
+      const value = insertAndReadBack(row);
+      return { ok: true, value };
     } catch (cause: unknown) {
       return { ok: false, error: telemetryError(cause) };
     }

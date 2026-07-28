@@ -46,12 +46,15 @@ describe('dual-owned schema constants', () => {
     expect(M001_DDL).toBe(MEMORY_BASELINE_DDL);
   });
 
-  // "Exactly" is deliberately not literal right now: the CHECK also admits
-  // 'skill-drop' (m003) while TELEMETRY_EVENT_TYPES still lists only the
-  // three original values, and this test never probes 'skill-drop'. That gap
-  // closes when the type-level change lands (issue #46 follow-up) — until
-  // then, green here means "the three listed types still work," not "the
-  // CHECK and TELEMETRY_EVENT_TYPES are in sync."
+  // The gap this comment used to describe closed in the type-level change
+  // (issue #46): TELEMETRY_EVENT_TYPES now includes 'skill-drop' (derived from
+  // EVENT_TYPE_PRESENCE in store.ts), so the loop below inserts one and this
+  // test now probes all four CHECK-admitted values, not just the original
+  // three. Per the file-level comment above, this remains INCLUSION-only —
+  // TELEMETRY_EVENT_TYPES ⊆ what the CHECK accepts — so it still cannot by
+  // itself catch the CHECK admitting a fifth value TELEMETRY_EVENT_TYPES
+  // doesn't list; that direction is what the m002↔m003 rebuild-diff test below
+  // pins instead, by asserting the CHECK's literal text.
   it('the telemetry_events CHECK constraint accepts exactly TELEMETRY_EVENT_TYPES', () => {
     const db = new Database(':memory:');
     try {
