@@ -327,7 +327,7 @@ describe('main (telemetry export)', () => {
   const CSI = '\u009B';
   const HOSTILE_CHARS: readonly string[] = [RLO, ZWSP, LINE_SEPARATOR, DEL, CSI];
   // Since issue #51, `record()` REFUSES a sessionId like this, so it can no
-  // longer be seeded through the public API — see the raw INSERT in hostileDb
+  // longer be seeded through the public API. See the raw INSERT in hostileDb
   // below and the reason it is the more faithful fixture.
   const HOSTILE_SESSION = `s${RLO}${LINE_SEPARATOR}${DEL}${CSI}1`;
   // A payload field that IS sanitized on write, proving the point the deleted
@@ -342,7 +342,7 @@ describe('main (telemetry export)', () => {
     const db = openTelemetryDatabase({ path });
     const store = createTelemetryStore(db);
     // Seeded by RAW INSERT, deliberately bypassing record()'s correlation-id
-    // gate (issue #51). This is not a workaround for the guard — it is the
+    // gate (issue #51). This is not a workaround for the guard. It is the
     // more faithful fixture, and the guard is what makes that clear. The write
     // path now refuses these ids, so the only way such a row exists in a real
     // database is the way this INSERT models it: written by a binary older

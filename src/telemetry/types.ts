@@ -272,7 +272,7 @@ interface TelemetryEventBase {
    * sanitised on write; these two are not, and the asymmetry is deliberate.
    * `sanitizeControlChars` maps every control character to a single space, so
    * sanitising would map two DISTINCT ids onto one value in the columns whose
-   * only job is correlation — the same collision class issue #50 exists to
+   * only job is correlation, the same collision class issue #50 exists to
    * close for `path`. It would also not have closed the reported vector, since
    * it does not strip bidi at all. A correlation key is identity, so the only
    * safe response to a malformed one is refusal.

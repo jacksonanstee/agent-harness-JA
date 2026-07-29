@@ -163,7 +163,7 @@ describe('createTelemetryStore.record', () => {
     ['a zero-width character', `sess-${'\u200B'}-abc`],
     ['a line separator', `sess-${'\u2028'}-abc`],
     ['a space', 'sess abc'],
-    ['a shell metacharacter', 'sess;rm -rf /'],
+    ['a shell metacharacter', 'sess;abc'],
     ['a quote', `sess-${'"'}-abc`],
     ['a slash', 'sess/abc'],
   ])('rejects a sessionId containing %s', (_label, sessionId) => {
@@ -208,7 +208,7 @@ describe('createTelemetryStore.record', () => {
   // the non-string branch too: a hostile object's toString() is
   // attacker-authored, so calling it and splicing the result in raw would move
   // the problem into the error path rather than close it. The id is not a
-  // string here, so there is nothing legitimate to render — report the type and
+  // string here, so there is nothing legitimate to render: report the type and
   // never invoke the value.
   it('never invokes toString() on a non-string id, and leaks no raw bytes into the message', () => {
     const { store } = openStore();

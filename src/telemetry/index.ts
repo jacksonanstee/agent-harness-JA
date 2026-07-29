@@ -1,9 +1,8 @@
 export {
+  assertValidCorrelationId,
   boundSkillDropName,
   boundSkillDropPath,
-  assertValidCorrelationId,
   createTelemetryStore,
-  isValidCorrelationId,
   openTelemetryDatabase,
   DEFAULT_DB_PATH,
   SKILL_DROP_REASONS,

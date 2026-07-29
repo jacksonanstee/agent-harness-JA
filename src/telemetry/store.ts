@@ -60,8 +60,9 @@ const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-e
 
 /**
  * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a
- * partial match cannot admit a longer string, and `+` with a separate length
- * check rather than `{1,N}` so the two failures report distinctly.
+ * partial match cannot admit a longer string. The length lives in a separate
+ * check rather than folded in as `{1,N}` so the bound stays one named constant
+ * shared with the session layer, not a number buried in a pattern.
  *
  * Allowlisting is the whole point. A denylist of "the control and bidi
  * characters we know about" is the enumerate-a-class-one-PoC-at-a-time trap
@@ -75,19 +76,28 @@ const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-e
  */
 const CORRELATION_ID_RE = /^[A-Za-z0-9_.:-]+$/;
 
-/** Stated once so the guard and its error message cannot disagree. */
-const CORRELATION_ID_RULE = `must be 1-${TELEMETRY_ID_MAX} characters of [A-Za-z0-9_.:-]`;
+/**
+ * DERIVED from the pattern, both halves of it. An earlier cut interpolated the
+ * length but hand-typed the character class, under a comment claiming the rule
+ * was "stated once so the guard and its error message cannot disagree": true
+ * of the bound, false of the charset, which is the half more likely to change.
+ * Widening the class for some consumer's id scheme would have left every
+ * rejection message naming a rule the guard no longer enforced, with nothing to
+ * catch it. Same derivation idiom as `PATH_DIGEST_RE` below and the charsets in
+ * `internal/sanitize.ts`. `slice(1, -2)` drops the `^` and the trailing `+$`.
+ */
+const CORRELATION_ID_RULE = `must be 1-${TELEMETRY_ID_MAX} characters of ${CORRELATION_ID_RE.source.slice(1, -2)}`;
 
 /**
- * The single definition of a well-formed correlation id, exported because the
- * session layer checks the SAME rule at construction time (issue #51). Do not
- * re-implement it there: the store's rejection is downgraded to a warning by
- * `recordTelemetry`, so if the two sides drifted the looser one would win
- * silently and rows would vanish. Same single-predicate pattern as
- * `isBlockedFirstToken` in the sandbox, which exists because an enforcement
- * path and its warning path had drifted apart.
+ * Module-local on purpose. `assertValidCorrelationId` below is the whole
+ * contract, and it is the only caller; a predicate exported beside it would be
+ * a name nothing imports, and this repo's sub-barrels are where the root barrel
+ * shops for things to make public (ADR-0023). Deliberately NOT the
+ * `isBlockedFirstToken` shape: that predicate is exported because it has two
+ * genuinely independent callers, an enforcement path and a warning path that
+ * had drifted. Here the thing both layers share is the THROW, not the test.
  */
-export function isValidCorrelationId(value: unknown): value is string {
+function isValidCorrelationId(value: unknown): value is string {
   return typeof value === 'string' && value.length <= TELEMETRY_ID_MAX && CORRELATION_ID_RE.test(value);
 }
 
@@ -95,8 +105,8 @@ export function isValidCorrelationId(value: unknown): value is string {
  * Throwing form, exported so the session layer raises the SAME error for the
  * SAME rule. An earlier cut of this change shared only the predicate and let
  * each layer word its own message, which meant two descriptions of one rule
- * free to drift apart — the thing the predicate was shared to prevent, one
- * level up. Rendering the rejected value is the fiddly part (escape it, never
+ * free to drift apart, which is the thing the predicate was shared to prevent,
+ * one level up. Rendering the rejected value is the fiddly part (escape it, never
  * invoke its `toString`), and it should exist once.
  */
 export function assertValidCorrelationId(value: unknown, field: string): string {
