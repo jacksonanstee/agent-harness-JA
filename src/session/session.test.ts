@@ -2066,6 +2066,65 @@ describe('skill-drop telemetry (issue #46)', () => {
     expect(payload.pathTruncated).toBe(true);
   });
 
+  // Issue #50 at the CAPTURE SITE. The helper deriving a digest is worth
+  // nothing if the record loop never passes it on, which is this project's
+  // recurring failure signature: green run, field silently dead.
+  it('carries a pathDigest for a truncated path, and distinguishes two paths that store identically', async () => {
+    const payloadFor = async (dir: string) => {
+      const telemetry = fakeTelemetry();
+      const session = createSession(
+        makeDeps(fakeQuery([INIT, ASSISTANT, RESULT]), {
+          telemetry,
+          scanInjection: blockingScan,
+          loadSkills: () => ({
+            // Differs ONLY before the tail-cut, so the stored `path` is
+            // byte-identical for both and only the digest can tell them apart.
+            skills: [{ ...hostile, path: `/home/${dir}/${'d'.repeat(2000)}/verylast.md` }],
+            errors: [],
+          }),
+        }),
+        { skillsDir: '/skills' },
+      );
+      await session.run('hi');
+      return telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+        path: string;
+        pathTruncated: boolean;
+        pathDigest?: string;
+      };
+    };
+
+    const alice = await payloadFor('alice');
+    const bobby = await payloadFor('bobby');
+
+    // Premise: without the digest these two rows are indistinguishable.
+    expect(alice.pathTruncated).toBe(true);
+    expect(alice.path).toBe(bobby.path);
+
+    expect(alice.pathDigest).toMatch(/^[0-9a-f]{16}$/);
+    expect(bobby.pathDigest).toMatch(/^[0-9a-f]{16}$/);
+    expect(alice.pathDigest).not.toBe(bobby.pathDigest);
+  });
+
+  it('omits pathDigest when the path fits, so presence means "something was discarded"', async () => {
+    const telemetry = fakeTelemetry();
+    const session = createSession(
+      makeDeps(fakeQuery([INIT, ASSISTANT, RESULT]), {
+        telemetry,
+        scanInjection: blockingScan,
+        loadSkills: () => ({ skills: [{ ...hostile, path: '/skills/short.md' }], errors: [] }),
+      }),
+      { skillsDir: '/skills' },
+    );
+    await session.run('hi');
+
+    const payload = telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+      pathTruncated: boolean;
+      pathDigest?: string;
+    };
+    expect(payload.pathTruncated).toBe(false);
+    expect(payload.pathDigest).toBeUndefined();
+  });
+
   it('carries pathHasEscapes through from capture, describing the RAW pre-image', async () => {
     const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
     const telemetry = fakeTelemetry();

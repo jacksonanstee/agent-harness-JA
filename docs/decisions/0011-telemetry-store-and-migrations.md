@@ -220,15 +220,16 @@ the table decision 4 already owns.
       `text.length <= NaN` false and `slice(NaN)` behave as `slice(0)`,
       returning the entire input falsely marked truncated. Unreachable today —
       all caps are module constants.
-    - **R-j:** tail truncation is inherently lossy, so two paths differing only
-      *before* the cut store identically; `pathTruncated` tells an operator the
-      path was cut but not that a distinguishing character was lost. This was
-      first reported as a defect of the escape guard and **re-graded after
-      verification**: a pure-ASCII control with no escape machinery collides the
-      same way, so it predates the escape design entirely. Candidate fix is a
-      short digest of the full escaped path. **Reachability changed from
-      theoretical to default-on with Task 5** — `boundSkillDropPath` had zero
-      production callers before it.
+    - **R-j — CLOSED 2026-07-29 (issue #50); see amendment item 16 below.** Tail
+      truncation is inherently lossy, so two paths differing only *before* the
+      cut store identically; `pathTruncated` tells an operator the path was cut
+      but not that a distinguishing character was lost. This was first reported
+      as a defect of the escape guard and **re-graded after verification**: a
+      pure-ASCII control with no escape machinery collides the same way, so it
+      predates the escape design entirely. Reachability changed from theoretical
+      to default-on with Task 5, because `boundSkillDropPath` had zero
+      production callers before it — which is why it was fixed rather than
+      carried further.
     - **R-k:** `sessionId` and `turnId` are sanitised NOWHERE on the write path
       and reach SQLite raw; the export sink escapes them, but the stored rows
       hold the raw bytes and any future reader of those columns inherits the
@@ -284,6 +285,43 @@ the table decision 4 already owns.
     because a turn's skill-drop rows are written in a tight loop and share a
     millisecond, so `ts` alone gives no total order. This is also why m003
     copies `rowid` explicitly.
+
+16. **`pathDigest` closes R-j (issue #50, 2026-07-29).** `SkillDropPayload`
+    gains an OPTIONAL `pathDigest`: SHA-256 of the full escaped path, first
+    `SKILL_DROP_PATH_DIGEST_LEN` (16) hex characters, present only when
+    `pathTruncated` is true. Two paths differing only before the tail-cut now
+    stay distinguishable.
+    - **Optional, and it must stay optional.** Rows written before the field
+      existed carry no `pathDigest`. Requiring it would fail
+      `isSkillDropPayload` on READ, and `rowToEvent` throws rather than skipping
+      a row, so `query()` would throw on every call and deny the ENTIRE trail —
+      every unrelated event included — for anyone who had already run the
+      shipping build. **Measured, not reasoned:** removing one required field
+      from one stored skill-drop row made `telemetry export` exit 1 with zero
+      rows out of twenty-five. It also cannot be backfilled by a migration,
+      because the digest covers the full escaped path and that is precisely
+      what truncation discarded. No migration is needed either way: `payload`
+      is JSON TEXT, so the column shape is unchanged.
+    - **Absent is valid; present-but-malformed is not.** The validator pins the
+      exact length and lowercase-hex charset with an anchored pattern. An
+      unusable disambiguator is worse than none, because a consumer would trust
+      it.
+    - **SHA-256 rather than a non-cryptographic hash.** The input is
+      attacker-authored. FNV-class collisions are trivially constructible,
+      which would let an attacker deliberately collide two audit rows and
+      defeat the field's only purpose. 64 bits is a disambiguator, not a
+      security primitive, and that is the claim being made.
+    - **Emitted only when truncated,** because a complete path is already its
+      own identity. The key is omitted rather than set to `undefined`, so
+      presence is itself the signal that something was discarded. This also
+      keeps the R-d per-row cost unchanged for the common case.
+    - **Derived by `boundSkillDropPath`, from the same call that truncates**, so
+      it can no more disagree with `path` than `pathTruncated` can. The
+      alternative — deriving it at the call site from the stored value —
+      collides exactly as the stored value does, which is the bug itself.
+      Rejected alternatives: raising `SKILL_DROP_PATH_MAX` (moves the boundary,
+      does not remove it) and a head-plus-tail elision (still lossy in the
+      middle, and spends more of the budget to be wrong less often).
 
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`

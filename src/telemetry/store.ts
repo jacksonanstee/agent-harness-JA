@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
@@ -22,6 +23,7 @@ import {
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,
   SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_DIGEST_LEN,
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
@@ -234,9 +236,14 @@ function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number):
  * rather than keeping a fragment of it — which only ever trims MORE, never
  * less, so the result never exceeds the cap this function exists to enforce.
  */
-export function boundSkillDropPath(path: string): { value: string; truncated: boolean } {
+export function boundSkillDropPath(
+  path: string,
+): { value: string; truncated: boolean; digest?: string } {
   const cap = SKILL_DROP_PATH_MAX - 1;
   const truncated = path.length > cap;
+  // No digest when nothing was discarded: a complete path is its own identity,
+  // and the key is omitted rather than set to undefined so a consumer can use
+  // presence as the signal (issue #50).
   if (!truncated) return { value: path, truncated };
   const naiveFrom = path.length - cap;
   let effectiveMax = cap;
@@ -250,7 +257,22 @@ export function boundSkillDropPath(path: string): { value: string; truncated: bo
     }
     if (start >= naiveFrom) break; // tokens run in order; nothing earlier remains
   }
-  return { value: truncateTailWellFormed(path, effectiveMax), truncated };
+  return {
+    value: truncateTailWellFormed(path, effectiveMax),
+    truncated,
+    // Over the FULL input, never the truncated result: digesting the result
+    // would collide exactly as the stored value does, which is the whole bug
+    // (issue #50). Computed here so it cannot disagree with `truncated`.
+    digest: skillDropPathDigest(path),
+  };
+}
+
+/**
+ * SHA-256 over the full escaped path, first SKILL_DROP_PATH_DIGEST_LEN hex
+ * characters. Lowercase because `digest('hex')` is, and the validator pins it.
+ */
+function skillDropPathDigest(fullPath: string): string {
+  return createHash('sha256').update(fullPath, 'utf8').digest('hex').slice(0, SKILL_DROP_PATH_DIGEST_LEN);
 }
 
 /**
@@ -259,6 +281,13 @@ export function boundSkillDropPath(path: string): { value: string; truncated: bo
  */
 export function boundSkillDropName(name: string): string {
   return truncateWellFormed(name, SKILL_DROP_NAME_MAX - 1);
+}
+
+/** Anchored and length-pinned: a partial match would admit a longer string. */
+const PATH_DIGEST_RE = new RegExp(`^[0-9a-f]{${SKILL_DROP_PATH_DIGEST_LEN}}$`);
+
+function isOptionalPathDigest(value: unknown): boolean {
+  return value === undefined || (typeof value === 'string' && PATH_DIGEST_RE.test(value));
 }
 
 function isSkillDropPayload(value: unknown): value is SkillDropPayload {
@@ -270,6 +299,11 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     value.path.length <= SKILL_DROP_PATH_MAX &&
     typeof value.pathTruncated === 'boolean' &&
     typeof value.pathHasEscapes === 'boolean' &&
+    // OPTIONAL: absent is valid, because rows predating the field must still
+    // read — see SkillDropPayload.pathDigest for why requiring it would deny
+    // the whole trail. Present-but-malformed is NOT valid: an unusable
+    // disambiguator is worse than none, since a consumer would trust it.
+    isOptionalPathDigest(value.pathDigest) &&
     typeof value.reason === 'string' &&
     SKILL_DROP_REASON_SET.has(value.reason) &&
     isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&

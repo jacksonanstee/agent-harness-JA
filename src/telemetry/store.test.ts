@@ -15,7 +15,7 @@ import {
   SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
 } from './store.js';
-import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_MAX } from './types.js';
+import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_DIGEST_LEN, SKILL_DROP_PATH_MAX } from './types.js';
 import type { TelemetryEventInput, TelemetryStore } from './types.js';
 
 let dbs: Database.Database[] = [];
@@ -350,6 +350,68 @@ describe('skill-drop events', () => {
     ruleIds: ['markdown-image-exfil'],
   };
 
+  // BACKWARD COMPATIBILITY, and the reason `pathDigest` is OPTIONAL rather
+  // than required (issue #50). Rows written before the field existed carry no
+  // `pathDigest`. Making it required would fail this validator on READ, and
+  // rowToEvent throws rather than skipping, so query() would then throw on
+  // EVERY call — denying the entire trail, including every unrelated row, for
+  // anyone who had already run the shipping build. Verified empirically
+  // before choosing optional: removing one required field from one stored row
+  // made `telemetry export` exit 1 with zero rows out of twenty-five.
+  //
+  // It also CANNOT be backfilled by a migration: the digest is taken over the
+  // full escaped path, which is exactly what truncation discarded.
+  it('accepts a skill-drop payload with no pathDigest at all — rows predating the field must still read', () => {
+    const { store } = openStore();
+    expect(store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: { ...validPayload, path: '…' + 'p'.repeat(SKILL_DROP_PATH_MAX - 1), pathTruncated: true },
+    }).ok).toBe(true);
+    expect(store.query({ type: 'skill-drop' })).toHaveLength(1);
+  });
+
+  it.each([
+    ['wrong length', 'abc'],
+    ['uppercase hex', 'A3F2C81D9E4B7061'],
+    ['non-hex characters', 'zzzzzzzzzzzzzzzz'],
+    ['too long', 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN + 1)],
+    ['not a string', 12345],
+  ])('rejects a malformed pathDigest (%s) rather than storing an unusable disambiguator', (_label, digest) => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, pathDigest: digest } as never,
+      }),
+    ).toThrow(/skill-drop/);
+  });
+
+  it('round-trips pathDigest through the real store for a truncated row', () => {
+    const { store } = openStore();
+    const bounded = boundSkillDropPath('/home/alice/' + 'd'.repeat(SKILL_DROP_PATH_MAX) + '/skills/helper.md');
+    expect(bounded.truncated).toBe(true);
+    expect(
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: {
+          ...validPayload,
+          path: bounded.value,
+          pathTruncated: true,
+          pathDigest: bounded.digest,
+        },
+      }).ok,
+    ).toBe(true);
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(1);
+    expect((rows[0]?.payload as { pathDigest?: string }).pathDigest).toBe(bounded.digest);
+  });
+
   // THE REGRESSION TEST FOR THE CAP-SEMANTICS BUG. An earlier draft of this
   // plan passed CAP (not CAP - 1) to the truncators, so every truncated value
   // came out CAP + 1 units, failed this validator, threw, and was downgraded
@@ -570,6 +632,60 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     // Guarded behaviour: the whole partial token is dropped, so the kept
     // tail starts at the token's END (the 'q' suffix), never mid-token.
     expect(result.value.startsWith('…q')).toBe(true);
+  });
+
+  // THE issue #50 regression. Tail truncation keeps the filename and discards
+  // everything before it, so two paths differing ONLY before the cut store
+  // byte-identically — and `path` exists precisely to disambiguate skills
+  // whose names collide. An attacker authoring a cloned repo controls
+  // directory depth and naming, so the offset is engineerable.
+  it('distinguishes two paths that differ only BEFORE the cut, which store identically (issue #50)', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const sharedTail = '/skills/helper.md';
+    // Same length, same retained tail, differing in one character that the
+    // tail-cut discards. Nothing about the stored value can tell them apart.
+    const a = `/home/alice/${'d'.repeat(cap)}${sharedTail}`;
+    const b = `/home/bobby/${'d'.repeat(cap)}${sharedTail}`;
+    expect(a).not.toBe(b);
+    expect(a).toHaveLength(b.length);
+
+    const boundedA = boundSkillDropPath(a);
+    const boundedB = boundSkillDropPath(b);
+
+    // The premise: the stored values really are indistinguishable. If this
+    // ever stops holding the test below is proving nothing.
+    expect(boundedA.truncated).toBe(true);
+    expect(boundedB.truncated).toBe(true);
+    expect(boundedA.value).toBe(boundedB.value);
+
+    // The fix: an out-of-band digest of the FULL escaped path keeps them
+    // distinguishable. Digesting the truncated value instead would collide
+    // exactly as the stored value does, so this assertion pins the input.
+    expect(boundedA.digest).toBeDefined();
+    expect(boundedB.digest).toBeDefined();
+    expect(boundedA.digest).not.toBe(boundedB.digest);
+  });
+
+  it('omits the digest entirely when the path was not truncated — a complete path is its own identity', () => {
+    const bounded = boundSkillDropPath('/skills/helper.md');
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.digest).toBeUndefined();
+    expect(Object.hasOwn(bounded, 'digest')).toBe(false);
+  });
+
+  it('emits the digest as exactly 16 lowercase hex characters', () => {
+    const bounded = boundSkillDropPath('p'.repeat(SKILL_DROP_PATH_MAX * 2));
+    expect(bounded.digest).toMatch(/^[0-9a-f]{16}$/);
+    expect(bounded.digest).toHaveLength(SKILL_DROP_PATH_DIGEST_LEN);
+  });
+
+  it('derives the digest deterministically from the same input', () => {
+    const long = `/x/${'y'.repeat(SKILL_DROP_PATH_MAX * 2)}/skill.md`;
+    const first = boundSkillDropPath(long).digest;
+    // Floor: without this, `undefined === undefined` passes vacuously and the
+    // test survives the digest never being computed at all.
+    expect(first).toBeDefined();
+    expect(boundSkillDropPath(long).digest).toBe(first);
   });
 
   // Contract pin for pathHasEscapes (3-agent review of ebf3041, convergent
