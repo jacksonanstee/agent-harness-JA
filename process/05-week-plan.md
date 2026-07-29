@@ -20,8 +20,26 @@
 | 2 | 2026-05-25 → 2026-05-31 | re-dated: 2026-07-06 → 2026-07-12 | Security layer + telemetry |
 | 3 | 2026-06-01 → 2026-06-07 | re-dated: 2026-07-13 → 2026-07-19 | Eval layer |
 | 4 | 2026-06-08 → 2026-06-14 | re-dated: 2026-07-20 → 2026-07-26 | Docs polish + launch |
+| 5 | not planned ² | 2026-07-15 → 2026-07-26 | Pre-publish audit, security fixes, API lock |
+| 6 | not planned ² | 2026-07-27 → 2026-07-29 | Model tiers, refusals, CI gate parity, skill-channel enforcement |
 
 ¹ Week 1 stalled for six weeks after H-2 landed (2026-05-20) and resumed 2026-07-05; the remaining four modules + CI landed 2026-07-05/06. The slip and its causes are logged in [devlog/week-1.md](./devlog/week-1.md), per the slippage protocol below. Original planned dates stay visible in this table — re-dating by overwriting would be exactly the "retrospective tidy-up" this file promises not to do.
+
+² **The committed schedule ends at week 4.** This document is a four-week
+contract, and it was met: the build finished and the publish path was ready.
+Weeks 5 and 6 are post-plan continuation, not extensions of the contract, and
+they are listed here only so the devlog folder has no gap with nothing
+explaining it. Their work came from an adversarial pre-publish audit, from
+review findings, and from issues, rather than from this plan. The publish
+itself is deliberately deferred pending reader feedback rather than blocked,
+which is why the "launch" theme in the week-4 row is still open. Two
+consequences worth stating plainly rather than leaving to be inferred: the
+"one devlog entry per week, written on the Sunday that closes the week" ground
+rule above lapsed for both of these weeks, and they were written up together on
+2026-07-29 rather than at each week's close; and the week-4 row's dates cover
+that week's merges, while [devlog/week-4.md](./devlog/week-4.md) is headed with
+the two days its build work actually occupied. Neither figure has been altered
+to agree with the other.
 
 ## Week 0 — Foundation (2026-05-14 → 2026-05-17)
 
