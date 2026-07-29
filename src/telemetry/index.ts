@@ -1,6 +1,7 @@
 export {
   boundSkillDropName,
   boundSkillDropPath,
+  assertValidCorrelationId,
   createTelemetryStore,
   isValidCorrelationId,
   openTelemetryDatabase,

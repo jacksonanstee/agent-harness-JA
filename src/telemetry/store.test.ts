@@ -202,6 +202,36 @@ describe('createTelemetryStore.record', () => {
     expect(() => store.record({ ...TOOL_TRACE, sessionId: '' })).toThrow(TypeError);
   });
 
+  // Review finding. describeId's whole promise is that a rejected id reaches
+  // error.message ESCAPED, because the reason it was rejected is that it
+  // carries characters that misbehave in a terminal. That promise has to cover
+  // the non-string branch too: a hostile object's toString() is
+  // attacker-authored, so calling it and splicing the result in raw would move
+  // the problem into the error path rather than close it. The id is not a
+  // string here, so there is nothing legitimate to render — report the type and
+  // never invoke the value.
+  it('never invokes toString() on a non-string id, and leaks no raw bytes into the message', () => {
+    const { store } = openStore();
+    let invoked = false;
+    const hostile = {
+      toString() {
+        invoked = true;
+        return `pwned${'\u001B'}]0;INJECTED${'\u0007'}`;
+      },
+    };
+    let message = '';
+    try {
+      store.record({ ...TOOL_TRACE, sessionId: hostile } as unknown as TelemetryEventInput);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toBe('');
+    expect(invoked).toBe(false);
+    expect(message).not.toContain('INJECTED');
+    expect(message.includes('\u001B')).toBe(false);
+    expect(message.includes('\u0007')).toBe(false);
+  });
+
   it('rejects a structurally invalid payload with a TypeError', () => {
     const { store } = openStore();
     expect(() =>

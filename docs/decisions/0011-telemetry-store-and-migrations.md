@@ -257,15 +257,30 @@ the table decision 4 already owns.
         ULID, prefixed, namespaced, dotted) and excludes whitespace, quotes,
         path separators and shell metacharacters, so no future reader inherits
         a quoting problem either.
-      - **Checked in two places on purpose, from ONE predicate.** The store
+      - **Checked in two places on purpose, from ONE definition.** The store
         refuses at `assertValidInput`, but `recordTelemetry` catches that throw
         and downgrades it to one stderr warning, so a consumer with a rejected
         id scheme would lose every row of the run and see only warnings. The
-        session layer therefore checks the same predicate at the earliest point
-        each id exists: `config.turnId` at construction, `generateId()`'s
-        output on the call that produces one. The predicate is imported, never
-        re-implemented, because a drift in the looser direction would be
-        swallowed by exactly that downgrade.
+        session layer therefore checks at the earliest point each id exists:
+        `config.turnId` at construction, `generateId()`'s output on the call
+        that produces one. Both layers call the same exported
+        `assertValidCorrelationId`, because a drift in the looser direction
+        would be swallowed by exactly that downgrade. Note what that had to
+        include: an earlier cut shared only the PREDICATE and let each layer
+        word its own message, which left two descriptions of one rule free to
+        drift, which is the same failure the sharing existed to prevent, one
+        level up.
+        The throwing form owns the rule, the message, and the escaping of the
+        rejected value.
+      - **The rejected value is escaped, and a non-string one is never
+        rendered at all.** Security review caught the second half: the first
+        draft fell through to `String(value)` for a non-string id, and `String`
+        invokes the value's own `toString`, so a hostile object would have
+        spliced attacker-authored text into the error message unescaped, while
+        the function's own doc comment claimed it escaped. That moves the
+        problem into the error path rather than closing it. A non-string id is
+        now reported by type only: the caller's mistake is the type, not the
+        characters.
       - **Residual, narrowed not eliminated:** rows written before this change,
         or written straight into the shared SQLite file by another writer, can
         still hold raw bytes. The export sink's escaping is what covers them and

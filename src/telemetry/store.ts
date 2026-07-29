@@ -92,15 +92,39 @@ export function isValidCorrelationId(value: unknown): value is string {
 }
 
 /**
+ * Throwing form, exported so the session layer raises the SAME error for the
+ * SAME rule. An earlier cut of this change shared only the predicate and let
+ * each layer word its own message, which meant two descriptions of one rule
+ * free to drift apart — the thing the predicate was shared to prevent, one
+ * level up. Rendering the rejected value is the fiddly part (escape it, never
+ * invoke its `toString`), and it should exist once.
+ */
+export function assertValidCorrelationId(value: unknown, field: string): string {
+  if (!isValidCorrelationId(value)) {
+    throw new TypeError(`${field} ${CORRELATION_ID_RULE}, got ${describeId(value)}`);
+  }
+  return value;
+}
+
+/**
  * Renders a rejected id for an error message. Escaped, not raw: the whole
  * reason this id was refused is that it carries characters that misbehave in a
  * terminal, and a direct library consumer printing `error.message` would
  * otherwise be handed the exact bytes the guard just refused to store.
  * `recordTelemetry` sanitises on its own path, but a thrown TypeError belongs
  * to whoever catches it.
+ *
+ * A NON-STRING id is reported by TYPE and never rendered, which is the case an
+ * earlier draft of this function got wrong: it fell through to `String(value)`,
+ * and `String` invokes the value's own `toString`, which on a hostile object is
+ * attacker-authored text spliced into the message with no escaping at all. That
+ * would have moved the problem into the error path rather than closing it,
+ * while the paragraph above claimed otherwise. There is nothing legitimate to
+ * render for a non-string anyway: the caller's mistake is the type, not the
+ * characters, so the type is the whole diagnosis.
  */
 function describeId(value: unknown): string {
-  if (typeof value !== 'string') return String(value);
+  if (typeof value !== 'string') return `a non-string value of type ${typeof value}`;
   return escapePathUnsafe(truncateWellFormed(value, TELEMETRY_ID_MAX)).value;
 }
 
@@ -448,12 +472,8 @@ function assertValidInput(event: TelemetryEventInput): void {
       `event.type must be one of ${TELEMETRY_EVENT_TYPES.join('|')}, got ${String(event.type)}`,
     );
   }
-  if (!isValidCorrelationId(event.sessionId)) {
-    throw new TypeError(`event.sessionId ${CORRELATION_ID_RULE}, got ${describeId(event.sessionId)}`);
-  }
-  if (!isValidCorrelationId(event.turnId)) {
-    throw new TypeError(`event.turnId ${CORRELATION_ID_RULE}, got ${describeId(event.turnId)}`);
-  }
+  assertValidCorrelationId(event.sessionId, 'event.sessionId');
+  assertValidCorrelationId(event.turnId, 'event.turnId');
   if (event.ts !== undefined && (!Number.isFinite(event.ts) || event.ts < 0)) {
     throw new TypeError(`event.ts must be a non-negative finite number when provided, got ${String(event.ts)}`);
   }
