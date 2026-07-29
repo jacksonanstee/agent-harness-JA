@@ -1,4 +1,5 @@
 export {
+  assertValidCorrelationId,
   boundSkillDropName,
   boundSkillDropPath,
   createTelemetryStore,
@@ -16,6 +17,7 @@ export {
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
+  TELEMETRY_ID_MAX,
 } from './types.js';
 export type {
   HookEventKind,

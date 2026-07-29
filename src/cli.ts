@@ -189,9 +189,18 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     const events = store.query(filter);
     // JSON.stringify escapes C0 controls and lone surrogates and NOTHING ELSE:
     // U+007F, the whole C1 block, U+2028/U+2029 and every bidi/invisible
-    // character reach the output RAW (swept, internal/sanitize.test.ts). Neither is
-    // `sessionId`/`turnId` sanitized on the write path (record() sanitizes only
-    // the payload), so a hostile id arrives here verbatim. escapeJsonText
+    // character reach the output RAW (swept, internal/sanitize.test.ts).
+    // `sessionId`/`turnId` are REFUSED on the write path since issue #51, so
+    // they no longer arrive here verbatim through `record()`. This escape is
+    // still load-bearing, for the residual that fix left: rows written by a
+    // binary older than #51, or by another writer straight into the shared
+    // SQLite file, which is what rowToEvent's "never trust a shared DB file
+    // blindly" validation exists for. Do not read the #51 gate as making this
+    // redundant, and do not "fix" the residual by sanitizing ids on write:
+    // ADR-0011 R-k records why refusal, not substitution, is correct for an
+    // identity column.
+    //
+    // escapeJsonText
     // re-encodes each of those as a `\uXXXX` JSON escape: valid JSON that
     // parses back to the identical value, so the export stays lossless for
     // machine consumers while the file is safe to `cat`.

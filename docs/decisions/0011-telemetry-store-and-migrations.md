@@ -75,9 +75,19 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
      but no longer a separate *home*: it moved into `src/internal/sanitize.ts`
      (commit `389a7fa`) and is now DERIVED from `CONTROL_CHARS` rather than
      hand-typed. Only `sanitizeForTerminal` — the function, with its forty-odd
-     callers — stays in `src/cli/shared.ts`. That leaf now holds every charset
-     in the codebase, each derived rather than hand-typed. See the amendment
-     below, item 13, for the derivation chain.
+     callers — stays in `src/cli/shared.ts`. That leaf now holds every
+     TEXT-NEUTRALISATION charset in the codebase, each derived rather than
+     hand-typed. See the amendment below, item 13, for the derivation chain.
+   - ⚠️ **Scope of that claim, narrowed 2026-07-29 (issue #51).** As first
+     written this said "every charset in the codebase", and issue #51 falsified
+     it by adding one that correctly lives elsewhere. The leaf owns charsets
+     that answer "what must be stripped or escaped out of hostile text". It does
+     NOT own SCHEMA charsets that answer "what may a value contain", such as
+     `CORRELATION_ID_RE` in `src/telemetry/store.ts`: those travel with a
+     module-specific bound and a module-worded error, and hoisting one would
+     put `TELEMETRY_ID_MAX` in a leaf that should not know telemetry exists.
+     The eval layer's id charset is a third, different set for the same reason.
+     Derive-rather-than-hand-type still applies to all of them.
 
 ## Alternatives considered
 
@@ -230,13 +240,85 @@ the table decision 4 already owns.
       to default-on with Task 5, because `boundSkillDropPath` had zero
       production callers before it — which is why it was fixed rather than
       carried further.
-    - **R-k:** `sessionId` and `turnId` are sanitised NOWHERE on the write path
-      and reach SQLite raw; the export sink escapes them, but the stored rows
-      hold the raw bytes and any future reader of those columns inherits the
-      problem. Security review bounded it: those ids are not attacker-reachable
-      in the shipped CLI flow (always `randomUUID()` or caller-supplied via
-      `SessionConfig`), and `runTelemetryExport` is the only shipped reader, so
-      this is a direct-library-consumer exposure rather than a live CLI vector.
+    - **R-k: CLOSED 2026-07-29 (issue #51), by REFUSAL rather than by
+      sanitisation.** As filed: `sessionId` and `turnId` were sanitised nowhere
+      on the write path and reached SQLite raw; the export sink escaped them,
+      but the stored rows held the raw bytes and any future reader of those
+      columns inherited the problem. Security review bounded it to a
+      direct-library-consumer exposure, since the shipped CLI flow always
+      supplies `randomUUID()` and `runTelemetryExport` was the only shipped
+      reader.
+      - ⚠️ **Do not generalise this heading. Refusal is correct HERE because
+        these are identity columns.** Issue #48 is the same symptom in the
+        `src/eval/scorecard` JSON sink and has the OPPOSITE correct fix: those
+        fields are free-text reasons, not keys, so refusing them would drop
+        legitimate rows and escape-on-output (item 13) is the answer there. The
+        two share a shape and not a remedy. Ask what the field IS before
+        choosing between refuse, escape and substitute.
+      - **Sanitising was the obvious fix and it was the wrong one**, which is
+        the part worth keeping. `sanitizeControlChars` maps every control
+        character to a single space, so sanitising would have mapped two
+        DISTINCT ids onto one value in the two columns whose only purpose is
+        correlation. That is the identical collision class item 16 above exists
+        to close for `path`, reintroduced one field over. It would also not have
+        closed the reported vector at all: the filed issue names U+202E, and
+        that function does not strip bidi.
+      - **A correlation key is identity, so the only safe response to a
+        malformed one is refusal.** `isValidCorrelationId`
+        (`src/telemetry/store.ts`) is an anchored ALLOWLIST,
+        `[A-Za-z0-9_.:-]` bounded by `TELEMETRY_ID_MAX`. Allowlist, not
+        denylist, on ADR-0026's evidence: enumerating the hostile code points
+        one proof-of-concept at a time did not converge there, and naming what
+        an identifier MAY contain needs no maintenance as Unicode grows. The
+        set admits the schemes a library consumer plausibly already uses (UUID,
+        ULID, prefixed, namespaced, dotted) and excludes whitespace, quotes,
+        path separators and shell metacharacters, so no future reader inherits
+        a quoting problem either.
+      - **The rule is VALIDATE AT THE MINT SITE, not "every layer adds a
+        check".** Architecture review corrected an earlier draft of this bullet
+        that read "checked in two places on purpose", which invites a future
+        writer to add a third check, or worse to read the store's gate as one
+        removable half of a pair. It is not a pair. `assertValidInput` is a
+        TOTAL gate that no writer can bypass, and it is what makes the property
+        hold. What the session layer adds is LOUDNESS, not coverage:
+        `recordTelemetry` catches the store's throw and downgrades it to one
+        stderr warning per row, so a consumer with a rejected id scheme would
+        otherwise lose the whole run's telemetry and see only warnings. The
+        session validates precisely the two ids it MINTS, at the moment it
+        mints them: `config.turnId` at construction, `generateId()`'s output on
+        the call that produces one. A future writer that mints an id should do
+        the same; one that merely passes an id through needs to do nothing, and
+        is still safe.
+        - **The composition root is exactly that case, and it is worth naming.**
+          `src/cli.ts` mints both ids and its hook sink calls `record()`
+          directly, handling `ok: false` but not a throw. It is safe because
+          those ids are `randomUUID()` and the same values reach `createSession`
+          via `generateId`, so they are asserted before the first hook fires.
+          That is a real property but an incidental one: a future `--session`
+          flag on `run`, mirroring the one `telemetry export` already has, would
+          break it. Validate at that mint site too if such a flag is added.
+        - Both layers call the same exported `assertValidCorrelationId`. An
+          earlier cut shared only the PREDICATE and let each layer word its own
+          message, which left two descriptions of one rule free to drift, which
+          is the same failure the sharing existed to prevent, one level up. The
+          throwing form owns the rule, the message and the escaping of the
+          rejected value; the predicate behind it is module-local, because what
+          the two layers share is the throw, not the test.
+      - **The rejected value is escaped, and a non-string one is never
+        rendered at all.** Security review caught the second half: the first
+        draft fell through to `String(value)` for a non-string id, and `String`
+        invokes the value's own `toString`, so a hostile object would have
+        spliced attacker-authored text into the error message unescaped, while
+        the function's own doc comment claimed it escaped. That moves the
+        problem into the error path rather than closing it. A non-string id is
+        now reported by type only: the caller's mistake is the type, not the
+        characters.
+      - **Residual, narrowed not eliminated:** rows written before this change,
+        or written straight into the shared SQLite file by another writer, can
+        still hold raw bytes. The export sink's escaping is what covers them and
+        remains load-bearing; `src/cli.test.ts` now seeds that case with a raw
+        `INSERT` rather than through `record()`, which models the real remaining
+        threat more faithfully than the old fixture did.
     - **R-d, restated with a price.** Rows restate the same static fact every
       turn. Task 3 priced this against a handful of writes; Task 5 changed the
       shape by moving the loop ahead of the session-start fire. The bound is

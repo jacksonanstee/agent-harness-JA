@@ -27,8 +27,10 @@ import {
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
+  TELEMETRY_ID_MAX,
 } from './types.js';
 import {
+  escapePathUnsafe,
   PATH_ESCAPE_SEQUENCE,
   sanitizeControlChars as sanitizeText,
   truncateTailWellFormed,
@@ -55,6 +57,86 @@ export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
 const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-error', 'hook-fired']);
+
+/**
+ * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a
+ * partial match cannot admit a longer string. The length lives in a separate
+ * check rather than folded in as `{1,N}` so the bound stays one named constant
+ * shared with the session layer, not a number buried in a pattern.
+ *
+ * Allowlisting is the whole point. A denylist of "the control and bidi
+ * characters we know about" is the enumerate-a-class-one-PoC-at-a-time trap
+ * ADR-0026 recorded: every round of that fix found one more code point sitting
+ * in a gap. Naming what an identifier MAY contain converges immediately and
+ * needs no maintenance as Unicode grows. The set is chosen to admit the id
+ * schemes a library consumer plausibly already uses (UUID, ULID, prefixed and
+ * namespaced ids, dotted versions) while excluding whitespace, quotes, path
+ * separators and shell metacharacters, so no future reader of these columns
+ * inherits a quoting problem.
+ */
+const CORRELATION_ID_RE = /^[A-Za-z0-9_.:-]+$/;
+
+/**
+ * DERIVED from the pattern, both halves of it. An earlier cut interpolated the
+ * length but hand-typed the character class, under a comment claiming the rule
+ * was "stated once so the guard and its error message cannot disagree": true
+ * of the bound, false of the charset, which is the half more likely to change.
+ * Widening the class for some consumer's id scheme would have left every
+ * rejection message naming a rule the guard no longer enforced, with nothing to
+ * catch it. Same derivation idiom as `PATH_DIGEST_RE` below and the charsets in
+ * `internal/sanitize.ts`. `slice(1, -2)` drops the `^` and the trailing `+$`.
+ */
+const CORRELATION_ID_RULE = `must be 1-${TELEMETRY_ID_MAX} characters of ${CORRELATION_ID_RE.source.slice(1, -2)}`;
+
+/**
+ * Module-local on purpose. `assertValidCorrelationId` below is the whole
+ * contract, and it is the only caller; a predicate exported beside it would be
+ * a name nothing imports, and this repo's sub-barrels are where the root barrel
+ * shops for things to make public (ADR-0023). Deliberately NOT the
+ * `isBlockedFirstToken` shape: that predicate is exported because it has two
+ * genuinely independent callers, an enforcement path and a warning path that
+ * had drifted. Here the thing both layers share is the THROW, not the test.
+ */
+function isValidCorrelationId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= TELEMETRY_ID_MAX && CORRELATION_ID_RE.test(value);
+}
+
+/**
+ * Throwing form, exported so the session layer raises the SAME error for the
+ * SAME rule. An earlier cut of this change shared only the predicate and let
+ * each layer word its own message, which meant two descriptions of one rule
+ * free to drift apart, which is the thing the predicate was shared to prevent,
+ * one level up. Rendering the rejected value is the fiddly part (escape it, never
+ * invoke its `toString`), and it should exist once.
+ */
+export function assertValidCorrelationId(value: unknown, field: string): string {
+  if (!isValidCorrelationId(value)) {
+    throw new TypeError(`${field} ${CORRELATION_ID_RULE}, got ${describeId(value)}`);
+  }
+  return value;
+}
+
+/**
+ * Renders a rejected id for an error message. Escaped, not raw: the whole
+ * reason this id was refused is that it carries characters that misbehave in a
+ * terminal, and a direct library consumer printing `error.message` would
+ * otherwise be handed the exact bytes the guard just refused to store.
+ * `recordTelemetry` sanitises on its own path, but a thrown TypeError belongs
+ * to whoever catches it.
+ *
+ * A NON-STRING id is reported by TYPE and never rendered, which is the case an
+ * earlier draft of this function got wrong: it fell through to `String(value)`,
+ * and `String` invokes the value's own `toString`, which on a hostile object is
+ * attacker-authored text spliced into the message with no escaping at all. That
+ * would have moved the problem into the error path rather than closing it,
+ * while the paragraph above claimed otherwise. There is nothing legitimate to
+ * render for a non-string anyway: the caller's mistake is the type, not the
+ * characters, so the type is the whole diagnosis.
+ */
+function describeId(value: unknown): string {
+  if (typeof value !== 'string') return `a non-string value of type ${typeof value}`;
+  return escapePathUnsafe(truncateWellFormed(value, TELEMETRY_ID_MAX)).value;
+}
 
 
 const INSERT_SQL = `
@@ -400,12 +482,8 @@ function assertValidInput(event: TelemetryEventInput): void {
       `event.type must be one of ${TELEMETRY_EVENT_TYPES.join('|')}, got ${String(event.type)}`,
     );
   }
-  if (typeof event.sessionId !== 'string' || event.sessionId === '') {
-    throw new TypeError(`event.sessionId must be a non-empty string, got ${String(event.sessionId)}`);
-  }
-  if (typeof event.turnId !== 'string' || event.turnId === '') {
-    throw new TypeError(`event.turnId must be a non-empty string, got ${String(event.turnId)}`);
-  }
+  assertValidCorrelationId(event.sessionId, 'event.sessionId');
+  assertValidCorrelationId(event.turnId, 'event.turnId');
   if (event.ts !== undefined && (!Number.isFinite(event.ts) || event.ts < 0)) {
     throw new TypeError(`event.ts must be a non-negative finite number when provided, got ${String(event.ts)}`);
   }
