@@ -245,16 +245,91 @@ export type SkillDropReason =
   /** Aggregate skill budget exhausted before this skill (pre-existing behaviour). */
   | 'prompt-budget';
 
+/**
+ * Which scan point (ADR-0026) blocked a skill. `session.ts` is the only author
+ * of these literals, so the union lives here at the origin, mirroring its
+ * sibling `SkillDropReason` above. Telemetry's structural mirror
+ * (`SkillDropPayload.channels`, src/telemetry/types.ts) stays `string[]`:
+ * narrowing the origin type does not obligate every structural mirror to
+ * narrow too.
+ *
+ * ADDING A MEMBER HAS TWO CONSEQUENCES — one the compiler catches, one it
+ * cannot:
+ *
+ * 1. `SKILL_DROP_CHANNEL_TEXT` (session.ts) is a `Record` over this union, so
+ *    a new member is a COMPILE ERROR at the scan site. Deliberate: the array
+ *    literal it replaced compiled clean and left the new channel unscanned.
+ * 2. `SKILL_DROP_CHANNELS_MAX` (src/telemetry/types.ts) hand-copies this
+ *    union's CARDINALITY, and no compiler can see that link — layering forbids
+ *    telemetry importing session, so nothing derives one from the other. Leave
+ *    it stale and a drop naming the new channel exceeds the cap, fails
+ *    `isSkillDropPayload`, throws in `assertValidInput`, and `recordTelemetry`
+ *    downgrades it to a single stderr warning: the row is gone and the suite
+ *    is green. `session.test.ts` re-derives the equality — bump the cap in the
+ *    same commit as the union.
+ *
+ * Member ORDER is observable: it is the scan order, the order of
+ * `DroppedSkill.channels`, and the order the drop warning joins them in.
+ */
+export type SkillDropChannel = 'description' | 'body' | 'assembled section';
+
 export interface DroppedSkill {
   name: string;
   /**
-   * Absolute source path. Carried because skill NAMES are not unique — the
-   * loader applies no cross-file uniqueness constraint, so two files may
-   * both declare `name: helper` and only the path disambiguates them.
+   * Absolute source path, run through `escapePathUnsafe` (src/internal/
+   * sanitize.ts) rather than deleted/space-substituted like `name`. Carried
+   * because skill NAMES are not unique — the loader applies no cross-file
+   * uniqueness constraint, so two files may both declare `name: helper` and
+   * only the path disambiguates them. Escaping, not stripping, matters here
+   * specifically because of that: an invisible character renders as nothing
+   * whether it is present or deleted, so deleting it buys no visibility
+   * while destroying the one thing this field exists for — a hostile
+   * `/skills/he<U+200B>lper.md` would otherwise collapse onto a benign
+   * `/skills/helper.md` and misdirect an operator, following the drop
+   * warning's own remediation instruction, to edit the wrong file (round-1
+   * fix, issue #46 Finding 1).
    */
   path: string;
+  /**
+   * OUT-OF-BAND marker: true when the RAW path carried at least one
+   * control/bidi/invisible character that `escapePathUnsafe` escaped.
+   * It describes the PRE-IMAGE, not the `path` string above. Mirrors
+   * SkillDropPayload.pathHasEscapes (telemetry/types.ts), which is the same
+   * flag under the same contract. See `escapePathUnsafe`'s doc comment for
+   * why escaping (not deletion) is the right transform for this field.
+   *
+   * Two things a consumer must not get wrong:
+   *
+   * Backslash-doubling alone does NOT set it. Doubling is lossless
+   * formatting applied unconditionally so that a file literally named
+   * `\u{200B}` cannot forge a real escape; it neutralises nothing, and on
+   * win32 every separator doubles, so flagging those would make the signal
+   * useless. `escapePathUnsafe('C:\Users\f.md')` reports `escaped: false`
+   * (asserted in sanitize.test.ts).
+   *
+   * Do NOT re-derive it by scanning `path` for `\u{`. Besides the forgery
+   * problem (a legitimately named file can contain that literal text), the
+   * stored path is truncated AFTER escaping and `boundSkillDropPath` drops a
+   * straddling token whole, so a stored path can legitimately contain zero
+   * escape tokens while this flag is correctly true. A re-derived value
+   * would silently disagree with the recorded one.
+   */
+  pathHasEscapes: boolean;
   reason: SkillDropReason;
-  /** Rule ids that triggered the block; empty for `prompt-budget`. */
+  /**
+   * Which scanned channels blocked the skill; empty for 'prompt-budget'.
+   * Carried because the stderr warning names the channel and, without this,
+   * the durable telemetry record would be strictly LESS informative than the
+   * transient warning it exists to replace (issue #46).
+   */
+  channels: SkillDropChannel[];
+  /**
+   * Rule ids that triggered the block, cleaned at capture (`cleanSkillText`,
+   * session.ts) — unlike `path`, a rule id identifies nothing on disk, so
+   * deletion is the right transform here, the same as for `name`. Empty for
+   * `prompt-budget`. `scanInjection` is caller-supplied (`SessionDeps`), not
+   * the shipped rule table, so a rule id is untrusted input like any other.
+   */
   ruleIds: string[];
 }
 

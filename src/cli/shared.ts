@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { loadJsonSettings } from '../internal/settings.js';
+import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   mergeLayers,
   mergeSandboxLayers,
@@ -14,27 +15,35 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, SandboxConfig } from '../security/index.js';
+import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
  *  scorecard producers writing through the same `writeScorecard` helper). */
 export const EVAL_OUT_DIR = join('.harness', 'eval');
 
+// The `--type` values are DERIVED from TELEMETRY_EVENT_TYPES, not hand-copied:
+// a fifth event type appears in the usage text without anyone remembering to
+// come here. Before this, `--type <t>` was discoverable only by guessing wrong
+// and reading `parseTelemetryArgs`'s rejection message (src/cli.ts), which
+// renders the same array — so both surfaces now come from one source and
+// cannot disagree about what is valid.
 export const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
   '       agent-harness-ja eval [taskDir] [--challenge]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
-  '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]\n' +
+  `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>]\n` +
   '       agent-harness-ja init [dir]';
 
-// Deliberately separate from src/internal/sanitize.ts: model output and
-// warnings reach the user's terminal, where newline/tab are kept for
-// readability while ANSI/OSC escape introducers and C1 controls are stripped.
-export const TERMINAL_UNSAFE = /[\x00-\x08\x0B-\x1F\x7F-\x9F\u2028\u2029]/g;
+// TERMINAL_UNSAFE itself now lives in src/internal/sanitize.ts, beside the
+// JSON_TEXT_UNSAFE that derives from it: the zero-dep leaf is the only home
+// reachable by src/eval/**, which eslint blocks from importing src/cli/**.
+// The FUNCTION stays here, where all forty-odd of its callers are.
 
 export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
 }
+
 
 /** Filesystem-safe scorecard timestamp (spec: arbiter condition 2 — no colons). */
 export function scorecardFilename(nowMs: number): string {

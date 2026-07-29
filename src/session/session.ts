@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import type { TaskDescriptor } from '../router/index.js';
 import type { Skill } from '../skills/index.js';
+import {
+  boundSkillDropName,
+  boundSkillDropPath,
+  SKILL_DROP_RULE_ID_MAX,
+  SKILL_DROP_RULE_IDS_MAX,
+} from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 import type { ScanResult } from '../security/index.js';
 import type {
@@ -19,8 +25,10 @@ import type {
   SessionDeps,
   SessionRefusal,
   SessionResult,
+  SkillDropChannel,
 } from './types.js';
 import {
+  escapePathUnsafe,
   sanitizeControlChars,
   stripBidi,
   stripInvisibles,
@@ -243,6 +251,41 @@ function skillSection(skill: Skill): { name: string; section: string } {
   return { name, section: body === '' ? header : `${header}\n\n${body}` };
 }
 
+/**
+ * Exhaustive BY CONSTRUCTION over SkillDropChannel — the EVENT_TYPE_PRESENCE
+ * idiom (src/telemetry/store.ts), generalised from a `true` marker to the
+ * accessor that yields the text each channel scans. The array literal this
+ * replaced was MEMBERSHIP-typed: widening SkillDropChannel and forgetting the
+ * literal compiled clean, and the new channel was then never scanned — a
+ * silent hole in an ENFORCED control (ADR-0026), with a green suite. A
+ * missing key here is now a compile error.
+ *
+ * Key ORDER is load-bearing, not cosmetic: it is the order channels are
+ * scanned in, the order they appear in DroppedSkill.channels, and the order
+ * the drop warning joins them in ("... its body and assembled section").
+ * Pinned by session.test.ts.
+ *
+ * Accessors stay EAGER — every channel is scanned for every skill and the
+ * results are filtered afterwards. Do not short-circuit on the first blocking
+ * channel: DroppedSkill.channels is meant to name every channel that blocked.
+ */
+const SKILL_DROP_CHANNEL_TEXT: Record<SkillDropChannel, (skill: Skill) => string> = {
+  description: (skill) => skill.description,
+  body: (skill) => skill.body,
+  'assembled section': (skill) => skillSection(skill).section,
+};
+
+/**
+ * The channel list, DERIVED — never hand-written. Its length is the union's
+ * cardinality, which telemetry hand-copies as SKILL_DROP_CHANNELS_MAX
+ * (src/telemetry/types.ts). Layering forbids telemetry importing session, so
+ * nothing can derive one from the other and the two can only be compared from
+ * this side; session.test.ts re-derives the equality.
+ */
+export const SKILL_DROP_CHANNELS = Object.keys(
+  SKILL_DROP_CHANNEL_TEXT,
+) as readonly SkillDropChannel[];
+
 function buildSystemPrompt(skills: Skill[]): {
   prompt: string | undefined;
   droppedSkills: DroppedSkill[];
@@ -264,7 +307,19 @@ function buildSystemPrompt(skills: Skill[]): {
     // +2 counts the `\n\n` join separator, so the cap is exact, not soft —
     // otherwise ~20k minimal skills overrun the budget ~15% via separators.
     if (section.length + 2 > remaining) {
-      droppedSkills.push({ name, path: stripBidi(sanitizeControlChars(skill.path)), reason: 'prompt-budget', ruleIds: [] });
+      // ESCAPED, not cleaned like `name` above — see escapePathUnsafe's doc
+      // comment (src/internal/sanitize.ts) and DroppedSkill.path's (deleting
+      // an invisible character here would misdirect an operator to a
+      // byte-identical benign twin, since skill names are not unique).
+      const { value: path, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
+      droppedSkills.push({
+        name,
+        path,
+        pathHasEscapes,
+        reason: 'prompt-budget',
+        channels: [],
+        ruleIds: [],
+      });
       continue;
     }
     remaining -= section.length + 2;
@@ -323,29 +378,40 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // ASSEMBLED scan catches what the cleaner would create (space-splicing),
       // plus the name channel and phrases split across fields. Neither alone
       // is sufficient — see skillSection's comment and ADR-0026.
-      const channels = [
-        { channel: 'description', scan: scanSkillChannel(`skill "${label}" description`, skill.description) },
-        { channel: 'body', scan: scanSkillChannel(`skill "${label}" body`, skill.body) },
-        {
-          channel: 'assembled section',
-          scan: scanSkillChannel(`skill "${label}" assembled section`, skillSection(skill).section),
-        },
-      ];
+      // The scan LABEL is derived from the channel name so the two cannot
+      // drift; today's three labels are already exactly `skill "<name>"
+      // <channel>`. It reaches the operator via runInjectionScan's
+      // "injection scan <verdict> on <label> output" warning.
+      const channels: { channel: SkillDropChannel; scan: ScanResult | null }[] =
+        SKILL_DROP_CHANNELS.map((channel) => ({
+          channel,
+          scan: scanSkillChannel(`skill "${label}" ${channel}`, SKILL_DROP_CHANNEL_TEXT[channel](skill)),
+        }));
       const blocking = channels.filter((c) => blocksSkill(c.scan));
       if (blocking.length === 0) {
         injectableSkills.push(skill);
         continue;
       }
       // Deduped across channels: the same rule firing on more than one is one
-      // reason, not three.
-      const ruleIds = [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))];
-      // Bidi-stripped as well as control-stripped, matching the loader's
-      // treatment of SkillError.file: a reversed filename in the ONE message
-      // that tells the operator which file to edit would point them at the
-      // wrong one (Trojan Source, issue #24). sanitizeControlChars alone does
-      // not remove bidi.
-      const safePath = stripBidi(sanitizeText(skill.path));
-      blockedSkills.push({ name: label, path: safePath, reason: 'injection-block', ruleIds });
+      // reason, not three. Cleaned (deleted, not escaped) with cleanSkillText:
+      // `scanInjection` is caller-supplied (SessionDeps), not the shipped
+      // rule table, so a rule id is untrusted the same way a path or name is
+      // — but unlike `path`, a rule id identifies nothing on disk, so
+      // deletion loses nothing worth keeping.
+      const ruleIds = [...new Set(blocking.flatMap((b) => b.scan?.rule_ids ?? []))].map(cleanSkillText);
+      // ESCAPED, not cleaned: deleting an invisible character here would
+      // misdirect an operator to a byte-identical benign twin, since skill
+      // names are not unique (escapePathUnsafe's doc comment, src/internal/
+      // sanitize.ts; DroppedSkill.path's, round-1 fix issue #46 Finding 1).
+      const { value: safePath, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
+      blockedSkills.push({
+        name: label,
+        path: safePath,
+        pathHasEscapes,
+        reason: 'injection-block',
+        channels: blocking.map((b) => b.channel),
+        ruleIds,
+      });
       warn(
         `skill "${label}" (${safePath}) dropped from the system prompt: ` +
           `injection scan blocked its ${blocking.map((b) => b.channel).join(' and ')} ` +
@@ -376,6 +442,94 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           `telemetry record threw: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
         );
       }
+    }
+
+    // Placed ABOVE the session-start fire deliberately (issue #46). Two
+    // reasons: `deps.hooks.fire('session-start')` below is NOT try/caught
+    // (unlike the pre-tool fire), so an injected runtime that throws would
+    // otherwise lose every drop record; and recording here makes skill-drop
+    // rows sort BEFORE the session-start row under the store's default
+    // `ORDER BY ts ASC`, which is a truthful trace rather than an excused one.
+    // Consequence to keep in mind: operator-visible stderr ordering changed —
+    // budget-drop warnings now precede session-start hook-error warnings.
+    //
+    // Only the skills that survived the injection gate are offered to the
+    // budget pass, so the two drop reasons stay distinct and a blocked skill
+    // never consumes budget a legitimate one could have used.
+    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
+      buildSystemPrompt(injectableSkills);
+    for (const dropped of budgetDropped) {
+      warn(
+        `skill "${dropped.name}" (${dropped.path}) dropped from the system ` +
+          `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
+      );
+    }
+    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
+
+    // Iterates the EXACT array returned as SessionResult.droppedSkills, so the
+    // durable record and the programmatic surface cannot drift. The payload is
+    // a bounded PROJECTION of that array, not a copy: name/path/ruleIds are
+    // capped because a malicious cloned repo is in scope (security-model) and
+    // this sink is durable and exportable.
+    //
+    // `name` and `path` go through the telemetry helpers, which own the cap
+    // arithmetic AND the truncated-flag derivation. Do NOT hand-roll it here:
+    // the caps are TOTAL stored length while the truncators bound CONTENT and
+    // append an ellipsis, so passing a cap directly yields cap+1 units, fails
+    // the store's read validator, throws in assertValidInput, and
+    // recordTelemetry downgrades that to a warning — silently losing exactly
+    // the oversized attacker-controlled rows this record exists to capture.
+    const ruleIdBudget = SKILL_DROP_RULE_ID_MAX - 1;
+
+    for (const dropped of droppedSkills) {
+      // TAIL-preserving: a path's disambiguating part is its filename.
+      // `dropped.path` is already ESCAPED at capture by escapePathUnsafe —
+      // escaped, NOT deleted, so the pre-image stays recoverable. That
+      // satisfies the required TRANSFORM-then-TRUNCATE order: truncating first
+      // would let an attacker spend the whole budget on characters a later
+      // transform rewrites, blanking their own audit row.
+      const boundedPath = boundSkillDropPath(dropped.path);
+      recordTelemetry({
+        type: 'skill-drop',
+        sessionId: harnessSessionId,
+        turnId,
+        payload: {
+          name: boundSkillDropName(dropped.name),
+          path: boundedPath.value,
+          // Out-of-band, because the in-band ellipsis is attacker-forgeable,
+          // and taken from the helper so it cannot disagree with `path`.
+          pathTruncated: boundedPath.truncated,
+          // Carried straight through from capture. It describes the RAW
+          // PRE-IMAGE, so it deliberately survives a truncation that drops the
+          // last escape token — do NOT re-derive it by scanning `path`.
+          pathHasEscapes: dropped.pathHasEscapes,
+          reason: dropped.reason,
+          // NOT sliced, deliberately, and the asymmetry with ruleIds is the
+          // point. `channels` is a CLOSED union whose cardinality the
+          // session-side drift guards prove equal to SKILL_DROP_CHANNELS_MAX,
+          // so an over-length array is unreachable unless that guard has
+          // already failed. Slicing would silently write a row missing a
+          // channel — hiding the very drift the guards exist to catch, and
+          // contradicting the failure mode documented in types.ts on both
+          // sides ("exceeds the cap, fails isSkillDropPayload, row gone, one
+          // stderr warning"). Losing the row loudly beats keeping a quietly
+          // incomplete one.
+          // Passed through WHOLE: not sliced, not element-truncated. Unlike
+          // ruleIds below, channels is harness-authored from a closed union,
+          // so it is not attacker-influenced at all. Truncating an element
+          // would silently rewrite a value while the count above deliberately
+          // fails loud — two opposite philosophies on one field. Both halves
+          // are guarded from the session side, the only side that lints:
+          // cardinality by the drift guards, element length by the
+          // `every channel name fits SKILL_DROP_CHANNEL_MAX` test.
+          channels: [...dropped.channels],
+          // Sliced, because these come from a CALLER-SUPPLIED scanner
+          // (SessionDeps.scanInjection) and are bounded by nothing.
+          ruleIds: dropped.ruleIds
+            .slice(0, SKILL_DROP_RULE_IDS_MAX)
+            .map((ruleId) => truncateWellFormed(ruleId, ruleIdBudget)),
+        },
+      });
     }
 
     function stringifyForScan(output: unknown): string {
@@ -590,19 +744,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let costUsd: number | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
-
-    // Only the skills that survived the injection gate are offered to the
-    // budget pass, so the two drop reasons stay distinct and a blocked skill
-    // never consumes budget a legitimate one could have used.
-    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
-      buildSystemPrompt(injectableSkills);
-    for (const dropped of budgetDropped) {
-      warn(
-        `skill "${dropped.name}" (${dropped.path}) dropped from the system ` +
-          `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
-      );
-    }
-    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
 
     try {
       // Steps 5-14: the SDK turn.

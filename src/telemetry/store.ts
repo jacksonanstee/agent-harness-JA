@@ -6,6 +6,8 @@ import { MIGRATIONS, runMigrations } from './migrations/index.js';
 import type {
   HookEventPayload,
   RecordResult,
+  SkillDropPayload,
+  SkillDropReason,
   TelemetryError,
   TelemetryEvent,
   TelemetryEventInput,
@@ -16,9 +18,37 @@ import type {
   TurnCostPayload,
   TurnUsage,
 } from './types.js';
-import { sanitizeControlChars as sanitizeText } from '../internal/sanitize.js';
+import {
+  SKILL_DROP_CHANNEL_MAX,
+  SKILL_DROP_CHANNELS_MAX,
+  SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_MAX,
+  SKILL_DROP_RULE_ID_MAX,
+  SKILL_DROP_RULE_IDS_MAX,
+} from './types.js';
+import {
+  PATH_ESCAPE_SEQUENCE,
+  sanitizeControlChars as sanitizeText,
+  truncateTailWellFormed,
+  truncateWellFormed,
+} from '../internal/sanitize.js';
 
-export const TELEMETRY_EVENT_TYPES = ['turn-cost', 'tool-trace', 'hook-event'] as const satisfies readonly TelemetryEventType[];
+/**
+ * Exhaustive BY CONSTRUCTION. The previous
+ * `as const satisfies readonly TelemetryEventType[]` checked MEMBERSHIP only:
+ * widening TelemetryEventType and forgetting this array compiled clean, and
+ * then EVENT_TYPE_SET rejected every write of the new type at
+ * assertValidInput — which recordTelemetry downgrades to a warning, so the
+ * feature would be silently dead. A missing key here is now a compile error.
+ */
+const EVENT_TYPE_PRESENCE: Record<TelemetryEventType, true> = {
+  'turn-cost': true,
+  'tool-trace': true,
+  'hook-event': true,
+  'skill-drop': true,
+};
+
+export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonly TelemetryEventType[];
 export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
@@ -124,15 +154,148 @@ function isHookEventPayload(value: unknown): value is HookEventPayload {
     typeof value.event === 'string' &&
     (value.tool === undefined || typeof value.tool === 'string') &&
     (value.reason === undefined || typeof value.reason === 'string') &&
-    (value.handlerIndex === undefined || typeof value.handlerIndex === 'number') &&
-    (value.handlersFired === undefined || typeof value.handlersFired === 'number')
+    // Number.isInteger, not `typeof === 'number'`: the same write-passes/
+    // read-fails asymmetry as the sparse-array class above — `typeof NaN` and
+    // `typeof Infinity` are both 'number', so both used to pass here, then
+    // JSON.stringify writes NaN/Infinity as `null`, and the read-back's
+    // re-validation (this same function) rejects the `null`. The transaction
+    // now makes that fail-safe (nothing commits) rather than fail-open, but
+    // it was still a silently lost event with a misleading error, so this
+    // closes it at the same pre-write gate as the array fix.
+    (value.handlerIndex === undefined || Number.isInteger(value.handlerIndex)) &&
+    (value.handlersFired === undefined || Number.isInteger(value.handlersFired))
+  );
+}
+
+/**
+ * Exhaustive BY CONSTRUCTION, same shape as EVENT_TYPE_PRESENCE above and for
+ * the same reason: a hand-copied `Set(['injection-block', 'prompt-budget'])`
+ * is a MEMBERSHIP check, not a completeness check. This is the exact bug this
+ * task fixed for TELEMETRY_EVENT_TYPES, one file down — a set built from a
+ * literal list compiles clean when SkillDropReason grows a third member and
+ * nobody updates the literal, and the new reason is silently dead-lettered by
+ * assertValidInput. A missing key here is now a compile error.
+ */
+const SKILL_DROP_REASON_PRESENCE: Record<SkillDropReason, true> = {
+  'injection-block': true,
+  'prompt-budget': true,
+};
+
+// Mirrors TELEMETRY_EVENT_TYPES/EVENT_TYPE_SET above: an exported array for
+// callers/tests that need the exact member list (round-2 review Finding 3 —
+// the sibling ratchet had a runtime "covers every member" test and this one
+// didn't), plus an internal Set for the O(1) membership check below.
+export const SKILL_DROP_REASONS = Object.keys(SKILL_DROP_REASON_PRESENCE) as readonly SkillDropReason[];
+const SKILL_DROP_REASON_SET: ReadonlySet<string> = new Set(SKILL_DROP_REASONS);
+
+/**
+ * First array-bearing payload in this store: elements are validated, not just
+ * the container, because a direct writer need not have gone through session.ts.
+ *
+ * Indexed loop, NOT `.every`: `Array.prototype.every` (and `.map`, in
+ * sanitizePayload's skill-drop branch) SKIP holes — they walk HasProperty, not
+ * indices — so a sparse array (e.g. `ruleIds[2] = 'x'` with no index 0 or 1
+ * set) passes this check and passes the `.map` in sanitizePayload unchanged.
+ * `JSON.stringify` does NOT skip holes: it materialises each one as `null`.
+ * That row then INSERTs successfully, and only fails re-validation on the
+ * read-back inside record() (rowToEvent's structural check), by which point
+ * the write already happened — see the transaction wrapping the insert and
+ * read-back in createTelemetryStore. Reading `value[i]` on a hole returns
+ * `undefined`, which fails `typeof item !== 'string'` here, so this indexed
+ * loop rejects the sparse array BEFORE either the write or the `.map`.
+ */
+function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number): value is string[] {
+  if (!Array.isArray(value) || value.length > maxItems) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const item: unknown = value[i];
+    if (typeof item !== 'string' || item.length > maxLen) return false;
+  }
+  return true;
+}
+
+/**
+ * Bakes the CAP-1 truncator arithmetic (see types.ts's SKILL_DROP_*_MAX doc
+ * comment) into one place so no caller re-derives it. Task 5's capture site
+ * needs this arithmetic in two independent spots — the truncation call and
+ * the separate `pathTruncated` derivation, since neither truncator reports
+ * whether it fired — and a hand-copied `CAP - 1` in each is a silent-inversion
+ * risk: get the sign wrong and every oversized attacker-controlled path (the
+ * rows most worth having) fails isSkillDropPayload and vanishes as a warning.
+ *
+ * The input here has ALREADY been through `escapePathUnsafe` (session.ts
+ * capture site, round-1 fix issue #46 Finding 1) — escape THEN truncate, not
+ * the other order, so the cap bounds what is actually stored rather than a
+ * pre-image that can grow past it during escaping. That ordering creates a
+ * hazard `truncateTailWellFormed` alone does not guard: a raw tail-cut can
+ * land INSIDE one of `escapePathUnsafe`'s own tokens (`\\` or `\u{HEX}`,
+ * `PATH_ESCAPE_SEQUENCE`), keeping a fragment like `00B}rest.md` that reads as
+ * ordinary text containing digits and a brace, not as a truncated escape.
+ * Guarded by nudging the cut FORWARD — dropping the whole partial token
+ * rather than keeping a fragment of it — which only ever trims MORE, never
+ * less, so the result never exceeds the cap this function exists to enforce.
+ */
+export function boundSkillDropPath(path: string): { value: string; truncated: boolean } {
+  const cap = SKILL_DROP_PATH_MAX - 1;
+  const truncated = path.length > cap;
+  if (!truncated) return { value: path, truncated };
+  const naiveFrom = path.length - cap;
+  let effectiveMax = cap;
+  PATH_ESCAPE_SEQUENCE.lastIndex = 0;
+  for (let m = PATH_ESCAPE_SEQUENCE.exec(path); m !== null; m = PATH_ESCAPE_SEQUENCE.exec(path)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (naiveFrom > start && naiveFrom < end) {
+      effectiveMax = path.length - end;
+      break;
+    }
+    if (start >= naiveFrom) break; // tokens run in order; nothing earlier remains
+  }
+  return { value: truncateTailWellFormed(path, effectiveMax), truncated };
+}
+
+/**
+ * `name` has no truncated-flag counterpart (see SkillDropPayload.pathTruncated's
+ * doc comment for why `path` needs one and `name` deliberately doesn't).
+ */
+export function boundSkillDropName(name: string): string {
+  return truncateWellFormed(name, SKILL_DROP_NAME_MAX - 1);
+}
+
+function isSkillDropPayload(value: unknown): value is SkillDropPayload {
+  return (
+    isObject(value) &&
+    typeof value.name === 'string' &&
+    value.name.length <= SKILL_DROP_NAME_MAX &&
+    typeof value.path === 'string' &&
+    value.path.length <= SKILL_DROP_PATH_MAX &&
+    typeof value.pathTruncated === 'boolean' &&
+    typeof value.pathHasEscapes === 'boolean' &&
+    typeof value.reason === 'string' &&
+    SKILL_DROP_REASON_SET.has(value.reason) &&
+    isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&
+    isBoundedStringArray(value.ruleIds, SKILL_DROP_RULE_IDS_MAX, SKILL_DROP_RULE_ID_MAX)
   );
 }
 
 function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
-  if (type === 'turn-cost') return isTurnCostPayload(payload);
-  if (type === 'tool-trace') return isToolTracePayload(payload);
-  return isHookEventPayload(payload);
+  switch (type) {
+    case 'turn-cost':
+      return isTurnCostPayload(payload);
+    case 'tool-trace':
+      return isToolTracePayload(payload);
+    case 'hook-event':
+      return isHookEventPayload(payload);
+    case 'skill-drop':
+      return isSkillDropPayload(payload);
+    default: {
+      // `payload` is unknown here, so the old unguarded fall-through gave NO
+      // compile-time protection: a fifth type would have been validated
+      // against the hook-event shape. Exhaustiveness is on the DISCRIMINANT,
+      // which does type-check — a new type without a case fails to compile.
+      const exhaustive: never = type;
+      return exhaustive;
+    }
+  }
 }
 
 /**
@@ -171,6 +334,18 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       ...p,
       tool: sanitizeText(p.tool),
       resultSummary: p.resultSummary === null ? null : sanitizeText(p.resultSummary),
+    };
+  }
+  if (event.type === 'skill-drop') {
+    const p = event.payload;
+    // sanitizeText is a 1:1 space substitution, so lengths are preserved and
+    // the caps validated above still hold after sanitization.
+    return {
+      ...p,
+      name: sanitizeText(p.name),
+      path: sanitizeText(p.path),
+      channels: p.channels.map(sanitizeText),
+      ruleIds: p.ruleIds.map(sanitizeText),
     };
   }
   const p = event.payload;
@@ -321,6 +496,51 @@ export function createTelemetryStore(db: Database.Database): TelemetryStore {
   const insert = db.prepare(INSERT_SQL);
   const selectById = db.prepare('SELECT * FROM telemetry_events WHERE id = @id;');
 
+  /**
+   * Insert and read-back as ONE transaction, defined once and reused (per
+   * better-sqlite3's guidance) rather than wrapped fresh on every call.
+   *
+   * rowToEvent's read-back re-validation can throw on a row that passed
+   * isPayloadForType in memory but serializes differently — the sparse-array
+   * case above is the one this task found and closed pre-write, but that fix
+   * is per-field; this closes the CLASS for every field, present and future.
+   * Before this wrapped the two statements, that throw happened AFTER
+   * insert.run had already committed (better-sqlite3 auto-commits a bare
+   * statement outside an explicit transaction), so record() returned
+   * `ok: false` while the bad row stayed in the table — and recordTelemetry
+   * downgrades `ok: false` to one stderr warning, so the corrupted row (and,
+   * via store.query()'s unconditional rowToEvent map, every OTHER row too,
+   * since one throwing row fails the whole query) went undetected until an
+   * operator ran `telemetry export` weeks later. Wrapping means `ok: false`
+   * now always means "nothing was written."
+   *
+   * COST, named rather than left implicit: every write now pays one extra
+   * SELECT, a `JSON.parse`, and a full structural re-validation
+   * (`isPayloadForType` again, via `rowToEvent`) beyond the INSERT itself,
+   * plus the transaction's own BEGIN/COMMIT (or ROLLBACK) overhead. Accepted
+   * trade: this defends against the row and its in-memory source diverging at
+   * the DB layer — another writer, a trigger, a relaxed migration — not
+   * against the write-path validator (`assertValidInput`), which already ran
+   * before `insertAndReadBack` is ever called. That divergence class has now
+   * bitten this file twice (the sparse-array case above, then a NaN
+   * handlerIndex in isHookEventPayload) in two review rounds, which is why
+   * the cost is paid unconditionally rather than only for skill-drop.
+   */
+  const insertAndReadBack = db.transaction(
+    (row: {
+      id: string;
+      type: TelemetryEventInput['type'];
+      sessionId: string;
+      turnId: string;
+      ts: number;
+      payload: string;
+    }): TelemetryEvent => {
+      insert.run(row);
+      const stored = selectById.get({ id: row.id });
+      return rowToEvent(stored);
+    },
+  );
+
   function record(event: TelemetryEventInput): RecordResult {
     assertValidInput(event);
     const row = {
@@ -332,9 +552,8 @@ export function createTelemetryStore(db: Database.Database): TelemetryStore {
       payload: JSON.stringify(sanitizePayload(event)),
     };
     try {
-      insert.run(row);
-      const stored = selectById.get({ id: row.id });
-      return { ok: true, value: rowToEvent(stored) };
+      const value = insertAndReadBack(row);
+      return { ok: true, value };
     } catch (cause: unknown) {
       return { ok: false, error: telemetryError(cause) };
     }

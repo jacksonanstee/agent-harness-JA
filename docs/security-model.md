@@ -282,7 +282,15 @@ This is the thinnest leg, and honestly so. Telemetry (ADR-0011) records every
 step of the turn with session/turn correlation ids, hook denials land as
 `denied-by-hook` events, and `rule_ids` is deliberately never capped by the
 excerpt budget so the record of *which* rules fired is complete (ADR-0012
-§8). But the store is a local SQLite file with no integrity protection: any
+§8). Since 2026-07-29 (issue #46) the harness's one model-facing enforcement
+action is covered too: a skill dropped from the system prompt writes a
+`skill-drop` row naming the skill, the reason, the scanned channels and the
+rules that fired, so "when did this skill stop reaching the model, and why?"
+is answerable from the record rather than only from a stderr line that scrolls
+away. Two limits on that, stated rather than glossed: recording is best-effort
+(`deps.telemetry` is optional and a failed write is downgraded to a warning),
+and the row carries which rules fired, not the matched text (R-c). But the
+store is a local SQLite file with no integrity protection: any
 process with file access can rewrite history. Within the attacker model
 (§2 — the operator and OS are trusted) that is acceptable; it stops being
 acceptable if telemetry is ever used as evidence *against* a party with write
