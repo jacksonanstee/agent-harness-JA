@@ -131,6 +131,30 @@ export type SkillDropReason = 'injection-block' | 'prompt-budget';
  */
 export const SKILL_DROP_NAME_MAX = 200;
 export const SKILL_DROP_PATH_MAX = 1024;
+/**
+ * Length of `SkillDropPayload.pathDigest`, in lowercase hex characters (issue
+ * #50). Each hex character carries 4 bits, so the value below is a 128-bit
+ * digest.
+ *
+ * The width is set by the THREAT, not by taste. This field exists to survive a
+ * DELIBERATE attacker: they author the skill pack, so they choose both paths,
+ * and forcing two audit rows to collide defeats the field's only purpose. That
+ * rules out a non-cryptographic hash (FNV-class collisions are constructible by
+ * hand) — but it equally rules out a short truncation of a good one, because a
+ * 64-bit digest has a birthday bound near 2^32 hashes, minutes of commodity GPU
+ * time and well inside an attacker's budget. At 128 bits the bound is 2^64,
+ * which is not reachable.
+ *
+ * NEITHER DIRECTION IS A FREE EDIT, and the guards live elsewhere, so they are
+ * named here the way `SKILL_DROP_CHANNELS_MAX` names its drift test above.
+ * Narrowing restores the forceable collision and is refused by the ratchet in
+ * `src/telemetry/store.test.ts`. Widening is a BREAKING READ CHANGE rather than
+ * an improvement: the validator's pattern is anchored at exactly this width and
+ * `query()` throws on the first row that fails it, so old rows would deny the
+ * whole trail. Raise the width by adding a NEW FIELD, not by editing this
+ * number. ADR-0011 decision 16 carries the full argument.
+ */
+export const SKILL_DROP_PATH_DIGEST_LEN = 32;
 export const SKILL_DROP_CHANNELS_MAX = 3;
 export const SKILL_DROP_CHANNEL_MAX = 64;
 export const SKILL_DROP_RULE_IDS_MAX = 32;
@@ -188,6 +212,37 @@ export interface SkillDropPayload {
    * see DroppedSkill.pathHasEscapes for the full contract.
    */
   pathHasEscapes: boolean;
+  /**
+   * SHA-256 of the FULL escaped path, first `SKILL_DROP_PATH_DIGEST_LEN` hex
+   * characters. Present only when `pathTruncated` is true, because a complete
+   * path is already its own identity (issue #50).
+   *
+   * WHY IT EXISTS: tail truncation keeps the filename and discards everything
+   * before it, so two paths differing only BEFORE the cut store byte-
+   * identically — and `path` exists precisely to disambiguate skills whose
+   * names collide. `pathTruncated` tells an operator the path was cut; it does
+   * not tell them a DISTINGUISHING character was lost. An attacker authoring a
+   * cloned repo controls directory depth and naming, so the offset is
+   * engineerable.
+   *
+   * ⚠️ OPTIONAL ON PURPOSE, and it must stay that way. Rows written before
+   * this field existed carry no `pathDigest`. Requiring it would fail
+   * `isSkillDropPayload` on READ, and `rowToEvent` throws rather than skipping
+   * the row, so `query()` would throw on every call and deny the ENTIRE trail
+   * — every unrelated event included — for anyone who had already run the
+   * shipping build. Verified empirically before choosing optional: removing
+   * one required field from one stored row made `telemetry export` exit 1 with
+   * zero rows out of twenty-five.
+   *
+   * It also cannot be backfilled by a migration, because the digest is taken
+   * over the full escaped path and that is exactly what truncation discarded.
+   *
+   * Derive it from `boundSkillDropPath`, which returns it from the SAME call
+   * that truncates, so the digest and `pathTruncated` cannot disagree. Do not
+   * compute it from the STORED path: that collides exactly as the stored value
+   * does, which is the bug this field exists to fix.
+   */
+  pathDigest?: string;
   reason: SkillDropReason;
   /** Scanned channels that blocked the skill; empty for 'prompt-budget'. */
   channels: string[];

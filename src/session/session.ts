@@ -499,6 +499,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // Out-of-band, because the in-band ellipsis is attacker-forgeable,
           // and taken from the helper so it cannot disagree with `path`.
           pathTruncated: boundedPath.truncated,
+          // Present only when the path WAS truncated, and taken from the same
+          // call, so it can no more disagree with `path` than pathTruncated
+          // can. Digests the FULL escaped path: two paths differing only
+          // before the tail-cut store identically, and this is what keeps them
+          // apart (issue #50). Never re-derive it from `boundedPath.value`.
+          //
+          // Conditional spread, not `pathDigest: boundedPath.digest`. The
+          // latter sets an OWN property holding undefined, which contradicts
+          // the "absent means nothing was discarded" contract for anyone
+          // inspecting the payload before it is serialised. JSON.stringify
+          // happens to drop it either way, so this is about the in-memory
+          // object telling the same truth as the stored row.
+          ...(boundedPath.digest === undefined ? {} : { pathDigest: boundedPath.digest }),
           // Carried straight through from capture. It describes the RAW
           // PRE-IMAGE, so it deliberately survives a truncation that drops the
           // last escape token — do NOT re-derive it by scanning `path`.

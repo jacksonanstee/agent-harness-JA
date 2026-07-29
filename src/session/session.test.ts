@@ -8,6 +8,7 @@ import {
   SKILL_DROP_CHANNELS_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_DIGEST_LEN,
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_IDS_MAX,
 } from '../telemetry/index.js';
@@ -2064,6 +2065,73 @@ describe('skill-drop telemetry (issue #46)', () => {
     expect(payload.path.endsWith('/verylast.md')).toBe(true);
     // Out-of-band marker, because the leading ellipsis is attacker-forgeable.
     expect(payload.pathTruncated).toBe(true);
+  });
+
+  // Issue #50 at the CAPTURE SITE. The helper deriving a digest is worth
+  // nothing if the record loop never passes it on, which is this project's
+  // recurring failure signature: green run, field silently dead.
+  it('carries a pathDigest for a truncated path, and distinguishes two paths that store identically', async () => {
+    const payloadFor = async (dir: string) => {
+      const telemetry = fakeTelemetry();
+      const session = createSession(
+        makeDeps(fakeQuery([INIT, ASSISTANT, RESULT]), {
+          telemetry,
+          scanInjection: blockingScan,
+          loadSkills: () => ({
+            // Differs ONLY before the tail-cut, so the stored `path` is
+            // byte-identical for both and only the digest can tell them apart.
+            skills: [{ ...hostile, path: `/home/${dir}/${'d'.repeat(2000)}/verylast.md` }],
+            errors: [],
+          }),
+        }),
+        { skillsDir: '/skills' },
+      );
+      await session.run('hi');
+      return telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+        path: string;
+        pathTruncated: boolean;
+        pathDigest?: string;
+      };
+    };
+
+    const alice = await payloadFor('alice');
+    const bobby = await payloadFor('bobby');
+
+    // Premise: without the digest these two rows are indistinguishable.
+    expect(alice.pathTruncated).toBe(true);
+    expect(alice.path).toBe(bobby.path);
+
+    const hex = new RegExp(`^[0-9a-f]{${SKILL_DROP_PATH_DIGEST_LEN}}$`);
+    expect(alice.pathDigest).toMatch(hex);
+    expect(bobby.pathDigest).toMatch(hex);
+    expect(alice.pathDigest).not.toBe(bobby.pathDigest);
+  });
+
+  it('omits pathDigest when the path fits, so presence means "something was discarded"', async () => {
+    const telemetry = fakeTelemetry();
+    const session = createSession(
+      makeDeps(fakeQuery([INIT, ASSISTANT, RESULT]), {
+        telemetry,
+        scanInjection: blockingScan,
+        loadSkills: () => ({ skills: [{ ...hostile, path: '/skills/short.md' }], errors: [] }),
+      }),
+      { skillsDir: '/skills' },
+    );
+    await session.run('hi');
+
+    const payload = telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+      pathTruncated: boolean;
+      pathDigest?: string;
+    };
+    expect(payload.pathTruncated).toBe(false);
+    expect(payload.pathDigest).toBeUndefined();
+    // Stronger than toBeUndefined, and the reason the capture site uses a
+    // conditional spread: `pathDigest: boundedPath.digest` would set an OWN
+    // property holding undefined, so the in-memory payload would carry a key
+    // the "absent means nothing was discarded" contract says is not there.
+    // JSON.stringify hides the difference at the storage layer, which is
+    // exactly why it needs pinning here rather than in a round-trip test.
+    expect(Object.hasOwn(payload, 'pathDigest')).toBe(false);
   });
 
   it('carries pathHasEscapes through from capture, describing the RAW pre-image', async () => {
