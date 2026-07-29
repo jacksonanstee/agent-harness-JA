@@ -38,6 +38,8 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
    `turn_id`, `ts`), JSON `payload` TEXT. Per-type tables buy nothing at v1.0
    scale and triple the migration surface; queries are "filter by
    session/turn/type/time", which the three indexes serve.
+   - **Extended 2026-07-29 (issue #46):** a fourth type, `skill-drop`, added
+     by migration m003. See the amendment below, item 1.
 5. **Correlation model.** The composition root (cli) pre-generates a harness
    session id and a turn id, because hook events fire before the SDK reports
    its own session id. Every telemetry writer keys on the harness ids; the SDK
@@ -56,6 +58,10 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
 8. **JSONL export:** `agent-harness-ja telemetry export [--db] [--out]
    [--session] [--type]`, one `JSON.stringify(event)` per line, stdout by
    default (terminal-sanitized).
+   - ⚠️ **"terminal-sanitized" is SUPERSEDED and was FALSE from 2026-07-29
+     (commit `5ffad52`).** The export ESCAPES; it does not sanitize. See the
+     amendment below, item 13, for why replacing rather than adding was the
+     correct move.
 9. **Sanitizer extraction (ADR-0008 Revisit-if fired).** Telemetry echoes
    attacker-influenced strings (tool names, hook reasons, result summaries)
    into an export that reaches terminals, so it sanitizes on write — making it
@@ -65,6 +71,13 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
    `TERMINAL_UNSAFE` stays separate: it keeps newline/tab, a different charset
    contract. This amends ADR-0008's "hooks depends on nothing" to "hooks
    depends on nothing outside `src/internal/`".
+   - **Widened 2026-07-29.** `TERMINAL_UNSAFE` is still a separate *contract*
+     but no longer a separate *home*: it moved into `src/internal/sanitize.ts`
+     (commit `389a7fa`) and is now DERIVED from `CONTROL_CHARS` rather than
+     hand-typed. Only `sanitizeForTerminal` — the function, with its forty-odd
+     callers — stays in `src/cli/shared.ts`. There is now one root charset and
+     three derivations from it, all in that one leaf. See the amendment below,
+     item 13.
 
 ## Alternatives considered
 
@@ -97,6 +110,179 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
   event recorded by session), closing the one failure path the hook sink
   cannot see.
 
+## Amendment (2026-07-29, issue #46): the `skill-drop` event
+
+ADR-0026 shipped block-on-flag for the skill channel and named its own gap: a
+drop left no durable record, so "when did this skill stop reaching the model,
+and why?" was unanswerable thirty days later. This amendment records what
+closing that gap decided. It adds no new ADR — the event is a fourth type in
+the table decision 4 already owns.
+
+1. **Fourth event type, `skill-drop`.** Payload: `name`, `path`,
+   `pathTruncated`, `pathHasEscapes`, `reason` (`injection-block` |
+   `prompt-budget`), `channels`, `ruleIds`. One row per dropped skill per
+   turn, written at the capture site in `src/session/session.ts`.
+2. **Migration m003 is a table REBUILD, not an `ALTER`.** SQLite cannot alter
+   a `CHECK` constraint, so widening the type discriminator means
+   create-copy-drop-rename. It runs inside the runner's per-migration
+   transaction and SQLite DDL is transactional, so a failure mid-rebuild rolls
+   back rather than leaving a half-renamed table. The three indexes are
+   recreated because `DROP TABLE` takes its indexes with it.
+3. **Old-binary lockout, accepted.** Once m003 is recorded, an older binary
+   throws at the runner's registry check (`recorded migration N is not in the
+   registry; refusing to run`) and fails *entirely* — `telemetry export` and
+   any run that opens the DB. Two realistic scenarios: a version rollback, and
+   two checkouts sharing one `./.harness/telemetry.db`. Accepted because the
+   runner's refusal is deliberately fail-loud, and because this attaches to
+   *any* future migration rather than to this one. Recorded as **one** item
+   because it strictly dominates the per-row read-path skew: no read path
+   skips the migration gate.
+4. **The payload is a BOUNDED PROJECTION of `SessionResult.droppedSkills`, not
+   a copy.** `path` is tail-truncated at 1024 units (the filename
+   disambiguates; skill names are not unique), `name` at 200. So the row and
+   the in-memory result are deliberately not byte-identical, and code that
+   assumes otherwise is wrong.
+5. **`name` and `path` are NOT redacted, deliberately.** They are short bounded
+   strings naming a local file. The redactor is fail-closed, so a redactor
+   error would replace them with the `[REDACTION FAILED]` sentinel — destroying
+   the disambiguator the record exists to carry. A hostile skill pack authors
+   its own `name` anyway, so redacting it protects nothing. The closer
+   precedents agree: hook-error `reason` and the ADR-0025 turn-cost tokens are
+   both persisted unredacted. R-g (absolute local paths now enter an
+   exportable JSONL sink) is the accepted cost.
+6. **First array-bearing payload in this store.** `channels` and `ruleIds` are
+   validated and sanitized ELEMENT-wise, not just as containers, because a
+   direct library writer need not have gone through `session.ts`. The element
+   check uses an indexed loop, not `.every()`: `.every()` skips array holes
+   while `JSON.stringify` materialises them as `null`, so a sparse array
+   passed write validation, committed, and then threw on read — poisoning
+   `query()` for the whole trail, not just that row. Validation and read-back
+   now happen in ONE transaction, so `ok: false` means nothing was written.
+7. **Stderr and row ordering changed.** The prompt build, the budget-drop warn
+   loop and the `droppedSkills` merge now sit ABOVE the session-start fire
+   (`src/session/session.ts`, and the comment there is authoritative). Two
+   consequences, both intended: skill-drop rows sort before the session-start
+   row, and budget-drop warnings now precede session-start hook-error warnings.
+   A third was found during review rather than designed: before the move, a
+   throw in `buildSystemPrompt` fired `session-start` but never `stop`, an
+   asymmetric hook lifecycle; now neither fires.
+8. **The caps are TOTAL stored length, and getting this backwards is silent.**
+   The truncators bound *content* at `max` and then append a U+2026, so a
+   truncated value is `max + 1` units. The capture site must therefore pass
+   `CAP - 1`. Pass `CAP` and every truncated row fails `isSkillDropPayload`,
+   throws in `assertValidInput`, and is downgraded by `recordTelemetry` to one
+   stderr warning — i.e. the pathological long attacker-controlled paths, the
+   rows most worth having, are exactly the ones lost. `boundSkillDropName` and
+   `boundSkillDropPath` own that arithmetic so no caller re-derives it, and a
+   store round-trip test pins that a truncated row is actually RECORDED.
+9. **`pathTruncated` is out-of-band, and that is the point.** U+2026 is a legal
+   filename character and skill paths are attacker-authored (a malicious cloned
+   repo is in scope), so a file named `…foo.md` is byte-identical to a
+   genuinely truncated path. An in-band marker is forgeable in both directions:
+   fake truncation to send an analyst to the wrong file, or collision between a
+   short path and a truncated long one. `name` deliberately has no equivalent
+   flag — it is a display label, not the disambiguator. Scope choice, not
+   oversight.
+10. **TRANSFORM, then TRUNCATE — the order is required.** Truncating first lets
+    an attacker fill the tail with characters a later transform rewrites, so
+    the whole retained budget is spent on content that vanishes, blanking their
+    own audit row. Our order is already correct; it is documented here so a
+    future refactor cannot silently invert it. The transform is
+    **`escapePathUnsafe`, NOT `cleanSkillText`**: paths are ESCAPED (`\u{...}`),
+    so the pre-image is recoverable, because deleting an invisible character
+    would let a hostile `/skills/he<U+200B>lper.md` read back byte-identical to
+    a benign `/skills/helper.md`. `name`, `description`, `body` and `ruleIds`
+    are still `cleanSkillText`'d. `pathHasEscapes` is a property of the
+    **pre-image** and therefore survives a truncation that removes the only
+    escape token; **re-deriving it by scanning the stored path is the bug, not
+    the fix.**
+11. **STANDING RULE for future migrations.** m003 is the project's first table
+    rebuild and hand-copies m002's columns. See the new entry under "Revisit
+    if" below for the rule itself. The ADR entry is necessary but NOT
+    sufficient: an ADR requires the next author to think to consult it, whereas
+    the rowid rule is already discoverable because it lives inline in
+    `m003-skill-drop-type.ts`, the file an m004 author will literally copy. The
+    drift-guard rule therefore gets the same code-adjacent treatment — a line in
+    m003's docblock and in `index.ts`'s "append new migrations here" registry
+    comment — *in addition to* this ADR. Related: `ddl-drift.test.ts`'s mandate
+    has widened from cross-module dual ownership to any hand-copied DDL parity,
+    cross- or intra-module, so the file's scope is now declared rather than
+    inferred from its accumulated contents.
+12. **Residuals named rather than fixed.**
+    - **R-h:** lone surrogates already present in the input pass through both
+      truncators untouched, including via the `length <= max` short-string
+      branch, so truncation is not the enabler. SQLite stores the JSON as UTF-8
+      (lone surrogate → U+FFFD) while `JSON.stringify` for the export emits a
+      literal `\udc00`, so **the two retained sinks disagree about the same
+      row**. Reachable on win32. `truncateWellFormed`'s "the result is always
+      well-formed UTF-16" doc comment is correspondingly an overclaim.
+    - **R-i:** `truncateWellFormed`'s `max` is unvalidated. `NaN` makes
+      `text.length <= NaN` false and `slice(NaN)` behave as `slice(0)`,
+      returning the entire input falsely marked truncated. Unreachable today —
+      all caps are module constants.
+    - **R-j:** tail truncation is inherently lossy, so two paths differing only
+      *before* the cut store identically; `pathTruncated` tells an operator the
+      path was cut but not that a distinguishing character was lost. This was
+      first reported as a defect of the escape guard and **re-graded after
+      verification**: a pure-ASCII control with no escape machinery collides the
+      same way, so it predates the escape design entirely. Candidate fix is a
+      short digest of the full escaped path. **Reachability changed from
+      theoretical to default-on with Task 5** — `boundSkillDropPath` had zero
+      production callers before it.
+    - **R-k:** `sessionId` and `turnId` are sanitised NOWHERE on the write path
+      and reach SQLite raw; the export sink escapes them, but the stored rows
+      hold the raw bytes and any future reader of those columns inherits the
+      problem. Security review bounded it: those ids are not attacker-reachable
+      in the shipped CLI flow (always `randomUUID()` or caller-supplied via
+      `SessionConfig`), and `runTelemetryExport` is the only shipped reader, so
+      this is a direct-library-consumer exposure rather than a live CLI vector.
+    - **R-d, restated with a price.** Rows restate the same static fact every
+      turn, up to the loader's 10,000-entry cap. Task 3 priced this against a
+      handful of writes; Task 5 changed the number. A hostile 10,000-skill pack
+      yields ~7,000+ synchronous validated writes per turn, ahead of the
+      session-start fire.
+13. **The export is ESCAPED, not terminal-sanitised — decision item 8 is
+    amended because it was FALSE.** Commit `5ffad52` removed the
+    `sanitizeForTerminal` pass outright rather than adding to it, and that
+    replacement was the correct move on measured grounds: the escape charset is
+    a strict superset by construction, so keeping both was a provable no-op that
+    was *also* lossy — the old pass substituted a space, so the stdout copy of a
+    row parsed to a DIFFERENT value than the `--out` copy. The two are now
+    byte-identical for the same query, pinned by a test. Escapes are 4-digit
+    `\uXXXX` per UTF-16 code unit, not the braced `\u{HEX}` of
+    `escapePathUnsafe`, because JSON has no braced form. Decision item 9 is
+    widened at the same time: there is now one root charset (`CONTROL_CHARS`)
+    and three derivations from it — `TERMINAL_UNSAFE`, `PATH_ESCAPE_TARGETS`
+    and `JSON_TEXT_UNSAFE` — all living in `src/internal/sanitize.ts`. The
+    encoder's home is that leaf and **not** the cli layer, because eslint blocks
+    `src/eval/**` from importing `src/cli/**` and `src/eval/scorecard` writes
+    durable JSON through the same class of sink; that eval-side gap is
+    pre-existing on main and tracked as its own issue (#48) rather than fixed
+    here.
+14. **The capture site bounds `channels` and `ruleIds` ASYMMETRICALLY, on
+    purpose.** `channels` is harness-authored from a closed union, so it is
+    passed through whole — neither sliced nor element-truncated — because
+    slicing would write a row silently missing a channel and hide the very
+    drift the cardinality guards exist to catch. `ruleIds` comes from a
+    caller-supplied `scanInjection` and is bounded by nothing, so it IS sliced
+    to `SKILL_DROP_RULE_IDS_MAX` and each element truncated to
+    `SKILL_DROP_RULE_ID_MAX - 1`. The four array caps are validation bounds in
+    both cases; only the `RULE_ID` pair carries truncation semantics at the
+    capture site.
+15. **Trace order is `ORDER BY ts, rowid`, not `ts` alone.** Decision 5 says
+    `sessionId + turnId + ts + rowid` reconstructs a full trace; this states the
+    query that does it. It matters more for this event type than the others,
+    because a turn's skill-drop rows are written in a tight loop and share a
+    millisecond, so `ts` alone gives no total order. This is also why m003
+    copies `rowid` explicitly.
+
+**Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
+is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`
+constraint, not the converse. And the drift guard cannot observe a run that
+throws, so placement is pinned by the ordering test instead — which is a
+statement about what the guard does, not a claim that a test could not do it; a
+fixture-keyed variant is writable.
+
 ## Revisit if
 
 - Retention policy: `telemetry_events` has **no TTL/purge** (memory's session
@@ -114,3 +300,11 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
 - Memory's `ensureSchema` and migration 001 drift — byte-identity is enforced
   by `ddl-drift.test.ts`; a schema change to `memory_entries` must go through a
   new migration and update both sites.
+- **Any migration that rebuilds an existing table** must add a byte-diff test
+  in `ddl-drift.test.ts` comparing its output against the immediately preceding
+  migration's, with only that migration's declared intentional change
+  normalised away. Standing rule from 2026-07-29 (issue #46): m003 is the first
+  rebuild and hand-copies m002's columns, so nothing but this test would catch a
+  dropped `NOT NULL`. The rebuild must also copy `rowid` explicitly — a plain
+  `INSERT…SELECT` assigns fresh rowids and silently renumbers retained operator
+  data across a ship-once migration. See m003's DDL comment for both.
