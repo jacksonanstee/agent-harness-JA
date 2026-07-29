@@ -130,6 +130,23 @@ Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
 
 Everything stays on your machine. Sessions and eval runs persist to a local SQLite file (`.harness/telemetry.db`, gitignored); there is no network telemetry, no phone-home, and no external endpoint anywhere in the codebase. Secrets are redacted before anything is retained (fail-closed: if redaction errors, the write is dropped, not passed through), and findings store rule IDs and offsets, never secret bytes. Export is operator-invoked only (`telemetry export` → JSONL). There is currently no retention TTL: delete `.harness/telemetry.db` to erase history (a `telemetry purge` subcommand is on the roadmap).
 
+### Worked example: why did a skill not load?
+
+A skill can be dropped from the system prompt because the injection scanner blocked it, or because it did not fit the prompt budget. Either way the drop is recorded durably, so a stale incident is still answerable after the run is gone:
+
+```bash
+node dist/cli.js telemetry export --type skill-drop
+```
+
+Each row carries the skill's `name` and `path`, the `reason` (`injection-block` or `prompt-budget`), the scanned `channels` that blocked it (empty for a budget drop), and the `ruleIds` that fired.
+
+Two fields on that row need a word of explanation, because without it a correctly recorded path reads as corruption:
+
+- **`path` is escaped, not raw.** Skill paths come from a cloned repo, so they are attacker-authored. Control, bidi and invisible characters are rewritten as `\u{...}` before storage rather than deleted, which keeps a hostile `/skills/he\u{200B}lper.md` from reading back byte-identical to a benign `/skills/helper.md`. `pathHasEscapes` tells you whether the *original* path carried any such character. It is a property of that original, so it stays true even if truncation later removes the escape sequence itself: do not re-derive it by scanning the stored string.
+- **`pathTruncated`** marks a path bounded to 1024 units, keeping the tail, because the filename is the part that disambiguates. The flag is separate from the value on purpose. `…` is a legal filename character, so an in-band ellipsis could be forged in either direction by a hostile skill pack. `name` has no equivalent flag: it is a display label, not the disambiguator.
+
+Literal backslashes in a path are doubled, so a file *named* `\u{202E}` cannot forge a real escape sequence. That doubling on its own does not set `pathHasEscapes`. Field-by-field reasoning lives with the payload definition in [src/telemetry/types.ts](./src/telemetry/types.ts).
+
 ---
 
 ## License

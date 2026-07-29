@@ -15,17 +15,24 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, SandboxConfig } from '../security/index.js';
+import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
  *  scorecard producers writing through the same `writeScorecard` helper). */
 export const EVAL_OUT_DIR = join('.harness', 'eval');
 
+// The `--type` values are DERIVED from TELEMETRY_EVENT_TYPES, not hand-copied:
+// a fifth event type appears in the usage text without anyone remembering to
+// come here. Before this, `--type <t>` was discoverable only by guessing wrong
+// and reading `parseTelemetryArgs`'s rejection message (src/cli.ts), which
+// renders the same array — so both surfaces now come from one source and
+// cannot disagree about what is valid.
 export const USAGE =
   'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
   '       agent-harness-ja eval [taskDir] [--challenge]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
-  '       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <t>]\n' +
+  `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>]\n` +
   '       agent-harness-ja init [dir]';
 
 // TERMINAL_UNSAFE itself now lives in src/internal/sanitize.ts, beside the
