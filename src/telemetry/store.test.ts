@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -673,10 +674,34 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(Object.hasOwn(bounded, 'digest')).toBe(false);
   });
 
-  it('emits the digest as exactly 16 lowercase hex characters', () => {
+  it('emits the digest as lowercase hex of exactly SKILL_DROP_PATH_DIGEST_LEN characters', () => {
     const bounded = boundSkillDropPath('p'.repeat(SKILL_DROP_PATH_MAX * 2));
-    expect(bounded.digest).toMatch(/^[0-9a-f]{16}$/);
+    expect(bounded.digest).toMatch(new RegExp(`^[0-9a-f]{${SKILL_DROP_PATH_DIGEST_LEN}}$`));
     expect(bounded.digest).toHaveLength(SKILL_DROP_PATH_DIGEST_LEN);
+  });
+
+  // RATCHET, not a pin. The width is a SECURITY parameter: at 64 bits the
+  // birthday bound is ~2^32 hashes, minutes of commodity GPU time, and the
+  // attacker authors both paths — so a future "tidy-up" narrowing this back
+  // would silently restore the forceable collision while every other test
+  // stayed green (verified: narrowing 32 -> 16 passes the whole suite, because
+  // everything else derives from the constant). Widening stays legal.
+  it('never narrows the digest below 128 bits — widening is fine, narrowing is not', () => {
+    expect(SKILL_DROP_PATH_DIGEST_LEN).toBeGreaterThanOrEqual(32);
+  });
+
+  // PINS THE ALGORITHM AND THE ENCODING, which review proved nothing else did:
+  // swapping `.update(path, 'utf8')` for 'utf16le' left the entire suite green,
+  // because format/determinism/distinctness assertions all survive an encoding
+  // change. Recomputed here independently rather than by calling the function
+  // under test, so a silent swap of algorithm, encoding or slice goes RED.
+  it('is SHA-256 of the full path in utf8, truncated — recomputed independently', () => {
+    const path = `/home/alice/${'d'.repeat(SKILL_DROP_PATH_MAX)}/skills/helper.md`;
+    const expected = createHash('sha256')
+      .update(path, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(boundSkillDropPath(path).digest).toBe(expected);
   });
 
   it('derives the digest deterministically from the same input', () => {

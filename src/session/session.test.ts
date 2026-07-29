@@ -8,6 +8,7 @@ import {
   SKILL_DROP_CHANNELS_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_DIGEST_LEN,
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_IDS_MAX,
 } from '../telemetry/index.js';
@@ -2100,8 +2101,9 @@ describe('skill-drop telemetry (issue #46)', () => {
     expect(alice.pathTruncated).toBe(true);
     expect(alice.path).toBe(bobby.path);
 
-    expect(alice.pathDigest).toMatch(/^[0-9a-f]{16}$/);
-    expect(bobby.pathDigest).toMatch(/^[0-9a-f]{16}$/);
+    const hex = new RegExp(`^[0-9a-f]{${SKILL_DROP_PATH_DIGEST_LEN}}$`);
+    expect(alice.pathDigest).toMatch(hex);
+    expect(bobby.pathDigest).toMatch(hex);
     expect(alice.pathDigest).not.toBe(bobby.pathDigest);
   });
 
@@ -2123,6 +2125,13 @@ describe('skill-drop telemetry (issue #46)', () => {
     };
     expect(payload.pathTruncated).toBe(false);
     expect(payload.pathDigest).toBeUndefined();
+    // Stronger than toBeUndefined, and the reason the capture site uses a
+    // conditional spread: `pathDigest: boundedPath.digest` would set an OWN
+    // property holding undefined, so the in-memory payload would carry a key
+    // the "absent means nothing was discarded" contract says is not there.
+    // JSON.stringify hides the difference at the storage layer, which is
+    // exactly why it needs pinning here rather than in a round-trip test.
+    expect(Object.hasOwn(payload, 'pathDigest')).toBe(false);
   });
 
   it('carries pathHasEscapes through from capture, describing the RAW pre-image', async () => {

@@ -288,7 +288,7 @@ the table decision 4 already owns.
 
 16. **`pathDigest` closes R-j (issue #50, 2026-07-29).** `SkillDropPayload`
     gains an OPTIONAL `pathDigest`: SHA-256 of the full escaped path, first
-    `SKILL_DROP_PATH_DIGEST_LEN` (16) hex characters, present only when
+    `SKILL_DROP_PATH_DIGEST_LEN` (32) hex characters, present only when
     `pathTruncated` is true. Two paths differing only before the tail-cut now
     stay distinguishable.
     - **Optional, and it must stay optional.** Rows written before the field
@@ -306,11 +306,18 @@ the table decision 4 already owns.
       exact length and lowercase-hex charset with an anchored pattern. An
       unusable disambiguator is worse than none, because a consumer would trust
       it.
-    - **SHA-256 rather than a non-cryptographic hash.** The input is
-      attacker-authored. FNV-class collisions are trivially constructible,
-      which would let an attacker deliberately collide two audit rows and
-      defeat the field's only purpose. 64 bits is a disambiguator, not a
-      security primitive, and that is the claim being made.
+    - **SHA-256 at 128 bits, and the WIDTH is set by the same argument as the
+      algorithm.** The input is attacker-authored: they write the skill pack,
+      so they choose both paths, and forcing two audit rows to collide defeats
+      the field's only purpose. That rules out a non-cryptographic hash, since
+      FNV-class collisions are constructible by hand. **It equally rules out a
+      short truncation of a good hash, and an earlier draft of this item missed
+      that** — it specified 16 hex characters (64 bits) while justifying itself
+      on attacker-forced-collision grounds, and a 64-bit birthday bound is ~2^32
+      hashes, minutes of commodity GPU time. Review caught the inconsistency.
+      At 32 hex characters the bound is 2^64, out of reach, so the rejection
+      argument and the chosen width now agree. A test ratchets the constant so
+      it can be widened but not silently narrowed.
     - **Emitted only when truncated,** because a complete path is already its
       own identity. The key is omitted rather than set to `undefined`, so
       presence is itself the signal that something was discarded. This also

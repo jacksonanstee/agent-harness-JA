@@ -133,13 +133,21 @@ export const SKILL_DROP_NAME_MAX = 200;
 export const SKILL_DROP_PATH_MAX = 1024;
 /**
  * Length of `SkillDropPayload.pathDigest`, in lowercase hex characters (issue
- * #50). 16 hex chars is 64 bits, which is a disambiguator rather than a
- * security primitive — but the input is attacker-authored, so a
- * non-cryptographic hash was rejected: FNV collisions are trivially
- * constructible, which would let an attacker deliberately collide two audit
- * rows and defeat the field's only purpose.
+ * #50). 32 hex chars is 128 bits.
+ *
+ * The width is set by the THREAT, not by taste. This field exists to survive a
+ * DELIBERATE attacker: they author the skill pack, so they choose both paths,
+ * and forcing two audit rows to collide defeats the field's only purpose. That
+ * rules out a non-cryptographic hash (FNV-class collisions are constructible by
+ * hand) — but it equally rules out a short truncation of a good one. A 64-bit
+ * digest has a birthday bound near 2^32 hashes, which is minutes of commodity
+ * GPU time and well inside an attacker's budget. An earlier draft of this
+ * constant was 16 (64 bits) and justified itself by rejecting FNV on
+ * attacker-forced-collision grounds while not surviving that same test; review
+ * caught the inconsistency. At 128 bits the bound is 2^64, which is not
+ * reachable, so the rejection argument and the chosen width finally agree.
  */
-export const SKILL_DROP_PATH_DIGEST_LEN = 16;
+export const SKILL_DROP_PATH_DIGEST_LEN = 32;
 export const SKILL_DROP_CHANNELS_MAX = 3;
 export const SKILL_DROP_CHANNEL_MAX = 64;
 export const SKILL_DROP_RULE_IDS_MAX = 32;
