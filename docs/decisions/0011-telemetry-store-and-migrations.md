@@ -290,10 +290,14 @@ the table decision 4 already owns.
     gains an OPTIONAL `pathDigest`: SHA-256 of the full escaped path, first
     `SKILL_DROP_PATH_DIGEST_LEN` hex characters, present only when
     `pathTruncated` is true. Two paths differing only before the tail-cut now
-    stay distinguishable. The width is deliberately named rather than quoted:
-    R-d above records a figure that travelled into this document and could not
-    be derived from the code, and repeating the number here would be the same
-    mistake. The code owns the value; this item owns the reason.
+    stay distinguishable. The character count is deliberately named rather than
+    quoted: R-d above records a figure that travelled into this document and
+    could not be derived from the code, and repeating that number here would be
+    the same mistake. Note what this does and does not claim. The bit strength
+    below IS quoted, repeatedly and on purpose, because it is the load-bearing
+    term of the threat argument and that argument is what this item exists to
+    record. What is struck is the incidental encoding of that strength as a
+    count of hex characters, which the constant already carries.
     - **Optional, and it must stay optional.** Rows written before the field
       existed carry no `pathDigest`. Requiring it would fail
       `isSkillDropPayload` on READ, and `rowToEvent` throws rather than skipping

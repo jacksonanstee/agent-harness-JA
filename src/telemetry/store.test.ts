@@ -374,12 +374,13 @@ describe('skill-drop events', () => {
   });
 
   // EVERY case derives its length from the constant. Two of these were once
-  // 16-char literals sized for the old width; when the constant widened to 32
+  // literals sized for the PREVIOUS, narrower width; when the constant widened
   // they started failing the validator on LENGTH, so the case and charset
   // guards they are named for stopped being exercised at all. Verified: with
-  // the literals, relaxing PATH_DIGEST_RE to `^[0-9a-fA-F]{32}$` — and even to
-  // `^.{32}$` — left all 53 tests in this file green. A test that cannot fail
-  // for the reason its label gives is worse than no test.
+  // those literals in place, relaxing PATH_DIGEST_RE to accept upper-case hex,
+  // and then to accept ANY character at the right length, left every test in
+  // this file green. A test that cannot fail for the reason its label gives is
+  // worse than no test.
   it.each([
     ['wrong length', 'abc'],
     ['uppercase hex', 'A'.repeat(SKILL_DROP_PATH_DIGEST_LEN)],
@@ -703,7 +704,10 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
   // store.ts. Widening is therefore a BREAKING READ CHANGE for any existing
   // database and needs a NEW FIELD NAME rather than a bigger number here. See
   // ADR-0011 decision 16.
-  it('never narrows the digest below 128 bits — narrowing is forbidden, widening is breaking', () => {
+  // The name stops at what the body proves. "Widening is breaking" is argued in
+  // the comment above and enforced by nothing, so it stays out of a title that
+  // appears in CI output without its comment.
+  it('never narrows the digest below 128 bits', () => {
     expect(SKILL_DROP_PATH_DIGEST_LEN).toBeGreaterThanOrEqual(32);
   });
 
