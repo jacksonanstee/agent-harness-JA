@@ -213,7 +213,7 @@ export interface SkillDropPayload {
    */
   pathHasEscapes: boolean;
   /**
-   * SHA-256 of the FULL escaped path, first `SKILL_DROP_PATH_DIGEST_LEN` hex
+   * SHA-256 of the FULL RAW path, first `SKILL_DROP_PATH_DIGEST_LEN` hex
    * characters. Present only when `pathTruncated` is true, because a complete
    * path is already its own identity (issue #50).
    *
@@ -235,7 +235,7 @@ export interface SkillDropPayload {
    * zero rows out of twenty-five.
    *
    * It also cannot be backfilled by a migration, because the digest is taken
-   * over the full escaped path and that is exactly what truncation discarded.
+   * over the full raw path and that is exactly what truncation discarded.
    *
    * Derive it from `boundSkillDropPath`, which returns it from the SAME call
    * that truncates, so the digest and `pathTruncated` cannot disagree. Do not

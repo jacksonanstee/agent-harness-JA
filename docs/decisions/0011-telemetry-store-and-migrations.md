@@ -369,7 +369,7 @@ the table decision 4 already owns.
     copies `rowid` explicitly.
 
 16. **`pathDigest` closes R-j (issue #50, 2026-07-29).** `SkillDropPayload`
-    gains an OPTIONAL `pathDigest`: SHA-256 of the full escaped path, first
+    gains an OPTIONAL `pathDigest`: SHA-256 of the full RAW path, first
     `SKILL_DROP_PATH_DIGEST_LEN` hex characters, present only when
     `pathTruncated` is true. Two paths differing only before the tail-cut now
     stay distinguishable. The character count is deliberately named rather than
@@ -388,7 +388,7 @@ the table decision 4 already owns.
       shipping build. **Measured, not reasoned:** removing one required field
       from one stored skill-drop row made `telemetry export` exit 1 with zero
       rows out of twenty-five. It also cannot be backfilled by a migration,
-      because the digest covers the full escaped path and that is precisely
+      because the digest covers the full raw path and that is precisely
       what truncation discarded. No migration is needed either way: `payload`
       is JSON TEXT, so the column shape is unchanged.
     - **Absent is valid; present-but-malformed is not.** The validator pins the
@@ -431,6 +431,41 @@ the table decision 4 already owns.
       Rejected alternatives: raising `SKILL_DROP_PATH_MAX` (moves the boundary,
       does not remove it) and a head-plus-tail elision (still lossy in the
       middle, and spends more of the budget to be wrong less often).
+    - **The digest is taken over the RAW path, and that closes R-l (issue #54,
+      2026-07-29).** As first shipped it covered the ESCAPED path, which review
+      showed keys it to a moving target: `escapePathUnsafe`'s target set derives
+      from `\p{Default_Ignorable_Code_Point}`, a Unicode-version-dependent
+      property that this repo has already widened twice. So the same file on the
+      same machine could digest differently after a Node upgrade, and the field
+      would start answering "different file" for exactly the
+      invisible-character-bearing hostile paths it exists to tell apart. The raw
+      pre-image is stable forever.
+      - **It also makes the digest checkable.** An operator holding a candidate
+        file can now run `printf '%s' "$path" | sha256sum` and compare the
+        leading characters. Against the escaped form that was not reproducible
+        without reimplementing the escaper, which the #52 review raised
+        separately as a README defect.
+      - **`boundSkillDropPath` takes the pre-image as a second argument
+        defaulting to the path**, so the co-derivation above is preserved
+        exactly: one call still decides both `truncated` and whether a digest is
+        emitted. The session layer passes the raw path; it does NOT travel on
+        `DroppedSkill`, because that type is public and the raw path is
+        attacker-authored, so putting it back on the programmatic surface would
+        undo what escaping it was for. It rides an internal `DropRecord` paired
+        by the compiler instead.
+      - **Free to change only because nothing had been written yet.** Verified
+        against the live database before deciding: zero `pathDigest` rows
+        existed anywhere, so there was no migration and no set of
+        mutually-incomparable rows. After real rows exist this becomes a new
+        field, not an edit, by the same rule the width carries above.
+      - **Interaction with issue #53, stated rather than left implicit.** Making
+        the digest reproducible with `sha256sum` also makes an offline
+        dictionary attack on its pre-image marginally easier, and #53 tracks
+        exactly that: the digest is unsalted and the discarded prefix carries the
+        operator's home directory. This item does not resolve #53. If #53 lands
+        an HMAC keyed per installation, that supersedes the reproducibility
+        argument here and the raw-versus-escaped choice stops mattering, because
+        neither form would be independently computable.
 
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`

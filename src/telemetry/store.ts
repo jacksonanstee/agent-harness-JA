@@ -320,6 +320,7 @@ function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number):
  */
 export function boundSkillDropPath(
   path: string,
+  digestPreImage: string = path,
 ): { value: string; truncated: boolean; digest?: string } {
   const cap = SKILL_DROP_PATH_MAX - 1;
   const truncated = path.length > cap;
@@ -342,15 +343,25 @@ export function boundSkillDropPath(
   return {
     value: truncateTailWellFormed(path, effectiveMax),
     truncated,
-    // Over the FULL input, never the truncated result: digesting the result
-    // would collide exactly as the stored value does, which is the whole bug
-    // (issue #50). Computed here so it cannot disagree with `truncated`.
-    digest: skillDropPathDigest(path),
+    // Over the FULL pre-image, never the truncated result: digesting the
+    // result would collide exactly as the stored value does, which is the
+    // whole bug (issue #50). Computed here so it cannot disagree with
+    // `truncated`.
+    //
+    // `digestPreImage` defaults to `path` so a caller with nothing better to
+    // offer still gets a working disambiguator, but the session layer passes
+    // the RAW path deliberately (issue #54): `path` here has been through
+    // `escapePathUnsafe`, whose target set derives from the
+    // Unicode-version-dependent `\p{Default_Ignorable_Code_Point}`, so
+    // digesting it would silently re-key every stored digest on an ICU upgrade
+    // or a charset widening. The raw pre-image is stable forever, and it is
+    // what an operator can reproduce with `sha256sum` against a candidate file.
+    digest: skillDropPathDigest(digestPreImage),
   };
 }
 
 /**
- * SHA-256 over the full escaped path, first SKILL_DROP_PATH_DIGEST_LEN hex
+ * SHA-256 over the full pre-image it is given, first SKILL_DROP_PATH_DIGEST_LEN hex
  * characters. Lowercase because `digest('hex')` is, and the validator pins it.
  */
 function skillDropPathDigest(fullPath: string): string {

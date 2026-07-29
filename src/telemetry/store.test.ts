@@ -455,7 +455,7 @@ describe('skill-drop events', () => {
   // made `telemetry export` exit 1 with zero rows out of twenty-five.
   //
   // It also CANNOT be backfilled by a migration: the digest is taken over the
-  // full escaped path, which is exactly what truncation discarded.
+  // full raw path, which is exactly what truncation discarded.
   it('accepts a skill-drop payload with no pathDigest at all — rows predating the field must still read', () => {
     const { store } = openStore();
     expect(store.record({
@@ -761,7 +761,7 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(boundedB.truncated).toBe(true);
     expect(boundedA.value).toBe(boundedB.value);
 
-    // The fix: an out-of-band digest of the FULL escaped path keeps them
+    // The fix: an out-of-band digest of the FULL raw path keeps them
     // distinguishable. Digesting the truncated value instead would collide
     // exactly as the stored value does, so this assertion pins the input.
     expect(boundedA.digest).toBeDefined();
@@ -817,6 +817,39 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
       .digest('hex')
       .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
     expect(boundSkillDropPath(path).digest).toBe(expected);
+  });
+
+  // ISSUE #54. The digest is taken over the pre-image the CALLER supplies, not
+  // over the (escaped) string being truncated. Without this test the two are
+  // indistinguishable whenever they happen to be equal, and reverting the
+  // session layer to digest its escaped path passes every other assertion in
+  // this file: format, determinism, distinctness and the recompute test all
+  // hold for either input. Escaped and raw are deliberately DIFFERENT here.
+  it('digests the supplied pre-image, not the string it truncates', () => {
+    const raw = `/home/alice/${'d'.repeat(SKILL_DROP_PATH_MAX)}/he${'\u200B'}lper.md`;
+    const escaped = escapePathUnsafe(raw).value;
+    expect(escaped).not.toBe(raw);
+
+    const bounded = boundSkillDropPath(escaped, raw);
+    const expected = createHash('sha256')
+      .update(raw, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(bounded.digest).toBe(expected);
+
+    // ...and it is NOT the digest of the escaped form, which is what a
+    // regression would produce.
+    const escapedDigest = createHash('sha256')
+      .update(escaped, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(escapedDigest).not.toBe(expected);
+    expect(bounded.digest).not.toBe(escapedDigest);
+  });
+
+  it('defaults the pre-image to the path when a caller supplies only one argument', () => {
+    const long = `/x/${'y'.repeat(SKILL_DROP_PATH_MAX * 2)}/skill.md`;
+    expect(boundSkillDropPath(long).digest).toBe(boundSkillDropPath(long, long).digest);
   });
 
   it('derives the digest deterministically from the same input', () => {
