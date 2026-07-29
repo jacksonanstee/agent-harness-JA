@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+
+import { escapePathUnsafe } from '../internal/sanitize.js';
 
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
@@ -2132,6 +2135,52 @@ describe('skill-drop telemetry (issue #46)', () => {
     // JSON.stringify hides the difference at the storage layer, which is
     // exactly why it needs pinning here rather than in a round-trip test.
     expect(Object.hasOwn(payload, 'pathDigest')).toBe(false);
+  });
+
+  // ISSUE #54, and the assertion the whole change rests on. The session must
+  // hand the RAW path to boundSkillDropPath, not the escaped one it stores.
+  // Escaping derives its target set from \p{Default_Ignorable_Code_Point}, a
+  // Unicode-version-dependent property, so digesting the escaped form silently
+  // re-keys every stored digest on an ICU upgrade or a charset widening,
+  // exactly for the invisible-character-bearing paths the field exists to tell
+  // apart. Recomputed here from the raw path independently, so a revert to
+  // `boundSkillDropPath(dropped.path)` goes RED.
+  it('digests the RAW path, so the value survives an escape-charset change', async () => {
+    const rawPath = `/skills/${'d'.repeat(SKILL_DROP_PATH_MAX)}/he${'\u200B'}lper.md`;
+    const telemetry = fakeTelemetry();
+    const session = createSession(
+      makeDeps(fakeQuery([INIT, ASSISTANT, RESULT]), {
+        telemetry,
+        scanInjection: blockingScan,
+        loadSkills: () => ({ skills: [{ ...hostile, path: rawPath }], errors: [] }),
+      }),
+      { skillsDir: '/skills' },
+    );
+    await session.run('hi');
+
+    const payload = telemetry.events.find((e) => e.type === 'skill-drop')?.payload as {
+      path: string;
+      pathTruncated: boolean;
+      pathHasEscapes: boolean;
+      pathDigest?: string;
+    };
+    // Premise checks: the row truncated (so a digest exists at all) and the
+    // stored path really is the escaped form, i.e. raw and escaped differ here.
+    expect(payload.pathTruncated).toBe(true);
+    expect(payload.pathHasEscapes).toBe(true);
+    const escaped = escapePathUnsafe(rawPath).value;
+    expect(escaped).not.toBe(rawPath);
+
+    const fromRaw = createHash('sha256')
+      .update(rawPath, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    const fromEscaped = createHash('sha256')
+      .update(escaped, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(fromRaw).not.toBe(fromEscaped);
+    expect(payload.pathDigest).toBe(fromRaw);
   });
 
   it('carries pathHasEscapes through from capture, describing the RAW pre-image', async () => {

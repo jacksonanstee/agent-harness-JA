@@ -287,17 +287,39 @@ export const SKILL_DROP_CHANNELS = Object.keys(
   SKILL_DROP_CHANNEL_TEXT,
 ) as readonly SkillDropChannel[];
 
+/**
+ * Internal pairing of a drop with the RAW path it came from (issue #54).
+ *
+ * `DroppedSkill.path` is escaped, and the telemetry digest must NOT be taken
+ * over that form: `escapePathUnsafe`'s target set derives from
+ * `\p{Default_Ignorable_Code_Point}`, a Unicode-version-dependent property, so
+ * an ICU upgrade or a deliberate charset widening silently re-keys every digest
+ * ever written. The digest exists to answer "are these two truncated rows the
+ * same file?", and across such a change it would start answering NO for exactly
+ * the invisible-character-bearing hostile paths it was built for.
+ *
+ * Deliberately NOT a field on `DroppedSkill`: that type is public
+ * (SessionResult.droppedSkills), the raw path is attacker-authored, and putting
+ * an unescaped hostile string back onto the programmatic surface would undo
+ * what escaping it was for. It stays internal to this module, paired by the
+ * compiler rather than by a lookup that could miss.
+ */
+interface DropRecord {
+  skill: DroppedSkill;
+  rawPath: string;
+}
+
 function buildSystemPrompt(skills: Skill[]): {
   prompt: string | undefined;
-  droppedSkills: DroppedSkill[];
+  dropped: DropRecord[];
 } {
-  if (skills.length === 0) return { prompt: undefined, droppedSkills: [] };
+  if (skills.length === 0) return { prompt: undefined, dropped: [] };
   // The body IS the skill (ADR-0006: "This is what the agent reads when the
   // skill is loaded") — inject it whole, not just the name/description line.
   // Same charset contract as the header: control/bidi/invisible chars are
   // stripped; the injection scan runs on the RAW body before this.
   const sections: string[] = [];
-  const droppedSkills: DroppedSkill[] = [];
+  const dropped: DropRecord[] = [];
   let remaining = MAX_SKILL_PROMPT_CHARS;
   for (const skill of skills) {
     // Same helper the enforcement pass scans, so the gated string and the
@@ -313,23 +335,26 @@ function buildSystemPrompt(skills: Skill[]): {
       // an invisible character here would misdirect an operator to a
       // byte-identical benign twin, since skill names are not unique).
       const { value: path, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
-      droppedSkills.push({
-        name,
-        path,
-        pathHasEscapes,
-        reason: 'prompt-budget',
-        channels: [],
-        ruleIds: [],
+      dropped.push({
+        skill: {
+          name,
+          path,
+          pathHasEscapes,
+          reason: 'prompt-budget',
+          channels: [],
+          ruleIds: [],
+        },
+        rawPath: skill.path,
       });
       continue;
     }
     remaining -= section.length + 2;
     sections.push(section);
   }
-  if (sections.length === 0) return { prompt: undefined, droppedSkills };
+  if (sections.length === 0) return { prompt: undefined, dropped };
   return {
     prompt: ['You have the following harness skills available:', ...sections].join('\n\n'),
-    droppedSkills,
+    dropped,
   };
 }
 
@@ -387,7 +412,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // description as well as body, because otherwise the payload just moves
     // to the description, which lands at the same authority.
     const injectableSkills: Skill[] = [];
-    const blockedSkills: DroppedSkill[] = [];
+    const blockedRecords: DropRecord[] = [];
     for (const skill of loadResult.skills) {
       const label = cleanSkillText(skill.name);
       // RAW scans catch what the cleaner would remove (smuggling). The
@@ -420,13 +445,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // names are not unique (escapePathUnsafe's doc comment, src/internal/
       // sanitize.ts; DroppedSkill.path's, round-1 fix issue #46 Finding 1).
       const { value: safePath, escaped: pathHasEscapes } = escapePathUnsafe(skill.path);
-      blockedSkills.push({
-        name: label,
-        path: safePath,
-        pathHasEscapes,
-        reason: 'injection-block',
-        channels: blocking.map((b) => b.channel),
-        ruleIds,
+      blockedRecords.push({
+        skill: {
+          name: label,
+          path: safePath,
+          pathHasEscapes,
+          reason: 'injection-block',
+          channels: blocking.map((b) => b.channel),
+          ruleIds,
+        },
+        rawPath: skill.path,
       });
       warn(
         `skill "${label}" (${safePath}) dropped from the system prompt: ` +
@@ -474,21 +502,26 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Only the skills that survived the injection gate are offered to the
     // budget pass, so the two drop reasons stay distinct and a blocked skill
     // never consumes budget a legitimate one could have used.
-    const { prompt: systemPrompt, droppedSkills: budgetDropped } =
+    const { prompt: systemPrompt, dropped: budgetRecords } =
       buildSystemPrompt(injectableSkills);
-    for (const dropped of budgetDropped) {
+    for (const record of budgetRecords) {
       warn(
-        `skill "${dropped.name}" (${dropped.path}) dropped from the system ` +
+        `skill "${record.skill.name}" (${record.skill.path}) dropped from the system ` +
           `prompt: aggregate skill budget (${MAX_SKILL_PROMPT_CHARS} chars) exceeded`,
       );
     }
-    const droppedSkills: DroppedSkill[] = [...blockedSkills, ...budgetDropped];
+    const dropRecords: DropRecord[] = [...blockedRecords, ...budgetRecords];
+    const droppedSkills: DroppedSkill[] = dropRecords.map((r) => r.skill);
 
-    // Iterates the EXACT array returned as SessionResult.droppedSkills, so the
-    // durable record and the programmatic surface cannot drift. The payload is
-    // a bounded PROJECTION of that array, not a copy: name/path/ruleIds are
-    // capped because a malicious cloned repo is in scope (security-model) and
-    // this sink is durable and exportable.
+    // Iterates the records whose `.skill` values ARE the elements of the array
+    // returned as SessionResult.droppedSkills (same object identities, see the
+    // map above), so the durable record and the programmatic surface cannot
+    // drift. The record also carries the RAW path, which the digest needs and
+    // the public type deliberately does not expose (issue #54, DropRecord).
+    //
+    // The payload is a bounded PROJECTION of that array, not a copy: the
+    // name/path/ruleIds fields are capped because a malicious cloned repo is
+    // in scope (security-model) and this sink is durable and exportable.
     //
     // `name` and `path` go through the telemetry helpers, which own the cap
     // arithmetic AND the truncated-flag derivation. Do NOT hand-roll it here:
@@ -499,14 +532,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // the oversized attacker-controlled rows this record exists to capture.
     const ruleIdBudget = SKILL_DROP_RULE_ID_MAX - 1;
 
-    for (const dropped of droppedSkills) {
+    for (const record of dropRecords) {
+      const dropped = record.skill;
       // TAIL-preserving: a path's disambiguating part is its filename.
       // `dropped.path` is already ESCAPED at capture by escapePathUnsafe —
       // escaped, NOT deleted, so the pre-image stays recoverable. That
       // satisfies the required TRANSFORM-then-TRUNCATE order: truncating first
       // would let an attacker spend the whole budget on characters a later
       // transform rewrites, blanking their own audit row.
-      const boundedPath = boundSkillDropPath(dropped.path);
+      const boundedPath = boundSkillDropPath(dropped.path, record.rawPath);
       recordTelemetry({
         type: 'skill-drop',
         sessionId: harnessSessionId,
@@ -519,9 +553,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           pathTruncated: boundedPath.truncated,
           // Present only when the path WAS truncated, and taken from the same
           // call, so it can no more disagree with `path` than pathTruncated
-          // can. Digests the FULL escaped path: two paths differing only
-          // before the tail-cut store identically, and this is what keeps them
-          // apart (issue #50). Never re-derive it from `boundedPath.value`.
+          // can. Digests the FULL RAW path, not the escaped or truncated one:
+          // two paths differing only before the tail-cut store identically and
+          // this is what keeps them apart (issue #50), while taking the RAW
+          // pre-image keeps the digest stable across ICU upgrades and escape
+          // widenings that would otherwise silently re-key it (issue #54).
+          // Never re-derive it from `boundedPath.value`.
           //
           // Conditional spread, not `pathDigest: boundedPath.digest`. The
           // latter sets an OWN property holding undefined, which contradicts

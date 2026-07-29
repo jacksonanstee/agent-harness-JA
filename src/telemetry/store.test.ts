@@ -455,7 +455,7 @@ describe('skill-drop events', () => {
   // made `telemetry export` exit 1 with zero rows out of twenty-five.
   //
   // It also CANNOT be backfilled by a migration: the digest is taken over the
-  // full escaped path, which is exactly what truncation discarded.
+  // full raw path, which is exactly what truncation discarded.
   it('accepts a skill-drop payload with no pathDigest at all — rows predating the field must still read', () => {
     const { store } = openStore();
     expect(store.record({
@@ -495,7 +495,8 @@ describe('skill-drop events', () => {
 
   it('round-trips pathDigest through the real store for a truncated row', () => {
     const { store } = openStore();
-    const bounded = boundSkillDropPath('/home/alice/' + 'd'.repeat(SKILL_DROP_PATH_MAX) + '/skills/helper.md');
+    const p = `/home/alice/${'d'.repeat(SKILL_DROP_PATH_MAX)}/skills/helper.md`;
+    const bounded = boundSkillDropPath(p, p);
     expect(bounded.truncated).toBe(true);
     expect(
       store.record({
@@ -691,7 +692,7 @@ describe('skill-drop events', () => {
 // maximally-long input comes out at exactly the cap, not cap + 1.
 describe('boundSkillDropPath / boundSkillDropName', () => {
   it('boundSkillDropPath returns a short path unchanged with truncated: false', () => {
-    expect(boundSkillDropPath('/skills/helper.md')).toEqual({
+    expect(boundSkillDropPath('/skills/helper.md', '/skills/helper.md')).toEqual({
       value: '/skills/helper.md',
       truncated: false,
     });
@@ -699,7 +700,7 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
 
   it('boundSkillDropPath bounds a maximally-long path at exactly SKILL_DROP_PATH_MAX units (not MAX + 1)', () => {
     const longPath = 'p'.repeat(SKILL_DROP_PATH_MAX * 2);
-    const result = boundSkillDropPath(longPath);
+    const result = boundSkillDropPath(longPath, longPath);
     expect(result.truncated).toBe(true);
     expect(result.value).toHaveLength(SKILL_DROP_PATH_MAX);
     expect(result.value.startsWith('…')).toBe(true);
@@ -725,7 +726,7 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     // 8), or this test proves nothing.
     expect(naiveFrom).toBe(prefix.length + 5);
 
-    const result = boundSkillDropPath(path);
+    const result = boundSkillDropPath(path, path);
     expect(result.truncated).toBe(true);
     expect(result.value.length).toBeLessThanOrEqual(SKILL_DROP_PATH_MAX);
     // The naive (unguarded) cut would keep the fragment '0B}' — the token's
@@ -752,8 +753,8 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(a).not.toBe(b);
     expect(a).toHaveLength(b.length);
 
-    const boundedA = boundSkillDropPath(a);
-    const boundedB = boundSkillDropPath(b);
+    const boundedA = boundSkillDropPath(a, a);
+    const boundedB = boundSkillDropPath(b, b);
 
     // The premise: the stored values really are indistinguishable. If this
     // ever stops holding the test below is proving nothing.
@@ -761,7 +762,7 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(boundedB.truncated).toBe(true);
     expect(boundedA.value).toBe(boundedB.value);
 
-    // The fix: an out-of-band digest of the FULL escaped path keeps them
+    // The fix: an out-of-band digest of the FULL raw path keeps them
     // distinguishable. Digesting the truncated value instead would collide
     // exactly as the stored value does, so this assertion pins the input.
     expect(boundedA.digest).toBeDefined();
@@ -770,14 +771,15 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
   });
 
   it('omits the digest entirely when the path was not truncated — a complete path is its own identity', () => {
-    const bounded = boundSkillDropPath('/skills/helper.md');
+    const bounded = boundSkillDropPath('/skills/helper.md', '/skills/helper.md');
     expect(bounded.truncated).toBe(false);
     expect(bounded.digest).toBeUndefined();
     expect(Object.hasOwn(bounded, 'digest')).toBe(false);
   });
 
   it('emits the digest as lowercase hex of exactly SKILL_DROP_PATH_DIGEST_LEN characters', () => {
-    const bounded = boundSkillDropPath('p'.repeat(SKILL_DROP_PATH_MAX * 2));
+    const p = 'p'.repeat(SKILL_DROP_PATH_MAX * 2);
+    const bounded = boundSkillDropPath(p, p);
     expect(bounded.digest).toMatch(new RegExp(`^[0-9a-f]{${SKILL_DROP_PATH_DIGEST_LEN}}$`));
     expect(bounded.digest).toHaveLength(SKILL_DROP_PATH_DIGEST_LEN);
   });
@@ -816,16 +818,45 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
       .update(path, 'utf8')
       .digest('hex')
       .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
-    expect(boundSkillDropPath(path).digest).toBe(expected);
+    expect(boundSkillDropPath(path, path).digest).toBe(expected);
   });
+
+  // ISSUE #54. The digest is taken over the pre-image the CALLER supplies, not
+  // over the (escaped) string being truncated. Without this test the two are
+  // indistinguishable whenever they happen to be equal, and reverting the
+  // session layer to digest its escaped path passes every other assertion in
+  // this file: format, determinism, distinctness and the recompute test all
+  // hold for either input. Escaped and raw are deliberately DIFFERENT here.
+  it('digests the supplied pre-image, not the string it truncates', () => {
+    const raw = `/home/alice/${'d'.repeat(SKILL_DROP_PATH_MAX)}/he${'\u200B'}lper.md`;
+    const escaped = escapePathUnsafe(raw).value;
+    expect(escaped).not.toBe(raw);
+
+    const bounded = boundSkillDropPath(escaped, raw);
+    const expected = createHash('sha256')
+      .update(raw, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(bounded.digest).toBe(expected);
+
+    // ...and it is NOT the digest of the escaped form, which is what a
+    // regression would produce.
+    const escapedDigest = createHash('sha256')
+      .update(escaped, 'utf8')
+      .digest('hex')
+      .slice(0, SKILL_DROP_PATH_DIGEST_LEN);
+    expect(escapedDigest).not.toBe(expected);
+    expect(bounded.digest).not.toBe(escapedDigest);
+  });
+
 
   it('derives the digest deterministically from the same input', () => {
     const long = `/x/${'y'.repeat(SKILL_DROP_PATH_MAX * 2)}/skill.md`;
-    const first = boundSkillDropPath(long).digest;
+    const first = boundSkillDropPath(long, long).digest;
     // Floor: without this, `undefined === undefined` passes vacuously and the
     // test survives the digest never being computed at all.
     expect(first).toBeDefined();
-    expect(boundSkillDropPath(long).digest).toBe(first);
+    expect(boundSkillDropPath(long, long).digest).toBe(first);
   });
 
   // Contract pin for pathHasEscapes (3-agent review of ebf3041, convergent
@@ -847,7 +878,8 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(escaped.escaped).toBe(true);
     expect(escaped.value).toContain('\\u{200B}');
 
-    const bounded = boundSkillDropPath(escaped.value);
+    // Mirrors the capture site: escaped value in, RAW path as the pre-image.
+    const bounded = boundSkillDropPath(escaped.value, rawPath);
     expect(bounded.truncated).toBe(true);
     // The only token is gone from what actually gets persisted.
     expect(bounded.value).not.toContain('\\u{');
