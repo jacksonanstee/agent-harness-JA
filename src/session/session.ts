@@ -517,10 +517,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // returned as SessionResult.droppedSkills (same object identities, see the
     // map above), so the durable record and the programmatic surface cannot
     // drift. The record also carries the RAW path, which the digest needs and
-    // the public type deliberately does not expose (issue #54, DropRecord). The payload is
-    // a bounded PROJECTION of that array, not a copy: name/path/ruleIds are
-    // capped because a malicious cloned repo is in scope (security-model) and
-    // this sink is durable and exportable.
+    // the public type deliberately does not expose (issue #54, DropRecord).
+    //
+    // The payload is a bounded PROJECTION of that array, not a copy: the
+    // name/path/ruleIds fields are capped because a malicious cloned repo is
+    // in scope (security-model) and this sink is durable and exportable.
     //
     // `name` and `path` go through the telemetry helpers, which own the cap
     // arithmetic AND the truncated-flag derivation. Do NOT hand-roll it here:

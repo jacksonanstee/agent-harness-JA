@@ -320,7 +320,7 @@ function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number):
  */
 export function boundSkillDropPath(
   path: string,
-  digestPreImage: string = path,
+  digestPreImage: string,
 ): { value: string; truncated: boolean; digest?: string } {
   const cap = SKILL_DROP_PATH_MAX - 1;
   const truncated = path.length > cap;
@@ -348,9 +348,14 @@ export function boundSkillDropPath(
     // whole bug (issue #50). Computed here so it cannot disagree with
     // `truncated`.
     //
-    // `digestPreImage` defaults to `path` so a caller with nothing better to
-    // offer still gets a working disambiguator, but the session layer passes
-    // the RAW path deliberately (issue #54): `path` here has been through
+    // `digestPreImage` is REQUIRED, with no default back to `path`. Review
+    // asked for that: a default silently digests the escaped path whenever a
+    // caller forgets the argument, which is precisely the bug #54 fixes,
+    // reintroduced with no compiler signal. There is exactly one production
+    // caller and it always knows the raw path, so the parameter costs nothing
+    // and forces every future call site into an explicit, reviewable choice.
+    // The session layer passes the RAW path (issue #54): `path` here has been
+    // through
     // `escapePathUnsafe`, whose target set derives from the
     // Unicode-version-dependent `\p{Default_Ignorable_Code_Point}`, so
     // digesting it would silently re-key every stored digest on an ICU upgrade
