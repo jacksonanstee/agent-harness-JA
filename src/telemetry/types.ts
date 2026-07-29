@@ -133,19 +133,26 @@ export const SKILL_DROP_NAME_MAX = 200;
 export const SKILL_DROP_PATH_MAX = 1024;
 /**
  * Length of `SkillDropPayload.pathDigest`, in lowercase hex characters (issue
- * #50). 32 hex chars is 128 bits.
+ * #50). Each hex character carries 4 bits, so the value below is a 128-bit
+ * digest.
  *
  * The width is set by the THREAT, not by taste. This field exists to survive a
  * DELIBERATE attacker: they author the skill pack, so they choose both paths,
  * and forcing two audit rows to collide defeats the field's only purpose. That
  * rules out a non-cryptographic hash (FNV-class collisions are constructible by
- * hand) — but it equally rules out a short truncation of a good one. A 64-bit
- * digest has a birthday bound near 2^32 hashes, which is minutes of commodity
- * GPU time and well inside an attacker's budget. An earlier draft of this
- * constant was 16 (64 bits) and justified itself by rejecting FNV on
- * attacker-forced-collision grounds while not surviving that same test; review
- * caught the inconsistency. At 128 bits the bound is 2^64, which is not
- * reachable, so the rejection argument and the chosen width finally agree.
+ * hand) — but it equally rules out a short truncation of a good one, because a
+ * 64-bit digest has a birthday bound near 2^32 hashes, minutes of commodity GPU
+ * time and well inside an attacker's budget. At 128 bits the bound is 2^64,
+ * which is not reachable.
+ *
+ * NEITHER DIRECTION IS A FREE EDIT, and the guards live elsewhere, so they are
+ * named here the way `SKILL_DROP_CHANNELS_MAX` names its drift test above.
+ * Narrowing restores the forceable collision and is refused by the ratchet in
+ * `src/telemetry/store.test.ts`. Widening is a BREAKING READ CHANGE rather than
+ * an improvement: the validator's pattern is anchored at exactly this width and
+ * `query()` throws on the first row that fails it, so old rows would deny the
+ * whole trail. Raise the width by adding a NEW FIELD, not by editing this
+ * number. ADR-0011 decision 16 carries the full argument.
  */
 export const SKILL_DROP_PATH_DIGEST_LEN = 32;
 export const SKILL_DROP_CHANNELS_MAX = 3;

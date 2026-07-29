@@ -288,9 +288,12 @@ the table decision 4 already owns.
 
 16. **`pathDigest` closes R-j (issue #50, 2026-07-29).** `SkillDropPayload`
     gains an OPTIONAL `pathDigest`: SHA-256 of the full escaped path, first
-    `SKILL_DROP_PATH_DIGEST_LEN` (32) hex characters, present only when
+    `SKILL_DROP_PATH_DIGEST_LEN` hex characters, present only when
     `pathTruncated` is true. Two paths differing only before the tail-cut now
-    stay distinguishable.
+    stay distinguishable. The width is deliberately named rather than quoted:
+    R-d above records a figure that travelled into this document and could not
+    be derived from the code, and repeating the number here would be the same
+    mistake. The code owns the value; this item owns the reason.
     - **Optional, and it must stay optional.** Rows written before the field
       existed carry no `pathDigest`. Requiring it would fail
       `isSkillDropPayload` on READ, and `rowToEvent` throws rather than skipping
@@ -315,9 +318,22 @@ the table decision 4 already owns.
       that** — it specified 16 hex characters (64 bits) while justifying itself
       on attacker-forced-collision grounds, and a 64-bit birthday bound is ~2^32
       hashes, minutes of commodity GPU time. Review caught the inconsistency.
-      At 32 hex characters the bound is 2^64, out of reach, so the rejection
-      argument and the chosen width now agree. A test ratchets the constant so
-      it can be widened but not silently narrowed.
+      At 128 bits the bound is 2^64, out of reach, so the rejection argument
+      and the chosen width now agree. A test ratchets the constant so it cannot
+      be silently narrowed.
+    - **Widening later is a BREAKING READ CHANGE, not a free improvement.** The
+      ratchet permits a larger number, and round-2 review caught that permission
+      being read as "widening is fine" when the read path says otherwise. The
+      validator's pattern is anchored at the exact current width, `rowToEvent`
+      throws rather than skipping, and `query()` maps it over every row — so a
+      single row written at the old width denies the whole trail by exactly the
+      route the optionality bullet above measured. Anyone raising the width must
+      therefore introduce a NEW FIELD NAME and leave the old field readable,
+      rather than growing this one in place. The alternative considered and
+      rejected was a width-tolerant range in the validator: it buys a free
+      widening at the cost of un-pinning the exact width and handing every
+      consumer a rule to remember (compare only equal-width digests), which is
+      the kind of unstated obligation this item exists to avoid.
     - **Emitted only when truncated,** because a complete path is already its
       own identity. The key is omitted rather than set to `undefined`, so
       presence is itself the signal that something was discarded. This also

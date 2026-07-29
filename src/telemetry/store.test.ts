@@ -373,10 +373,17 @@ describe('skill-drop events', () => {
     expect(store.query({ type: 'skill-drop' })).toHaveLength(1);
   });
 
+  // EVERY case derives its length from the constant. Two of these were once
+  // 16-char literals sized for the old width; when the constant widened to 32
+  // they started failing the validator on LENGTH, so the case and charset
+  // guards they are named for stopped being exercised at all. Verified: with
+  // the literals, relaxing PATH_DIGEST_RE to `^[0-9a-fA-F]{32}$` — and even to
+  // `^.{32}$` — left all 53 tests in this file green. A test that cannot fail
+  // for the reason its label gives is worse than no test.
   it.each([
     ['wrong length', 'abc'],
-    ['uppercase hex', 'A3F2C81D9E4B7061'],
-    ['non-hex characters', 'zzzzzzzzzzzzzzzz'],
+    ['uppercase hex', 'A'.repeat(SKILL_DROP_PATH_DIGEST_LEN)],
+    ['non-hex characters', 'z'.repeat(SKILL_DROP_PATH_DIGEST_LEN)],
     ['too long', 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN + 1)],
     ['not a string', 12345],
   ])('rejects a malformed pathDigest (%s) rather than storing an unusable disambiguator', (_label, digest) => {
@@ -685,8 +692,18 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
   // attacker authors both paths — so a future "tidy-up" narrowing this back
   // would silently restore the forceable collision while every other test
   // stayed green (verified: narrowing 32 -> 16 passes the whole suite, because
-  // everything else derives from the constant). Widening stays legal.
-  it('never narrows the digest below 128 bits — widening is fine, narrowing is not', () => {
+  // everything else derives from the constant).
+  //
+  // WIDENING IS PERMITTED HERE BUT IS NOT FREE, and this assertion alone must
+  // not be read as blessing it. PATH_DIGEST_RE is anchored at exactly this
+  // width, rowToEvent throws on a payload that fails it, and store.query maps
+  // rowToEvent over every row unconditionally — so one row written at the old
+  // width denies the ENTIRE trail, not just itself. That is the same
+  // whole-query denial already recorded against the transaction wrapper in
+  // store.ts. Widening is therefore a BREAKING READ CHANGE for any existing
+  // database and needs a NEW FIELD NAME rather than a bigger number here. See
+  // ADR-0011 decision 16.
+  it('never narrows the digest below 128 bits — narrowing is forbidden, widening is breaking', () => {
     expect(SKILL_DROP_PATH_DIGEST_LEN).toBeGreaterThanOrEqual(32);
   });
 
