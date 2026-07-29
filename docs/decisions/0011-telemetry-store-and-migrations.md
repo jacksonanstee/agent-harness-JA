@@ -75,9 +75,9 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
      but no longer a separate *home*: it moved into `src/internal/sanitize.ts`
      (commit `389a7fa`) and is now DERIVED from `CONTROL_CHARS` rather than
      hand-typed. Only `sanitizeForTerminal` — the function, with its forty-odd
-     callers — stays in `src/cli/shared.ts`. There is now one root charset and
-     three derivations from it, all in that one leaf. See the amendment below,
-     item 13.
+     callers — stays in `src/cli/shared.ts`. That leaf now holds every charset
+     in the codebase, each derived rather than hand-typed. See the amendment
+     below, item 13, for the derivation chain.
 
 ## Alternatives considered
 
@@ -237,10 +237,15 @@ the table decision 4 already owns.
       `SessionConfig`), and `runTelemetryExport` is the only shipped reader, so
       this is a direct-library-consumer exposure rather than a live CLI vector.
     - **R-d, restated with a price.** Rows restate the same static fact every
-      turn, up to the loader's 10,000-entry cap. Task 3 priced this against a
-      handful of writes; Task 5 changed the number. A hostile 10,000-skill pack
-      yields ~7,000+ synchronous validated writes per turn, ahead of the
-      session-start fire.
+      turn. Task 3 priced this against a handful of writes; Task 5 changed the
+      shape by moving the loop ahead of the session-start fire. The bound is
+      one synchronous validated write per dropped skill per turn, up to the
+      loader's 10,000-entry cap. How close a hostile pack gets to that bound is
+      a function of skill SIZE, not skill count: `buildSystemPrompt` admits
+      skills in load order against a 256,000-char remaining budget, so 10,000
+      minimal skills may produce no budget drops at all while 10,000 oversized
+      ones drop every time. An earlier draft of this item quoted a specific
+      figure; it was not derivable from the code and is replaced by the bound.
 13. **The export is ESCAPED, not terminal-sanitised — decision item 8 is
     amended because it was FALSE.** Commit `5ffad52` removed the
     `sanitizeForTerminal` pass outright rather than adding to it, and that
@@ -251,9 +256,13 @@ the table decision 4 already owns.
     byte-identical for the same query, pinned by a test. Escapes are 4-digit
     `\uXXXX` per UTF-16 code unit, not the braced `\u{HEX}` of
     `escapePathUnsafe`, because JSON has no braced form. Decision item 9 is
-    widened at the same time: there is now one root charset (`CONTROL_CHARS`)
-    and three derivations from it — `TERMINAL_UNSAFE`, `PATH_ESCAPE_TARGETS`
-    and `JSON_TEXT_UNSAFE` — all living in `src/internal/sanitize.ts`. The
+    widened at the same time: no charset in `src/internal/sanitize.ts` is
+    hand-typed twice. `TERMINAL_UNSAFE` derives from `CONTROL_CHARS`;
+    `PATH_ESCAPE_TARGETS` from `CONTROL_CHARS` together with `BIDI_CONTROLS`
+    and `INVISIBLES`; and `JSON_TEXT_UNSAFE` from `TERMINAL_UNSAFE` — two hops
+    from the root — plus `\p{Default_Ignorable_Code_Point}` and U+FFF9–FFFB.
+    Hand-typing is the construction that let U+2065 through twice, which is
+    why the derivations matter more than the count. The
     encoder's home is that leaf and **not** the cli layer, because eslint blocks
     `src/eval/**` from importing `src/cli/**` and `src/eval/scorecard` writes
     durable JSON through the same class of sink; that eval-side gap is
