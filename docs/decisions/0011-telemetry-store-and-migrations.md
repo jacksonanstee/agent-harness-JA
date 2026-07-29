@@ -462,10 +462,85 @@ the table decision 4 already owns.
         the digest reproducible with `sha256sum` also makes an offline
         dictionary attack on its pre-image marginally easier, and #53 tracks
         exactly that: the digest is unsalted and the discarded prefix carries the
-        operator's home directory. This item does not resolve #53. If #53 lands
-        an HMAC keyed per installation, that supersedes the reproducibility
-        argument here and the raw-versus-escaped choice stops mattering, because
-        neither form would be independently computable.
+        operator's home directory. That confidentiality question is settled
+        separately, in the pre-image item below.
+      - **CORRECTION, 2026-07-29.** An earlier draft of the bullet above went on
+        to say that a keyed HMAC would supersede the reproducibility argument
+        "and the raw-versus-escaped choice stops mattering, because neither form
+        would be independently computable". **That was wrong, and it is struck.**
+        Raw-over-escaped is justified above primarily on ICU STABILITY, that the
+        same file on the same machine must not digest differently after a Node
+        upgrade. Keying the pre-image does not touch that argument: an HMAC over
+        the escaped path re-keys on a `\p{Default_Ignorable_Code_Point}`
+        widening exactly as a bare hash does. Left standing, the sentence was the
+        one a future implementer would cite to revert #54. Caught by the design
+        panel described in the next item, which is the second time in two days a
+        review has found a false claim in prose rather than in code.
+
+17. **Pre-image confidentiality: issue #53 ACCEPTED as residual R-16, not fixed
+    (2026-07-29).** Decision 16 above reasons only about collision resistance,
+    which left the confidentiality of the digest's own pre-image unstated. It is
+    stated here.
+
+    The gap is real. Truncation is tail preserving, so the discarded part is the
+    leading directories, and the attacker authored the skill pack, so they know
+    the tail. That makes it a confirmation of one of N guesses rather than a
+    collision search, which is why WIDTH is irrelevant to it: a review PoC
+    recovered the correct home directory at both 64 and 128 bits.
+
+    - **A keyed HMAC was designed in full and rejected on evidence.** A
+      three-reviewer panel (skeptic, constraint, operator advocate) returned
+      REJECT, APPROVE-WITH-CHANGES and APPROVE-WITH-CHANGES, and the rejection
+      was decisive on three findings the design could not absorb:
+      - **The key has nowhere safe to live.** The only placement that reaches
+        the write path is `./.harness/`, and §2 of the security model names
+        project-level config attacker-influenced input. A cloned repo can ship
+        its own `telemetry-digest.key`, the harness reads it along its SUCCESS
+        path, and the mitigation becomes a no-op while the ADR claims closure.
+        That is strictly worse than the documented status quo. It also means the
+        phrase "per-installation key" was never what the placement delivered: it
+        is per-working-directory, so every fresh clone, worktree and CI
+        workspace mints a different one.
+      - **HMAC zero-pads its key, so a broken key file is a GLOBAL key.**
+        Verified empirically: an empty file, a one-byte zero, thirty-two zeros
+        and sixty-four zeros all produce the same digest, and Node raises no
+        error for any of them. A truncated restore or an interrupted first write
+        therefore collapses every affected installation onto one publicly
+        computable function of the path.
+      - **The proposed degradation was attacker-triggerable.** "Omit the digest
+        when the key is unavailable" reads as fail-closed, but it is fail-closed
+        on pre-image confidentiality and fail-OPEN on the property the field
+        exists for, and a hostile repo can trigger it with a mode-0000 file. It
+        also overloads an absence that this document, `types.ts` and the README
+        all currently define as meaning "the row predates the field".
+    - **Also considered: digesting the path relative to the skills root.** No
+      key, and lossless within one run, since the root is constant there. It was
+      not taken because one database spans sessions under different roots, so
+      two skills at the same relative path would become indistinguishable, and
+      it leaves sensitive directory names BELOW the root untouched.
+    - **Why accepting is defensible here, in this document's own terms.** The
+      exposure is skill-drop rows only, only where an escaped path exceeds
+      `SKILL_DROP_PATH_MAX - 1`, so only for paths an attacker engineered, and
+      it reaches an adversary only through an export the operator shares
+      deliberately. **The digest is not even the weakest link in that export:**
+      no secret rule matches a path or a username, so ordinary tool output
+      containing `pwd`, `ls` or an `ENOENT` message puts the same home directory
+      into `tool-trace.resultSummary` in cleartext, one row over. Hardening a
+      128-bit field while its plaintext sits adjacent would be motion, not
+      security. That adjacent leak is tracked as issue #59, and this item's
+      severity assessment depends on it staying visible: if #59 closes, the
+      digest becomes the weakest link it currently is not, and this decision
+      should be re-costed.
+    - **⚠️ REVISIT-IF, and the deadline is the mechanism.** HMAC-SHA-256 hex is
+      byte-shape-identical to SHA-256 hex, so `PATH_DIGEST_RE` cannot tell the
+      two apart, `rowToEvent` never throws on a mixed population and `query()`
+      never signals one. Keying is therefore an EDIT only while zero digest rows
+      exist anywhere (verified again on 2026-07-29: 24 events, zero skill-drop
+      rows). **After the first truncated skill path is recorded, a keyed digest
+      is a NEW FIELD, not an edit**, by the same rule the width carries above.
+      Revisit if an export is routinely shared with parties outside the
+      operator's trust boundary, or if the adjacent cleartext-path disclosure is
+      closed and the digest becomes the weakest link it currently is not.
 
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`
