@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,12 @@ import {
   SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
 } from './store.js';
-import { SKILL_DROP_NAME_MAX, SKILL_DROP_PATH_DIGEST_LEN, SKILL_DROP_PATH_MAX } from './types.js';
+import {
+  SKILL_DROP_NAME_MAX,
+  SKILL_DROP_PATH_DIGEST_LEN,
+  SKILL_DROP_PATH_MAX,
+  TELEMETRY_ID_MAX,
+} from './types.js';
 import type { TelemetryEventInput, TelemetryStore } from './types.js';
 
 let dbs: Database.Database[] = [];
@@ -136,6 +141,65 @@ describe('createTelemetryStore.record', () => {
     const { store } = openStore();
     expect(() => store.record({ ...TOOL_TRACE, ts: -1 })).toThrow(TypeError);
     expect(() => store.record({ ...TOOL_TRACE, ts: Number.NaN })).toThrow(TypeError);
+  });
+
+  // Issue #51 (R-k). The correlation ids were gated on `typeof === 'string' &&
+  // !== ''` only, so control, bidi and invisible characters reached the
+  // promoted indexed columns raw. REJECTED rather than sanitised, and the
+  // reason is not squeamishness about mutation: sanitizeControlChars maps
+  // EVERY control character to one space, so sanitising would map two distinct
+  // ids onto one value in the columns whose entire job is correlation. It also
+  // would not have closed the reported vector, because it does not strip bidi
+  // at all.
+  //
+  // One case per rejected property, each named, so a relaxation of the pattern
+  // fails the test whose label describes what it relaxed. Control characters
+  // are written as ESCAPE TEXT, never raw bytes.
+  it.each([
+    ['a C0 control', `sess-${'\u0001'}-abc`],
+    ['DEL', `sess-${'\u007F'}-abc`],
+    ['a C1 control', `sess-${'\u009B'}-abc`],
+    ['a bidi override', `sess-${'\u202E'}-abc`],
+    ['a zero-width character', `sess-${'\u200B'}-abc`],
+    ['a line separator', `sess-${'\u2028'}-abc`],
+    ['a space', 'sess abc'],
+    ['a shell metacharacter', 'sess;rm -rf /'],
+    ['a quote', `sess-${'"'}-abc`],
+    ['a slash', 'sess/abc'],
+  ])('rejects a sessionId containing %s', (_label, sessionId) => {
+    const { store } = openStore();
+    expect(() => store.record({ ...TOOL_TRACE, sessionId })).toThrow(TypeError);
+  });
+
+  it('rejects a turnId containing a control character, on the same rule as sessionId', () => {
+    const { store } = openStore();
+    expect(() => store.record({ ...TOOL_TRACE, turnId: `turn-${'\u0001'}-abc` })).toThrow(TypeError);
+  });
+
+  it('rejects an over-long id, and accepts one at exactly the cap', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...TOOL_TRACE, sessionId: 'a'.repeat(TELEMETRY_ID_MAX + 1) }),
+    ).toThrow(TypeError);
+    expect(store.record({ ...TOOL_TRACE, sessionId: 'a'.repeat(TELEMETRY_ID_MAX) }).ok).toBe(true);
+  });
+
+  // The accept side matters as much as the reject side: this store is a public
+  // factory, so the pattern has to admit id schemes we do not ship. A guard
+  // that only ever rejects is a guard nobody can adopt.
+  it.each([
+    ['a canonical UUID', randomUUID()],
+    ['a prefixed ULID-style id', 'sess_01HXT4AB1C6R5IT7OFANFQRW'],
+    ['a dotted run id', 'run-123.v2'],
+    ['a colon-namespaced id', 'harness:run:42'],
+  ])('accepts %s', (_label, sessionId) => {
+    const { store } = openStore();
+    expect(store.record({ ...TOOL_TRACE, sessionId }).ok).toBe(true);
+  });
+
+  it('still rejects an empty id, which the charset alone would not catch', () => {
+    const { store } = openStore();
+    expect(() => store.record({ ...TOOL_TRACE, sessionId: '' })).toThrow(TypeError);
   });
 
   it('rejects a structurally invalid payload with a TypeError', () => {

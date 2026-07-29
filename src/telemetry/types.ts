@@ -249,9 +249,34 @@ export interface SkillDropPayload {
   ruleIds: string[];
 }
 
+/**
+ * Maximum length of `sessionId` / `turnId`, in UTF-16 code units (issue #51).
+ * Comfortably above a UUID (36) and a prefixed ULID, and far below anything
+ * that belongs in an indexed correlation column.
+ *
+ * Enforced with the charset by `isValidCorrelationId` (src/telemetry/store.ts),
+ * which is the single definition used by BOTH the store's write gate and the
+ * session layer's construction-time check. Two copies of this rule would drift,
+ * and the drift would be invisible: the store's rejection is downgraded to a
+ * warning by `recordTelemetry`, so the looser side would silently win.
+ */
+export const TELEMETRY_ID_MAX = 128;
+
 interface TelemetryEventBase {
   id: string;
-  /** Harness-generated session id — stable across hook/session/tool events. */
+  /**
+   * Harness-generated session id — stable across hook/session/tool events.
+   *
+   * REJECTED, never sanitised, when it falls outside `isValidCorrelationId`
+   * (issue #51). Every other attacker-influenced string in this module is
+   * sanitised on write; these two are not, and the asymmetry is deliberate.
+   * `sanitizeControlChars` maps every control character to a single space, so
+   * sanitising would map two DISTINCT ids onto one value in the columns whose
+   * only job is correlation — the same collision class issue #50 exists to
+   * close for `path`. It would also not have closed the reported vector, since
+   * it does not strip bidi at all. A correlation key is identity, so the only
+   * safe response to a malformed one is refusal.
+   */
   sessionId: string;
   /** Turn-scoped correlation id; with sessionId reconstructs a full trace. */
   turnId: string;

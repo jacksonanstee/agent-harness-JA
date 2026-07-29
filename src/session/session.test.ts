@@ -2295,3 +2295,53 @@ describe('skill-drop telemetry (issue #46)', () => {
     expect(budgetIndex).toBeLessThan(hookIndex);
   });
 });
+
+describe('correlation id validation (issue #51)', () => {
+  // The store already refuses these, but `recordTelemetry` catches its throw
+  // and downgrades it to one stderr warning, so a caller with a bad id scheme
+  // would lose EVERY telemetry row of the run and see only a warning per row.
+  // Failing at the session boundary makes a bad scheme a startup error instead
+  // of silent data loss. Same predicate as the store's, deliberately: see
+  // isValidCorrelationId.
+  it('throws when config.turnId is malformed, at construction rather than at record time', () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    expect(() =>
+      createSession(makeDeps(fake), { skillsDir: '/nowhere', turnId: `turn-${'\u202E'}-abc` }),
+    ).toThrow(TypeError);
+  });
+
+  it('accepts a well-formed non-UUID turnId, because the store is a public factory', () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    expect(() =>
+      createSession(makeDeps(fake), { skillsDir: '/nowhere', turnId: 'harness:run:42' }),
+    ).not.toThrow();
+  });
+
+  it('throws when a caller-supplied generateId returns a malformed id', async () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    const session = createSession(makeDeps(fake), {
+      skillsDir: '/nowhere',
+      generateId: () => `sess-${'\u0001'}-abc`,
+    });
+    await expect(session.run('hello')).rejects.toThrow(TypeError);
+  });
+
+  it('does not mutate a valid id on its way to telemetry', async () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+    const recorded: string[] = [];
+    const session = createSession(
+      makeDeps(fake, {
+        telemetry: {
+          record: (event) => {
+            recorded.push(event.sessionId);
+            return { ok: true, value: undefined } as never;
+          },
+        },
+      }),
+      { skillsDir: '/nowhere', generateId: () => 'sess_01HXT4AB1C6R5IT7OFANFQRW' },
+    );
+    await session.run('hello');
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const id of recorded) expect(id).toBe('sess_01HXT4AB1C6R5IT7OFANFQRW');
+  });
+});

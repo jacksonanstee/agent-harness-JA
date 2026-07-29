@@ -2,6 +2,7 @@ export {
   boundSkillDropName,
   boundSkillDropPath,
   createTelemetryStore,
+  isValidCorrelationId,
   openTelemetryDatabase,
   DEFAULT_DB_PATH,
   SKILL_DROP_REASONS,
@@ -16,6 +17,7 @@ export {
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
+  TELEMETRY_ID_MAX,
 } from './types.js';
 export type {
   HookEventKind,

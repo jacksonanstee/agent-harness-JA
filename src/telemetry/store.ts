@@ -27,8 +27,10 @@ import {
   SKILL_DROP_PATH_MAX,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
+  TELEMETRY_ID_MAX,
 } from './types.js';
 import {
+  escapePathUnsafe,
   PATH_ESCAPE_SEQUENCE,
   sanitizeControlChars as sanitizeText,
   truncateTailWellFormed,
@@ -55,6 +57,52 @@ export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
 const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-error', 'hook-fired']);
+
+/**
+ * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a
+ * partial match cannot admit a longer string, and `+` with a separate length
+ * check rather than `{1,N}` so the two failures report distinctly.
+ *
+ * Allowlisting is the whole point. A denylist of "the control and bidi
+ * characters we know about" is the enumerate-a-class-one-PoC-at-a-time trap
+ * ADR-0026 recorded: every round of that fix found one more code point sitting
+ * in a gap. Naming what an identifier MAY contain converges immediately and
+ * needs no maintenance as Unicode grows. The set is chosen to admit the id
+ * schemes a library consumer plausibly already uses (UUID, ULID, prefixed and
+ * namespaced ids, dotted versions) while excluding whitespace, quotes, path
+ * separators and shell metacharacters, so no future reader of these columns
+ * inherits a quoting problem.
+ */
+const CORRELATION_ID_RE = /^[A-Za-z0-9_.:-]+$/;
+
+/** Stated once so the guard and its error message cannot disagree. */
+const CORRELATION_ID_RULE = `must be 1-${TELEMETRY_ID_MAX} characters of [A-Za-z0-9_.:-]`;
+
+/**
+ * The single definition of a well-formed correlation id, exported because the
+ * session layer checks the SAME rule at construction time (issue #51). Do not
+ * re-implement it there: the store's rejection is downgraded to a warning by
+ * `recordTelemetry`, so if the two sides drifted the looser one would win
+ * silently and rows would vanish. Same single-predicate pattern as
+ * `isBlockedFirstToken` in the sandbox, which exists because an enforcement
+ * path and its warning path had drifted apart.
+ */
+export function isValidCorrelationId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= TELEMETRY_ID_MAX && CORRELATION_ID_RE.test(value);
+}
+
+/**
+ * Renders a rejected id for an error message. Escaped, not raw: the whole
+ * reason this id was refused is that it carries characters that misbehave in a
+ * terminal, and a direct library consumer printing `error.message` would
+ * otherwise be handed the exact bytes the guard just refused to store.
+ * `recordTelemetry` sanitises on its own path, but a thrown TypeError belongs
+ * to whoever catches it.
+ */
+function describeId(value: unknown): string {
+  if (typeof value !== 'string') return String(value);
+  return escapePathUnsafe(truncateWellFormed(value, TELEMETRY_ID_MAX)).value;
+}
 
 
 const INSERT_SQL = `
@@ -400,11 +448,11 @@ function assertValidInput(event: TelemetryEventInput): void {
       `event.type must be one of ${TELEMETRY_EVENT_TYPES.join('|')}, got ${String(event.type)}`,
     );
   }
-  if (typeof event.sessionId !== 'string' || event.sessionId === '') {
-    throw new TypeError(`event.sessionId must be a non-empty string, got ${String(event.sessionId)}`);
+  if (!isValidCorrelationId(event.sessionId)) {
+    throw new TypeError(`event.sessionId ${CORRELATION_ID_RULE}, got ${describeId(event.sessionId)}`);
   }
-  if (typeof event.turnId !== 'string' || event.turnId === '') {
-    throw new TypeError(`event.turnId must be a non-empty string, got ${String(event.turnId)}`);
+  if (!isValidCorrelationId(event.turnId)) {
+    throw new TypeError(`event.turnId ${CORRELATION_ID_RULE}, got ${describeId(event.turnId)}`);
   }
   if (event.ts !== undefined && (!Number.isFinite(event.ts) || event.ts < 0)) {
     throw new TypeError(`event.ts must be a non-negative finite number when provided, got ${String(event.ts)}`);

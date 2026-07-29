@@ -326,8 +326,9 @@ describe('main (telemetry export)', () => {
   const DEL = '\u007F';
   const CSI = '\u009B';
   const HOSTILE_CHARS: readonly string[] = [RLO, ZWSP, LINE_SEPARATOR, DEL, CSI];
-  // sessionId is NOT sanitized on the write path (record() sanitizes only the
-  // payload), so this arrives at the exporter verbatim.
+  // Since issue #51, `record()` REFUSES a sessionId like this, so it can no
+  // longer be seeded through the public API — see the raw INSERT in hostileDb
+  // below and the reason it is the more faithful fixture.
   const HOSTILE_SESSION = `s${RLO}${LINE_SEPARATOR}${DEL}${CSI}1`;
   // A payload field that IS sanitized on write, proving the point the deleted
   // comment got wrong: sanitizeText spaces control chars but passes bidi and
@@ -340,12 +341,26 @@ describe('main (telemetry export)', () => {
     const path = join(dir, 'telemetry.db');
     const db = openTelemetryDatabase({ path });
     const store = createTelemetryStore(db);
-    store.record({
+    // Seeded by RAW INSERT, deliberately bypassing record()'s correlation-id
+    // gate (issue #51). This is not a workaround for the guard — it is the
+    // more faithful fixture, and the guard is what makes that clear. The write
+    // path now refuses these ids, so the only way such a row exists in a real
+    // database is the way this INSERT models it: written by a binary older
+    // than #51, or by another writer straight into the shared SQLite file,
+    // which is exactly the case rowToEvent's "never trust a shared DB file
+    // blindly" validation exists for. The exporter therefore still has to
+    // escape on READ, and these tests are what hold that true; #51 narrowed
+    // the entry points, it did not make the export sink's job go away.
+    db.prepare(
+      `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+       VALUES (@id, @type, @sessionId, @turnId, @ts, @payload)`,
+    ).run({
+      id: '00000000-0000-4000-8000-000000000001',
       type: 'hook-event',
       sessionId: HOSTILE_SESSION,
       turnId: 't1',
       ts: 100,
-      payload: { kind: 'hook-fired', event: 'session-start', handlersFired: 0 },
+      payload: JSON.stringify({ kind: 'hook-fired', event: 'session-start', handlersFired: 0 }),
     });
     store.record({
       type: 'hook-event',

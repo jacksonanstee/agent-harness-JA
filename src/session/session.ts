@@ -5,6 +5,7 @@ import type { Skill } from '../skills/index.js';
 import {
   boundSkillDropName,
   boundSkillDropPath,
+  isValidCorrelationId,
   SKILL_DROP_RULE_ID_MAX,
   SKILL_DROP_RULE_IDS_MAX,
 } from '../telemetry/index.js';
@@ -337,10 +338,36 @@ function buildSystemPrompt(skills: Skill[]): {
  * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
  * is injected so tests never touch the network.
  */
+/**
+ * Issue #51. The telemetry store refuses a malformed correlation id, but
+ * `recordTelemetry` below catches that throw and downgrades it to one stderr
+ * warning — so a caller whose id scheme is rejected would lose every row of
+ * the run and get only a warning per row, which is the silent-loss failure
+ * mode this codebase keeps rediscovering. Checking here converts it into a
+ * loud failure at the earliest point each id exists: `config.turnId` at
+ * construction, `generateId()`'s output on the first call that produces one.
+ *
+ * `isValidCorrelationId` is IMPORTED, never re-implemented. Two copies of this
+ * rule would drift, and the drift would be invisible in the dangerous
+ * direction: if this side were looser, the store's rejection is the one that
+ * gets swallowed.
+ */
+function assertCorrelationId(value: string, field: string): string {
+  if (!isValidCorrelationId(value)) {
+    // Escaped, not raw: the reason this id was refused is that it carries
+    // characters that misbehave in the terminal this message reaches.
+    throw new TypeError(
+      `${field} must be a well-formed correlation id, got ${escapePathUnsafe(value).value}`,
+    );
+  }
+  return value;
+}
+
 export function createSession(deps: SessionDeps, config: SessionConfig): Session {
   const now = config.now ?? Date.now;
   const generateId = config.generateId ?? randomUUID;
   const warn = config.onWarning ?? (() => undefined);
+  if (config.turnId !== undefined) assertCorrelationId(config.turnId, 'config.turnId');
 
   async function run(prompt: string): Promise<SessionResult> {
     // Step 2: model selection.
@@ -420,10 +447,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       );
     }
 
-    const harnessSessionId = generateId();
+    const harnessSessionId = assertCorrelationId(generateId(), 'generateId() result');
     // Fallback deliberately does NOT reuse generateId: a caller injecting a
     // constant generateId (as the CLI does) would otherwise collapse
     // turnId === sessionId and destroy trace correlation.
+    // Not re-checked: config.turnId was validated at construction and
+    // randomUUID is well-formed by construction.
     const turnId = config.turnId ?? randomUUID();
     let sdkSessionId: string | null = null;
     const denied: DeniedToolCall[] = [];

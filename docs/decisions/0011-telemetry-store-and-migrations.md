@@ -230,13 +230,48 @@ the table decision 4 already owns.
       to default-on with Task 5, because `boundSkillDropPath` had zero
       production callers before it — which is why it was fixed rather than
       carried further.
-    - **R-k:** `sessionId` and `turnId` are sanitised NOWHERE on the write path
-      and reach SQLite raw; the export sink escapes them, but the stored rows
-      hold the raw bytes and any future reader of those columns inherits the
-      problem. Security review bounded it: those ids are not attacker-reachable
-      in the shipped CLI flow (always `randomUUID()` or caller-supplied via
-      `SessionConfig`), and `runTelemetryExport` is the only shipped reader, so
-      this is a direct-library-consumer exposure rather than a live CLI vector.
+    - **R-k: CLOSED 2026-07-29 (issue #51), by REFUSAL rather than by
+      sanitisation.** As filed: `sessionId` and `turnId` were sanitised nowhere
+      on the write path and reached SQLite raw; the export sink escaped them,
+      but the stored rows held the raw bytes and any future reader of those
+      columns inherited the problem. Security review bounded it to a
+      direct-library-consumer exposure, since the shipped CLI flow always
+      supplies `randomUUID()` and `runTelemetryExport` was the only shipped
+      reader.
+      - **Sanitising was the obvious fix and it was the wrong one**, which is
+        the part worth keeping. `sanitizeControlChars` maps every control
+        character to a single space, so sanitising would have mapped two
+        DISTINCT ids onto one value in the two columns whose only purpose is
+        correlation. That is the identical collision class item 16 above exists
+        to close for `path`, reintroduced one field over. It would also not have
+        closed the reported vector at all: the filed issue names U+202E, and
+        that function does not strip bidi.
+      - **A correlation key is identity, so the only safe response to a
+        malformed one is refusal.** `isValidCorrelationId`
+        (`src/telemetry/store.ts`) is an anchored ALLOWLIST,
+        `[A-Za-z0-9_.:-]` bounded by `TELEMETRY_ID_MAX`. Allowlist, not
+        denylist, on ADR-0026's evidence: enumerating the hostile code points
+        one proof-of-concept at a time did not converge there, and naming what
+        an identifier MAY contain needs no maintenance as Unicode grows. The
+        set admits the schemes a library consumer plausibly already uses (UUID,
+        ULID, prefixed, namespaced, dotted) and excludes whitespace, quotes,
+        path separators and shell metacharacters, so no future reader inherits
+        a quoting problem either.
+      - **Checked in two places on purpose, from ONE predicate.** The store
+        refuses at `assertValidInput`, but `recordTelemetry` catches that throw
+        and downgrades it to one stderr warning, so a consumer with a rejected
+        id scheme would lose every row of the run and see only warnings. The
+        session layer therefore checks the same predicate at the earliest point
+        each id exists: `config.turnId` at construction, `generateId()`'s
+        output on the call that produces one. The predicate is imported, never
+        re-implemented, because a drift in the looser direction would be
+        swallowed by exactly that downgrade.
+      - **Residual, narrowed not eliminated:** rows written before this change,
+        or written straight into the shared SQLite file by another writer, can
+        still hold raw bytes. The export sink's escaping is what covers them and
+        remains load-bearing; `src/cli.test.ts` now seeds that case with a raw
+        `INSERT` rather than through `record()`, which models the real remaining
+        threat more faithfully than the old fixture did.
     - **R-d, restated with a price.** Rows restate the same static fact every
       turn. Task 3 priced this against a handful of writes; Task 5 changed the
       shape by moving the loop ahead of the session-start fire. The bound is
