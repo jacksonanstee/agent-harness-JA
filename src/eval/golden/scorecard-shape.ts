@@ -57,7 +57,22 @@ export interface GoldenMeta {
   /** ISO-8601, from the injected clock. */
   createdAt: string;
   harnessVersion: string;
-  /** Resolved absolute task directory the run scored. */
+  /**
+   * The task directory the run scored, relative to the working directory the
+   * run was invoked from (issue #62).
+   *
+   * It was a resolved ABSOLUTE path until 2026-07-31, which put the
+   * operator's home directory into every scorecard unconditionally, in a file
+   * whose purpose is to be shared. Resolve it against the producing machine's
+   * working directory to recover the original; that working directory is
+   * deliberately not recorded here, because doing so would re-introduce the
+   * disclosure this field just dropped.
+   *
+   * A scorecard written before the change is still readable and is
+   * distinguishable by `isAbsolute()`, which is why the meaning could change
+   * without the new field name ADR-0011 item 16 otherwise requires: that rule
+   * exists for mixed populations that CANNOT be told apart, and this one can.
+   */
   taskDir: string;
   /** Distinct router model choices observed across rows that ran, sorted. */
   models: string[];

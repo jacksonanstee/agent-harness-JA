@@ -95,7 +95,7 @@ The zero-digest-row window that decision 17 depends on is **not spent** by this 
 ## Revisit if
 
 - A future design records the home value in the row, or takes it as an explicit argument, and therefore escapes the root cause in decision 3.
-- The golden scorecard `meta.taskDir` sink (R-17, filed separately) is closed, since it is unconditional on every eval run and is the higher-frequency disclosure of the two.
+- ~~The golden scorecard `meta.taskDir` sink (R-17, filed separately) is closed, since it is unconditional on every eval run and is the higher-frequency disclosure of the two.~~ **FIRED 2026-07-31, issue #62 closed.** It did not require revisiting this ADR's acceptance, and the reason sharpens decision 3 rather than weakening it: `meta.taskDir` is harness-authored and structured, so both operands of the transform are known at write time and `relative()` needs no ambient `os.homedir()`. The #59 channels carry paths incidentally inside prose the harness did not author, which is exactly why they had nothing to key on but an ambient value. The distinction to carry forward is not narrow-versus-wide scope, it is **whether the harness computed the value it is about to store**.
 - `resultSummary` acquires a consumer that requires ground-truth absolute paths, which would make an export-time transform strictly better than a write-time one.
 
 ## Verification, and its named limits
