@@ -90,18 +90,40 @@ function finiteCostOrNull(value: number | null): number | null {
  *
  * All three #59 designs died because they keyed on `os.homedir()`, a value
  * that is unrecorded in the artefact and silently wrong under a different
- * `HOME` (ADR-0027 decision 3, and the R-17 residual). `relative()` consults
- * no such value: both of its operands are known here, so there is nothing to
- * be wrong about, and no signal field is needed to say whether it fired.
+ * `HOME` (ADR-0027 decision 3, and the R-17 residual). The only ambient value
+ * consulted here is the caller's `cwd`, and the difference that matters is
+ * that `cwd` cannot be well-formed but WRONG the way `$HOME` can: it is the
+ * directory the run was actually invoked from, so the transform cannot
+ * degrade into a no-op that reports success.
  *
- * Two properties worth stating because a reader will ask:
- * - It is not lossy for an investigator. On the machine that produced the
- *   scorecard, `resolve(process.cwd(), taskDir)` returns the original path.
- *   The working directory is deliberately NOT recorded, since that would
- *   re-introduce the disclosure one field over.
- * - Old and new scorecards stay tellable apart by `isAbsolute()`, so the
- *   mixed-population problem that makes ADR-0011 item 16 demand a NEW FIELD
- *   NAME for a changed meaning does not arise here.
+ * ⚠️ WHAT THIS DOES NOT CLOSE, measured rather than assumed. `relative()`
+ * walks UP to the common ancestor and then down, so when `cwd` is not at or
+ * above `root` the result contains the intervening absolute segments:
+ *
+ *     portableTaskDir('/Users/<name>/clients/acme/tasks', '/tmp/scratch')
+ *       -> '../../Users/<name>/clients/acme/tasks'
+ *
+ * The home directory is fully present there. The closure is therefore real
+ * for the invocation shape the CLI defaults to and overwhelmingly uses (a
+ * task directory at or under the working directory, `./eval/golden`), and it
+ * is NOT a general fix. Pinned by test rather than left to be rediscovered,
+ * and tracked as its own issue, because storing something else in the escape
+ * case is a type change plus the signal field ADR-0027 decision 3 requires,
+ * which is a separate decision from this one.
+ *
+ * It is not lossy for an investigator: on the machine that produced the
+ * scorecard, resolving the stored value against the invoking working
+ * directory returns the original path. That working directory is deliberately
+ * NOT recorded, since doing so would re-introduce the disclosure one field
+ * over.
+ *
+ * On the field keeping its NAME despite changing meaning: ADR-0011 item 16
+ * requires a new name when the READ path is intolerant, because its validator
+ * is anchored, `rowToEvent` throws rather than skipping, and `query()` maps
+ * over every row, so one nonconforming row denies the whole trail. A golden
+ * scorecard has no read path at all: nothing in this repo parses one back,
+ * there is no validator and no query. That, not the fact that `isAbsolute()`
+ * can tell the populations apart, is why the rule does not bite here.
  *
  * Known limit, reasoned and not executed: on Windows a path on a different
  * drive has no relative form and `relative()` returns an absolute path. There
@@ -407,7 +429,18 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       if (typeof taskDir !== 'string' || taskDir.length === 0) {
         throw new EvalUsageError('taskDir must be a non-empty string');
       }
-      const root = resolve(taskDir);
+      // Captured ONCE, here, and used for both the resolve below and the
+      // `meta.taskDir` write at the end of the run. Reading `process.cwd()`
+      // again at write time would let the two operands disagree: oracles are
+      // dynamically imported and execute in-process on the main thread, where
+      // `process.chdir` is available, so a hostile task pack could move the
+      // working directory between the two reads and put the absolute path
+      // back into the field with `isAbsolute()` still false (review finding,
+      // 2026-07-31). Reachable only with the arbitrary-code-execution
+      // primitive that security-model R-10 already accepts, but the one-line
+      // capture removes the window rather than reasoning about it.
+      const invocationCwd = process.cwd();
+      const root = resolve(invocationCwd, taskDir);
       const files = discoverTaskFiles(root);
       const parses = files.map(parseTaskFile);
       assertUniqueIds(parses);
@@ -450,7 +483,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         meta: {
           createdAt,
           harnessVersion,
-          taskDir: portableTaskDir(root, process.cwd()),
+          taskDir: portableTaskDir(root, invocationCwd),
           models: [...models].sort(),
         },
         rows: sorted,

@@ -263,15 +263,44 @@ describe('createGoldenRunner rows', () => {
       expect(out).toBe(join('..', '..', 'tasks'));
     });
 
-    it('never consults the environment, so a changed HOME cannot alter it', () => {
+    // An earlier cut of this test set HOME to an unrelated value and asserted
+    // portableTaskDir('/a/b/tasks', '/a/b') === 'tasks'. That passes for an
+    // implementation that reads process.env.HOME on every call, so it could
+    // not fail for the reason its name gave. The fixture has to be one where
+    // a homedir-keyed implementation and this one MUST disagree: HOME a
+    // genuine prefix of root, and cwd somewhere the prefix strip would not
+    // reach.
+    it('cannot be altered by HOME, because it never consults it', () => {
       const before = process.env['HOME'];
       try {
-        process.env['HOME'] = '/home/someone-else';
-        expect(portableTaskDir('/a/b/tasks', '/a/b')).toBe('tasks');
+        process.env['HOME'] = '/a/b';
+        // A homedir-prefix-stripping implementation returns 'tasks' here.
+        // Walking up from cwd is the only correct answer.
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
+        // Same inputs, different HOME: identical output, which is the
+        // property the name actually promises.
+        process.env['HOME'] = '/completely/elsewhere';
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
       } finally {
         if (before === undefined) delete process.env['HOME'];
         else process.env['HOME'] = before;
       }
+    });
+
+    // ⚠️ The limit of the fix, pinned so it cannot be quietly rediscovered or
+    // quietly changed. When cwd is not at or above the task directory,
+    // `relative()` walks up to the common ancestor and then back down, so the
+    // intervening absolute segments (including the home directory) survive.
+    // The closure claimed in security-model R-17 (b) is scoped to the
+    // invocation shape the CLI defaults to, and this test is the evidence for
+    // that scoping rather than an aspiration to fix it here.
+    it('STILL exposes intervening absolute segments when cwd is not above the task directory', () => {
+      const out = portableTaskDir('/Users/someone/clients/acme/tasks', '/tmp/scratch');
+      expect(out.startsWith('..')).toBe(true);
+      // The disclosure this issue is about is present, and saying so in an
+      // assertion is the point: a future change that closes it must come here
+      // and delete this expectation deliberately.
+      expect(out).toContain('/Users/someone');
     });
   });
 
