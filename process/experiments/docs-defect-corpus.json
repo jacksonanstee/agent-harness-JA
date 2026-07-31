@@ -1,0 +1,125 @@
+{
+  "note": "Hand-labelled corpus of VERIFIED prose defects in agent-harness-JA. Ground truth is high-confidence: each was found by review, confirmed, and corrected in the named commit. `clause` is the defective assertion; `line_has_citation` records whether the physical line it lived on carried a backticked identifier / file:line / 'verified <date>', which is what issue #61's proposed rule keys on.",
+  "defects": [
+    {
+      "id": "D01", "source": "issue-61-comment", "commit": "10aeae1",
+      "clause": "The key has nowhere safe to live. The only placement that reaches the write path is `./.harness/`.",
+      "class": "false-uniqueness", "line_has_citation": true,
+      "why": "src/cli.ts passes userDir: homedir() into the same command; a trusted placement exists."
+    },
+    {
+      "id": "D02", "source": "issue-61-comment", "commit": "10aeae1",
+      "clause": "`:memory:` is used by tests",
+      "class": "wrong-scope", "line_has_citation": true,
+      "why": "It is used by every `harness eval` run, not only tests."
+    },
+    {
+      "id": "D03", "source": "issue-61-comment", "commit": "10aeae1",
+      "clause": "three independent objections",
+      "class": "false-independence", "line_has_citation": false,
+      "why": "One objection supplied another's trigger; only two were independent."
+    },
+    {
+      "id": "D04", "source": "issue-61-comment", "commit": "10aeae1",
+      "clause": "zero digest rows anywhere",
+      "class": "overbroad-scope", "line_has_citation": false,
+      "why": "Evidenced by a single database; 'anywhere' is not established."
+    },
+    {
+      "id": "D05", "source": "issue-61-comment", "commit": "10aeae1",
+      "clause": "absence means the row predates the field",
+      "class": "missing-qualifier", "line_has_citation": true,
+      "why": "True only on rows where pathTruncated is true; stated unconditionally."
+    },
+    {
+      "id": "D06", "source": "issue-61-body", "commit": "10aeae1",
+      "clause": "a keyed digest would make the raw-versus-escaped choice stop mattering",
+      "class": "false-consequence", "line_has_citation": false,
+      "why": "That choice rests on ICU stability, which keying does not touch. Reached main."
+    },
+    {
+      "id": "D07", "source": "session-2026-07-31", "commit": "97dfd2e",
+      "clause": "reported a band seven characters wider than the real one",
+      "class": "wrong-number", "line_has_citation": false,
+      "why": "Six, under the synthesis's own fixture. Seven is the TRUE band width stated 20 lines earlier."
+    },
+    {
+      "id": "D08", "source": "session-2026-07-31", "commit": "97dfd2e",
+      "clause": "the client or project directory outlives the username by the whole width of the home path",
+      "class": "wrong-quantity", "line_has_citation": false,
+      "why": "Margin is user.length + clientDir.length - 1 (14), not home.length (13). Was wrong in THREE files; fixed in one first."
+    },
+    {
+      "id": "D09", "source": "session-2026-07-31", "commit": "97dfd2e",
+      "clause": "That is the same position issue #53 was in a fortnight earlier",
+      "class": "wrong-date", "line_has_citation": false,
+      "why": "Two days. Contradicted by security-model.md dating the panel 2026-07-29."
+    },
+    {
+      "id": "D10", "source": "session-2026-07-31", "commit": "97dfd2e",
+      "clause": "digests as shipped today:      differ",
+      "class": "unreproducible-transcript", "line_has_citation": false,
+      "why": "Printed fixtures were 46/34 chars, under the 1023 cap, where the function returns early with NO digest."
+    },
+    {
+      "id": "D11", "source": "session-2026-07-31", "commit": "97dfd2e",
+      "clause": "Rejected for the reason ADR-0013 already gives for excluding an unanchored generic rule: paths are not secrets, the false-positive surface is very large, and `resultSummary` exists to be readable.",
+      "class": "misattribution", "line_has_citation": true,
+      "why": "ADR-0013 gives ONE reason (over-matches code-heavy tool output). The other two are this ADR's own."
+    },
+    {
+      "id": "D12", "source": "session-2026-07-31", "commit": "7e67413",
+      "clause": "four further channels are now enumerated as R-17",
+      "class": "intra-commit-count-disagreement", "line_has_citation": true,
+      "why": "R-17 enumerates five, in the same commit."
+    },
+    {
+      "id": "D13", "source": "session-2026-07-31", "commit": "7e67413",
+      "clause": "It must either record the home value in the row alongside the transformed text, so a reader can tell whether the transform applied and to what, or take the home directory as an explicit operator argument with no environment default.",
+      "class": "self-defeating-prescription", "line_has_citation": true,
+      "why": "Recording the home value in the row IS the disclosure R-17 exists to name."
+    },
+    {
+      "id": "D14", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "so `relative()` closes it without consulting `os.homedir()` at all. There is therefore no ambient value to be silently wrong about",
+      "class": "false-absolute", "line_has_citation": true,
+      "why": "process.cwd() is ambient. The true claim is that cwd cannot be well-formed but WRONG the way $HOME can."
+    },
+    {
+      "id": "D15", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "**CLOSED 2026-07-31 (issue #62):**",
+      "class": "overclaimed-closure", "line_has_citation": true,
+      "why": "Partly closed. relative() walks up to the common ancestor, so the home dir survives when cwd is not at or above the task dir."
+    },
+    {
+      "id": "D16", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "the mixed-population problem that makes ADR-0011 item 16 demand a NEW FIELD NAME for a changed meaning does not arise here",
+      "class": "wrong-rationale", "line_has_citation": true,
+      "why": "Item 16 is about an intolerant READ path, not distinguishability. A golden scorecard has no read path, which is a stronger reason."
+    },
+    {
+      "id": "D17", "source": "session-2026-07-31", "commit": "c2f9c4b",
+      "clause": "measured on this machine, 11 of 11 golden scorecards on disk contained the operator's home directory",
+      "class": "wrong-population", "line_has_citation": true,
+      "why": "22 of 22. The sweep covered .harness/eval/ only and missed examples/repo-qa/.harness/eval/."
+    },
+    {
+      "id": "D18", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "The #59 channels carry paths incidentally inside prose the harness did not author, which is exactly why they had nothing to key on but an ambient value.",
+      "class": "overgeneralisation", "line_has_citation": false,
+      "why": "(c) and (d) ARE harness-authored prose interpolating an operator-supplied glob."
+    },
+    {
+      "id": "D19", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "it('never consults the environment, so a changed HOME cannot alter it', () => {",
+      "class": "test-name-not-tested", "line_has_citation": true,
+      "why": "Passes for an implementation reading process.env.HOME on every call."
+    },
+    {
+      "id": "D20", "source": "session-2026-07-31", "commit": "0608a78",
+      "clause": "(b) is **unconditional and per run**, making it a higher-frequency disclosure than the conditional one #59 was filed about, and it is named by neither #59 nor R-16",
+      "class": "stale-tense-after-own-edit", "line_has_citation": false,
+      "why": "Left in the present tense in the same commit that closed (b), so the row contradicted itself."
+    }
+  ]
+}
