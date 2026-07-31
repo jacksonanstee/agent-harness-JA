@@ -91,8 +91,12 @@ future reader acts on, so both halves are recorded.
 
 The design round was run by a fan-out of agents, and the synthesis it
 produced got the band's boundary wrong: it derived the flip from the
-username's last character index rather than its first, and reported a band
-seven characters wider than the real one. Spot-checking it took one script.
+username's last character index rather than its first. Under its own fixture,
+a seven-character username, that put the band end six characters late.
+
+The mechanism is worth more than the magnitude. Deriving from the last index
+makes the band width depend on the username's length, which is precisely the
+dependency the real band does not have. Spot-checking it took one script.
 
 That is the second time in three weeks that the load-bearing error was in
 prose summarising verified work rather than in the work. The tests were green

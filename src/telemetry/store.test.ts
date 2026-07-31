@@ -725,7 +725,12 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     const mid = '/clients/acme/';
     const tail = '/evil.md';
     const atLength = (total: number) => {
-      const path = home + mid + 'd'.repeat(total - home.length - mid.length - tail.length) + tail;
+      const filler = total - home.length - mid.length - tail.length;
+      // Named assertion rather than a RangeError out of repeat(): a cap change
+      // that drops the budget below this fixture's fixed overhead must fail on
+      // something that says what went wrong, not inside fixture construction.
+      expect(filler).toBeGreaterThanOrEqual(0);
+      const path = home + mid + 'd'.repeat(filler) + tail;
       // Sanity: an off-by-one in the fixture would silently probe a different
       // band member and the test would prove nothing about the boundary.
       expect(path).toHaveLength(total);
@@ -759,24 +764,42 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
   });
 
   // The band above is the narrow claim. The wider one, which R-16 does not
-  // reach at all: truncation removes the least identifying part FIRST. The
-  // client or project directory outlives the username by the whole width of
-  // the home path, and it is usually the more sensitive of the two.
+  // reach at all: truncation removes the least identifying part FIRST, so the
+  // client or project directory outlives the username, and it is usually the
+  // more sensitive of the two. This probes BOTH ends of that interval, because
+  // one probe cannot establish "long after".
   it('leaves the client directory name in the stored path long after the username is gone', () => {
     const cap = SKILL_DROP_PATH_MAX - 1;
-    const home = '/Users/testop';
+    const user = 'testop';
+    const home = `/Users/${user}`;
     const client = 'acme-corp';
-    const mid = `/clients/${client}/`;
+    const clientDir = '/clients/';
+    const mid = `${clientDir}${client}/`;
     const tail = '/evil.md';
-    // One character past the point where the whole home directory, separator
-    // included, has been discarded.
-    const total = cap + home.length + 1;
-    const path = home + mid + 'd'.repeat(total - home.length - mid.length - tail.length) + tail;
-    expect(path).toHaveLength(total);
+    const stored = (total: number) => {
+      const filler = total - home.length - mid.length - tail.length;
+      expect(filler).toBeGreaterThanOrEqual(0);
+      const path = home + mid + 'd'.repeat(filler) + tail;
+      expect(path).toHaveLength(total);
+      return boundSkillDropPath(path, path).value;
+    };
 
-    const stored = boundSkillDropPath(path, path).value;
-    expect(stored).not.toContain('testop');
-    expect(stored).toContain(client);
+    // Truncation drops `total - cap` leading characters, so a component stays
+    // intact exactly while the drop has not reached its first index. Both
+    // bounds are derived from the fixture, never typed as literals.
+    const firstUserGone = cap + home.indexOf(user) + 1;
+    const lastClientIntact = cap + home.length + clientDir.length;
+
+    expect(stored(firstUserGone)).not.toContain(user);
+    expect(stored(firstUserGone)).toContain(client);
+    // The far end, which is what "long after" actually claims.
+    expect(stored(lastClientIntact)).not.toContain(user);
+    expect(stored(lastClientIntact)).toContain(client);
+    expect(stored(lastClientIntact + 1)).not.toContain(client);
+    // The interval is the username's own length plus the directory sitting
+    // between it and the client. It is NOT the width of the home path, which
+    // an earlier comment here claimed.
+    expect(lastClientIntact - firstUserGone).toBe(user.length + clientDir.length - 1);
   });
 
   // Regression for review Finding 2: the input here has ALREADY been through
