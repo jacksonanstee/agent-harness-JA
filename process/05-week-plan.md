@@ -22,12 +22,13 @@
 | 4 | 2026-06-08 → 2026-06-14 | re-dated: 2026-07-20 → 2026-07-26 | Docs polish + launch |
 | 5 | not planned ² | 2026-07-15 → 2026-07-26 | Pre-publish audit, security fixes, API lock |
 | 6 | not planned ² | 2026-07-27 → 2026-07-29 | Model tiers, refusals, CI gate parity, skill-channel enforcement |
+| 7 | not planned ² | 2026-07-30 → 2026-07-31 | Issue #59 design round: three fixes built, three killed, accepted as residual R-17 |
 
 ¹ Week 1 stalled for six weeks after H-2 landed (2026-05-20) and resumed 2026-07-05; the remaining four modules + CI landed 2026-07-05/06. The slip and its causes are logged in [devlog/week-1.md](./devlog/week-1.md), per the slippage protocol below. Original planned dates stay visible in this table — re-dating by overwriting would be exactly the "retrospective tidy-up" this file promises not to do.
 
 ² **The committed schedule ends at week 4.** This document is a four-week
 contract, and it was met: the build finished and the publish path was ready.
-Weeks 5 and 6 are post-plan continuation, not extensions of the contract, and
+Weeks 5 to 7 are post-plan continuation, not extensions of the contract, and
 they are listed here only so the devlog folder has no gap with nothing
 explaining it. Their work came from an adversarial pre-publish audit, from
 review findings, and from issues, rather than from this plan. The publish

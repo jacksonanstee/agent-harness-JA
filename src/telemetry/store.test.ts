@@ -706,6 +706,118 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(result.value.startsWith('…')).toBe(true);
   });
 
+  // Issue #59 / security-model R-16. R-16 justifies its severity by saying
+  // tail-preserving truncation "discards the LEADING directories, exactly
+  // where /Users/<name> or /home/<name> sits". That is true asymptotically and
+  // FALSE in a band immediately past the cap: truncation keeps the last `cap`
+  // characters, so it drops exactly (length - cap) leading ones, and the
+  // username survives until that drop reaches it. The band is therefore
+  // [cap + 1, cap + LEAD.length], where LEAD is whatever precedes the
+  // username. Measured to hold exactly for '/Users/', '/home/' and a longer
+  // service-account lead. Everything here derives from SKILL_DROP_PATH_MAX so
+  // a cap change moves the test with the code rather than silently unpinning
+  // it.
+  it('keeps the operator username in the stored path across a band just past the cap, where a digest is also present', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const lead = '/Users/';
+    const user = 'testop';
+    const home = lead + user;
+    const mid = '/clients/acme/';
+    const tail = '/evil.md';
+    const atLength = (total: number) => {
+      const filler = total - home.length - mid.length - tail.length;
+      // Named assertion rather than a RangeError out of repeat(): a cap change
+      // that drops the budget below this fixture's fixed overhead must fail on
+      // something that says what went wrong, not inside fixture construction.
+      expect(filler).toBeGreaterThanOrEqual(0);
+      const path = home + mid + 'd'.repeat(filler) + tail;
+      // Sanity: an off-by-one in the fixture would silently probe a different
+      // band member and the test would prove nothing about the boundary.
+      expect(path).toHaveLength(total);
+      return boundSkillDropPath(path, path);
+    };
+
+    // FLOOR. Without this the rest could pass on a fixture that never carried
+    // a home directory at all. At the cap nothing is discarded, so the full
+    // home sits in the stored value and there is no digest.
+    const atCap = atLength(cap);
+    expect(atCap.truncated).toBe(false);
+    expect(Object.hasOwn(atCap, 'digest')).toBe(false);
+    expect(atCap.value).toContain(home);
+
+    // THE BAND, at both ends: the first truncating length, and the last length
+    // at which the drop has still not reached the username.
+    for (const total of [cap + 1, cap + lead.length]) {
+      const banded = atLength(total);
+      expect(banded.truncated).toBe(true);
+      expect(Object.hasOwn(banded, 'digest')).toBe(true);
+      // R-16's stated reason says this cannot happen. It can.
+      expect(banded.value).toContain(user);
+    }
+
+    // THE FLIP, one character past the band, so the assertion above is shown
+    // to discriminate on length rather than holding for every input.
+    const past = atLength(cap + lead.length + 1);
+    expect(past.truncated).toBe(true);
+    expect(Object.hasOwn(past, 'digest')).toBe(true);
+    expect(past.value).not.toContain(user);
+  });
+
+  // The band above is the narrow claim. The wider one, which R-16 does not
+  // reach at all: truncation removes the least identifying part FIRST, so the
+  // client or project directory outlives the username, and it is usually the
+  // more sensitive of the two. This probes BOTH ends of that interval, because
+  // one probe cannot establish "long after".
+  it('leaves the client directory name in the stored path long after the username is gone', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const user = 'testop';
+    const home = `/Users/${user}`;
+    const client = 'acme-corp';
+    const clientDir = '/clients/';
+    const mid = `${clientDir}${client}/`;
+    const tail = '/evil.md';
+    const stored = (total: number) => {
+      const filler = total - home.length - mid.length - tail.length;
+      expect(filler).toBeGreaterThanOrEqual(0);
+      const path = home + mid + 'd'.repeat(filler) + tail;
+      expect(path).toHaveLength(total);
+      return boundSkillDropPath(path, path).value;
+    };
+
+    // Truncation drops `total - cap` leading characters, so a component stays
+    // intact exactly while the drop has not reached its first index. Both
+    // bounds are derived from the fixture, never typed as literals.
+    // Both endpoints are MEASURED from boundSkillDropPath by sweeping, not
+    // computed. An earlier cut of this test asserted an identity between two
+    // arithmetic expressions instead, which reduces to
+    // `user.length + clientDir.length - 1` on both sides and therefore pinned
+    // nothing about the function at all.
+    let firstUserGone = -1;
+    let lastClientIntact = -1;
+    for (let total = cap; total <= cap + 60; total += 1) {
+      const value = stored(total);
+      if (firstUserGone === -1 && !value.includes(user)) firstUserGone = total;
+      if (value.includes(client)) lastClientIntact = total;
+    }
+    // The sweep must have found both, or every assertion below is vacuous
+    // against a sentinel.
+    expect(firstUserGone).toBeGreaterThan(cap);
+    expect(lastClientIntact).toBeGreaterThan(firstUserGone);
+
+    // Each endpoint boxed on both sides, so it is the boundary its name
+    // claims rather than merely a length where the property happens to hold.
+    expect(stored(firstUserGone - 1)).toContain(user);
+    expect(stored(firstUserGone)).not.toContain(user);
+    expect(stored(lastClientIntact)).toContain(client);
+    expect(stored(lastClientIntact + 1)).not.toContain(client);
+
+    // The measured margin: the client survives the username by the username's
+    // own length plus the directory sitting between them. It is NOT the width
+    // of the home path, which is a different number (13 against 14 here).
+    expect(lastClientIntact - firstUserGone).toBe(user.length + clientDir.length - 1);
+    expect(lastClientIntact - firstUserGone).not.toBe(home.length);
+  });
+
   // Regression for review Finding 2: the input here has ALREADY been through
   // escapePathUnsafe (session.ts capture site), so it can contain an
   // `\u{HEX}` token. A naive tail-cut (truncateTailWellFormed alone) has no
