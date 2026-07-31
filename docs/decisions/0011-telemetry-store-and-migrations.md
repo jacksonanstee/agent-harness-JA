@@ -559,6 +559,25 @@ the table decision 4 already owns.
       Revisit if an export is routinely shared with parties outside the
       operator's trust boundary, or if the adjacent cleartext-path disclosure is
       closed and the digest becomes the weakest link it currently is not.
+    - **STATUS 2026-07-31 (ADR-0027): the revisit-if did NOT fire, and the
+      deadline is NOT spent.** Issue #59, the adjacent disclosure this item's
+      severity depends on, was attempted with three designs and all three were
+      killed by independent review, each for a different structural reason.
+      #59 remains OPEN and the cleartext channel remains live, so the "not even
+      the weakest link" argument above still holds. Re-verified the same day in
+      the only database this project has produced: 24 events, zero rows carrying
+      a `pathDigest`, so keying remains an EDIT rather than a new field.
+      **Two corrections to the paragraph above, neither changing its
+      conclusion.** First, "truncation discards the leading directories" is true
+      asymptotically but false in a band immediately past the cap: the drop is
+      exactly `length - cap` leading characters, so a row can carry BOTH a
+      digest and a cleartext username, and inside that band the digest is even
+      further from being the weakest link. Second, the cleartext channel is
+      wider than `tool-trace.resultSummary` alone; four further channels are now
+      enumerated as R-17. The root cause that killed all three designs is
+      recorded in ADR-0027 and constrains any future attempt: every one of them
+      keyed on `os.homedir()`, which returns `$HOME` verbatim, is unrecorded in
+      the row, and degrades with no signal.
 
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`

@@ -706,6 +706,79 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(result.value.startsWith('…')).toBe(true);
   });
 
+  // Issue #59 / security-model R-16. R-16 justifies its severity by saying
+  // tail-preserving truncation "discards the LEADING directories, exactly
+  // where /Users/<name> or /home/<name> sits". That is true asymptotically and
+  // FALSE in a band immediately past the cap: truncation keeps the last `cap`
+  // characters, so it drops exactly (length - cap) leading ones, and the
+  // username survives until that drop reaches it. The band is therefore
+  // [cap + 1, cap + LEAD.length], where LEAD is whatever precedes the
+  // username. Measured to hold exactly for '/Users/', '/home/' and a longer
+  // service-account lead. Everything here derives from SKILL_DROP_PATH_MAX so
+  // a cap change moves the test with the code rather than silently unpinning
+  // it.
+  it('keeps the operator username in the stored path across a band just past the cap, where a digest is also present', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const lead = '/Users/';
+    const user = 'testop';
+    const home = lead + user;
+    const mid = '/clients/acme/';
+    const tail = '/evil.md';
+    const atLength = (total: number) => {
+      const path = home + mid + 'd'.repeat(total - home.length - mid.length - tail.length) + tail;
+      // Sanity: an off-by-one in the fixture would silently probe a different
+      // band member and the test would prove nothing about the boundary.
+      expect(path).toHaveLength(total);
+      return boundSkillDropPath(path, path);
+    };
+
+    // FLOOR. Without this the rest could pass on a fixture that never carried
+    // a home directory at all. At the cap nothing is discarded, so the full
+    // home sits in the stored value and there is no digest.
+    const atCap = atLength(cap);
+    expect(atCap.truncated).toBe(false);
+    expect(Object.hasOwn(atCap, 'digest')).toBe(false);
+    expect(atCap.value).toContain(home);
+
+    // THE BAND, at both ends: the first truncating length, and the last length
+    // at which the drop has still not reached the username.
+    for (const total of [cap + 1, cap + lead.length]) {
+      const banded = atLength(total);
+      expect(banded.truncated).toBe(true);
+      expect(Object.hasOwn(banded, 'digest')).toBe(true);
+      // R-16's stated reason says this cannot happen. It can.
+      expect(banded.value).toContain(user);
+    }
+
+    // THE FLIP, one character past the band, so the assertion above is shown
+    // to discriminate on length rather than holding for every input.
+    const past = atLength(cap + lead.length + 1);
+    expect(past.truncated).toBe(true);
+    expect(Object.hasOwn(past, 'digest')).toBe(true);
+    expect(past.value).not.toContain(user);
+  });
+
+  // The band above is the narrow claim. The wider one, which R-16 does not
+  // reach at all: truncation removes the least identifying part FIRST. The
+  // client or project directory outlives the username by the whole width of
+  // the home path, and it is usually the more sensitive of the two.
+  it('leaves the client directory name in the stored path long after the username is gone', () => {
+    const cap = SKILL_DROP_PATH_MAX - 1;
+    const home = '/Users/testop';
+    const client = 'acme-corp';
+    const mid = `/clients/${client}/`;
+    const tail = '/evil.md';
+    // One character past the point where the whole home directory, separator
+    // included, has been discarded.
+    const total = cap + home.length + 1;
+    const path = home + mid + 'd'.repeat(total - home.length - mid.length - tail.length) + tail;
+    expect(path).toHaveLength(total);
+
+    const stored = boundSkillDropPath(path, path).value;
+    expect(stored).not.toContain('testop');
+    expect(stored).toContain(client);
+  });
+
   // Regression for review Finding 2: the input here has ALREADY been through
   // escapePathUnsafe (session.ts capture site), so it can contain an
   // `\u{HEX}` token. A naive tail-cut (truncateTailWellFormed alone) has no
