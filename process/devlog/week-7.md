@@ -14,7 +14,7 @@ tool output puts the operator's home directory into a durable row that
 normalising `$HOME` to `~` on the way into retained sinks, as strongest on a
 first pass. Uncosted, unpanelled.
 
-That is the same position issue #53 was in a fortnight earlier, when the
+That is the same position issue #53 was in two days earlier, when the
 preferred fix was a keyed HMAC and a three-reviewer panel killed it. So this
 one got the same treatment before any code: map every retained sink, build
 three designs from different angles, and give each design its own hostile
@@ -78,10 +78,12 @@ itself. Measured, matching that arithmetic exactly: 7 for `/Users/`, 6 for
 The wider point only became visible once the narrow one was measured.
 Truncation removes the least identifying part first. Past the band a partial
 username survives, and the client or project directory outlives the username
-by the whole width of the home path. At the first truncating length the
-stored value literally begins `…Users/<name>/clients/acme/`. If the worry is
-disclosure, the client name is usually the more sensitive of the two, and it
-is the one that survives longest.
+by the username's own length plus the directory sitting between them, a
+margin that is measured rather than being a function of the home path's
+width. At the first truncating length the stored value literally begins
+`…Users/<name>/clients/acme/`. If the worry is disclosure, the client name is
+usually the more sensitive of the two, and it is the one that survives
+longest.
 
 This strengthens R-16's conclusion while making its stated reason wrong,
 which is an awkward combination to write up honestly. The reason is what a

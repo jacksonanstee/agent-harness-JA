@@ -30,6 +30,8 @@ digests as shipped today:      differ
 digests under the design:      IDENTICAL
 ```
 
+The two paths are shown short for readability, and that hides a precondition worth stating, because it is R-17 channel (a) restated: `boundSkillDropPath` returns early with **no digest at all** for any path at or under `SKILL_DROP_PATH_MAX - 1` (1023). So both fixtures must be padded past the cap before either has a digest to compare. Padded, the collision reproduces exactly as printed.
+
 Two distinct skill files become indistinguishable in the one field whose sole documented purpose is to distinguish them. That is the exact property `pathDigest` was added for in issue #50, and `src/telemetry/types.ts` already puts it in the threat model, since an attacker authoring a cloned repo controls directory depth and naming and can therefore engineer the offset.
 
 **Design C, scrub at `telemetry export` with a `--raw-paths` escape hatch.** Killed because its guard rejects only the *malformed* subset of `$HOME`. It cannot reject a well-formed but wrong one, and in that case the transform is a total no-op that still prints an affirmative assurance and still exits 0.
@@ -60,7 +62,7 @@ Truncation keeps the last `cap` characters, where `cap = SKILL_DROP_PATH_MAX - 1
 
 So the band is `[cap + 1, cap + lead.length]`, and its width is the length of whatever precedes the username, independent of the username's own length. Inside that band a row carries **both** a `pathDigest` and a cleartext username.
 
-The wider finding, which R-16 does not reach at all: truncation removes the least identifying part first. A partial username survives past the band, and the client or project directory outlives the username by the whole width of the home path. At the first truncating length the stored value literally begins `…Users/<name>/clients/acme/`.
+The wider finding, which R-16 does not reach at all: truncation removes the least identifying part first. A partial username survives past the band, and the client or project directory outlives the username by the username's own length plus the directory sitting between them, a margin that is measured rather than being a function of the home path's width. At the first truncating length the stored value literally begins `…Users/<name>/clients/acme/`.
 
 This *strengthens* R-16's severity conclusion, since inside the band the digest is demonstrably not the weakest link, while making its stated reason wrong. Both halves are recorded, because the reason is what a future reader will act on.
 
@@ -80,7 +82,7 @@ This *strengthens* R-16's severity conclusion, since inside the band the digest 
 
 ## Rejected alternatives
 
-- **A path or home-directory rule in the redactor.** Rejected for the reason ADR-0013 already gives for excluding an unanchored generic rule: paths are not secrets, the false-positive surface is very large, and `resultSummary` exists to be readable. Issue #59 anticipated this and agreed.
+- **A path or home-directory rule in the redactor.** Rejected for three reasons, one borrowed and two added here, kept apart so a reader can see which is which. ADR-0013 decision 3 supplies the borrowed one, and its wording is narrower than a paraphrase suggests: an unanchored generic rule "over-matches code-heavy tool output". The two this ADR adds are that paths are not secrets, so a rule matching them would be the first in the set that is not targeting a credential, and that `resultSummary` exists to be readable. Issue #59 anticipated this and agreed.
 - **Designs A, B and C above**, each with its kill reason recorded.
 - **Closing #59 as wontfix.** Rejected under decision 1.
 

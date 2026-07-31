@@ -787,19 +787,35 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     // Truncation drops `total - cap` leading characters, so a component stays
     // intact exactly while the drop has not reached its first index. Both
     // bounds are derived from the fixture, never typed as literals.
-    const firstUserGone = cap + home.indexOf(user) + 1;
-    const lastClientIntact = cap + home.length + clientDir.length;
+    // Both endpoints are MEASURED from boundSkillDropPath by sweeping, not
+    // computed. An earlier cut of this test asserted an identity between two
+    // arithmetic expressions instead, which reduces to
+    // `user.length + clientDir.length - 1` on both sides and therefore pinned
+    // nothing about the function at all.
+    let firstUserGone = -1;
+    let lastClientIntact = -1;
+    for (let total = cap; total <= cap + 60; total += 1) {
+      const value = stored(total);
+      if (firstUserGone === -1 && !value.includes(user)) firstUserGone = total;
+      if (value.includes(client)) lastClientIntact = total;
+    }
+    // The sweep must have found both, or every assertion below is vacuous
+    // against a sentinel.
+    expect(firstUserGone).toBeGreaterThan(cap);
+    expect(lastClientIntact).toBeGreaterThan(firstUserGone);
 
+    // Each endpoint boxed on both sides, so it is the boundary its name
+    // claims rather than merely a length where the property happens to hold.
+    expect(stored(firstUserGone - 1)).toContain(user);
     expect(stored(firstUserGone)).not.toContain(user);
-    expect(stored(firstUserGone)).toContain(client);
-    // The far end, which is what "long after" actually claims.
-    expect(stored(lastClientIntact)).not.toContain(user);
     expect(stored(lastClientIntact)).toContain(client);
     expect(stored(lastClientIntact + 1)).not.toContain(client);
-    // The interval is the username's own length plus the directory sitting
-    // between it and the client. It is NOT the width of the home path, which
-    // an earlier comment here claimed.
+
+    // The measured margin: the client survives the username by the username's
+    // own length plus the directory sitting between them. It is NOT the width
+    // of the home path, which is a different number (13 against 14 here).
     expect(lastClientIntact - firstUserGone).toBe(user.length + clientDir.length - 1);
+    expect(lastClientIntact - firstUserGone).not.toBe(home.length);
   });
 
   // Regression for review Finding 2: the input here has ALREADY been through
