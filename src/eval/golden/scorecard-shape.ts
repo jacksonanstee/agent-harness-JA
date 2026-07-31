@@ -57,7 +57,31 @@ export interface GoldenMeta {
   /** ISO-8601, from the injected clock. */
   createdAt: string;
   harnessVersion: string;
-  /** Resolved absolute task directory the run scored. */
+  /**
+   * The task directory the run scored, relative to the working directory the
+   * run was invoked from (issue #62).
+   *
+   * It was a resolved ABSOLUTE path until 2026-07-31, which put the
+   * operator's home directory into every scorecard unconditionally, in a file
+   * whose purpose is to be shared. Resolve it against the producing machine's
+   * working directory to recover the original; that working directory is
+   * deliberately not recorded here, because doing so would re-introduce the
+   * disclosure this field just dropped.
+   *
+   * ⚠️ Not a general fix. `relative()` walks up to the common ancestor, so
+   * when the working directory is not at or above the task directory the
+   * intervening absolute segments survive in this field. The closure is
+   * scoped to the invocation shape the CLI defaults to.
+   *
+   * The field kept its name despite the changed meaning. ADR-0011 item 16
+   * requires a NEW FIELD NAME when the READ path is intolerant: there, the
+   * validator is anchored, `rowToEvent` throws rather than skipping, and
+   * `query()` maps over every row, so one nonconforming row denies the whole
+   * trail. A golden scorecard has no read path at all, no validator and no
+   * query, so that rule does not bite. (Old rows also happen to be
+   * distinguishable by `isAbsolute()`, but that is a convenience, not the
+   * reason.)
+   */
   taskDir: string;
   /** Distinct router model choices observed across rows that ran, sorted. */
   models: string[];

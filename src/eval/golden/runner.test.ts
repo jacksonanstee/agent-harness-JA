@@ -1,11 +1,11 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
-import { createGoldenRunner, EvalUsageError } from './runner.js';
+import { createGoldenRunner, EvalUsageError, portableTaskDir } from './runner.js';
 import type { GoldenRunnerDeps, TaskSessionConfig } from './runner.js';
 import type { LoadOracleFn } from './oracle.js';
 import type {
@@ -185,6 +185,124 @@ describe('createGoldenRunner rows', () => {
     const scorecard = await runner.run(fixtures('run'));
     expect(scorecard.rows[0]?.volatile.refusalSource).toBeNull();
     expect(scorecard.rows[0]?.volatile.refusalFallbackModel).toBeNull();
+  });
+
+  // Issue #62. `meta.taskDir` embedded `resolve(taskDir)` verbatim, so every
+  // scorecard carried the operator's absolute path unconditionally: 22 of 22
+  // golden scorecards on the filing machine contained a home directory (11 in
+  // `.harness/eval/`, 11 in `examples/repo-qa/.harness/eval/`).
+  // It is recorded relative to the working directory instead.
+  //
+  // The choice of `relative()` is the whole point and not an implementation
+  // detail: it never consults `homedir()`. ADR-0027 decision 3 rules out
+  // keying a transform on an ambient value that is unrecorded in the artefact
+  // and can be silently wrong, which is what killed all three issue #59
+  // designs. `relative()` has no such value to get wrong.
+  it('records meta.taskDir relative to the working directory, never as an absolute path', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+      harnessVersion: '0.1.0-test',
+    });
+    const taskDir = fixtures('run');
+    // FLOOR: the input really is absolute and really does sit under the
+    // working directory, or the assertions below could pass for the wrong
+    // reason on a fixture that was never absolute to begin with.
+    expect(isAbsolute(taskDir)).toBe(true);
+    expect(taskDir.startsWith(process.cwd())).toBe(true);
+
+    const scorecard = await runner.run(taskDir);
+
+    expect(isAbsolute(scorecard.meta.taskDir)).toBe(false);
+    // Nothing an investigator needs is lost: on the machine that produced it,
+    // the stored value round-trips to exactly the directory that was run.
+    expect(resolve(process.cwd(), scorecard.meta.taskDir)).toBe(taskDir);
+  });
+
+  // The same field, for a directory OUTSIDE the working directory. `relative`
+  // walks up rather than falling back to an absolute path, so the home prefix
+  // still goes. Documented limit: on Windows a different drive letter has no
+  // relative form and `relative()` returns an absolute path. There is no
+  // Windows CI here, so that path is reasoned about and NOT executed.
+  it('keeps meta.taskDir relative for a task directory outside the working directory', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'golden-outside-'));
+    writeFileSync(
+      join(outside, 'solo.task.md'),
+      '---\nid: solo\nprompt: hi\noracle: ./nope.js\n---\n',
+      'utf8',
+    );
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+      harnessVersion: '0.1.0-test',
+    });
+    expect(isAbsolute(outside)).toBe(true);
+
+    const scorecard = await runner.run(outside);
+
+    expect(isAbsolute(scorecard.meta.taskDir)).toBe(false);
+    expect(resolve(process.cwd(), scorecard.meta.taskDir)).toBe(resolve(outside));
+  });
+
+  // The boundary `run()` cannot reach without a process.chdir, which is why
+  // portableTaskDir takes cwd as a parameter. `relative(x, x)` is the empty
+  // string, and an empty path reads as a MISSING field rather than as "the
+  // working directory", so it is mapped to '.'.
+  describe('portableTaskDir', () => {
+    it("maps the working directory itself to '.', never to the empty string", () => {
+      expect(portableTaskDir('/a/b/c', '/a/b/c')).toBe('.');
+      // The floor: relative() really does return '' here, so the branch above
+      // is doing work rather than restating what relative already gives.
+      expect(relative('/a/b/c', '/a/b/c')).toBe('');
+    });
+
+    it('walks up for a directory outside cwd rather than falling back to absolute', () => {
+      const out = portableTaskDir('/a/b/tasks', '/a/b/c/d');
+      expect(isAbsolute(out)).toBe(false);
+      expect(out).toBe(join('..', '..', 'tasks'));
+    });
+
+    // An earlier cut of this test set HOME to an unrelated value and asserted
+    // portableTaskDir('/a/b/tasks', '/a/b') === 'tasks'. That passes for an
+    // implementation that reads process.env.HOME on every call, so it could
+    // not fail for the reason its name gave. The fixture has to be one where
+    // a homedir-keyed implementation and this one MUST disagree: HOME a
+    // genuine prefix of root, and cwd somewhere the prefix strip would not
+    // reach.
+    it('cannot be altered by HOME, because it never consults it', () => {
+      const before = process.env['HOME'];
+      try {
+        process.env['HOME'] = '/a/b';
+        // A homedir-prefix-stripping implementation returns 'tasks' here.
+        // Walking up from cwd is the only correct answer.
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
+        // Same inputs, different HOME: identical output, which is the
+        // property the name actually promises.
+        process.env['HOME'] = '/completely/elsewhere';
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
+      } finally {
+        if (before === undefined) delete process.env['HOME'];
+        else process.env['HOME'] = before;
+      }
+    });
+
+    // ⚠️ The limit of the fix, pinned so it cannot be quietly rediscovered or
+    // quietly changed. When cwd is not at or above the task directory,
+    // `relative()` walks up to the common ancestor and then back down, so the
+    // intervening absolute segments (including the home directory) survive.
+    // The closure claimed in security-model R-17 (b) is scoped to the
+    // invocation shape the CLI defaults to, and this test is the evidence for
+    // that scoping rather than an aspiration to fix it here. Tracked as #64.
+    it('STILL exposes intervening absolute segments when cwd is not above the task directory', () => {
+      const out = portableTaskDir('/Users/someone/clients/acme/tasks', '/tmp/scratch');
+      expect(out.startsWith('..')).toBe(true);
+      // The disclosure this issue is about is present, and saying so in an
+      // assertion is the point: a future change that closes it must come here
+      // and delete this expectation deliberately.
+      expect(out).toContain('/Users/someone');
+    });
   });
 
   it('scores pass/fail/parse-fail rows and keeps going (per-task isolation)', async () => {

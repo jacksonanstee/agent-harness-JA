@@ -576,7 +576,11 @@ the table decision 4 already owns.
       wider than `tool-trace.resultSummary` alone; five further channels are now
       enumerated as R-17: (a) untruncated skill-drop paths, (b) golden-scorecard
       `meta.taskDir`, (c) hook-event `reason`, (d) `denied[]` inside
-      `memory_entries`, and (e) `memory_entries.content`. The root cause that killed all three designs is
+      `memory_entries`, and (e) `memory_entries.content`. Of these, (b) was
+      partly closed on 2026-07-31 by issue #62, for the invocation shape where
+      the task directory sits at or under the working directory; the other
+      four, and (b)'s escape case, remain live, so the argument above is
+      unaffected. The root cause that killed all three designs is
       recorded in ADR-0027 and constrains any future attempt: every one of them
       keyed on `os.homedir()`, which returns `$HOME` verbatim, is unrecorded in
       the row, and degrades with no signal.
