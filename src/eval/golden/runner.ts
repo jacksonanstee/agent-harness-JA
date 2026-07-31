@@ -107,7 +107,7 @@ function finiteCostOrNull(value: number | null): number | null {
  * for the invocation shape the CLI defaults to and overwhelmingly uses (a
  * task directory at or under the working directory, `./eval/golden`), and it
  * is NOT a general fix. Pinned by test rather than left to be rediscovered,
- * and tracked as its own issue, because storing something else in the escape
+ * and tracked as issue #64, because storing something else in the escape
  * case is a type change plus the signal field ADR-0027 decision 3 requires,
  * which is a separate decision from this one.
  *

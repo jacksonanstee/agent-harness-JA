@@ -188,8 +188,9 @@ describe('createGoldenRunner rows', () => {
   });
 
   // Issue #62. `meta.taskDir` embedded `resolve(taskDir)` verbatim, so every
-  // scorecard carried the operator's absolute path unconditionally, and 11 of
-  // 11 golden scorecards on the filing machine contained a home directory.
+  // scorecard carried the operator's absolute path unconditionally: 22 of 22
+  // golden scorecards on the filing machine contained a home directory (11 in
+  // `.harness/eval/`, 11 in `examples/repo-qa/.harness/eval/`).
   // It is recorded relative to the working directory instead.
   //
   // The choice of `relative()` is the whole point and not an implementation
@@ -293,7 +294,7 @@ describe('createGoldenRunner rows', () => {
     // intervening absolute segments (including the home directory) survive.
     // The closure claimed in security-model R-17 (b) is scoped to the
     // invocation shape the CLI defaults to, and this test is the evidence for
-    // that scoping rather than an aspiration to fix it here.
+    // that scoping rather than an aspiration to fix it here. Tracked as #64.
     it('STILL exposes intervening absolute segments when cwd is not above the task directory', () => {
       const out = portableTaskDir('/Users/someone/clients/acme/tasks', '/tmp/scratch');
       expect(out.startsWith('..')).toBe(true);
