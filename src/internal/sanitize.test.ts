@@ -4,12 +4,53 @@ import {
   escapeJsonText,
   escapePathUnsafe,
   JSON_TEXT_UNSAFE,
+  normaliseNewlines,
   sanitizeControlChars,
+  sanitizeControlCharsKeepingLines,
   stripBidi,
   stripInvisibles,
   TERMINAL_UNSAFE,
   truncateTailWellFormed,
 } from './sanitize.js';
+
+// Every sibling charset in this file is pinned here; the two model-bound
+// functions added by issue #45 were not, which is how four separate mutations
+// to them passed the whole suite (security review MEDIUM-3, docs-parity HIGH).
+describe('normaliseNewlines', () => {
+  it('folds CRLF and lone CR to LF, and leaves LF alone', () => {
+    expect(normaliseNewlines('a\r\nb\rc\nd')).toBe('a\nb\nc\nd');
+    expect(normaliseNewlines('no line endings')).toBe('no line endings');
+    // A CR at the very end is still a line ending, not a stray control char.
+    expect(normaliseNewlines('trailing\r')).toBe('trailing\n');
+  });
+});
+
+describe('sanitizeControlCharsKeepingLines', () => {
+  it('PRESERVES tab and newline — the whole point of the model-bound contract', () => {
+    expect(sanitizeControlCharsKeepingLines('# Heading\n\n- bullet\n\tindented')).toBe(
+      '# Heading\n\n- bullet\n\tindented',
+    );
+  });
+
+  it('still strips everything sanitizeControlChars strips apart from tab and LF', () => {
+    expect(sanitizeControlCharsKeepingLines('a\x1b[31mb')).toBe('a [31mb');
+    expect(sanitizeControlCharsKeepingLines('x\x00y\x07z')).toBe('x y z');
+    expect(sanitizeControlCharsKeepingLines('del\x7fc1\x9b')).toBe('del c1 ');
+    expect(sanitizeControlCharsKeepingLines('ls ps end')).toBe('ls ps end');
+    // Vertical tab and form feed are NOT line endings and stay stripped.
+    expect(sanitizeControlCharsKeepingLines('a\x0bb\x0cc')).toBe('a b c');
+  });
+
+  it('normalises newlines BEFORE stripping, so no line gains a trailing space', () => {
+    // ADR-0028 decision 6. Wrong order gives 'line one \nline two', because CR
+    // is stripped to a SPACE — a trailing space welded onto every line of any
+    // CRLF-authored file. Removing normaliseNewlines from the pipeline left the
+    // entire suite green before this test existed.
+    expect(sanitizeControlCharsKeepingLines('line one\r\nline two')).toBe('line one\nline two');
+    expect(sanitizeControlCharsKeepingLines('line one\rline two')).toBe('line one\nline two');
+    expect(sanitizeControlCharsKeepingLines('a\r\nb')).not.toContain(' \n');
+  });
+});
 
 describe('sanitizeControlChars', () => {
   it('strips C0 controls, C1 controls, DEL, and Unicode line separators', () => {
