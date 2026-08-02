@@ -1,3 +1,13 @@
+> # ⛔ WITHDRAWN 2026-08-02. DO NOT CITE THE NUMBERS BELOW.
+>
+> An adversarial methodology review returned CONCLUSION_UNSAFE on all three
+> lenses and **27 findings were upheld**. All three results below are
+> compromised; two of them reverse or destabilise the conclusion they were
+> used to support. The body is preserved **unaltered** so the failure is
+> inspectable, not because it is trustworthy.
+>
+> **Read [WITHDRAWN-defect-register.md](./WITHDRAWN-defect-register.md) instead.**
+
 # Can a CI gate catch this repo's prose defects? A measurement
 
 **Date:** 2026-07-31
