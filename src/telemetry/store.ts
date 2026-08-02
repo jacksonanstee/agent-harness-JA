@@ -402,6 +402,31 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     // the whole trail. Present-but-malformed is NOT valid: an unusable
     // disambiguator is worse than none, since a consumer would trust it.
     isOptionalPathDigest(value.pathDigest) &&
+    // COUPLING, enforced here for the first time (issue #55). A digest is
+    // emitted ONLY on truncated rows, so presence is itself the signal that
+    // something was discarded — which is what ADR-0011 decision 16,
+    // `SkillDropPayload` in types.ts and the README operator note all tell a
+    // consumer to key on. The shape check above never looked at
+    // `pathTruncated`, so that documented coupling was enforced by nothing.
+    // Because isPayloadForType serves record() AND rowToEvent, this conjunct
+    // closes both gates at once — they were never asymmetric.
+    //
+    // WHAT IT BUYS, stated precisely because the first draft of this comment
+    // overstated it: COHERENCE between two fields, not the truth of either. A
+    // writer that sets `pathTruncated: true` beside a well-formed digest on a
+    // short, complete path is still admitted. So this defends against an
+    // honest-but-buggy direct writer and against record()/rowToEvent drift —
+    // NOT against a forger, who simply lies in two fields instead of one.
+    //
+    // ONE DIRECTION ONLY, and the asymmetry is load-bearing. `digest present
+    // => pathTruncated` is safe to enforce because rows predating the field
+    // carry no digest and so are untouched by it. The CONVERSE, `pathTruncated
+    // => digest present`, would fail the TRUNCATED pre-field rows, which are
+    // digest-less by construction (not every pre-field row — an untruncated
+    // one satisfies it), and rowToEvent throws rather than skipping, so
+    // query() would deny the ENTIRE trail by exactly the route the optionality
+    // bullet measured. Do not "complete" this into a biconditional.
+    (value.pathDigest === undefined || value.pathTruncated === true) &&
     typeof value.reason === 'string' &&
     SKILL_DROP_REASON_SET.has(value.reason) &&
     isBoundedStringArray(value.channels, SKILL_DROP_CHANNELS_MAX, SKILL_DROP_CHANNEL_MAX) &&

@@ -217,6 +217,18 @@ export interface SkillDropPayload {
    * characters. Present only when `pathTruncated` is true, because a complete
    * path is already its own identity (issue #50).
    *
+   * That coupling is ENFORCED as of issue #55, on read as well as on write
+   * (`isPayloadForType` serves both): `isSkillDropPayload` rejects a payload
+   * carrying a digest alongside `pathTruncated: false`.
+   *
+   * Read that for exactly what it is — COHERENCE between two fields, not the
+   * truth of either. A writer that sets `pathTruncated: true` beside a
+   * well-formed digest on a short, complete path is still admitted, so the
+   * guard helps against an honest-but-buggy direct writer and against
+   * read/write drift, not against a forger. The CONVERSE is deliberately NOT
+   * enforced, and cannot be in this shared validator without denying legacy
+   * reads — see the optionality warning below and ADR-0011 decision 18.
+   *
    * WHY IT EXISTS: tail truncation keeps the filename and discards everything
    * before it, so two paths differing only BEFORE the cut store byte-
    * identically — and `path` exists precisely to disambiguate skills whose

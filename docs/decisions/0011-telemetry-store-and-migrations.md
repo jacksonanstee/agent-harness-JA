@@ -585,6 +585,115 @@ the table decision 4 already owns.
       keyed on `os.homedir()`, which returns `$HOME` verbatim, is unrecorded in
       the row, and degrades with no signal.
 
+18. **Decision 16's two obligations are now ENFORCED, not merely asserted
+    (issue #55, 2026-08-02).** Decision 16 states two constraints on
+    `pathDigest` that no VALIDATOR checked. Both are now checked. The shape of
+    the omission is worth recording, because it is identical in both cases and
+    recurred across this repo all week: the prose was accurate, the reasoning
+    was sound, the code it described was correct, and no gate bound the claim.
+    Stated exactly: the EMITTER side of the coupling was already tested twice
+    (`store.test.ts`'s "omits the digest entirely when the path was not
+    truncated" and `session.test.ts`'s equivalent). What nothing tested was
+    enforcement over an arbitrary payload — which is the only thing that helps
+    against a writer other than `boundSkillDropPath`.
+    - **`pathDigest` present implies `pathTruncated`, enforced in
+      `isSkillDropPayload`.** The coupling is asserted in at least four places
+      — decision 16's "emitted only when truncated" bullet, `boundSkillDropPath`'s
+      comment in `src/telemetry/store.ts`, `SkillDropPayload` in
+      `src/telemetry/types.ts`, and the README operator note — while the
+      validator checked the digest's SHAPE entirely independently of
+      `pathTruncated`. A consumer keying on presence, exactly as documented,
+      was trusting an unenforced coupling. Because `isPayloadForType` is shared
+      by `record()` and `rowToEvent`, the new conjunct covers the read path as
+      well as the write path; `createTelemetryStore` is on the public root
+      surface, so a row can reach the database without passing `record()`.
+      **What the conjunct does and does not buy, stated precisely, because an
+      earlier draft of this item overstated it.** It enforces COHERENCE between
+      two fields, not the truth of either. A writer that sets `pathTruncated:
+      true` alongside a well-formed digest on a short, complete path is still
+      admitted — measured, not assumed. Its value is therefore against
+      honest-but-buggy direct writers and against read/write drift, not against
+      a determined forger, who simply lies in two fields instead of one.
+    - **Correction to this item's first draft, and to the framing in issue #55
+      itself.** Both said in substance that #52 hardened the writer and left
+      the read path unguarded — the issue's words are "at the one writer that
+      was already correct, and left the read path ... unguarded. That is the
+      wrong side to have hardened first." That is false, and review is the
+      reason it is not in the text above. PR #52 (`a0c9338`, closing issue #50)
+      added `isOptionalPathDigest(value.pathDigest)` INSIDE `isSkillDropPayload`
+      — the shared validator — so digest SHAPE has been enforced on read since
+      #52. The two `Object.hasOwn` assertions #55 cites are `expect(...)` calls
+      in TESTS of the emitter, not a defence sited on one side. And because one
+      function serves both gates, the coupling was absent from read and write
+      SYMMETRICALLY; there was never a "wrong side hardened first" to correct.
+    - **TWO claims were inherited from issue #55 unchecked, not one, and the
+      propagation path is the point.** Besides the #52 framing, the false
+      universal came from the issue verbatim: "since rows predating the field
+      are truncated and digest-less by construction". Its gap section's opening
+      line also calls the constraint "the biconditional", which is the very conflation
+      the asymmetry bullet above exists to prevent. An issue is a claim, not
+      evidence; text lifted from one inherits its error rate. **When this issue
+      is closed, its Note-on-priority paragraph should be corrected in a
+      comment rather than left as the record.**
+    - **The converse is NOT enforceable in the shared validator, and the
+      asymmetry is load-bearing.** `pathTruncated` implies digest-present would
+      fail the TRUNCATED rows predating the field, which are digest-less by
+      construction — not every pre-field row, since an untruncated pre-field
+      row satisfies the biconditional, and decision 16 calls untruncated the
+      common case. `rowToEvent` throws rather than skipping, so `query()` would
+      deny the ENTIRE trail by exactly the route decision 16's optionality
+      bullet measured. Siting a converse check on the write gate alone would be
+      technically possible; keeping ONE shared validator is the deliberate
+      choice, and it is what makes the converse unenforceable here. The
+      backward-compatibility test storing `pathTruncated: true` with no digest
+      is the alarm: it turns red if anyone "completes" the implication into a
+      biconditional. Do not.
+    - **The width ratchet permitted precisely the change decision 16 forbids.**
+      That item requires a NEW FIELD NAME to raise the width, leaving the old
+      field readable, because `PATH_DIGEST_RE` is anchored at the exact width
+      and a single row at the old width denies the whole trail. The test
+      guarding the constant asserted `toBeGreaterThanOrEqual(32)`, which is
+      green on any widening. **Measured, not reasoned: with the constant set to
+      64 and that assertion in place, the post-#55 suite passed 1094/1094.** A
+      breaking read change ships with the entire suite green. The assertion is
+      now an exact pin failing in BOTH directions, written in BITS
+      (`SKILL_DROP_PATH_DIGEST_LEN * 4 === 128`) to follow decision 16's own
+      convention: quote the strength, which is the load-bearing term of the
+      threat argument, and not the character count the constant already carries.
+    - **The old test disclosed the gap rather than closing it, and that is the
+      transferable lesson.** Its comment stated in terms that "widening is
+      breaking" was "argued in the comment above and enforced by nothing", and
+      its title was deliberately narrowed so CI output would not overclaim.
+      That honesty was real, and it is why the gap was cheap to find. But a
+      disclosed gap is still a gap, and the disclosure sat one line above the
+      assertion that licensed the thing it warned about. **Standing rule from
+      this item: when a comment says an obligation is enforced by nothing, that
+      is a defect to schedule, not a caveat to keep.**
+    - **This item is itself the seventh round of the pattern, and that is why
+      it was reviewed before merge.** The FIRST DRAFT of this change — not the
+      text you are reading, which is the corrected one — carried correct CODE
+      alongside wrong CLAIMS. The code was never faulted on BEHAVIOUR: the
+      guard, the pin and the headline 1094/1094 measurement each reproduced
+      under independent check. One upheld finding was still code-side — a test
+      matcher broad enough to pass for the wrong reason under fixture drift, so
+      the split below is prose-heavy, not prose-only. The prose was wrong in at
+      least seven places. Among them: a false
+      history of #52; a false universal about legacy rows; a "presence really
+      is the signal" line overstating what field-coherence buys against a
+      hostile writer; and trust-boundary language that contradicted itself
+      across three files, two saying writers sit INSIDE the boundary while the
+      third said the validator FACES untrusted writers. Both load-bearing
+      errors leaned in the author's favour, making the predecessor look worse
+      and the fix look stronger, and the suite was green for every one of them.
+      A later pass then found this very bullet asserting that a commit had
+      "shipped" those four defects — describing as history a state that review
+      had already prevented, and undercounting itself while doing so. **The
+      rule holds, and the eighth data point is this paragraph's PREVIOUS DRAFT:
+      an artefact that
+      strengthens or corrects something is not evidence about itself, its
+      author cannot supply the check, and that remains true of the paragraph
+      written to record the fact.**
+
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`
 constraint, not the converse. And the drift guard cannot observe a run that

@@ -467,6 +467,74 @@ describe('skill-drop events', () => {
     expect(store.query({ type: 'skill-drop' })).toHaveLength(1);
   });
 
+  // ...and this same test is what makes the coupling below ONE-DIRECTIONAL.
+  // It stores `pathTruncated: true` with NO digest, so anyone who "completes"
+  // the implication below into a biconditional turns this row red. That is the
+  // intended alarm: the converse cannot be enforced in this shared validator,
+  // because the TRUNCATED rows predating the field are digest-less by
+  // construction. Not every pre-field row — an untruncated one satisfies a
+  // biconditional — which is why the alarm needs `pathTruncated: true` set.
+
+  // ISSUE #55. "`pathDigest` present implies `pathTruncated`" is asserted at
+  // ADR-0011 decision 16, on SkillDropPayload in types.ts, and in README's
+  // operator note ("appears only on truncated rows"). Until this test the
+  // validator checked the digest's SHAPE entirely independently of
+  // `pathTruncated`, so the documented coupling a consumer keys on was
+  // enforced by nothing — on BOTH gates, since isPayloadForType serves
+  // record() and rowToEvent alike.
+  //
+  // Written as a RAW INSERT rather than through record() because a row can
+  // reach the database without ever passing record(): createTelemetryStore is
+  // on the public root surface, so a direct library writer can insert its own.
+  // Do NOT read this as "#52 hardened the writer and left the read side open"
+  // — an earlier draft of this comment said that, and it is false. PR #52
+  // added isOptionalPathDigest INSIDE isSkillDropPayload, so digest shape has
+  // been enforced on read since then; what was missing was the coupling, and
+  // it was missing from both gates symmetrically.
+  it('rejects a stored row whose pathDigest is present while pathTruncated is false', () => {
+    const { db, store } = openStore();
+    // Derived from the constant, never a literal — see the charset cases below
+    // for what sizing a digest by hand cost this file once already.
+    const digest = 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN);
+    const row = (id: string, truncated: boolean): string =>
+      `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+       VALUES ('${id}', 'skill-drop', 's1', 't1', 1,
+         '{"name":"helper","path":"/skills/helper.md","pathTruncated":${truncated},` +
+      `"pathHasEscapes":false,"pathDigest":"${digest}","reason":"injection-block",` +
+      `"channels":[],"ruleIds":[]}');`;
+
+    // CONTROL FIRST. Byte-identical but for `pathTruncated`, and it must read
+    // back cleanly. Without it this test passes whenever the row is rejected
+    // for ANY structural reason — verified: delete the coupling conjunct AND
+    // drop `pathHasEscapes` from the fixture and the test below stays green,
+    // rejected for shape while its title claims the coupling. The control
+    // plus the exact-message matcher is what stops that.
+    const { db: cdb, store: cstore } = openStore();
+    cdb.prepare(row('ok55', true)).run();
+    expect(cstore.query({ type: 'skill-drop' })).toHaveLength(1);
+
+    db.prepare(row('bad55', false)).run();
+    expect(() => store.query()).toThrow(/payload mismatches type 'skill-drop'/);
+  });
+
+  // The same coupling on the WRITE path. Cheap, and it keeps record() and
+  // rowToEvent from silently drifting apart should either ever stop routing
+  // through isPayloadForType. Note the digest here is WELL-FORMED: `&&`
+  // short-circuits, so isOptionalPathDigest passes and the coupling conjunct
+  // is the SOLE rejector — which is what separates this row from the
+  // malformed-digest cases below.
+  it('rejects a well-formed pathDigest on an untruncated row at record() too', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, pathDigest: 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN) },
+      }),
+    ).toThrow(/skill-drop/);
+  });
+
   // EVERY case derives its length from the constant. Two of these were once
   // literals sized for the PREVIOUS, narrower width; when the constant widened
   // they started failing the validator on LENGTH, so the case and charset
@@ -896,27 +964,35 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     expect(bounded.digest).toHaveLength(SKILL_DROP_PATH_DIGEST_LEN);
   });
 
-  // RATCHET, not a pin. The width is a SECURITY parameter: at 64 bits the
+  // EXACT PIN IN BOTH DIRECTIONS — and it was a one-way ratchet until issue
+  // #55. The width is a SECURITY parameter downward: at 64 bits the
   // birthday bound is ~2^32 hashes, minutes of commodity GPU time, and the
   // attacker authors both paths — so a future "tidy-up" narrowing this back
   // would silently restore the forceable collision while every other test
   // stayed green (verified: narrowing 32 -> 16 passes the whole suite, because
   // everything else derives from the constant).
   //
-  // WIDENING IS PERMITTED HERE BUT IS NOT FREE, and this assertion alone must
-  // not be read as blessing it. PATH_DIGEST_RE is anchored at exactly this
-  // width, rowToEvent throws on a payload that fails it, and store.query maps
-  // rowToEvent over every row unconditionally — so one row written at the old
-  // width denies the ENTIRE trail, not just itself. That is the same
-  // whole-query denial already recorded against the transaction wrapper in
-  // store.ts. Widening is therefore a BREAKING READ CHANGE for any existing
-  // database and needs a NEW FIELD NAME rather than a bigger number here. See
-  // ADR-0011 decision 16.
-  // The name stops at what the body proves. "Widening is breaking" is argued in
-  // the comment above and enforced by nothing, so it stays out of a title that
-  // appears in CI output without its comment.
-  it('never narrows the digest below 128 bits', () => {
-    expect(SKILL_DROP_PATH_DIGEST_LEN).toBeGreaterThanOrEqual(32);
+  // WIDENING IS EQUALLY FORBIDDEN, and until issue #55 that was argued in this
+  // comment and enforced by nothing: the assertion was `toBeGreaterThanOrEqual`,
+  // which goes GREEN on precisely the change the paragraph below forbids. The
+  // gap was disclosed honestly in the old title rather than closed, so a
+  // widening shipped with the suite green would have looked reviewed.
+  //
+  // PATH_DIGEST_RE is anchored at exactly this width, rowToEvent throws on a
+  // payload that fails it, and store.query maps rowToEvent over every row
+  // unconditionally — so one row written at the old width denies the ENTIRE
+  // trail, not just itself. That is the same whole-query denial already
+  // recorded against the transaction wrapper in store.ts. Widening is
+  // therefore a BREAKING READ CHANGE for any existing database: raising the
+  // width means a NEW FIELD NAME, leaving this one readable, not a bigger
+  // number here. See ADR-0011 decision 16 and its issue-#55 amendment.
+  //
+  // Asserted in BITS rather than as a count of hex characters, following
+  // decision 16's own convention: it quotes the bit strength deliberately and
+  // repeatedly, because that is the load-bearing term of the threat argument,
+  // while deliberately NOT quoting the character count the constant carries.
+  it('pins the digest at exactly 128 bits — narrowing AND widening both fail', () => {
+    expect(SKILL_DROP_PATH_DIGEST_LEN * 4).toBe(128);
   });
 
   // PINS THE ALGORITHM AND THE ENCODING, which review proved nothing else did:
