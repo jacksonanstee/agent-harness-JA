@@ -682,10 +682,16 @@ the table decision 4 already owns.
         before `isOptionalPathDigest` was ever consulted", and generalised that
         to "a new conjunct placed EARLIER in the `&&` chain". **Both are the
         reverse of what the code does**, and a re-review caught it by reading
-        the file rather than the bullet: the shape guard is at
-        `src/telemetry/store.ts:404` and the coupling at `:429`, so `&&`
-        evaluates the shape FIRST and the coupling never ran for these rows in
-        normal operation. What the coupling actually is, is a LATER BACKSTOP:
+        the file rather than the bullet: inside `isSkillDropPayload`, the
+        `isOptionalPathDigest(value.pathDigest)` shape guard is a conjunct of
+        the same `&&` chain that the `pathDigest`-implies-`pathTruncated`
+        coupling was appended to, and the shape guard comes FIRST, so the
+        coupling never ran for these rows in normal operation. (Cited by
+        identifier rather than by line, deliberately: an earlier draft of this
+        bullet pinned the two to `store.ts:404` and `:429`, which are accurate
+        only on this branch and rot on the next edit above them. Everywhere
+        else this ADR cites `boundSkillDropPath`, `PATH_DIGEST_RE` and
+        `rowToEvent` by name for exactly that reason.) What the coupling actually is, is a LATER BACKSTOP:
         break the shape guard and the row falls through to it and is rejected
         anyway, so the test stays green and reports nothing about the guard it
         is named for. **The correct rule is position-independent: a negative
@@ -694,9 +700,26 @@ the table decision 4 already owns.
         the same fixture silences it, wherever in the chain it sits.** The
         "placed EARLIER" version was not merely imprecise, it was unusable —
         it would have cleared this very bug on inspection, since the conjunct
-        was added 25 lines LATER. Worth recording as its own failure: the
+        was added LATER in the chain. Worth recording as its own failure: the
         lesson extracted from a defect was wrong in the direction that made the
         defect look more obvious than it was.
+      - **⚠️ THIS CONJUNCT IS A READ-PATH TIGHTENING, and decision 16's own
+        doctrine applies to it.** Decision 16 says widening `pathDigest` later
+        would be a BREAKING READ CHANGE because `isPayloadForType` serves
+        `rowToEvent` as well as `record()`, and `query()` maps `rowToEvent` over
+        every row and THROWS rather than skipping — measured there at exit 1
+        with zero rows out of twenty-five. Adding a conjunct is the same
+        operation pointed the other way: any stored row that fails it becomes
+        permanently unreadable, and it takes every unrelated `turn-cost`,
+        `tool-trace` and `hook-event` row in that database down with it, because
+        one throw ends the whole export. **Exposure here is nil and that is a
+        fact about this field, not a general licence**: no shipped writer can
+        emit `pathDigest` without `pathTruncated` (`boundSkillDropPath` returns
+        early with no digest when nothing was discarded), the field has existed
+        only since PR #52, and a re-verification on 2026-07-31 found zero rows
+        carrying it. The next author tightening a shared validator against a
+        field that DOES have rows in the wild must add a new field or a
+        migration instead, exactly as decision 16 requires for widening.
       - Adding a conjunct is therefore a reason to re-check every existing
         negative test it can also reject, not only to add new ones. A cheap
         mechanical form: for each negative fixture, break the guard its title
