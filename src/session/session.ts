@@ -69,81 +69,48 @@ function cleanSkillBody(text: string): string {
   return stripInvisibles(stripBidi(sanitizeControlCharsKeepingLines(text)));
 }
 
-/**
- * Up to 3 spaces of indent, then 3+ backticks or 3+ tildes, then the info
- * string. The info string is CAPTURED because for backtick fences it decides
- * whether this is a fence at all — see `fenceOpener`.
- */
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+/** Up to 3 spaces of indent, then a run of 3+ backticks or 3+ tildes. */
+const FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
 
 /**
- * The opening marker if `line` opens a fenced code block, else null.
+ * Breaks a leading code-fence marker so the line cannot OPEN a fenced code
+ * block (ADR-0028 decision 8). Applied to `description` only.
  *
- * ⚠️ THE INFO-STRING RULE IS NOT A DETAIL, and omitting it is what made the
- * first cut of this function dangerous. CommonMark: "If the info string comes
- * after a backtick code fence, it may not contain any backtick characters."
- * So ```` ``` aa ``` ```` (spec example 143) is a PARAGRAPH containing inline
- * code, not a fence. The first cut read it as an opener, believed a fence was
- * left open, and appended a column-0 ```` ``` ```` — which opens a real fence
- * that swallows every later section. **The mitigation manufactured the exact
- * leak it exists to prevent**, on input that no scanner rule flags. Tilde
- * fences have no such restriction, hence the `startsWith('`')` guard.
+ * WHY THE DESCRIPTION NEEDS IT. `cleanSkillText` flattens `description` to a
+ * single line, but that line still lands at COLUMN 0 — it is the section's
+ * second line, straight after the header. An eleven-character description
+ * (```` ```markdown ````) therefore opens a fence that nothing closes, and
+ * every LATER section, including the operator policy skill and its correctly
+ * nonced header, is swallowed into it. Scanner `pass`, zero warnings, zero
+ * drops. That vector predates issue #45 and is reachable on every release so
+ * far; this is what closes it.
+ *
+ * WHY DEFANG RATHER THAN BALANCE, and this is the load-bearing part.
+ * `balanceCodeFences` — the previous mitigation, withdrawn in ADR-0028
+ * decision 8 — tried to APPEND a closing fence to an unbalanced section. That
+ * is unsound, because whether a line opens a fence and whether column 0 is the
+ * right place to close it are both facts about BLOCK CONTEXT, which a
+ * line-based pass does not have. Measured against the CommonMark reference
+ * parser, it manufactured three section-swallowing leaks that no release
+ * before it had, one of which fired on an honest authoring typo (an unclosed
+ * fence inside a numbered list) with no attacker present at all.
+ *
+ * This function cannot do that. It only ever REMOVES the ability to open a
+ * fence, never adds a marker, so it is monotone in the safe direction by
+ * construction. It costs nothing, because `description` is a LABEL — ADR-0006
+ * makes the BODY the markdown a skill is written in, and a fence in a
+ * one-line label was never going to render as a code block anyway.
+ *
+ * THE BODY IS DELIBERATELY NOT DEFANGED, and the fence it can leave open is an
+ * ACCEPTED RESIDUAL, not an oversight: see ADR-0028 decision 8 and the
+ * Consequences bullet on column-0 block structure. Defanging the body would
+ * destroy the feature issue #45 exists to deliver.
  */
-function fenceOpener(line: string): string | null {
-  const match = FENCE_OPEN_RE.exec(line);
-  if (match === null) return null;
-  const marker = match[1];
-  const info = match[2];
-  if (marker === undefined || info === undefined) return null;
-  return marker.startsWith('`') && info.includes('`') ? null : marker;
-}
-
-/**
- * Closes any fence a SECTION leaves open, so one section cannot leak block
- * structure into the NEXT one (security review HIGH-2, ADR-0028 decision 8).
- *
- * The nonce authenticates where a section STARTS. It says nothing about where
- * one ENDS, and once #45 let bodies keep their newlines a hostile skill could
- * end on an unclosed ```` ```markdown ```` fence and swallow every later
- * section — including the operator policy skill, whose correctly-nonced header
- * then reads as an illustration inside the attacker's fence. Load order is
- * ordinal by bare filename, so the attacker chooses to sort first.
- *
- * ⚠️ APPLIED TO THE WHOLE ASSEMBLED SECTION, NOT THE BODY. The first cut
- * balanced only `skill.body`, which left `description` — flattened to one line
- * but still landing at COLUMN 0 on the section's second line — able to open a
- * fence nothing closed. An 11-character description (```` ```markdown ````)
- * reproduced the original attack end-to-end with the shipped scanner returning
- * `pass`, zero warnings and zero drops. That hole predates #45 and exists on
- * main today; balancing the section rather than the body closes it here.
- *
- * CONSERVATIVE IN THE SAFE DIRECTION, on the CLOSE side only. A closing fence
- * must match the opening character, be at least as long, and carry nothing but
- * whitespace — an info string like ```` ```markdown ```` is CONTENT inside a
- * fence, not a close. Requiring `\s*$` therefore can only under-detect a close,
- * which appends a redundant fence. **That safety argument does NOT extend to
- * the OPEN side**, and the first cut's comment wrongly implied it did:
- * mis-detecting an open is dangerous in both directions — appending a fence
- * that opens a block (above), or missing a real opener and appending nothing.
- *
- * RESIDUAL, named rather than claimed away: this is a line-based approximation,
- * not a CommonMark parser. Fences nested inside block containers (a list item
- * indented 4+, a block quote) are not detected as openers. Those do not leak
- * past the container — a later column-0 heading terminates the container and
- * with it the block — which is why the approximation is accepted, not because
- * it is complete.
- */
-function balanceCodeFences(section: string): string {
-  let open: string | null = null;
-  for (const line of section.split('\n')) {
-    if (open === null) {
-      open = fenceOpener(line);
-      continue;
-    }
-    const char = open.startsWith('`') ? '`' : '~';
-    if (new RegExp(`^ {0,3}\\${char}{${open.length},}\\s*$`).test(line)) open = null;
-  }
-  return open === null ? section : `${section}\n${open}`;
+function defangFenceOpener(label: string): string {
+  return label.replace(
+    FENCE_OPENER_RE,
+    (_match, indent: string, marker: string) => `${indent}${marker[0]} ${marker.slice(1)}`,
+  );
 }
 
 const DEFAULT_DESCRIPTOR: TaskDescriptor = {
@@ -395,23 +362,18 @@ function blocksSkill(scan: ScanResult | null): boolean {
  */
 function skillSection(skill: Skill, nonce: string): { name: string; section: string } {
   const name = cleanSkillText(skill.name);
-  const header = `## Skill [${nonce}]: ${name}\n${cleanSkillText(skill.description)}`;
-  // BODY ONLY keeps its line structure (issue #45). `name` and `description`
-  // stay single-line: both are labels, a newline in either is meaningless, and
-  // `name` lands at column 0 in the header above — flattening them keeps two
-  // more channels from being able to emit a line-start `##` at all.
+  // `description` is DEFANGED as well as flattened, because flattened is not
+  // the same as harmless: it still occupies a whole line at column 0, so a
+  // fence marker there opens a block that swallows every later section
+  // (ADR-0028 decision 8). `name` needs no such pass — it sits mid-line after
+  // `]: `, and the loader's schema constrains it to `[a-z0-9-]` anyway.
+  const header = `## Skill [${nonce}]: ${name}\n${defangFenceOpener(cleanSkillText(skill.description))}`;
+  // BODY ONLY keeps its line structure (issue #45), and is deliberately NOT
+  // defanged: its fences are the feature. A fence the body leaves open is an
+  // accepted residual, in the same class as the `# HARNESS OVERRIDE`, `---`
+  // and HTML-comment structure the Consequences of ADR-0028 already accept.
   const body = cleanSkillBody(skill.body).trim();
-  const section = body === '' ? header : `${header}\n\n${body}`;
-  // BALANCE LAST, over the assembled section, and AFTER `.trim()`. Both parts
-  // are load-bearing and both were wrong in the first cut:
-  //   - over the SECTION, because `description` reaches column 0 too (see
-  //     `balanceCodeFences`), and an empty body must not skip the pass;
-  //   - after TRIM, because trim strips leading whitespace from the body's
-  //     first line. Balancing first let `    ```markdown` (four spaces, e.g.
-  //     from bidi characters that `stripBidi` maps to spaces) escape the
-  //     `^ {0,3}` opener test, and trim then promoted it back to column 0 —
-  //     a fence the balancer had already decided was not there.
-  return { name, section: balanceCodeFences(section) };
+  return { name, section: body === '' ? header : `${header}\n\n${body}` };
 }
 
 /**
