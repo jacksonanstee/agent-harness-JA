@@ -405,11 +405,15 @@ the table decision 4 already owns.
       on attacker-forced-collision grounds, and a 64-bit birthday bound is ~2^32
       hashes, minutes of commodity GPU time. Review caught the inconsistency.
       At 128 bits the bound is 2^64, out of reach, so the rejection argument
-      and the chosen width now agree. A test ratchets the constant so it cannot
-      be silently narrowed.
+      and the chosen width now agree. A test pinned the constant so it cannot
+      be silently narrowed — and, as of decision 18, so it cannot be silently
+      widened either.
     - **Widening later is a BREAKING READ CHANGE, not a free improvement.** The
-      ratchet permits a larger number, and round-2 review caught that permission
-      being read as "widening is fine" when the read path says otherwise. The
+      original guard was a one-way ratchet that permitted a larger number, and
+      round-2 review caught that permission being read as "widening is fine"
+      when the read path says otherwise. Decision 18 closed it: the assertion is
+      now an exact pin in both directions, so this paragraph is enforced rather
+      than merely argued. The
       validator's pattern is anchored at the exact current width, `rowToEvent`
       throws rather than skipping, and `query()` maps it over every row — so a
       single row written at the old width denies the whole trail by exactly the
@@ -660,6 +664,24 @@ the table decision 4 already owns.
       (`SKILL_DROP_PATH_DIGEST_LEN * 4 === 128`) to follow decision 16's own
       convention: quote the strength, which is the load-bearing term of the
       threat argument, and not the character count the constant already carries.
+    - **⭐ THE CONJUNCT SILENTLY UNBOUND A DIFFERENT GUARD, and a pre-merge
+      re-review is the only reason it is not in main.** `validPayload` carries
+      `pathTruncated: false`, so once the coupling shipped, all five
+      `rejects a malformed pathDigest (...)` fixtures were rejected by the
+      COUPLING before `isOptionalPathDigest` was ever consulted. The digest
+      SHAPE guard — the anchored width-and-charset check this same decision
+      calls load-bearing, since "an unusable disambiguator is worse than none" —
+      was left bound by nothing. **Measured differentially, same mutation both
+      sides (`PATH_DIGEST_RE` charset widened to `^.{LEN}$`, which keeps the
+      constant used so the build still exits 0): main `61d6250` turned 2 tests
+      red; this branch, before the fix, passed 1094/1094.** Closed by pairing
+      each fixture with `pathTruncated: true`, which makes the shape check the
+      sole rejector again. **The failure mode is general and worth naming: a new
+      conjunct placed EARLIER in a validator's `&&` chain becomes the rejector
+      for every existing negative fixture that trips it, and those fixtures then
+      pass for the wrong reason with their titles unchanged.** Adding a
+      conjunct is therefore a reason to re-check the negative tests that already
+      existed, not only to add new ones.
     - **The old test disclosed the gap rather than closing it, and that is the
       transferable lesson.** Its comment stated in terms that "widening is
       breaking" was "argued in the comment above and enforced by nothing", and
@@ -671,12 +693,15 @@ the table decision 4 already owns.
       is a defect to schedule, not a caveat to keep.**
     - **This item is itself the seventh round of the pattern, and that is why
       it was reviewed before merge.** The FIRST DRAFT of this change — not the
-      text you are reading, which is the corrected one — carried correct CODE
-      alongside wrong CLAIMS. The code was never faulted on BEHAVIOUR: the
-      guard, the pin and the headline 1094/1094 measurement each reproduced
-      under independent check. One upheld finding was still code-side — a test
-      matcher broad enough to pass for the wrong reason under fixture drift, so
-      the split below is prose-heavy, not prose-only. The prose was wrong in at
+      text you are reading, which is the corrected one — carried mostly correct
+      CODE alongside wrong CLAIMS. **That framing was itself too generous, and
+      the bullet above is why: a later re-review found a genuine behavioural
+      defect — the coupling conjunct unbinding the digest shape guard — that
+      three rounds of review on this branch had all missed.** What did reproduce
+      under independent check was narrower: the guard, the pin and the headline
+      1094/1094 measurement. A second upheld finding was also code-side — a test
+      matcher broad enough to pass for the wrong reason under fixture drift. The
+      prose was wrong in at
       least seven places. Among them: a false
       history of #52; a false universal about legacy rows; a "presence really
       is the signal" line overstating what field-coherence buys against a

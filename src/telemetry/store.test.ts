@@ -543,6 +543,26 @@ describe('skill-drop events', () => {
   // and then to accept ANY character at the right length, left every test in
   // this file green. A test that cannot fail for the reason its label gives is
   // worse than no test.
+  //
+  // ⭐ `pathTruncated: true` IS LOAD-BEARING, and it is here because the
+  // coupling conjunct this very commit added had already broken these tests in
+  // exactly the way the paragraph above warns about. `validPayload` carries
+  // `pathTruncated: false`, so once the conjunct shipped, every row below was
+  // rejected by the COUPLING before `isOptionalPathDigest` was consulted —
+  // leaving the digest shape guard bound by nothing, on a commit whose whole
+  // subject is guards that are enforced by nothing.
+  //
+  // MEASURED, differentially, with the same mutation on both sides
+  // (`PATH_DIGEST_RE` charset widened to `^.{SKILL_DROP_PATH_DIGEST_LEN}$`,
+  // which keeps the constant used so `npm run build` still exits 0):
+  //   main 61d6250              -> 2 failed  ('uppercase hex', 'non-hex characters')
+  //   this branch, before this  -> 1094 passed (1094). Nothing red anywhere.
+  // Setting the flag true makes the coupling pass, so the shape check is once
+  // again the SOLE rejector and that mutation goes red here as it does on main.
+  //
+  // Do NOT "simplify" this back to a bare `...validPayload`: the fixtures would
+  // still throw, the titles would still read as if the charset were tested, and
+  // the suite would still be green.
   it.each([
     ['wrong length', 'abc'],
     ['uppercase hex', 'A'.repeat(SKILL_DROP_PATH_DIGEST_LEN)],
@@ -556,7 +576,7 @@ describe('skill-drop events', () => {
         type: 'skill-drop',
         sessionId: 's',
         turnId: 't',
-        payload: { ...validPayload, pathDigest: digest } as never,
+        payload: { ...validPayload, pathTruncated: true, pathDigest: digest } as never,
       }),
     ).toThrow(/skill-drop/);
   });
