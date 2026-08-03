@@ -547,10 +547,20 @@ describe('skill-drop events', () => {
   // ⭐ `pathTruncated: true` IS LOAD-BEARING, and it is here because the
   // coupling conjunct this very commit added had already broken these tests in
   // exactly the way the paragraph above warns about. `validPayload` carries
-  // `pathTruncated: false`, so once the conjunct shipped, every row below was
-  // rejected by the COUPLING before `isOptionalPathDigest` was consulted —
-  // leaving the digest shape guard bound by nothing, on a commit whose whole
-  // subject is guards that are enforced by nothing.
+  // `pathTruncated: false`, so once the conjunct shipped every row below
+  // satisfied TWO rejectors, and breaking the one its title names stopped
+  // changing any outcome — the digest shape guard was left bound by nothing,
+  // on a commit whose whole subject is guards that are enforced by nothing.
+  //
+  // The coupling is the LATER conjunct (store.ts:429) and the shape guard the
+  // earlier one (:404), so `&&` consults the shape FIRST and the coupling never
+  // ran for these rows in normal operation. It is a BACKSTOP: gut the shape
+  // guard and the row falls through to the coupling and is rejected anyway.
+  // (The first draft of this comment had that backwards, and generalised it to
+  // "a conjunct placed EARLIER in the chain" — a rule that would have cleared
+  // this bug on inspection. The real rule has nothing to do with position: a
+  // negative fixture reports on the guard it names only while that guard is the
+  // ONLY thing rejecting it.)
   //
   // MEASURED, differentially, with the same mutation on both sides
   // (`PATH_DIGEST_RE` charset widened to `^.{SKILL_DROP_PATH_DIGEST_LEN}$`,

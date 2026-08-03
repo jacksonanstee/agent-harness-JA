@@ -667,21 +667,40 @@ the table decision 4 already owns.
     - **⭐ THE CONJUNCT SILENTLY UNBOUND A DIFFERENT GUARD, and a pre-merge
       re-review is the only reason it is not in main.** `validPayload` carries
       `pathTruncated: false`, so once the coupling shipped, all five
-      `rejects a malformed pathDigest (...)` fixtures were rejected by the
-      COUPLING before `isOptionalPathDigest` was ever consulted. The digest
-      SHAPE guard — the anchored width-and-charset check this same decision
-      calls load-bearing, since "an unusable disambiguator is worse than none" —
-      was left bound by nothing. **Measured differentially, same mutation both
-      sides (`PATH_DIGEST_RE` charset widened to `^.{LEN}$`, which keeps the
-      constant used so the build still exits 0): main `61d6250` turned 2 tests
-      red; this branch, before the fix, passed 1094/1094.** Closed by pairing
-      each fixture with `pathTruncated: true`, which makes the shape check the
-      sole rejector again. **The failure mode is general and worth naming: a new
-      conjunct placed EARLIER in a validator's `&&` chain becomes the rejector
-      for every existing negative fixture that trips it, and those fixtures then
-      pass for the wrong reason with their titles unchanged.** Adding a
-      conjunct is therefore a reason to re-check the negative tests that already
-      existed, not only to add new ones.
+      `rejects a malformed pathDigest (...)` fixtures satisfied TWO rejectors
+      instead of one. The digest SHAPE guard — the anchored width-and-charset
+      check decision 16 calls load-bearing, since "an unusable disambiguator is
+      worse than none" — was left bound by nothing, because breaking it no
+      longer changed any observable outcome. **Measured differentially, same
+      mutation both sides (`PATH_DIGEST_RE` charset widened to `^.{LEN}$`,
+      which keeps the constant used so the build still exits 0): main
+      `61d6250` turned 2 tests red; this branch, before the fix, passed
+      1094/1094.** Closed by pairing each fixture with `pathTruncated: true`,
+      which makes the shape check the sole rejector again.
+      - **⚠️ THE MECHANISM, stated correctly on the second attempt.** The first
+        draft of this bullet said the fixtures were "rejected by the COUPLING
+        before `isOptionalPathDigest` was ever consulted", and generalised that
+        to "a new conjunct placed EARLIER in the `&&` chain". **Both are the
+        reverse of what the code does**, and a re-review caught it by reading
+        the file rather than the bullet: the shape guard is at
+        `src/telemetry/store.ts:404` and the coupling at `:429`, so `&&`
+        evaluates the shape FIRST and the coupling never ran for these rows in
+        normal operation. What the coupling actually is, is a LATER BACKSTOP:
+        break the shape guard and the row falls through to it and is rejected
+        anyway, so the test stays green and reports nothing about the guard it
+        is named for. **The correct rule is position-independent: a negative
+        fixture can only detect the loss of the guard it names while that guard
+        is the ONLY thing rejecting it. Any second conjunct that also rejects
+        the same fixture silences it, wherever in the chain it sits.** The
+        "placed EARLIER" version was not merely imprecise, it was unusable —
+        it would have cleared this very bug on inspection, since the conjunct
+        was added 25 lines LATER. Worth recording as its own failure: the
+        lesson extracted from a defect was wrong in the direction that made the
+        defect look more obvious than it was.
+      - Adding a conjunct is therefore a reason to re-check every existing
+        negative test it can also reject, not only to add new ones. A cheap
+        mechanical form: for each negative fixture, break the guard its title
+        names and confirm it goes red.
     - **The old test disclosed the gap rather than closing it, and that is the
       transferable lesson.** Its comment stated in terms that "widening is
       breaking" was "argued in the comment above and enforced by nothing", and
