@@ -66,43 +66,84 @@ function cleanSkillText(text: string): string {
  * rather than on its own. Bidi and invisible stripping are unchanged.
  */
 function cleanSkillBody(text: string): string {
-  return balanceCodeFences(stripInvisibles(stripBidi(sanitizeControlCharsKeepingLines(text))));
+  return stripInvisibles(stripBidi(sanitizeControlCharsKeepingLines(text)));
 }
 
-/** Opening fence: up to 3 spaces of indent, then 3+ backticks or 3+ tildes. */
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+/**
+ * Up to 3 spaces of indent, then 3+ backticks or 3+ tildes, then the info
+ * string. The info string is CAPTURED because for backtick fences it decides
+ * whether this is a fence at all — see `fenceOpener`.
+ */
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**
- * Closes any fence a body leaves open, so a section cannot leak block structure
- * into the NEXT one (security review HIGH-2, ADR-0028 decision 8).
+ * The opening marker if `line` opens a fenced code block, else null.
+ *
+ * ⚠️ THE INFO-STRING RULE IS NOT A DETAIL, and omitting it is what made the
+ * first cut of this function dangerous. CommonMark: "If the info string comes
+ * after a backtick code fence, it may not contain any backtick characters."
+ * So ```` ``` aa ``` ```` (spec example 143) is a PARAGRAPH containing inline
+ * code, not a fence. The first cut read it as an opener, believed a fence was
+ * left open, and appended a column-0 ```` ``` ```` — which opens a real fence
+ * that swallows every later section. **The mitigation manufactured the exact
+ * leak it exists to prevent**, on input that no scanner rule flags. Tilde
+ * fences have no such restriction, hence the `startsWith('`')` guard.
+ */
+function fenceOpener(line: string): string | null {
+  const match = FENCE_OPEN_RE.exec(line);
+  if (match === null) return null;
+  const marker = match[1];
+  const info = match[2];
+  if (marker === undefined || info === undefined) return null;
+  return marker.startsWith('`') && info.includes('`') ? null : marker;
+}
+
+/**
+ * Closes any fence a SECTION leaves open, so one section cannot leak block
+ * structure into the NEXT one (security review HIGH-2, ADR-0028 decision 8).
  *
  * The nonce authenticates where a section STARTS. It says nothing about where
- * one ENDS, and once #45 let bodies keep their newlines a hostile body could
+ * one ENDS, and once #45 let bodies keep their newlines a hostile skill could
  * end on an unclosed ```` ```markdown ```` fence and swallow every later
  * section — including the operator policy skill, whose correctly-nonced header
  * then reads as an illustration inside the attacker's fence. Load order is
  * ordinal by bare filename, so the attacker chooses to sort first.
  *
- * CONSERVATIVE IN THE SAFE DIRECTION. A closing fence in CommonMark must match
- * the opening character, be at least as long, and carry nothing but whitespace
- * — an info string like ```` ```markdown ```` is CONTENT when it appears inside
- * a fence, not a close. Requiring `\s*$` here means we can only ever
- * under-detect a close, which appends a redundant fence (harmless). Treating
- * that line as a close would be the dangerous direction: we would think the
- * body was balanced and append nothing.
+ * ⚠️ APPLIED TO THE WHOLE ASSEMBLED SECTION, NOT THE BODY. The first cut
+ * balanced only `skill.body`, which left `description` — flattened to one line
+ * but still landing at COLUMN 0 on the section's second line — able to open a
+ * fence nothing closed. An 11-character description (```` ```markdown ````)
+ * reproduced the original attack end-to-end with the shipped scanner returning
+ * `pass`, zero warnings and zero drops. That hole predates #45 and exists on
+ * main today; balancing the section rather than the body closes it here.
+ *
+ * CONSERVATIVE IN THE SAFE DIRECTION, on the CLOSE side only. A closing fence
+ * must match the opening character, be at least as long, and carry nothing but
+ * whitespace — an info string like ```` ```markdown ```` is CONTENT inside a
+ * fence, not a close. Requiring `\s*$` therefore can only under-detect a close,
+ * which appends a redundant fence. **That safety argument does NOT extend to
+ * the OPEN side**, and the first cut's comment wrongly implied it did:
+ * mis-detecting an open is dangerous in both directions — appending a fence
+ * that opens a block (above), or missing a real opener and appending nothing.
+ *
+ * RESIDUAL, named rather than claimed away: this is a line-based approximation,
+ * not a CommonMark parser. Fences nested inside block containers (a list item
+ * indented 4+, a block quote) are not detected as openers. Those do not leak
+ * past the container — a later column-0 heading terminates the container and
+ * with it the block — which is why the approximation is accepted, not because
+ * it is complete.
  */
-function balanceCodeFences(body: string): string {
+function balanceCodeFences(section: string): string {
   let open: string | null = null;
-  for (const line of body.split('\n')) {
+  for (const line of section.split('\n')) {
     if (open === null) {
-      const marker = FENCE_OPEN_RE.exec(line)?.[1];
-      if (marker !== undefined) open = marker;
+      open = fenceOpener(line);
       continue;
     }
     const char = open.startsWith('`') ? '`' : '~';
     if (new RegExp(`^ {0,3}\\${char}{${open.length},}\\s*$`).test(line)) open = null;
   }
-  return open === null ? body : `${body}\n${open}`;
+  return open === null ? section : `${section}\n${open}`;
 }
 
 const DEFAULT_DESCRIPTOR: TaskDescriptor = {
@@ -127,10 +168,14 @@ const SUMMARY_TEXT_LIMIT = 200;
  *
  * They do NOT get only one attempt, and an earlier version of this comment said
  * they did. A body can carry thousands of candidate header lines: at
- * MAX_SKILL_PROMPT_CHARS and ~30 chars each, roughly 8,500 of them, so ~2^13
- * blind attempts at ~2^-51 per run. Still hopeless by ~50 orders of magnitude,
- * which is why the wrong figure went unnoticed — it was flattering, not
- * load-bearing.
+ * MAX_SKILL_PROMPT_CHARS (256,000) and ~30 chars each, roughly 8,500 of them,
+ * so ~2^13 blind attempts at ~2^-51 per run — about 1 in 10^15.
+ *
+ * That success probability was previously described here as "hopeless by ~50
+ * orders of magnitude". **It is ~15 decimal orders, not ~50** (2^-51 ≈
+ * 4.4 × 10^-16), which is the SECOND wrong figure in this one comment and, like
+ * the first, wrong in the flattering direction. Both survived because neither
+ * was load-bearing: the conclusion holds comfortably at 10^-15.
  *
  * Note this is NOT in tension with ADR-0011 decision 16 rejecting a 64-bit
  * path digest. That rejection turns on the BIRTHDAY bound (~2^32 work to force
@@ -356,7 +401,17 @@ function skillSection(skill: Skill, nonce: string): { name: string; section: str
   // `name` lands at column 0 in the header above — flattening them keeps two
   // more channels from being able to emit a line-start `##` at all.
   const body = cleanSkillBody(skill.body).trim();
-  return { name, section: body === '' ? header : `${header}\n\n${body}` };
+  const section = body === '' ? header : `${header}\n\n${body}`;
+  // BALANCE LAST, over the assembled section, and AFTER `.trim()`. Both parts
+  // are load-bearing and both were wrong in the first cut:
+  //   - over the SECTION, because `description` reaches column 0 too (see
+  //     `balanceCodeFences`), and an empty body must not skip the pass;
+  //   - after TRIM, because trim strips leading whitespace from the body's
+  //     first line. Balancing first let `    ```markdown` (four spaces, e.g.
+  //     from bidi characters that `stripBidi` maps to spaces) escape the
+  //     `^ {0,3}` opener test, and trim then promoted it back to column 0 —
+  //     a fence the balancer had already decided was not there.
+  return { name, section: balanceCodeFences(section) };
 }
 
 /**

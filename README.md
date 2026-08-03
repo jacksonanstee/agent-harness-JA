@@ -71,7 +71,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)**: Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)**: Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)**: Twenty-six ADRs (0001–0026) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, and block-on-flag enforcement for the skill channel.
+3. **[docs/decisions/](./docs/decisions/)**: Twenty-eight ADRs (0001–0028) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, block-on-flag enforcement for the skill channel, cleartext paths in retained sinks, and the nonce-authenticated skill-section delimiter.
 4. **[docs/architecture.md](./docs/architecture.md)**: System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)**: Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)**: How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
@@ -117,7 +117,7 @@ As of 2026-07-28:
 | Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
-| ADRs | 0001–0026 |
+| ADRs | 0001–0028 |
 | Tests | 1038 at the 2026-07-29 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
