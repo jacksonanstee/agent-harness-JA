@@ -1629,7 +1629,7 @@ describe('createSession', () => {
       });
     });
 
-    // ⚠️ ACCEPTED RESIDUAL, PINNED SO IT CANNOT CHANGE SILENTLY (issue filed;
+    // ⚠️ ACCEPTED RESIDUAL, PINNED SO IT CANNOT CHANGE SILENTLY (see
     // ADR-0028 decision 8 and the column-0 Consequences bullet).
     //
     // This test asserts a WEAKNESS, deliberately. A hostile body can still
