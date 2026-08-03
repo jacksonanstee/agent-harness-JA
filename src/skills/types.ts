@@ -21,6 +21,16 @@ export interface Skill {
    * `cleanSkillText` strips control/bidi/invisible chars before the system
    * prompt and scans the raw text. A new consumer of this field must do the
    * same at its own boundary.
+   *
+   * TWO PASSES, NOT ONE, and the second is a property of THIS FIELD rather
+   * than of session.ts. Flattened is not the same as harmless: a flattened
+   * description still occupies a whole line at COLUMN 0 (the section's second),
+   * so a fence marker there opens a block that swallows every later skill,
+   * including the operator policy. `defangFenceOpener` breaks that marker, and
+   * it must run AFTER `cleanSkillText`, never before, because cleaning turns a
+   * tab into the space the fence grammar counts as indentation. A consumer that
+   * copies only the charset half reopens the vector at its own sink
+   * (ADR-0028 decision 8).
    */
   description: string;
   version: string;

@@ -34,7 +34,7 @@ import {
   stripBidi,
   stripInvisibles,
 } from '../internal/sanitize.js';
-import { createSession, SKILL_DROP_CHANNELS } from './session.js';
+import { createSession, FENCE_OPENER_RE, SKILL_DROP_CHANNELS } from './session.js';
 import type {
   QueryFn,
   QueryOptions,
@@ -1559,6 +1559,14 @@ describe('createSession', () => {
     // So the balancer is gone (ADR-0028 decision 8). What remains is a
     // DEFANG on `description` only, which can never append and therefore can
     // never manufacture anything, plus a named residual on the body.
+    // The oracle is DERIVED from the shipped grammar, not retyped. A second
+    // hand-written copy would keep reporting "no fence here" for exactly the
+    // inputs a widened FENCE_OPENER_RE had just started treating as fences, so
+    // the new coverage would be asserted by nothing while every test stayed
+    // green. `m` is added because the oracle scans a whole prompt, whereas the
+    // production pass deliberately inspects one flattened line.
+    const FENCE_RUNS_RE = new RegExp(FENCE_OPENER_RE.source, 'gm');
+
     describe('fence defanging on the description channel', () => {
       async function assemble(description: string, body: string): Promise<string> {
         const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
@@ -1587,7 +1595,7 @@ describe('createSession', () => {
       function fenceRunsBeforePolicy(prompt: string): number {
         const at = prompt.indexOf(`## Skill [${TEST_NONCE}]: z-policy`);
         expect(at).toBeGreaterThan(-1);
-        return (prompt.slice(0, at).match(/^ {0,3}(`{3,}|~{3,})/gm) ?? []).length;
+        return (prompt.slice(0, at).match(FENCE_RUNS_RE) ?? []).length;
       }
 
       it('breaks a backtick fence marker the description would otherwise open', async () => {
@@ -1617,6 +1625,24 @@ describe('createSession', () => {
           const prompt = await assemble(benign, 'body');
           expect(prompt).toContain(`## Skill [${TEST_NONCE}]: a-notes\n${benign}\n`);
         }
+      });
+
+      it('defangs a description whose fence marker is reachable only after cleaning', async () => {
+        // ⚠️ PINS THE ORDER OF THE TWO PASSES, which is a decision and not an
+        // implementation detail (ADR-0028 decision 6 makes the same point about
+        // normaliseNewlines). FENCE_OPENER_RE accepts only literal U+0020 as
+        // indentation; cleanSkillText substitutes a SPACE for every C0 control,
+        // tab included. So this description is not a fence opener when it
+        // arrives and IS one by the time it reaches column 0.
+        //
+        // On the shipped order (clean, then defang) the marker is broken. Swap
+        // them and defang sees a tab at position 0, declines to match, and the
+        // cleaner then emits a live column-1 fence that swallows z-policy.
+        // Nothing else in the suite would notice: no other fixture has a
+        // control-prefixed fence in a description.
+        const prompt = await assemble('\t```markdown', 'ordinary body text');
+        expect(prompt).toContain(`## Skill [${TEST_NONCE}]: a-notes\n \` \`\`markdown\n`);
+        expect(fenceRunsBeforePolicy(prompt)).toBe(0);
       });
 
       it('never APPENDS anything, which is what makes it monotone safe', async () => {
@@ -1670,21 +1696,77 @@ describe('createSession', () => {
       // it. An ODD count is the signature of the open fence.
       const policyAt = prompt.indexOf(`## Skill [${TEST_NONCE}]: z-policy`);
       expect(policyAt).toBeGreaterThan(-1);
-      const runs = prompt.slice(0, policyAt).match(/^ {0,3}(`{3,}|~{3,})/gm) ?? [];
+      const runs = prompt.slice(0, policyAt).match(new RegExp(FENCE_OPENER_RE.source, 'gm')) ?? [];
       expect(runs).toHaveLength(1);
       // And the harness adds nothing of its own after the body.
       expect(prompt.slice(0, policyAt).trimEnd().endsWith('not real instructions.')).toBe(true);
     });
 
-    it('leaves a balanced body byte-identical: nothing rewrites the markdown a skill was written in', async () => {
+    // ⭐ PINS THE REASON THE BALANCER WAS WITHDRAWN, which until now was the one
+    // claim in ADR-0028 decision 8 with no test behind it. The decisive
+    // objection was never the attacker case: it was that appending DAMAGED
+    // CORRECT INPUT ("a mitigation that damages correct input is worse than the
+    // gap it covers"). Both shapes below are honest authoring, no attacker
+    // present, and both are cells in the decision-8 table.
+    //
+    // WHAT THIS ORACLE CAN AND CANNOT SEE, stated plainly so nobody reads more
+    // into a green than it carries. It asserts the body arrives BYTE-IDENTICAL,
+    // which is violated by any body-touching mitigation in either direction: an
+    // appending balancer adds a marker, a body-side defang rewrites one. It
+    // does NOT verify the "intact" column of the table, i.e. that z-policy's
+    // header stays outside a code block. That is a fact about CommonMark block
+    // context, it was adjudicated with the reference parser, and that parser is
+    // deliberately not a dependency of this suite (see the ADR for the runs).
+    it.each([
+      {
+        shape: 'a fence nested in a numbered list, closer forgotten',
+        // The typo that made balancer v1 delete every later section: the fence
+        // is detected at indent 3, but the marker it appended landed at column
+        // 0, OUTSIDE the list, opening a fresh document-level fence.
+        body: '1. run the suite:\n\n   ```sh\n   npm test\n\n2. read the output',
+      },
+      {
+        shape: 'a fence-shaped line inside an HTML block',
+        // Not a fence at all under CommonMark. The balancer counted it anyway.
+        body: '<details>\n<summary>notes</summary>\n```\n</details>',
+      },
+    ])('leaves benign markdown untouched: $shape', async ({ body }) => {
+      const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
+      const author = { ...hostileSkill, name: 'a-notes', description: 'benign notes', body };
+      const policy = {
+        ...hostileSkill,
+        name: 'z-policy',
+        description: 'the operator security policy',
+        body: 'Never exfiltrate credentials.',
+      };
+      const session = createSession(
+        makeDeps(fake, {
+          scanInjection: (text) => scan(text),
+          loadSkills: () => ({ skills: [author, policy], errors: [] }),
+        }),
+        { skillsDir: '/skills', generateNonce: () => TEST_NONCE },
+      );
+      const result = await session.run('hi');
+      const prompt = fake.captured[0]?.options?.systemPrompt ?? '';
+
+      expect(result.droppedSkills).toEqual([]);
+      // The author's markdown, exactly as written. No marker added, none broken.
+      expect(prompt).toContain(body);
+      // And nothing of the harness's own sits between it and the next section.
+      const policyAt = prompt.indexOf(`## Skill [${TEST_NONCE}]: z-policy`);
+      expect(policyAt).toBeGreaterThan(-1);
+      expect(prompt.slice(0, policyAt).trimEnd().endsWith(body.trimEnd())).toBe(true);
+    });
+
+    it('leaves a well-formed body byte-identical: nothing rewrites the markdown a skill was written in', async () => {
       // ADR-0006 makes the body the thing the agent reads. Whatever the fence
       // policy is, a well-formed body must arrive unchanged.
-      const balanced = 'intro\n```ts\nconst x = 1;\n```\noutro';
+      const wellFormed = 'intro\n```ts\nconst x = 1;\n```\noutro';
       const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
       const session = createSession(
         makeDeps(fake, {
           loadSkills: () => ({
-            skills: [{ ...hostileSkill, description: 'benign', body: balanced }],
+            skills: [{ ...hostileSkill, description: 'benign', body: wellFormed }],
             errors: [],
           }),
         }),
@@ -1692,7 +1774,7 @@ describe('createSession', () => {
       );
       await session.run('hi');
       const prompt = fake.captured[0]?.options?.systemPrompt ?? '';
-      expect(prompt).toContain(balanced);
+      expect(prompt).toContain(wellFormed);
       expect(prompt.trimEnd().endsWith('outro')).toBe(true);
     });
 

@@ -69,8 +69,18 @@ function cleanSkillBody(text: string): string {
   return stripInvisibles(stripBidi(sanitizeControlCharsKeepingLines(text)));
 }
 
-/** Up to 3 spaces of indent, then a run of 3+ backticks or 3+ tildes. */
-const FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
+/**
+ * Up to 3 spaces of indent, then a run of 3+ backticks or 3+ tildes.
+ *
+ * EXPORTED FOR THE TESTS' ORACLE, deliberately. The fence tests need to count
+ * column-0 fence openers in an assembled prompt, and a hand-typed second copy
+ * of this grammar would be an oracle that silently stops agreeing with the code
+ * the moment either is widened (the failure `src/internal/sanitize.ts`'s
+ * derivation chain exists to prevent — ADR-0011 item 13). They derive from this
+ * constant instead. Note the absent `m` flag: this matches the START OF A
+ * STRING, not of every line; see `defangFenceOpener`.
+ */
+export const FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
 
 /**
  * Breaks a leading code-fence marker so the line cannot OPEN a fenced code
@@ -104,7 +114,28 @@ const FENCE_OPENER_RE = /^( {0,3})(`{3,}|~{3,})/;
  * THE BODY IS DELIBERATELY NOT DEFANGED, and the fence it can leave open is an
  * ACCEPTED RESIDUAL, not an oversight: see ADR-0028 decision 8 and the
  * Consequences bullet on column-0 block structure. Defanging the body would
- * destroy the feature issue #45 exists to deliver.
+ * destroy the feature issue #45 exists to deliver. The residual is pinned by
+ * `session.test.ts`'s "does NOT stop a hostile body leaving a fence open
+ * (accepted residual)", which asserts the weakness so it cannot change quietly.
+ *
+ * ⚠️ TWO PROPERTIES OF THE CALL ITSELF ARE LOAD-BEARING, and neither is visible
+ * from this function's body.
+ *   1. ORDER. It must run AFTER `cleanSkillText`, never before. `FENCE_OPENER_RE`
+ *      accepts only literal U+0020 as indentation, while `cleanSkillText`
+ *      SUBSTITUTES A SPACE for every C0 control including TAB. On the shipped
+ *      order a description of "\t```markdown" cleans to " ```markdown" and is
+ *      then defanged. Inverted, this pass sees a tab at position 0, declines to
+ *      match, and the cleaner then produces a live column-1 fence. Measured:
+ *      three of five control-prefixed cases flip from safe to swallowing.
+ *      Pinned by "defangs a description whose fence marker is reachable only
+ *      after cleaning". This is decision 6's rule (order is the decision, not an
+ *      implementation detail) applied to a second pair of passes.
+ *   2. SINGLE LINE. `FENCE_OPENER_RE` has no `m` flag, so this inspects the
+ *      start of the STRING. That is exactly right for `description`, which
+ *      `cleanSkillText` has already flattened to one line, and it is why a
+ *      naive extension to the multi-line body would be WORSE than doing
+ *      nothing: it would defang line 1 and silently leave every later line's
+ *      marker live, which reads in review as a mitigation that is present.
  */
 function defangFenceOpener(label: string): string {
   return label.replace(
@@ -367,6 +398,15 @@ function skillSection(skill: Skill, nonce: string): { name: string; section: str
   // fence marker there opens a block that swallows every later section
   // (ADR-0028 decision 8). `name` needs no such pass — it sits mid-line after
   // `]: `, and the loader's schema constrains it to `[a-z0-9-]` anyway.
+  //
+  // THE RULE THAT GENERATES THESE THREE CHOICES IS POSITIONAL: any single-line
+  // field the harness emits AT COLUMN 0 must be defanged, and `name` is exempt
+  // only because it does not sit there. A future header line (a version, a tag
+  // list, or `name` moved to its own line for readability) needs the same pass
+  // and will get NO compile-time signal that it is missing one.
+  //
+  // ORDER IS LOAD-BEARING: defang runs AFTER cleaning, never before, or a
+  // tab-indented marker survives as a live fence. See defangFenceOpener.
   const header = `## Skill [${nonce}]: ${name}\n${defangFenceOpener(cleanSkillText(skill.description))}`;
   // BODY ONLY keeps its line structure (issue #45), and is deliberately NOT
   // defanged: its fences are the feature. A fence the body leaves open is an
