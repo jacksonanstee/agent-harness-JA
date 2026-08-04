@@ -61,6 +61,17 @@ cd "$ROOT" || { echo "check-docs: cannot enter '$ROOT'" >&2; exit 2; }
 # construction, and same reason, as check-links.sh.
 FAILURES=$(mktemp) || exit 2
 
+# TEST-ONLY SEAM, and it exists because round-2 review mutated `trap finish
+# EXIT` to a no-op and the entire suite stayed green: the fix for the
+# exit-code collision was itself bound by nothing. The one test named for the
+# property used a non-existent root, which hits the explicit `exit 2` on the
+# cd above and passes identically against the pre-fix script. A crash has to
+# be REACHABLE for the trap to be testable at all. Same reasoning as the
+# injectable `generateNonce` in src/session/session.ts.
+if [ -n "${CHECK_DOCS_SELFTEST_CRASH:-}" ]; then
+  printf '%s' "$__check_docs_deliberately_unset_variable"
+fi
+
 note() {
   # Doc content is attacker-influenced under the cloned-repo threat model
   # (security-model §2) and this reaches CI logs, so strip C0/C1 controls and
@@ -74,7 +85,7 @@ note() {
 
 markdown_files() {
   if git rev-parse --git-dir >/dev/null 2>&1; then
-    git ls-files '*.md'
+    git ls-files '*.md' || { echo "check-docs: git ls-files failed" >&2; kill -TERM $$; }
   else
     find . -name '*.md' -type f | sed 's|^\./||'
   fi
@@ -93,29 +104,31 @@ markdown_files() {
 # 3-backtick example is balanced, and line-parity called it broken.
 # ---------------------------------------------------------------------------
 check_structure() {
-  local file
+  local file out status
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    awk -v F="$file" '
+    # ⚠️ awk's status is CAPTURED, not piped away. Round-2 review: awk ran on
+    # the left of a pipeline whose status nothing inspected, so a missing awk
+    # or one unreadable .md skipped the file and the gate printed "OK", exit 0.
+    # That is the same defect as the exit-code collision, in the direction CI
+    # acts on. A scanner that could not read a file has NOT checked it, which
+    # is the didn't-run state, so it exits 2 rather than being filed as a
+    # finding or ignored.
+    out=$(awk -v F="$file" '
       function flush() {
         if (n > 0) {
-          # A delimiter row is pipes, spaces, colons and hyphens, with at least
-          # one hyphen so "| |" does not qualify. Up to 3 leading spaces, which
-          # CommonMark permits and the first cut rejected.
-          if (second !~ /^ {0,3}\|[ :|-]+$/ || second !~ /-/)
+          if (second !~ /^ ? ? ?\|[ :|-]+$/ || second !~ /-/)
             printf "%s:%d: table row is not inside a table (no delimiter row under the header) - a blank line above ends the table, so this renders as a paragraph\n", F, start
         }
         n = 0; second = ""
       }
       {
         line = $0
-        sub(/\r$/, "", line)          # CRLF: \r is not in the delimiter class
+        sub(/\r$/, "", line)
       }
-      # Fence opener/closer. Only a run of the SAME character, at least as long
-      # as the opener, closes a fence.
-      match(line, /^ {0,3}(`{3,}|~{3,})/) {
+      match(line, /^ ? ? ?(```+|~~~+)/) {
         marker = line
-        sub(/^ {0,3}/, "", marker)
+        sub(/^ ? ? ?/, "", marker)
         ch = substr(marker, 1, 1)
         len = 0
         while (substr(marker, len + 1, 1) == ch) len++
@@ -125,12 +138,11 @@ check_structure() {
           infence = 1; fch = ch; flen = len
           next
         }
-        # A closer carries no info string.
         if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
         next
       }
       infence { next }
-      line ~ /^ {0,3}\|/ {
+      line ~ /^ ? ? ?\|/ {
         if (n == 0) start = FNR
         n++
         if (n == 2) second = line
@@ -142,8 +154,20 @@ check_structure() {
         if (infence)
           printf "%s: a code fence opened and never closed - everything after it renders inside the block\n", F
       }
-    ' "$file"
-  done < <(markdown_files) | while IFS= read -r problem; do note "$problem"; done
+    ' "$file" 2>&1)
+    status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "check-docs: could not scan '$file' (scanner exit $status): $out" >&2
+      echo "check-docs: the file was NOT checked, so this run proves nothing" >&2
+      exit 2
+    fi
+    [ -n "$out" ] || continue
+    while IFS= read -r problem; do
+      [ -n "$problem" ] && note "$problem"
+    done <<EOF
+$out
+EOF
+  done < <(markdown_files)
 }
 
 # ---------------------------------------------------------------------------
@@ -154,6 +178,32 @@ check_structure() {
 # numeral, a spelled-out word) and all three are checked: the first cut checked
 # two, and the uncovered one is exactly where the drift was found.
 # ---------------------------------------------------------------------------
+# README with fenced blocks removed. check_structure is fence-aware and this
+# was not, so a `29 ADRs` inside a shell example was read as a live claim
+# (round-2 review). Same fence grammar, deliberately: two spellings of "is this
+# inside a fence" would drift apart.
+readme_prose() {
+  awk '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+    }
+    match(line, /^ ? ? ?(```+|~~~+)/) {
+      marker = line
+      sub(/^ ? ? ?/, "", marker)
+      ch = substr(marker, 1, 1)
+      len = 0
+      while (substr(marker, len + 1, 1) == ch) len++
+      rest = substr(marker, len + 1)
+      if (!infence) { infence = 1; fch = ch; flen = len; next }
+      if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
+      next
+    }
+    infence { next }
+    { print line }
+  ' README.md
+}
+
 check_adr_counts() {
   [ -d docs/decisions ] || return 0
   [ -f README.md ] || return 0
@@ -206,7 +256,7 @@ check_adr_counts() {
         note "README.md: spells the ADR count '$word' but docs/decisions holds $actual ($expected)"
       fi
     done
-  done < <(grep -iE 'ADRs?\b|0001[^0-9]' README.md)
+  done < <(readme_prose | grep -iE 'ADRs?\b|0001[^0-9]')
 
   # A README that talks about ADRs but carries no claim this gate recognises is
   # REPORTED, never passed over. A silent skip is the proxy-check pattern
@@ -219,11 +269,16 @@ check_adr_counts() {
 
 check_structure
 check_adr_counts
-checks_completed=1
 
+# `checks_completed` is set INSIDE each branch, after the reporting work, not
+# before it: a crash in cat/wc/printf would otherwise exit 1 and be read as a
+# finding. Narrow window, but the header claims exit 1 cannot mean a crash and
+# that claim should be true rather than nearly true (round-2 review).
 if [ -s "$FAILURES" ]; then
   cat "$FAILURES" >&2
   printf 'check-docs: FAILED (%d problem(s))\n' "$(wc -l < "$FAILURES" | tr -d ' ')" >&2
+  checks_completed=1
   exit 1
 fi
+checks_completed=1
 echo "check-docs: OK"

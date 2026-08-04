@@ -66,7 +66,12 @@ parsed=$(printf '%s' "$raw" | node -e '
     } catch (e) { console.error("unparseable vitest JSON: " + e.message); process.exit(2); }
   });
 ')
-if [ $? -ne 0 ] || [ -z "$parsed" ]; then
+parse_status=$?
+# The two conditions coincide today (node emits nothing on its failure paths),
+# so neither can be isolated by a fixture. Both are kept because they answer
+# different questions and a future parser change could separate them; noted
+# rather than silently carried as though one were tested (round-2 review).
+if [ "$parse_status" -ne 0 ] || [ -z "$parsed" ]; then
   echo "check-test-count: could not read the suite's test count from vitest" >&2
   exit 2
 fi

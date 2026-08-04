@@ -34,6 +34,20 @@ function runGate(root: string): Run {
   }
 }
 
+function runGateWithEnv(root: string, env: Record<string, string>): Run {
+  try {
+    const stdout = execFileSync('bash', [SCRIPT, root], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: { ...process.env, ...env },
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status: number; stderr: string; stdout: string };
+    return { status: e.status, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+}
+
 /** A finding is exit 1 AND the expected text. Exit 2 (crash) fails here. */
 function expectFinding(root: string, ...expected: string[]): Run {
   const run = runGate(root);
@@ -77,11 +91,38 @@ const GOOD_README =
   '# R\n\nTwenty-eight ADRs (0001-0028) cover it.\n\n| ADRs | 0001-0028 |\n| --- | --- |\n| a | b |\n';
 
 describe('check-docs.sh — exit-code contract', () => {
-  it('exits 2, not 1, when the gate itself cannot complete', () => {
-    // The property that makes every `toBe(1)` below meaningful. Without it a
-    // crashed script is indistinguishable from a script that found a problem.
+  it('exits 2 when the root does not exist', () => {
     const run = runGate(join(tmpdir(), 'docs-gate-does-not-exist-9f3a'));
     expect(run.status).toBe(2);
+  });
+
+  it('⭐ exits 2 when the gate CRASHES mid-run, which is what binds the trap', () => {
+    // ⚠️ THIS IS THE TEST THE FIRST FIX SHOULD HAVE HAD. Round-2 review
+    // mutated `trap finish EXIT` to a no-op and the whole suite stayed green:
+    // the fix for the exit-code collision was bound by nothing. The test named
+    // for the property used a non-existent root, which hits an explicit exit 2
+    // that predates the fix and passes against the buggy script too.
+    // A crash has to be reachable to be testable, hence the self-test seam.
+    const root = fixture({ 'docs/a.md': '# T\n' });
+    const run = runGateWithEnv(root, { CHECK_DOCS_SELFTEST_CRASH: '1' });
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('did not complete');
+  });
+
+  it('⭐ exits 2 rather than OK when a file cannot be scanned', () => {
+    // Round-2 HIGH: awk ran on the left of a pipeline whose status nothing
+    // read, so one unreadable .md was skipped and the gate printed OK/exit 0
+    // — a false PASS, the direction CI acts on. The fixture hides a real
+    // orphan row, so a regression both skips the file AND misses a finding.
+    const root = fixture({ 'docs/unreadable.md': '# T\n\n| orphan | row |\n' });
+    execFileSync('chmod', ['000', join(root, 'docs', 'unreadable.md')]);
+    try {
+      const run = runGate(root);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('NOT checked');
+    } finally {
+      execFileSync('chmod', ['644', join(root, 'docs', 'unreadable.md')]);
+    }
   });
 });
 
@@ -261,6 +302,17 @@ describe('check-docs.sh — derived ADR constants', () => {
       fixture({
         ...adrTree(28),
         'README.md': '# R\n\nWe shipped in under thirty days.\n\nTwenty-eight ADRs (0001-0028).\n',
+      }),
+    );
+  });
+
+  it('does not read an ADR count that sits inside a fenced block', () => {
+    // check_structure was fence-aware and this scan was not, so a count in a
+    // shell example was treated as a live claim (round-2 review).
+    expectClean(
+      fixture({
+        ...adrTree(28),
+        'README.md': '# R\n\nTwenty-eight ADRs (0001-0028).\n\n```\n29 ADRs (0001-0029)\n```\n',
       }),
     );
   });

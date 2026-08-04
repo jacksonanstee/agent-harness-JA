@@ -61,10 +61,18 @@ anchor, with zero merge commits in the window, so no diff is double-counted.
 
 **Scope sensitivity, since the denominator is dominated by `process/` working
 notes** (10,280 of the 15,233 lines) and issue #61 arguably targets `docs/`.
-Restricted to `docs/` and README only, 4,775 added lines: the full variant
-blocks 22 of 40 commits and the narrowest blocks 6 of 40. The decision survives
-at both scopes, which is why it is recorded as a kill rather than as a
-scope-dependent maybe.
+Restricted to `docs/` and README only, **4,693** added lines at that same
+anchor: the full variant blocks **21 of 40** commits and the narrowest blocks
+**5 of 40**. The decision survives at both scopes, which is why it is recorded
+as a kill rather than as a scope-dependent maybe.
+
+**⚠️ These three figures were wrong in the first draft of this paragraph, and
+the way they were wrong is the paragraph's own subject.** It quoted 4,775,
+22/40 and 6/40, which are the numbers this measurement gives at `c4722e7`
+rather than at the anchor the same sentence asserts, because the window is
+`git log -40` and HEAD had moved onto the branch. Independently re-derived at
+both refs by review and again by hand. The warning about the sliding window was
+added in the same edit that violated it.
 
 **The 7.8:1 figure was computed per LINE, and a gate fails per COMMIT.** One
 firing line fails the build, so commits-blocked is the unit that decides

@@ -115,6 +115,34 @@ describe('check-test-count.sh', () => {
     expect(run.stderr).toContain('not green');
   });
 
+  it('exits 2 on failed TESTS alone, with a clean exit status and no failed suites', () => {
+    // Round-2 review: each of the three red-suite conditions had a sibling
+    // covering it, so dropping numFailedTests left the whole suite green. This
+    // fixture isolates that one condition and its mirror below isolates the
+    // suite-count one.
+    const run = runGate(
+      fixture({
+        readme: readmeClaiming(1145),
+        vitestJson: JSON.stringify({ numTotalTests: 1145, numFailedTests: 3, numFailedTestSuites: 0 }),
+        vitestStatus: 0,
+      }),
+    );
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('3 failed test(s)');
+  });
+
+  it('exits 2 on a failed SUITE alone, with a clean exit status and no failed tests', () => {
+    const run = runGate(
+      fixture({
+        readme: readmeClaiming(1145),
+        vitestJson: JSON.stringify({ numTotalTests: 1145, numFailedTests: 0, numFailedTestSuites: 2 }),
+        vitestStatus: 0,
+      }),
+    );
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('2 failed suite(s)');
+  });
+
   it('exits 2 when vitest exits non-zero even if the JSON looks clean', () => {
     const run = runGate(
       fixture({ readme: readmeClaiming(1145), vitestJson: green(1145), vitestStatus: 1 }),
