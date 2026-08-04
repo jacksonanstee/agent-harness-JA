@@ -32,6 +32,8 @@ const CANONICAL: ReadonlyArray<readonly [RegExp, string]> = [
   [/^npm (?:run )?test$/, 'test'],
   [/^(?:npm run redteam|node \.?\/?dist\/cli\.js redteam)$/, 'redteam'],
   [/^(?:npm run check:links|bash scripts\/check-links\.sh)$/, 'check-links'],
+  [/^(?:npm run check:docs|bash scripts\/check-docs\.sh)$/, 'check-docs'],
+  [/^(?:npm run check:testcount|bash scripts\/check-test-count\.sh)$/, 'check-testcount'],
 ];
 
 const canonicalise = (command: string): string | null =>
@@ -213,6 +215,25 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
 
   it('still runs the docs-links gate that R6 fired over', () => {
     expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-links');
+  });
+
+  it('runs the docs structure gate, in the install-free job where it belongs', () => {
+    // Issue #61. Asserted against the JOB rather than the whole file, so
+    // moving it into build-test — which would delay a broken-table report
+    // behind a full install — fails here rather than passing silently.
+    expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
+  });
+
+  it('runs the derived test-count gate after the suite, so a red suite is reported first', () => {
+    // ⚠️ AN EARLIER VERSION OF THIS COMMENT WAS WRONG and review caught it: it
+    // said ordering this before `test` "would run the suite twice", implying
+    // this order avoids that. It does not. check-test-count.sh always shells
+    // out to a fresh `npx vitest run`, so the suite runs twice either way.
+    // The real reason for the order is failure legibility: `Test` fails first
+    // and names the broken test, rather than this gate failing first with a
+    // message about a count. Removing the second run means consuming the first
+    // one's JSON, which is a larger change than this gate justifies.
+    expect(indexOfGate('test')).toBeLessThan(indexOfGate('check-testcount'));
   });
 
   it('both CI and the publish path delegate to the one shared definition', () => {
