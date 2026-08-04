@@ -52,40 +52,55 @@ export type GoldenRow = ScorecardRowCore<GoldenFailureKind> & {
   volatile: RowVolatile;
 };
 
+/**
+ * The `meta.taskDir` pair (issues #62 and #64, ADR-0030).
+ *
+ * `taskDir` is populated only when the task directory is at or under the
+ * working directory the run was invoked from. It is then that directory
+ * relative to that cwd, and on the machine that produced the scorecard,
+ * resolving the stored value against the invoking working directory returns
+ * the original path. That working directory is deliberately NOT recorded,
+ * because recording it would re-introduce the disclosure this field exists
+ * to avoid.
+ *
+ * ANY other invocation stores null. The relative form for such a directory
+ * walks up through `..` and can spell out intervening absolute segments
+ * (the home directory, a client's name) in a file whose purpose is to be
+ * shared; even the bounded sibling shape (`../tasks`) reveals the
+ * directory's own name. Suppression only ever REMOVES information: null
+ * cannot be resolved by accident, where a degraded value (say, a bare
+ * basename) shape-matches a resolvable path and silently resolves WRONG.
+ * The Windows cross-drive case, where `relative()` has no relative form and
+ * returns an absolute path, suppresses too (reasoned, not executed; there
+ * is no Windows CI).
+ *
+ * `taskDirForm` is the in-row signal ADR-0027 decision 3 requires of a
+ * transform that may not apply: the "boolean paired with an identifier for
+ * the transform that ran", encoded as a two-value union because there is
+ * exactly one transform to name. The discriminated union makes the invalid
+ * pairings (a string with 'suppressed', a null with 'relative')
+ * unrepresentable rather than merely documented; two independently-settable
+ * fields whose relationship lived in prose already cost this codebase a
+ * review round once (`pathTruncated`/`pathDigest`, ADR-0011).
+ *
+ * `taskDir` keeps its name through the type change. ADR-0011 item 16
+ * requires a NEW FIELD NAME when the READ path is intolerant; a golden
+ * scorecard has no read path at all — re-verified for this change: nothing
+ * in src/, scripts/ or examples/ parses one back. Pre-#64 scorecards are
+ * distinguishable by the absence of `taskDirForm`.
+ */
+export type TaskDirMeta =
+  | { taskDir: string; taskDirForm: 'relative' }
+  | { taskDir: null; taskDirForm: 'suppressed' };
+
 /** Volatile — informational, never baseline-diffed. */
-export interface GoldenMeta {
+export type GoldenMeta = {
   /** ISO-8601, from the injected clock. */
   createdAt: string;
   harnessVersion: string;
-  /**
-   * The task directory the run scored, relative to the working directory the
-   * run was invoked from (issue #62).
-   *
-   * It was a resolved ABSOLUTE path until 2026-07-31, which put the
-   * operator's home directory into every scorecard unconditionally, in a file
-   * whose purpose is to be shared. Resolve it against the producing machine's
-   * working directory to recover the original; that working directory is
-   * deliberately not recorded here, because doing so would re-introduce the
-   * disclosure this field just dropped.
-   *
-   * ⚠️ Not a general fix. `relative()` walks up to the common ancestor, so
-   * when the working directory is not at or above the task directory the
-   * intervening absolute segments survive in this field. The closure is
-   * scoped to the invocation shape the CLI defaults to.
-   *
-   * The field kept its name despite the changed meaning. ADR-0011 item 16
-   * requires a NEW FIELD NAME when the READ path is intolerant: there, the
-   * validator is anchored, `rowToEvent` throws rather than skipping, and
-   * `query()` maps over every row, so one nonconforming row denies the whole
-   * trail. A golden scorecard has no read path at all, no validator and no
-   * query, so that rule does not bite. (Old rows also happen to be
-   * distinguishable by `isAbsolute()`, but that is a convenience, not the
-   * reason.)
-   */
-  taskDir: string;
   /** Distinct router model choices observed across rows that ran, sorted. */
   models: string[];
-}
+} & TaskDirMeta;
 
 export type GoldenTotals = ScorecardTotalsCore<GoldenFailureKind> & {
   /** passed / total; total >= 1 is guaranteed (zero tasks is a run-level error). */

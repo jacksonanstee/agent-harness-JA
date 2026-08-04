@@ -14,7 +14,8 @@ function makeCard(rows: GoldenRow[], overrides?: {
     meta: {
       createdAt: '2026-07-09T00:00:00.000Z',
       harnessVersion: '0.1.0-pre',
-      taskDir: '/tmp/tasks',
+      taskDir: 'tmp/tasks',
+      taskDirForm: 'relative',
       models: ['claude-sonnet-4-6'],
     },
     rows,
