@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import { createRouter, route } from './route.js';
 import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from './table.js';
@@ -274,5 +276,54 @@ describe('router: ModelChoice shape', () => {
     expect(c.rule_id.length).toBeGreaterThan(0);
     expect(typeof c.reason).toBe('string');
     expect(c.reason.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Docs-parity for the sensitivity-floor footgun (issue #67).
+ *
+ * README and ADR-0007 both state that the router imposes NO safety floor, so a
+ * custom table's catch-all rule can silently downgrade `sensitivity: 'high'`.
+ * That is a documented design decision, not a bug — but it is a claim about
+ * code, and this repo's whole #61 finding is that claims about code go stale
+ * silently while the suite stays green.
+ *
+ * These two tests make the claim self-invalidating: implement a floor, and the
+ * prose that says there isn't one turns a test red instead of quietly becoming
+ * false. Delete them only together with the README and ADR-0007 sentences.
+ */
+describe('router: the documented absence of a sensitivity floor', () => {
+  it('lets a custom catch-all downgrade high sensitivity, exactly as documented', () => {
+    // The footgun itself, executed rather than described. If a floor is ever
+    // added this fails, and the README/ADR-0007 warnings must change with it.
+    const table: RoutingRule[] = [
+      {
+        id: 'catch-all',
+        match: () => true,
+        model: 'claude-haiku-4-5',
+        reason: 'custom: everything to haiku',
+      },
+    ];
+    const choice = createRouter({ table }).route({ ...base, sensitivity: 'high' });
+    expect(choice.model).toBe('claude-haiku-4-5');
+    expect(choice.rule_id).toBe('catch-all');
+  });
+
+  it('has no floor implementation in the router source, which is what the prose asserts', () => {
+    // ⚠️ READS THE SOURCE, deliberately. The first draft of this test built an
+    // object literal and asserted the literal lacked the key — an assertion
+    // about a fixture, satisfied by construction, which is the exact defect
+    // class issue #61 and ADR-0029 are about. This version goes red the moment
+    // someone implements a floor, which is the only event that should force
+    // the README and ADR-0007 sentences to change.
+    const routerSource = [
+      readFileSync(new URL('./route.ts', import.meta.url), 'utf8'),
+      readFileSync(new URL('./table.ts', import.meta.url), 'utf8'),
+      readFileSync(new URL('./types.ts', import.meta.url), 'utf8'),
+    ].join('\n');
+    expect(
+      routerSource,
+      'a sensitivity floor now exists: update README.md and ADR-0007, which both state there is none',
+    ).not.toContain('enforceSensitivityFloor');
   });
 });

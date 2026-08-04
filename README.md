@@ -21,7 +21,7 @@ A thin, MIT-licensed, local-first harness that wraps the Claude Agent SDK and pr
 
 | Layer | What it gives you |
 |---|---|
-| **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape, with Fable targetable from a custom table — [ADR-0024](./docs/decisions/0024-router-model-tiers.md)), skill loading, hook runtime, telemetry, memory |
+| **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape, with Fable targetable from a custom table — [ADR-0024](./docs/decisions/0024-router-model-tiers.md)), skill loading, hook runtime, telemetry, memory. **A custom table can downgrade `sensitivity: 'high'`**: routing is first-match-wins and the table is fully replaceable, so a catch-all rule at the top silently sends sensitive work to a weaker model. The router imposes no safety floor by design ([ADR-0007](./docs/decisions/0007-task-descriptor-schema.md)) |
 | **Security** | Prompt-injection scanner on tool results (observe-only) and on skill content (enforced when a scanner is wired, as the CLI does: a flagged skill is kept out of the system prompt), secret redaction, permission model, sandbox boundaries |
 | **Evaluation** | Golden-task regression suite, red-team corpus (≥50 cases), two-pass adversarial verification |
 
@@ -118,7 +118,7 @@ As of 2026-08-04:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0029 |
-| Tests | 1164 at the 2026-08-04 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 1166 at the 2026-08-04 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
