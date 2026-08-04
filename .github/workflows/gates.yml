@@ -54,6 +54,15 @@ jobs:
       - name: Docs link gate
         run: bash scripts/check-links.sh
 
+      # Structural and derived-constant facts about the docs (issue #61). Sits
+      # in THIS job rather than build-test because it needs no install: a table
+      # row that renders as a paragraph is reported in seconds. Deliberately
+      # workflow-only and absent from prepublishOnly — the GATE_NAMES /
+      # PREPUBLISH_FLOOR split exists so a workflow-only gate can be added
+      # without forcing decision 4's directional invariant into equality.
+      - name: Docs structure gate
+        run: bash scripts/check-docs.sh
+
   build-test:
     runs-on: ubuntu-latest
     strategy:
@@ -111,6 +120,13 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # The one derived constant in the docs that is a property of the SUITE
+      # rather than of the filesystem, so it cannot live in the docs job. After
+      # Test because it runs the suite itself; a failure here means README's
+      # count drifted, which is what happened on 2026-08-04.
+      - name: Derived test-count gate
+        run: npm run check:testcount
 
       - name: Red-team gate
         run: node dist/cli.js redteam

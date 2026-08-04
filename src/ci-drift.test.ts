@@ -32,6 +32,8 @@ const CANONICAL: ReadonlyArray<readonly [RegExp, string]> = [
   [/^npm (?:run )?test$/, 'test'],
   [/^(?:npm run redteam|node \.?\/?dist\/cli\.js redteam)$/, 'redteam'],
   [/^(?:npm run check:links|bash scripts\/check-links\.sh)$/, 'check-links'],
+  [/^(?:npm run check:docs|bash scripts\/check-docs\.sh)$/, 'check-docs'],
+  [/^(?:npm run check:testcount|bash scripts\/check-test-count\.sh)$/, 'check-testcount'],
 ];
 
 const canonicalise = (command: string): string | null =>
@@ -213,6 +215,33 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
 
   it('still runs the docs-links gate that R6 fired over', () => {
     expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-links');
+  });
+
+  it('runs the docs structure gate, in the install-free job where it belongs', () => {
+    // Issue #61. Asserted against the JOB rather than the whole file, so
+    // moving it into build-test — which would delay a broken-table report
+    // behind a full install — fails here rather than passing silently.
+    expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
+  });
+
+  it('runs the derived test-count gate after the suite it derives from', () => {
+    // check-test-count.sh reads README's claimed count and re-derives the real
+    // one by running vitest, so ordering it before `test` would still work but
+    // would run the suite twice. Pinned so the cheaper order is deliberate.
+    expect(indexOfGate('test')).toBeLessThan(indexOfGate('check-testcount'));
+  });
+
+  it('the docs gates are absent from prepublishOnly, and that is the safe direction', () => {
+    // ADR-0022 decision 4: the workflow may be STRICTER than prepublishOnly,
+    // never looser. This pins which way round the asymmetry runs, so a future
+    // reader does not "fix" it by deleting the workflow step instead of adding
+    // the npm one. The deploy path still runs both, because publish.yml calls
+    // this same gates.yml.
+    const prepublish = packageJson.scripts.prepublishOnly!;
+    expect(prepublish).not.toContain('check:docs');
+    expect(prepublish).not.toContain('check:testcount');
+    expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
+    expect(gateOrder).toContain('check-testcount');
   });
 
   it('both CI and the publish path delegate to the one shared definition', () => {
