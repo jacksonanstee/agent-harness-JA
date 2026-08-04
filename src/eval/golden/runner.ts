@@ -126,15 +126,22 @@ function finiteCostOrNull(value: number | null): number | null {
  * require a `process.chdir`, which is unavailable in a worker thread and is
  * shared mutable state besides.
  *
- * Precondition: both arguments must be resolved absolute paths, which the
- * sole caller guarantees (`root = resolve(invocationCwd, taskDir)`, `cwd`
- * captured from `process.cwd()`). With a relative argument, `relative()`
- * silently re-anchors it to the AMBIENT process.cwd(), which is exactly the
- * unrecorded-ambient-value class this function exists to avoid. Misuse is
- * bounded: the absolute and leading-`..` checks still bar absolute segments
- * from the stored value, so a mis-call yields wrong data, never disclosure.
+ * Precondition, ENFORCED rather than trusted: both arguments must be
+ * resolved absolute paths, which the sole caller guarantees
+ * (`root = resolve(invocationCwd, taskDir)`, `cwd` captured from
+ * `process.cwd()`). With a relative argument, `relative()` silently
+ * re-anchors it to the AMBIENT process.cwd(), which is exactly the
+ * unrecorded-ambient-value class this function exists to avoid — and the
+ * verify round executed a mis-call that POPULATED the operator's
+ * home-relative path while passing both checks below (a deep ambient cwd
+ * plus a long `../` walk lands the whole cwd path in the down-walk). A
+ * non-absolute argument therefore suppresses outright: fails safe by
+ * removing information, never by disclosing (ADR-0030).
  */
 export function portableTaskDir(root: string, cwd: string): TaskDirMeta {
+  if (!isAbsolute(root) || !isAbsolute(cwd)) {
+    return { taskDir: null, taskDirForm: 'suppressed' };
+  }
   const rel = relative(cwd, root);
   // `relative(x, x)` is the empty string. An empty path is not a path, and it
   // would read as a missing field rather than as "the working directory".

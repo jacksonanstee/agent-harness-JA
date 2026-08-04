@@ -336,6 +336,29 @@ describe('createGoldenRunner rows', () => {
       });
     });
 
+    // The absolute-paths precondition is ENFORCED, not trusted. The verify
+    // round executed a mis-call that POPULATED the operator's home-relative
+    // path while passing the absolute and leading-`..` checks: with relative
+    // arguments, relative() re-anchors both to the ambient process.cwd(), so
+    // a deep cwd plus a long `../` walk lands the whole cwd path in the
+    // down-walk (portableTaskDir('.', '../'.repeat(14))). Suppressing any
+    // non-absolute argument closes the class by construction.
+    it('suppresses outright when either argument is not an absolute path', () => {
+      expect(portableTaskDir('tasks', '/a/b')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+      expect(portableTaskDir('/a/b/tasks', 'b')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+      // The counterexample's own shape.
+      expect(portableTaskDir('.', '../'.repeat(14))).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+    });
+
     // REPLACES the pinned-weakness test whose own comment required a future
     // fix to come here and delete its expectation deliberately (issue #64).
     // The shape that exposed intervening absolute segments (the stored value
