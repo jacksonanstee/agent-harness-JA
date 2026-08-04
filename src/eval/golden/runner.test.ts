@@ -1,6 +1,6 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RedactResult } from '../../security/index.js';
@@ -242,9 +242,12 @@ describe('createGoldenRunner rows', () => {
       now: fakeNow(),
       harnessVersion: '0.1.0-test',
     });
-    // FLOOR: the fixture really is outside the working directory (its
-    // relative form escapes), or the suppression below could hold vacuously.
-    expect(relative(process.cwd(), outside).split(sep)[0]).toBe('..');
+    // FLOOR: the fixture really is outside the working directory, or the
+    // suppression below could hold vacuously. Deliberately NOT phrased via
+    // the classifier's own predicate (relative + leading-segment), so a
+    // defect in that predicate cannot bend the floor the same way.
+    expect(isAbsolute(outside)).toBe(true);
+    expect(outside.startsWith(process.cwd())).toBe(false);
 
     const scorecard = await runner.run(outside);
 

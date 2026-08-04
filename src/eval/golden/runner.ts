@@ -125,6 +125,14 @@ function finiteCostOrNull(value: number | null): number | null {
  * `root === cwd` boundary be tested at all: reaching it through `run()` would
  * require a `process.chdir`, which is unavailable in a worker thread and is
  * shared mutable state besides.
+ *
+ * Precondition: both arguments must be resolved absolute paths, which the
+ * sole caller guarantees (`root = resolve(invocationCwd, taskDir)`, `cwd`
+ * captured from `process.cwd()`). With a relative argument, `relative()`
+ * silently re-anchors it to the AMBIENT process.cwd(), which is exactly the
+ * unrecorded-ambient-value class this function exists to avoid. Misuse is
+ * bounded: the absolute and leading-`..` checks still bar absolute segments
+ * from the stored value, so a mis-call yields wrong data, never disclosure.
  */
 export function portableTaskDir(root: string, cwd: string): TaskDirMeta {
   const rel = relative(cwd, root);

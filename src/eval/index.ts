@@ -26,6 +26,7 @@ export type {
   OracleFn,
   OracleVerdict,
   RowVolatile,
+  TaskDirMeta,
   RunOptions,
   TaskParseResult,
   TaskSessionConfig,

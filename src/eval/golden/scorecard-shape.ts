@@ -79,9 +79,13 @@ export type GoldenRow = ScorecardRowCore<GoldenFailureKind> & {
  * the transform that ran", encoded as a two-value union because there is
  * exactly one transform to name. The discriminated union makes the invalid
  * pairings (a string with 'suppressed', a null with 'relative')
- * unrepresentable rather than merely documented; two independently-settable
- * fields whose relationship lived in prose already cost this codebase a
- * review round once (`pathTruncated`/`pathDigest`, ADR-0011).
+ * unrepresentable at construction rather than merely documented; field-level
+ * mutation of an existing value is not barred (no `readonly`, per house
+ * style), which holds because the runner's meta literal is the only
+ * production construction site and nothing mutates it. Two
+ * independently-settable fields whose relationship lived in prose already
+ * cost this codebase a review round once (`pathTruncated`/`pathDigest`,
+ * ADR-0011).
  *
  * `taskDir` keeps its name through the type change. ADR-0011 item 16
  * requires a NEW FIELD NAME when the READ path is intolerant; a golden
