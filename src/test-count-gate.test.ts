@@ -38,6 +38,20 @@ function runGate(root: string): Run {
   }
 }
 
+function runGateWithEnv(root: string, env: Record<string, string>): Run {
+  try {
+    const stdout = execFileSync('bash', [SCRIPT, root], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH ?? ''}`, ...env },
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status: number; stderr: string; stdout: string };
+    return { status: e.status, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+}
+
 const roots: string[] = [];
 
 /**
@@ -162,6 +176,38 @@ describe('check-test-count.sh', () => {
     const run = runGate(fixture({ readme: '# R\n\nNo status table.\n', vitestJson: green(1145) }));
     expect(run.status).toBe(2);
     expect(run.stderr).toContain("no '| Tests | N' row");
+  });
+
+  it('⭐ exits 2 when the gate CRASHES, the contract its header always claimed', () => {
+    // Round-3: this file declared the same 0/1/2 contract as check-docs.sh and
+    // implemented none of it. Under `set -u` a crash exits 1, and the only
+    // exit 1 here means "your README count is stale" - so a typo in a message
+    // string would have told a developer to write a wrong number into the
+    // README, which is the exact defect this gate exists to prevent.
+    const root = fixture({ readme: readmeClaiming(1157), vitestJson: green(1157) });
+    const run = runGateWithEnv(root, { CHECK_TEST_COUNT_SELFTEST_CRASH: '1' });
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('did not complete');
+  });
+
+  it('tolerates a reformatted status table rather than reporting the row as missing', () => {
+    // A markdown formatter pads table columns to align them; the fixed
+    // single-space pattern then found nothing and blamed the wrong thing.
+    const root = fixture({
+      readme: '# R\n\n| Milestone | Status |\n|-----------|--------|\n| Tests     | 1157 at the snapshot |\n',
+      vitestJson: green(1157),
+    });
+    expect(runGate(root).status).toBe(0);
+  });
+
+  it('refuses to guess when the README carries two Tests rows', () => {
+    const root = fixture({
+      readme: `${readmeClaiming(1157)}| Tests | 999 elsewhere |\n`,
+      vitestJson: green(1157),
+    });
+    const run = runGate(root);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('more than one');
   });
 
   it('exits 2 when the root does not exist', () => {

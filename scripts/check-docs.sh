@@ -25,6 +25,14 @@
 # rendered as a paragraph), and a hand-copied count that went stale when a
 # sibling branch merged beside the one that measured it.
 #
+# FILE SCOPE, and it is WIDER than check-links.sh's. That script scans README,
+# docs/ and process/; this one scans every tracked markdown file, fixtures and
+# agent-authored reports included. There is no exemption mechanism. The known
+# consequence: a deliberately malformed .md fixture (an unclosed fence, say, to
+# pin ADR-0028's accepted residual) would fail every build, and the only
+# remedies would be deleting it or editing this script. If that day comes, add
+# an explicit ignore list here rather than weakening a check.
+#
 # Deliberate scope limits, stated because a gate that overclaims is worse than
 # none (ADR-0015's rule, applied to this file):
 #   - This does NOT judge prose. No truth claims, no natural language.
@@ -36,6 +44,17 @@
 #     tables do not appear in this repo and the marker would need its own
 #     stripping pass.
 #
+# EXTENDING THIS GATE, because four of its failure modes are SILENT and it
+# cannot warn you about them itself:
+#   - A FOURTH spelling of the ADR count (e.g. "the thirtieth ADR", "0001
+#     through 0030") is not detected. The `claims -eq 0` backstop only fires
+#     when NO claim is recognised, so a new spelling alongside the existing
+#     three drifts unchecked. Add a recogniser next to the other three.
+#   - Another hand-copied derived constant. README's "Three essays" is one
+#     today: `docs/blog/` holds exactly 3 files and nothing re-derives it.
+#   - Moving docs/decisions/ or renaming README (now reported, not silent).
+#   - Tables the scanner cannot see; see the blind-spot list in ADR-0029.
+#
 # Usage: check-docs.sh [ROOT]   (ROOT defaults to the repo root; the argument
 # exists so the test suite can point it at fixture trees.)
 set -uo pipefail
@@ -45,10 +64,10 @@ finish() {
   local status=$?
   if [ -z "$checks_completed" ] && [ "$status" -ne 0 ]; then
     echo "check-docs: did not complete (exit $status before the checks finished)" >&2
-    rm -f "${FAILURES:-}"
+    rm -f "${FAILURES:-}" "${FILE_LIST:-}"
     exit 2
   fi
-  rm -f "${FAILURES:-}"
+  rm -f "${FAILURES:-}" "${FILE_LIST:-}"
   exit "$status"
 }
 trap finish EXIT
@@ -60,34 +79,86 @@ cd "$ROOT" || { echo "check-docs: cannot enter '$ROOT'" >&2; exit 2; }
 # pipeline subshells where a counter would be silently discarded. Same
 # construction, and same reason, as check-links.sh.
 FAILURES=$(mktemp) || exit 2
+FILE_LIST=$(mktemp) || exit 2
 
 # TEST-ONLY SEAM, and it exists because round-2 review mutated `trap finish
 # EXIT` to a no-op and the entire suite stayed green: the fix for the
 # exit-code collision was itself bound by nothing. The one test named for the
 # property used a non-existent root, which hits the explicit `exit 2` on the
 # cd above and passes identically against the pre-fix script. A crash has to
-# be REACHABLE for the trap to be testable at all. Same reasoning as the
-# injectable `generateNonce` in src/session/session.ts.
+# be REACHABLE for the trap to be testable at all.
+#
+# ⚠️ THIS IS FAULT INJECTION, NOT DEPENDENCY INJECTION. An earlier comment
+# cited `generateNonce` in src/session/session.ts as the precedent; round-3
+# review showed the analogy fails on every load-bearing axis (that injects a
+# COLLABORATOR through a typed public field which production uses and which is
+# validated; this injects a FAULT through ambient environment, has no
+# production consumer and validates nothing). The honest name for it is fault
+# injection. It fails safe — the crash lands on the trap and exits 2, so an
+# environment that sets it by accident blocks the build rather than passing
+# it — and it is not referenced by any workflow or npm script.
 if [ -n "${CHECK_DOCS_SELFTEST_CRASH:-}" ]; then
   printf '%s' "$__check_docs_deliberately_unset_variable"
 fi
 
+# Every emitted line starts with a FIXED LITERAL, and that is a security
+# control rather than cosmetics. GitHub Actions parses a step's output line as
+# a WORKFLOW COMMAND when the line begins with `::`, and colons are not
+# control characters, are not stripped below, and do not trigger git's path
+# quoting. A tracked file at the repo root named
+# `::error title=X::y.md` therefore used to produce a finding line beginning
+# `::error title=X::`, giving a PR author a spoofed annotation in the Checks
+# UI and, via `::add-mask::`, the ability to blank out later log lines. The
+# prefix makes attacker-influenced text unable to be first on the line
+# (round-3 security review, empirically confirmed).
+FINDING_PREFIX='check-docs:'
+
 note() {
-  # Doc content is attacker-influenced under the cloned-repo threat model
-  # (security-model §2) and this reaches CI logs, so strip C0/C1 controls and
-  # bidi overrides first — Trojan-Source class, the treatment check-links.sh
-  # gives link targets.
-  printf '%s\n' "$1" \
+  # Doc content and FILENAMES are attacker-influenced under the cloned-repo
+  # threat model (security-model §2) and reach CI logs, so C0, C1, DEL and the
+  # bidi overrides/isolates come out first. C1 is two UTF-8 bytes (0xC2
+  # 0x80-0x9F), which no `tr` byte range can express, so it needs the sed pass
+  # — the previous version's comment claimed C1 and stripped only C0.
+  #
+  # ⚠️ THE PIPELINE'S STATUS IS CHECKED. Every finding in this gate funnels
+  # through this one function, and its `tr | sed` status was previously
+  # discarded: a failing sed dropped the finding, and if it was the only one
+  # the gate printed OK and exited 0. That is the same fail-open round 2 fixed
+  # for awk, sitting at the choke point every finding passes through.
+  local clean
+  clean=$(printf '%s\n' "$1" \
     | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
-    | LC_ALL=C sed $'s/\xe2\x80[\xaa-\xae]//g; s/\xe2\x81[\xa6-\xa9]//g' \
-    >> "$FAILURES"
+    | LC_ALL=C sed $'s/\xc2[\x80-\x9f]//g; s/\xe2\x80[\xaa-\xae]//g; s/\xe2\x81[\xa6-\xa9]//g') || {
+    echo "$FINDING_PREFIX the log sanitiser failed; refusing to report findings it could not clean" >&2
+    exit 2
+  }
+  printf '%s %s\n' "$FINDING_PREFIX" "$clean" >> "$FAILURES" || {
+    echo "$FINDING_PREFIX could not write to the findings file" >&2
+    exit 2
+  }
 }
 
-markdown_files() {
+# Markdown files, NUL-separated.
+#
+# NUL rather than newlines, and `-c core.quotePath=off`, because `git ls-files`
+# C-quotes any path with unusual bytes by default: a file named `café.md`
+# arrived as the literal text `"caf\303\251.md"`, which awk then could not
+# open, so the gate exited 2 and blocked every PR (round-3 review). NUL also
+# makes a newline in a filename harmless.
+#
+# The previous version signalled git failure with `kill -TERM $$` from inside a
+# process-substitution subshell. That did NOT produce the documented exit 2: it
+# died with 143 (128+SIGTERM), skipped the trap's cleanup, and reached Node as
+# `status: null, signal: SIGTERM`. Enumeration now happens once, up front, with
+# its status inspected like any other command.
+list_markdown_files() {
   if git rev-parse --git-dir >/dev/null 2>&1; then
-    git ls-files '*.md' || { echo "check-docs: git ls-files failed" >&2; kill -TERM $$; }
+    git -c core.quotePath=off ls-files -z '*.md'
   else
-    find . -name '*.md' -type f | sed 's|^\./||'
+    # node_modules is pruned: run outside a git tree after an install (a source
+    # tarball, a Docker context without .git) this otherwise scanned thousands
+    # of dependency READMEs.
+    find . -name node_modules -prune -o -name '*.md' -type f -print0
   fi
 }
 
@@ -105,7 +176,13 @@ markdown_files() {
 # ---------------------------------------------------------------------------
 check_structure() {
   local file out status
-  while IFS= read -r file; do
+  while IFS= read -r -d '' file; do
+    # `find` yields ./path and `git ls-files` yields path. Normalised so the two
+    # enumeration branches produce identical findings — and because the round-3
+    # test for the `::` log-injection fix passed vacuously without it: the ./
+    # prefix meant no line ever began with the attacker's filename, so the test
+    # could not tell whether the FINDING_PREFIX was doing anything.
+    file=${file#./}
     [ -n "$file" ] || continue
     # ⚠️ awk's status is CAPTURED, not piped away. Round-2 review: awk ran on
     # the left of a pipeline whose status nothing inspected, so a missing awk
@@ -157,8 +234,12 @@ check_structure() {
     ' "$file" 2>&1)
     status=$?
     if [ "$status" -ne 0 ]; then
-      echo "check-docs: could not scan '$file' (scanner exit $status): $out" >&2
-      echo "check-docs: the file was NOT checked, so this run proves nothing" >&2
+      # Routed through note()'s sanitiser rather than echoed raw: this path
+      # previously emitted the filename verbatim, and a bidi override in a
+      # filename reached the CI log intact on the non-git branch (round-3).
+      note "could not scan '$file' (scanner exit $status): $out"
+      note "that file was NOT checked, so this run proves nothing"
+      cat "$FAILURES" >&2
       exit 2
     fi
     [ -n "$out" ] || continue
@@ -167,7 +248,7 @@ check_structure() {
     done <<EOF
 $out
 EOF
-  done < <(markdown_files)
+  done < "$FILE_LIST"
 }
 
 # ---------------------------------------------------------------------------
@@ -182,6 +263,20 @@ EOF
 # was not, so a `29 ADRs` inside a shell example was read as a live claim
 # (round-2 review). Same fence grammar, deliberately: two spellings of "is this
 # inside a fence" would drift apart.
+# Wrapper whose ONLY job is to make the fence-stripper's failure loud. Its awk
+# had no status check, which is the identical shape as the round-2 awk finding
+# in check_structure, left unfixed in the sibling function added by that very
+# fix. If it fails the claim loop reads nothing and every count silently stops
+# being compared.
+readme_prose_or_die() {
+  local out
+  out=$(readme_prose) || {
+    echo "$FINDING_PREFIX could not read README.md for ADR claims - not checked, so this run proves nothing" >&2
+    exit 2
+  }
+  printf '%s\n' "$out"
+}
+
 readme_prose() {
   awk '
     {
@@ -205,11 +300,33 @@ readme_prose() {
 }
 
 check_adr_counts() {
-  [ -d docs/decisions ] || return 0
-  [ -f README.md ] || return 0
+  # ⚠️ THESE WERE SILENT RETURNS, which is the proxy-check pattern this same
+  # function names and bans 50 lines below. Move docs/decisions/ in a reorg, or
+  # rename README, and the whole derived-constant class went green forever with
+  # no message. The sibling script already took the opposite view on the
+  # identical condition (check-test-count.sh exits 2 on a missing README);
+  # round-3 review found the two disagreeing inside one commit.
+  #
+  # A fixture tree that legitimately has neither is a tree where this check does
+  # not apply; one that has README but no docs/decisions is a repo that moved
+  # its ADRs, which is exactly the case worth shouting about.
+  if [ ! -f README.md ] && [ ! -d docs/decisions ]; then
+    return 0
+  fi
+  if [ ! -d docs/decisions ]; then
+    note "docs/decisions/ is missing but README.md exists - the ADR counts are no longer being re-derived from anything"
+    return 0
+  fi
+  if [ ! -f README.md ]; then
+    note "README.md is missing but docs/decisions/ exists - nothing is asserting an ADR count to check"
+    return 0
+  fi
 
   local actual highest padded
-  actual=$(find docs/decisions -maxdepth 1 -name '[0-9][0-9][0-9][0-9]-*.md' | wc -l | tr -d ' ')
+  actual=$(find docs/decisions -maxdepth 1 -name '[0-9][0-9][0-9][0-9]-*.md' | wc -l | tr -d ' ') || {
+    note "could not enumerate docs/decisions - the ADR count was not re-derived"
+    return 0
+  }
   highest=$(find docs/decisions -maxdepth 1 -name '[0-9][0-9][0-9][0-9]-*.md' \
     | sed 's|.*/||; s|-.*||' | sort -n | tail -1)
   [ -n "$highest" ] || return 0
@@ -256,16 +373,24 @@ check_adr_counts() {
         note "README.md: spells the ADR count '$word' but docs/decisions holds $actual ($expected)"
       fi
     done
-  done < <(readme_prose | grep -iE 'ADRs?\b|0001[^0-9]')
+  done < <(readme_prose_or_die | grep -iE 'ADRs?\b|0001[^0-9]')
 
   # A README that talks about ADRs but carries no claim this gate recognises is
   # REPORTED, never passed over. A silent skip is the proxy-check pattern
   # DEC-0016 bans: it goes quiet exactly when someone rewords the claim, which
   # is when the coverage is lost.
-  if [ "$claims" -eq 0 ] && grep -qiE '\bADRs?\b' README.md; then
+  # Reads the fence-stripped README, not the raw file: the raw grep undid the
+  # round-2 fence fix six lines after it was applied, so an ADR mention that
+  # existed only inside a fenced example produced a false failure (round-3).
+  if [ "$claims" -eq 0 ] && readme_prose_or_die | grep -qiE '\bADRs?\b'; then
     note "check-docs: README mentions ADRs but carries no count this gate recognises (a range like 0001-$padded, '$actual ADRs', or the spelled-out form) - reword it into one of those or this check is silently covering nothing"
   fi
 }
+
+if ! list_markdown_files > "$FILE_LIST"; then
+  echo "$FINDING_PREFIX could not enumerate markdown files - the tree was not scanned, so this run proves nothing" >&2
+  exit 2
+fi
 
 check_structure
 check_adr_counts

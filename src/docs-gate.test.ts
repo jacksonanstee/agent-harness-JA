@@ -109,6 +109,53 @@ describe('check-docs.sh — exit-code contract', () => {
     expect(run.stderr).toContain('did not complete');
   });
 
+  it('⭐ prefixes every finding so attacker text can never start a CI log line', () => {
+    // ROUND-3 SECURITY HIGH, empirically confirmed. GitHub Actions parses a
+    // step's output line as a WORKFLOW COMMAND when it begins with `::`.
+    // Colons are not control characters, are not stripped, and do not trigger
+    // git's path quoting, so a tracked root-level file named
+    // `::error title=X::y.md` produced a finding line starting `::error ...`:
+    // a spoofed annotation, and via `::add-mask::` the ability to blank out
+    // later log lines. Every line now starts with a fixed literal.
+    const root = fixture({ '::error title=SPOOFED::x.md': '# T\n\n```\nunclosed\n' });
+    const run = runGate(root);
+    expect(run.status).toBe(1);
+    for (const line of run.stderr.split('\n').filter(Boolean)) {
+      expect(line.startsWith('::'), `line would parse as a workflow command: ${line}`).toBe(false);
+    }
+    expect(run.stderr).toContain('check-docs:');
+  });
+
+  it('⭐ exits 2, not OK, when the log sanitiser itself fails', () => {
+    // ROUND-3 SECURITY HIGH. Every finding funnels through note(), whose
+    // tr|sed status was discarded: a failing sed dropped the finding, and if
+    // it was the only one the gate printed OK and exited 0 on a real defect.
+    const root = fixture({ 'docs/a.md': '# T\n\n```\nunclosed\n' });
+    const bin = join(root, 'fakebin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'sed'), '#!/usr/bin/env bash\nexit 1\n');
+    execFileSync('chmod', ['+x', join(bin, 'sed')]);
+    const run = runGateWithEnv(root, { PATH: `${bin}:${process.env.PATH ?? ''}` });
+    expect(run.status, 'a broken sanitiser must never read as OK').toBe(2);
+  });
+
+  it('⭐ exits 2 when the file list cannot be enumerated', () => {
+    // Replaces `kill -TERM $$`, which exited 143 and reached Node as
+    // status:null/SIGTERM, violating this file's own exit-code contract and
+    // skipping the trap's cleanup (round-3 review, both lenses).
+    const root = fixture({ 'docs/a.md': '# T\n' });
+    const bin = join(root, 'fakebin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(bin, 'git'),
+      '#!/usr/bin/env bash\nif [ "$1" = "rev-parse" ]; then exit 0; fi\nexit 128\n',
+    );
+    execFileSync('chmod', ['+x', join(bin, 'git')]);
+    const run = runGateWithEnv(root, { PATH: `${bin}:${process.env.PATH ?? ''}` });
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('proves nothing');
+  });
+
   it('⭐ exits 2 rather than OK when a file cannot be scanned', () => {
     // Round-2 HIGH: awk ran on the left of a pipeline whose status nothing
     // read, so one unreadable .md was skipped and the gate printed OK/exit 0
@@ -314,6 +361,16 @@ describe('check-docs.sh — derived ADR constants', () => {
         ...adrTree(28),
         'README.md': '# R\n\nTwenty-eight ADRs (0001-0028).\n\n```\n29 ADRs (0001-0029)\n```\n',
       }),
+    );
+  });
+
+  it('REPORTS rather than silently skipping when docs/decisions has moved', () => {
+    // Round-3: both early returns were silent successes, which is the pattern
+    // this same function names and bans 50 lines later. A reorg that moves the
+    // ADRs used to make the whole derived-constant class green forever.
+    expectFinding(
+      fixture({ 'README.md': '# R\n\nTwenty-eight ADRs (0001-0028).\n' }),
+      'no longer being re-derived',
     );
   });
 

@@ -32,13 +32,46 @@
 # a fixture; it defaults to the repo root.)
 set -uo pipefail
 
+# The same EXIT-trap contract check-docs.sh carries, and it is here because
+# round-3 review found this file declaring the identical 0/1/2 contract in its
+# header while implementing none of it. Under `set -u` an unbound variable
+# exits 1, and the only exit 1 below means "README's count is stale" - so a
+# typo in a future message string would tell a developer to write a wrong
+# number into the README, which is precisely the defect this script exists to
+# prevent, one level up.
+checks_completed=""
+finish() {
+  local status=$?
+  if [ -z "$checks_completed" ] && [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    echo "check-test-count: did not complete (exit $status before the comparison)" >&2
+    exit 2
+  fi
+  exit "$status"
+}
+trap finish EXIT
+
+# Test-only seam, same role as check-docs.sh's: a crash has to be REACHABLE for
+# the trap to be bound by anything (round-2 lesson, applied here from the
+# start rather than after review).
+if [ -n "${CHECK_TEST_COUNT_SELFTEST_CRASH:-}" ]; then
+  printf '%s' "$__check_test_count_deliberately_unset_variable"
+fi
+
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || { echo "check-test-count: cannot enter '$ROOT'" >&2; exit 2; }
 
 README="README.md"
 [ -f "$README" ] || { echo "check-test-count: no $README in '$ROOT'" >&2; exit 2; }
 
-claimed=$(grep -oE '^\| Tests \| [0-9]+' "$README" | grep -oE '[0-9]+$')
+# Whitespace-tolerant: a markdown formatter (Prettier, VS Code) pads table
+# columns to align them, and the previous fixed-single-space pattern then found
+# nothing and reported the row as MISSING - loud, but with the wrong diagnosis
+# (round-3 review).
+claimed=$(grep -oE '^\|[[:space:]]*Tests[[:space:]]*\|[[:space:]]*[0-9]+' "$README" | grep -oE '[0-9]+$')
+if [ "$(printf '%s' "$claimed" | grep -c .)" -gt 1 ]; then
+  echo "check-test-count: $README has more than one '| Tests | N' row; refusing to guess which one is the claim" >&2
+  exit 2
+fi
 if [ -z "$claimed" ]; then
   # Not "no claim, nothing to check": the row is part of the README's status
   # table and its absence is itself a drift worth reporting.
@@ -88,6 +121,7 @@ if [ "$vitest_status" -ne 0 ] || [ "$failed_tests" -ne 0 ] || [ "$failed_suites"
   exit 2
 fi
 
+checks_completed=1
 if [ "$claimed" != "$actual" ]; then
   echo "README.md claims $claimed tests; the suite ran $actual. Re-derive the number rather than adjusting the date." >&2
   exit 1

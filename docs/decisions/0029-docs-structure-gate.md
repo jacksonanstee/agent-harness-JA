@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-04
-- **Requirements:** N-1 (verification posture); answers issue #61
+- **Requirements:** N-1 (verification posture); answers the GATE PROPOSAL in
+  issue #61, which stays OPEN
 
 ## Context
 
@@ -147,10 +148,13 @@ or first exercised by this one. The placement is right; the rationale attached
 to it was inflated.
 
 `check-docs.sh` runs in the existing `docs-links` job rather than a new one:
-it needs no install, so a broken table is reported in seconds, **and adding a
-step avoids renaming a job**. Renaming would change the status-check context
-and orphan the branch-protection required checks, which is a migration
-disguised as a rename.
+it needs no install, so a broken table is reported in seconds, and it is a STEP in that job
+rather than a new job because a second job costs another checkout and runner
+spin-up for a check that takes under a second. An earlier draft justified this
+by saying it "avoids renaming a job", which is a non-sequitur: adding a job
+orphans nothing, and only renaming or removing an existing required context
+does. The rename hazard is real (`test / docs-links` IS a required status check
+on `main`, verified against the API) but it is not what this decision avoided.
 
 ## Consequences
 
@@ -162,23 +166,45 @@ disguised as a rename.
 - **Coverage is narrow by construction.** These checks catch structure, not
   meaning. A table that is well-formed and wrong passes. Anyone reading the
   green as "the docs are checked" has read more into it than it says.
-- **The limits are narrower than an earlier draft of this bullet claimed, and
-  the claim itself was a review finding.** That draft said two known limits
-  were "both pinned by tests". One of them had no test at all, and it was not a
-  blind spot but a false POSITIVE: a fence indented inside a list item was not
-  tracked, so pipe-leading lines inside it were scanned as prose and rejected.
-  Both that and the `~~~` limit are now fixed rather than documented — fences
-  are tracked CommonMark-style, by marker character and run length, so a
-  3-backtick example inside a 4-backtick block is content and a `~~~` line
-  cannot close a backtick fence. What remains genuinely unhandled is a table
-  row inside a blockquote (`> | a |`) and fences indented past 3 spaces. Those
-  are stated here and in the script header, and are not claimed to be tested.
+- **⚠️ THE SCANNER'S BLIND SPOTS, stated as a list rather than as a closed
+  set, because an earlier draft of this bullet claimed a closed set and was
+  wrong.** That draft said the residual limits were blockquoted rows and fences
+  indented past 3 spaces. Round-3 review found at least three more, one of them
+  with a live counterexample in this repo:
+  1. **A table indented 4+ spaces is not scanned at all.** Row detection is
+     `^ ? ? ?\|`. `docs/decisions/0028-skill-section-nonce-delimiter.md` holds a
+     five-space-indented table of measured security results inside a list item;
+     appending a row to it after a blank line is invisible to this gate.
+     Verified empirically.
+  2. **Tables without leading pipes** (`a | b` / `--- | ---`) are invisible,
+     header and orphan rows alike.
+  3. **Opener detection is context-free**, so a fence-shaped line inside an HTML
+     block toggles the state machine. This is mechanism 2 of the three ADR-0028
+     measured against the reference parser nine days earlier.
+  These are NOT fixed. Fixing 1 and 2 needs list-container and column tracking,
+  and fixing 3 needs block context, which is exactly the position ADR-0028 shows
+  a line-based pass cannot fake. The honest posture is a narrow checker with its
+  gaps written down, not a wider one that guesses. **"CommonMark-style" in the
+  script header means the fence CLOSER rule specifically** (same character, run
+  length at least the opener's, spaces and tabs only after it, which correctly
+  avoids the `\s*$` over-match ADR-0028 measured); it does not claim parser
+  parity, and an earlier draft borrowed that comparison too broadly.
+- **What was fixed rather than declared**: the `~~~` variant and fences indented
+  1-3 spaces inside list items, both of which were false POSITIVES that rejected
+  valid markdown, plus a 3-backtick example inside a 4-backtick block.
 - **The spelled-out ADR count is mapped only across twenty and thirty.** Past
   that the gate REPORTS rather than skipping, because a silent skip is the
   proxy-check pattern DEC-0016 bans, and it would go quiet exactly when the
   repo outgrew it.
-- **Issue #61 is answered, not deferred.** The answer is "not as specified, and
-  here is the measurement", plus the two checks it asked for at the end.
+- **Issue #61's GATE PROPOSAL is answered; the issue stays open, and the
+  distinction is deliberate.** The answer to the proposal is "not as specified,
+  and here is the measurement", plus the two binary checks its own status
+  comment asked for. The issue carries two things this does not close: the
+  unsupported-claim class itself, which remains review-caught, and the LLM-judge
+  variant in alternative 4. No closing keyword appears in this ADR, the commit
+  or the PR, deliberately — a squash merge takes the PR title as the commit
+  subject and the commit messages as its body, so a keyword in any of them
+  would close the issue regardless of intent.
 
 ## Alternatives considered
 
