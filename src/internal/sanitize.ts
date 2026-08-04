@@ -55,6 +55,48 @@ export function stripBidi(text: string): string {
   return text.replace(BIDI_CONTROLS, ' ');
 }
 
+/**
+ * MODEL-BOUND control charset (issue #45): CONTROL_CHARS minus TAB and LF.
+ *
+ * A THIRD contract, not a reuse. `CONTROL_CHARS` is written for sinks where a
+ * newline is itself the threat (log injection, terminal escapes); a system
+ * prompt is neither. Sending skill bodies through `sanitizeControlChars`
+ * mapped every `\n` to a space, so markdown headings, bullets, numbered steps
+ * and fenced code blocks arrived at the model as one run-on line, even though
+ * ADR-0006 makes the body the thing the agent actually reads.
+ *
+ * Its charset currently COINCIDES with `TERMINAL_UNSAFE`, and that is a
+ * coincidence rather than a shared rule: the terminal keeps TAB/LF for
+ * readability, the model keeps them because they carry structure. Naming them
+ * separately is what lets one move without silently moving the other — the
+ * same reason `TERMINAL_UNSAFE` is not just `CONTROL_CHARS`. Both are derived
+ * from `C0_KEEPING_TAB_LF`, so the guard above covers this one too.
+ *
+ * CR is NOT kept. `normaliseNewlines` runs first and folds CRLF and lone CR
+ * into LF, so by the time this charset applies a surviving CR is a stray
+ * control character, not a line ending. Doing it in the other order would
+ * leave `line\r\nnext` as `line \nnext` — a trailing space welded onto every
+ * line of any CRLF-authored skill file.
+ */
+const MODEL_BOUND_UNSAFE = new RegExp(
+  CONTROL_CHARS.source.replace(C0_ALL, C0_KEEPING_TAB_LF),
+  'g',
+);
+
+/** CRLF and lone CR to LF, so line endings are one shape before sanitising. */
+export function normaliseNewlines(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+/**
+ * Control-char sanitiser for MODEL-BOUND sinks: strips C0/C1, U+2028/U+2029
+ * and DEL while PRESERVING tab and newline. Callers wanting the stricter
+ * single-line contract keep using `sanitizeControlChars`.
+ */
+export function sanitizeControlCharsKeepingLines(text: string): string {
+  return normaliseNewlines(text).replace(MODEL_BOUND_UNSAFE, ' ');
+}
+
 // Invisible smuggling chars for MODEL-BOUND sinks (system prompt): zero-width
 // chars, Unicode tag block, variation selectors. DELETED (not spaced) \u2014 they
 // occupy no visual width, so a space would alter what the reader sees.

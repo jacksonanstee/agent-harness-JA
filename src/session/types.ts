@@ -175,6 +175,18 @@ export interface SessionConfig {
    * generateId must not collapse turnId onto the session id).
    */
   turnId?: string;
+  /**
+   * Injected source for the per-run skill-section delimiter nonce (ADR-0028,
+   * issue #45). Tests inject a constant to keep byte-exact prompt assertions
+   * readable.
+   *
+   * Deliberately SEPARATE from `generateId`, for the same reason `turnId` is:
+   * the CLI injects a constant-closure `generateId`, and reusing it here would
+   * make the delimiter a fixed, publishable string — which is the entire
+   * property the nonce exists to have. A caller who overrides this owns that
+   * choice; the default is a fresh 64-bit value per run from `randomBytes`.
+   */
+  generateNonce?: () => string;
 }
 
 export interface DeniedToolCall {
