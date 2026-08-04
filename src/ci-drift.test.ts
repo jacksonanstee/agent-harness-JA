@@ -224,24 +224,16 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
   });
 
-  it('runs the derived test-count gate after the suite it derives from', () => {
-    // check-test-count.sh reads README's claimed count and re-derives the real
-    // one by running vitest, so ordering it before `test` would still work but
-    // would run the suite twice. Pinned so the cheaper order is deliberate.
+  it('runs the derived test-count gate after the suite, so a red suite is reported first', () => {
+    // ⚠️ AN EARLIER VERSION OF THIS COMMENT WAS WRONG and review caught it: it
+    // said ordering this before `test` "would run the suite twice", implying
+    // this order avoids that. It does not. check-test-count.sh always shells
+    // out to a fresh `npx vitest run`, so the suite runs twice either way.
+    // The real reason for the order is failure legibility: `Test` fails first
+    // and names the broken test, rather than this gate failing first with a
+    // message about a count. Removing the second run means consuming the first
+    // one's JSON, which is a larger change than this gate justifies.
     expect(indexOfGate('test')).toBeLessThan(indexOfGate('check-testcount'));
-  });
-
-  it('the docs gates are absent from prepublishOnly, and that is the safe direction', () => {
-    // ADR-0022 decision 4: the workflow may be STRICTER than prepublishOnly,
-    // never looser. This pins which way round the asymmetry runs, so a future
-    // reader does not "fix" it by deleting the workflow step instead of adding
-    // the npm one. The deploy path still runs both, because publish.yml calls
-    // this same gates.yml.
-    const prepublish = packageJson.scripts.prepublishOnly!;
-    expect(prepublish).not.toContain('check:docs');
-    expect(prepublish).not.toContain('check:testcount');
-    expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
-    expect(gateOrder).toContain('check-testcount');
   });
 
   it('both CI and the publish path delegate to the one shared definition', () => {

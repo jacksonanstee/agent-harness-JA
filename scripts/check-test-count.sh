@@ -8,32 +8,50 @@
 # dated snapshot makes a stale number defensible in prose, which is exactly why
 # it needs a command rather than a convention.
 #
+# EXIT CODES, and the middle one is a review finding against the first cut,
+# which captured vitest's stdout and never looked at its status:
+#   0  README's count matches the suite
+#   1  README's count is stale — a real drift, fix the README
+#   2  the measurement is not trustworthy (suite red, vitest missing, output
+#      unparseable, README row absent)
+# The distinction matters because of how the first cut failed. With a test file
+# that would not COLLECT, sixteen tests vanished and the gate reported
+# "README claims 1135; the suite ran 1119. Re-derive the number" — instructing
+# the developer to write the broken number into the README and hide the real
+# failure. A red suite is never a docs drift.
+#
 # This lives outside check-docs.sh deliberately: it needs node_modules and a
-# test run, so it belongs in the build job, while check-docs.sh must stay
+# test run, so it belongs in the build job, while check-docs.sh stays
 # install-free so a broken table is reported in seconds.
 #
 # Scope limit: this checks the COUNT, not the date beside it. Gating the date
-# would fail every PR that touches a test without touching the README, which
-# is friction with no defect behind it.
+# would fail every PR that touches a test without touching the README, which is
+# friction with no defect behind it.
+#
+# Usage: check-test-count.sh [ROOT]   (ROOT exists so the suite can point it at
+# a fixture; it defaults to the repo root.)
 set -uo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
+ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$ROOT" || { echo "check-test-count: cannot enter '$ROOT'" >&2; exit 2; }
 
 README="README.md"
-[ -f "$README" ] || { echo "check-test-count: no $README" >&2; exit 2; }
+[ -f "$README" ] || { echo "check-test-count: no $README in '$ROOT'" >&2; exit 2; }
 
 claimed=$(grep -oE '^\| Tests \| [0-9]+' "$README" | grep -oE '[0-9]+$')
 if [ -z "$claimed" ]; then
   # Not "no claim, nothing to check": the row is part of the README's status
   # table and its absence is itself a drift worth reporting.
   echo "check-test-count: no '| Tests | N' row found in $README - if the row was removed, remove this gate in the same commit" >&2
-  exit 1
+  exit 2
 fi
 
-# --reporter=json emits one JSON document on stdout. numTotalTests counts every
-# test the suite ran, which is the number the README row means.
+# --reporter=json emits one JSON document on stdout. Status is captured
+# separately: a red suite must not be read as a docs drift.
 raw=$(npx vitest run --reporter=json 2>/dev/null)
-actual=$(printf '%s' "$raw" | node -e '
+vitest_status=$?
+
+parsed=$(printf '%s' "$raw" | node -e '
   let s = "";
   process.stdin.on("data", (d) => (s += d));
   process.stdin.on("end", () => {
@@ -42,13 +60,26 @@ actual=$(printf '%s' "$raw" | node -e '
     try {
       const r = JSON.parse(s.slice(start));
       if (typeof r.numTotalTests !== "number") { console.error("no numTotalTests"); process.exit(2); }
-      console.log(r.numTotalTests);
+      const failedTests = r.numFailedTests ?? 0;
+      const failedSuites = r.numFailedTestSuites ?? 0;
+      console.log(`${r.numTotalTests} ${failedTests} ${failedSuites}`);
     } catch (e) { console.error("unparseable vitest JSON: " + e.message); process.exit(2); }
   });
 ')
-status=$?
-if [ $status -ne 0 ] || [ -z "$actual" ]; then
+if [ $? -ne 0 ] || [ -z "$parsed" ]; then
   echo "check-test-count: could not read the suite's test count from vitest" >&2
+  exit 2
+fi
+
+actual=$(printf '%s' "$parsed" | cut -d' ' -f1)
+failed_tests=$(printf '%s' "$parsed" | cut -d' ' -f2)
+failed_suites=$(printf '%s' "$parsed" | cut -d' ' -f3)
+
+# A red suite (or one that failed to collect) makes the count meaningless: the
+# number it reports is smaller than the truth for a reason that has nothing to
+# do with the README. Report the real problem instead of the derived one.
+if [ "$vitest_status" -ne 0 ] || [ "$failed_tests" -ne 0 ] || [ "$failed_suites" -ne 0 ]; then
+  echo "check-test-count: the suite is not green ($failed_tests failed test(s), $failed_suites failed suite(s), vitest exit $vitest_status) - the count is not measurable and README is not the problem" >&2
   exit 2
 fi
 

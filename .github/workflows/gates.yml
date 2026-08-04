@@ -56,10 +56,10 @@ jobs:
 
       # Structural and derived-constant facts about the docs (issue #61). Sits
       # in THIS job rather than build-test because it needs no install: a table
-      # row that renders as a paragraph is reported in seconds. Deliberately
-      # workflow-only and absent from prepublishOnly — the GATE_NAMES /
-      # PREPUBLISH_FLOOR split exists so a workflow-only gate can be added
-      # without forcing decision 4's directional invariant into equality.
+      # row that renders as a paragraph is reported in seconds. Workflow-only
+      # and absent from prepublishOnly, which decision 4's directional
+      # invariant permits (the workflow may be stricter, never looser) and
+      # which check-links already did before this gate existed.
       - name: Docs structure gate
         run: bash scripts/check-docs.sh
 

@@ -53,7 +53,18 @@ added lines against the merge base, and it kills that variant too:**
 | `nowhere\|no other` only | 16 | 0.11% | **9 / 40** |
 | `nowhere` only | 13 | 0.09% | **8 / 40** |
 
-Measured over the last 40 docs-touching commits, 15,233 added markdown lines.
+Measured over the last 40 docs-touching commits, 15,233 added markdown lines,
+**anchored at `9334f18`** (the merge-base for this work). The anchor is stated
+because the window is `git log -40`, so re-running it later slides forward and
+returns different figures; independently reproduced to the digit at that
+anchor, with zero merge commits in the window, so no diff is double-counted.
+
+**Scope sensitivity, since the denominator is dominated by `process/` working
+notes** (10,280 of the 15,233 lines) and issue #61 arguably targets `docs/`.
+Restricted to `docs/` and README only, 4,775 added lines: the full variant
+blocks 22 of 40 commits and the narrowest blocks 6 of 40. The decision survives
+at both scopes, which is why it is recorded as a kill rather than as a
+scope-dependent maybe.
 
 **The 7.8:1 figure was computed per LINE, and a gate fails per COMMIT.** One
 firing line fails the build, so commits-blocked is the unit that decides
@@ -84,13 +95,25 @@ shipped past a fully green suite rather than from imagination.
   rendered document. This is the documentation-side instance of the failure
   ADR-0028 accepts as residual for skill bodies, and unlike that one it costs
   nothing to check here.
-- **Derived constants.** The ADR count and range are re-derived from the
-  filesystem (`check-docs.sh`); the test count is re-derived by running the
-  suite (`check-test-count.sh`, in the build job because it needs one). The
-  README test count drifted on 2026-08-04 because two branches each measured
-  themselves alone and one merged beside the other. **The gate caught a live
-  instance the moment it was written**, which is the only evidence worth
-  anything about a checker.
+- **Derived constants.** The ADR count is asserted in README in three
+  spellings (a range, a bare numeral, a spelled-out word) and all three are
+  re-derived from the filesystem (`check-docs.sh`); the test count is
+  re-derived by running the suite (`check-test-count.sh`, in the build job
+  because it needs one). The README test count drifted on 2026-08-04 because
+  two branches each measured themselves alone and one merged beside the other.
+
+  **⚠️ CORRECTION, and it matters because it is this ADR's own subject.** An
+  earlier draft said the gate "caught a live instance the moment it was
+  written" and the commit message claimed "three live drifts". Adversarial
+  review checked it: both gates are GREEN on a clean pre-branch tree, and the
+  hand-fix to the test count had already landed before the gate existed. Every
+  drift the gate reported was one **this change itself created** by adding
+  ADR-0029 and new tests. Real evidence that the checks fire, and no evidence
+  at all of pre-existing drift caught in the wild, which is what "live" implied.
+  The one thing that genuinely was caught cold is narrower and worth keeping:
+  the gate's own blind spot, a bare `28 ADRs` numeral that no check covered
+  while the range and spelled-out forms were both checked. One fact with three
+  spellings needs three checks.
 
 **3. Both fail the build. Neither warns.**
 
@@ -104,11 +127,16 @@ that made the no-em-dash rule survive.
 `prepublishOnly`.**
 
 ADR-0022 decision 4 makes the workflow-versus-`prepublishOnly` invariant
-directional: the workflow may be stricter, never looser. `ci-drift.test.ts`
-keeps `GATE_NAMES` and `PREPUBLISH_FLOOR` as separate literals precisely so a
-workflow-only gate can be added without forcing equality. This is the first
-gate to use that. The deploy path still runs it, because `publish.yml` calls
-the same `gates.yml`.
+directional: the workflow may be stricter, never looser. The deploy path still
+runs both gates, because `publish.yml` calls the same `gates.yml`.
+
+**Correction to an earlier draft, which said this was "the first gate to use"
+the `GATE_NAMES` / `PREPUBLISH_FLOOR` split.** It is not. `check-links` was
+already a workflow-only gate absent from `prepublishOnly` before this change,
+and neither literal is modified here — both remain the same five elements. The
+split explains why a workflow-only gate is *permitted*; it was not introduced
+or first exercised by this one. The placement is right; the rationale attached
+to it was inflated.
 
 `check-docs.sh` runs in the existing `docs-links` job rather than a new one:
 it needs no install, so a broken table is reported in seconds, **and adding a
@@ -126,11 +154,17 @@ disguised as a rename.
 - **Coverage is narrow by construction.** These checks catch structure, not
   meaning. A table that is well-formed and wrong passes. Anyone reading the
   green as "the docs are checked" has read more into it than it says.
-- **Two known limits, pinned by tests rather than left in prose.** Only ` ``` `
-  fences toggle fence state, so a `~~~` block containing pipe-leading lines is
-  scanned as prose; and indented fences inside list items are not tracked. Both
-  have a test asserting the current behaviour, so teaching the gate either one
-  turns a test red and makes the change deliberate.
+- **The limits are narrower than an earlier draft of this bullet claimed, and
+  the claim itself was a review finding.** That draft said two known limits
+  were "both pinned by tests". One of them had no test at all, and it was not a
+  blind spot but a false POSITIVE: a fence indented inside a list item was not
+  tracked, so pipe-leading lines inside it were scanned as prose and rejected.
+  Both that and the `~~~` limit are now fixed rather than documented — fences
+  are tracked CommonMark-style, by marker character and run length, so a
+  3-backtick example inside a 4-backtick block is content and a `~~~` line
+  cannot close a backtick fence. What remains genuinely unhandled is a table
+  row inside a blockquote (`> | a |`) and fences indented past 3 spaces. Those
+  are stated here and in the script header, and are not claimed to be tested.
 - **The spelled-out ADR count is mapped only across twenty and thirty.** Past
   that the gate REPORTS rather than skipping, because a silent skip is the
   proxy-check pattern DEC-0016 bans, and it would go quiet exactly when the
