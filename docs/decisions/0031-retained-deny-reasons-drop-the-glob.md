@@ -168,10 +168,18 @@ friends) append to the same glob-free base string and are covered by existing te
 RED-first where runtime-visible: the three store-validator tests (suppressed shape
 accepted; null path without the suppressed form and unknown `pathForm` values rejected; the
 legacy-plus-suppressed upgrade trail) were observed failing against the shipped validator
-before it changed. The session-level pins reddened exactly as decision 6 enumerated (the
-exact-payload pin, the distinct-row pin, the digest fixture that had to MOVE under the
-mocked root because an out-of-root path now suppresses, and `load.test.ts`'s empty-dir
-equality), plus the 49 `loadSkills` mock literals at the type level. Suite 1174 → 1187.
+before it changed. The session-level pins reddened exactly as the design record enumerated
+(`process/designs/2026-08-07-issue-59-round2-design-spec.md`, Design A v2 item 6 — this
+ADR's decision 6 records the design, not the test list): the exact-payload pin, the
+distinct-row pin, the digest fixture that had to MOVE under the mocked root because an
+out-of-root path now suppresses, and `load.test.ts`'s empty-dir equality, plus the
+`loadSkills` mock literals at the type level — 49 shipped, where the spec's 51 was a
+pre-implementation estimate. Suite 1174 → 1187, then 1189 after the review round's two
+additions (the suppressed-arm coherence pins and the root-at-or-above-home documented-limit
+pin). Semver obligation, recorded here so the PR cannot omit it: `LoadResult` gains a
+REQUIRED `root` field (breaks external `loadSkills` implementers) and `SkillDropPayload`
+changed from interface to union — the PR body carries the breaking-change note, version
+implication decided there (package still pre-first-publish).
 
 Mutation gates on `relativeSkillDropPath` and the write site, each asserting its
 replacement applied and restored from a scratch copy (never `git checkout`) verified

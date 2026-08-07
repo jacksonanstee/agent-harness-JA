@@ -503,6 +503,37 @@ describe('skill-drop events', () => {
     expect(payload.pathForm).toBe('root-relative');
   });
 
+  it('a suppressed row cannot claim truncation or carry a digest (coherence, issue-#55 style)', () => {
+    // The write site can never produce either shape ('a suppressed row
+    // stores nothing, so nothing was truncated', and the digest spread is
+    // skipped) — this guards the honest-but-buggy DIRECT writer, the same
+    // class the digest-implies-truncated coupling below exists for. A digest
+    // on a suppressed row would attach the row's designated home-prefix
+    // carrier to a row whose whole point is refusing to identify the path.
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, path: null, pathForm: 'suppressed', pathTruncated: true } as never,
+      }),
+    ).toThrow(/skill-drop/);
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: {
+          ...validPayload,
+          path: null,
+          pathForm: 'suppressed',
+          pathDigest: 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN),
+        } as never,
+      }),
+    ).toThrow(/skill-drop/);
+  });
+
   it('rejects a null path without the suppressed form, and any unknown pathForm', () => {
     const { store } = openStore();
     expect(() =>

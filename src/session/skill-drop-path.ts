@@ -39,6 +39,18 @@ export type SkillDropPathMeta =
  * literally named `..foo` under the root is a legal name and stays
  * populated. `isAbsolute(rel)` covers the Windows cross-drive case, where
  * `relative()` has no relative form (reasoned, not executed: no Windows CI).
+ * One more win32 shape is admitted-but-ambient-anchored: a drive-less
+ * rooted argument (`\\skills`) passes `isAbsolute` while `relative()`
+ * re-anchors its drive to the ambient cwd — the outcomes are the correct
+ * relative form (same drive) or suppression via the cross-drive arm, both
+ * safe directions (reasoned, not executed).
+ *
+ * SCOPE OF THE GUARANTEE, stated because a review executed its edge: the
+ * home-prefix removal holds when the skills root sits below or disjoint
+ * from the operator's home directory. A root at or ABOVE `$HOME` (`/`,
+ * `/Users`) places home segments BELOW the root, where they store in
+ * cleartext like any other below-root segment (ADR-0027 decision 4's
+ * ceiling; operator-chosen configuration, not attacker-triggerable).
  *
  * Precondition, ENFORCED rather than trusted (the ADR-0030 verify round
  * executed the mis-call this guard exists for): with a relative argument,

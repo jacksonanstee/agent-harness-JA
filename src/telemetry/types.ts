@@ -183,6 +183,26 @@ export const SKILL_DROP_RULE_ID_MAX = 64;
  * ('root-relative'); absence means a legacy row, and that absence is what
  * distinguishes eras (the ADR-0011 item 16 argument for keeping the field
  * name, re-verified for this sink in ADR-0031).
+ *
+ * `path` itself is ROOT-RELATIVE to the skills root the loader scanned
+ * (legacy rows are absolute), and ALREADY ESCAPED (not merely cleaned) by
+ * the write site via `escapePathUnsafe` (src/internal/sanitize.ts). The
+ * escape runs AFTER relativisation, on the string actually stored —
+ * relativise, then escape, then bound — because escape tokens are not path
+ * segments and the cap must bound the stored form, not a pre-image that
+ * grows during escaping. Deleting an invisible character instead of
+ * escaping it would be lossy in exactly the way `pathTruncated` exists to
+ * prevent for truncation: a hostile `he<U+200B>lper.md` must not read back
+ * byte-identical to a benign `helper.md` (round-1 fix, issue #46
+ * Finding 1).
+ *
+ * TRUST BOUNDARY, stated for both properties: `isSkillDropPayload`
+ * (store.ts) validates shape, not content. A direct writer that skips
+ * escaping is not rejected there, and neither is one that stamps
+ * `pathForm: 'root-relative'` on a string that is absolute or was never
+ * derived from any root — the validator cannot know the root. Same
+ * boundary as every other string field on this payload; consumers keying
+ * on `pathForm` inherit it.
  */
 export type SkillDropPathPair =
   | { path: string; pathForm?: 'root-relative' }
@@ -192,19 +212,6 @@ export type SkillDropPayload = SkillDropPayloadFields & SkillDropPathPair;
 
 export interface SkillDropPayloadFields {
   name: string;
-  /*
-   * `path` (on SkillDropPathPair above): ROOT-RELATIVE to the skills root
-   * the loader scanned (ADR-0031 decision 6; legacy rows are absolute), and
-   * ALREADY ESCAPED (not merely cleaned) by the write site via
-   * `escapePathUnsafe` (src/internal/sanitize.ts) — escape runs AFTER
-   * relativisation, on the string actually stored: deleting an invisible
-   * character would be lossy in exactly the way `pathTruncated` below exists
-   * to prevent for truncation — a hostile `he<U+200B>lper.md` must not read
-   * back byte-identical to a benign `helper.md` (round-1 fix, issue #46
-   * Finding 1). `isSkillDropPayload` (store.ts) validates shape, not
-   * content, so a direct writer that skips escaping is not rejected there —
-   * same trust boundary as every other string field on this payload.
-   */
   /**
    * OUT-OF-BAND truncation marker for `path`. The in-band ellipsis cannot be
    * trusted: U+2026 is a legal filename character and skill paths are

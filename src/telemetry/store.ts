@@ -407,10 +407,19 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     // malformed, not legacy, and an unknown pathForm value is rejected the
     // same way a malformed digest is: an unusable signal a consumer would
     // trust is worse than none.
+    // The suppressed arm carries the FULL coherence the review demanded of
+    // it (issue-#55 style): a suppressed row stores nothing, so it can
+    // neither claim truncation nor carry a digest — a digest would attach
+    // the row's designated home-prefix carrier to a row whose whole point is
+    // refusing to identify the path. Same honest-but-buggy-direct-writer
+    // class as the digest-implies-truncated coupling below.
     ((typeof value.path === 'string' &&
       value.path.length <= SKILL_DROP_PATH_MAX &&
       (value.pathForm === undefined || value.pathForm === 'root-relative')) ||
-      (value.path === null && value.pathForm === 'suppressed')) &&
+      (value.path === null &&
+        value.pathForm === 'suppressed' &&
+        value.pathTruncated === false &&
+        value.pathDigest === undefined)) &&
     typeof value.pathTruncated === 'boolean' &&
     typeof value.pathHasEscapes === 'boolean' &&
     // OPTIONAL: absent is valid, because rows predating the field must still

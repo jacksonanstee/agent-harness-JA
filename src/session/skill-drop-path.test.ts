@@ -79,6 +79,18 @@ describe('relativeSkillDropPath', () => {
     });
   });
 
+  it('DOCUMENTED LIMIT: a root at or above the home directory stores home segments like any other below-root segment', () => {
+    // The home-prefix guarantee holds when the skills root sits below or
+    // disjoint from $HOME. An operator who points the harness at '/Users'
+    // (or '/') puts the home directory BELOW the root, and below-root
+    // segments store in cleartext by design (ADR-0027 decision 4 ceiling).
+    // Pinned as intended-and-documented, not accidental (review finding).
+    expect(relativeSkillDropPath('/Users', '/Users/op/skills/x.md')).toEqual({
+      path: 'op/skills/x.md',
+      pathForm: 'root-relative',
+    });
+  });
+
   it('a null root (the no-scan case) suppresses', () => {
     expect(relativeSkillDropPath(null, '/skills/helper.md')).toEqual({
       path: null,
