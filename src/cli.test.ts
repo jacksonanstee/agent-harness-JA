@@ -809,7 +809,8 @@ describe('writeScorecard', () => {
     meta: {
       createdAt: '2026-07-09T03:12:45.000Z',
       harnessVersion: '0.1.0-test',
-      taskDir: '/tmp/tasks',
+      taskDir: 'tmp/tasks',
+      taskDirForm: 'relative',
       models: [],
     },
     rows: [],

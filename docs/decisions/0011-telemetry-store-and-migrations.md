@@ -582,8 +582,9 @@ the table decision 4 already owns.
       `meta.taskDir`, (c) hook-event `reason`, (d) `denied[]` inside
       `memory_entries`, and (e) `memory_entries.content`. Of these, (b) was
       partly closed on 2026-07-31 by issue #62, for the invocation shape where
-      the task directory sits at or under the working directory; the other
-      four, and (b)'s escape case, remain live, so the argument above is
+      the task directory sits at or under the working directory, and fully
+      closed on 2026-08-04 by issue #64 / ADR-0030, which suppresses every
+      escaping form; the other four remain live, so the argument above is
       unaffected. The root cause that killed all three designs is
       recorded in ADR-0027 and constrains any future attempt: every one of them
       keyed on `os.homedir()`, which returns `$HOME` verbatim, is unrecorded in

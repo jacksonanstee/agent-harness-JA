@@ -27,6 +27,7 @@ export type {
   OracleVerdict,
   RowVolatile,
   RunOptions,
+  TaskDirMeta,
   TaskParseResult,
   TaskSessionConfig,
   VerificationSection,

@@ -1,5 +1,5 @@
 import { readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { TaskDescriptor } from '../../router/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
@@ -9,6 +9,7 @@ import type {
   GoldenRow,
   GoldenScorecard,
   GoldenTotals,
+  TaskDirMeta,
   VerificationSection,
 } from './scorecard-shape.js';
 import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
@@ -80,66 +81,75 @@ function finiteCostOrNull(value: number | null): number | null {
 }
 
 /**
- * The task directory as recorded in `meta.taskDir`, expressed relative to the
- * working directory (issue #62).
+ * The `meta.taskDir` pair for the scorecard (issues #62 and #64, ADR-0030).
  *
- * `resolve()` always yields an absolute path, so embedding it put the
- * operator's home directory into every scorecard, unconditionally, in a file
- * whose whole purpose is to be shared. This is the same disclosure class as
- * issue #59, and it is deliberately NOT fixed the same way.
+ * Contract: `taskDir` is populated only when the task directory is at or
+ * under the working directory the run was invoked from. Any other invocation
+ * stores null, with `taskDirForm: 'suppressed'` as the in-row signal
+ * ADR-0027 decision 3 requires of a transform that may not apply. The field
+ * semantics, and why null rather than a degraded value, live on the
+ * `TaskDirMeta` type in scorecard-shape.ts.
  *
- * All three #59 designs died because they keyed on `os.homedir()`, a value
- * that is unrecorded in the artefact and silently wrong under a different
- * `HOME` (ADR-0027 decision 3, and the R-17 residual). The only ambient value
- * consulted here is the caller's `cwd`, and the difference that matters is
- * that `cwd` cannot be well-formed but WRONG the way `$HOME` can: it is the
- * directory the run was actually invoked from, so the transform cannot
- * degrade into a no-op that reports success.
+ * Why `relative()` and never `os.homedir()`: all three issue #59 designs
+ * died keying on `$HOME`, an ambient value that is unrecorded in the
+ * artefact and silently wrong under a different environment (ADR-0027
+ * decision 3, and the R-17 residual). The only ambient value consulted here
+ * is the caller's `cwd`, which cannot be well-formed but WRONG the way
+ * `$HOME` can: it is the directory the run was actually invoked from, so
+ * the transform cannot degrade into a no-op that reports success.
  *
- * ⚠️ WHAT THIS DOES NOT CLOSE, measured rather than assumed. `relative()`
- * walks UP to the common ancestor and then down, so when `cwd` is not at or
- * above `root` the result contains the intervening absolute segments:
+ * Why suppress every walk-up: when `cwd` is not at or above `root`,
+ * `relative()` walks UP to the common ancestor and back down, so the result
+ * can spell out intervening absolute segments in a file whose purpose is to
+ * be shared:
  *
- *     portableTaskDir('/Users/<name>/clients/acme/tasks', '/tmp/scratch')
+ *     relative('/tmp/scratch', '/Users/<name>/clients/acme/tasks')
  *       -> '../../Users/<name>/clients/acme/tasks'
  *
- * The home directory is fully present there. The closure is therefore real
- * for the invocation shape the CLI defaults to and overwhelmingly uses (a
- * task directory at or under the working directory, `./eval/golden`), and it
- * is NOT a general fix. Pinned by test rather than left to be rediscovered,
- * and tracked as issue #64, because storing something else in the escape
- * case is a type change plus the signal field ADR-0027 decision 3 requires,
- * which is a separate decision from this one.
+ * Even the bounded sibling shape (`../tasks`, stored here until issue #64)
+ * reveals the directory's own name, which is routinely a client or project
+ * name, and no documented workflow produces it — so ALL `..`-leading forms
+ * suppress, and ADR-0030 records the supersession of #62's sibling
+ * behaviour.
  *
- * It is not lossy for an investigator: on the machine that produced the
- * scorecard, resolving the stored value against the invoking working
- * directory returns the original path. That working directory is deliberately
- * NOT recorded, since doing so would re-introduce the disclosure one field
- * over.
- *
- * On the field keeping its NAME despite changing meaning: ADR-0011 item 16
- * requires a new name when the READ path is intolerant, because its validator
- * is anchored, `rowToEvent` throws rather than skipping, and `query()` maps
- * over every row, so one nonconforming row denies the whole trail. A golden
- * scorecard has no read path at all: nothing in this repo parses one back,
- * there is no validator and no query. That, not the fact that `isAbsolute()`
- * can tell the populations apart, is why the rule does not bite here.
- *
- * Known limit, reasoned and not executed: on Windows a path on a different
- * drive has no relative form and `relative()` returns an absolute path. There
- * is no Windows CI in this project.
+ * The classifier is a segment check, not a prefix check: a directory
+ * literally named `..foo` under cwd is a legal name and stays populated.
+ * Suppression is the fall-through rather than a positive match, so any
+ * shape not positively recognised as at-or-under-cwd fails safe by removing
+ * information instead of disclosing it. `isAbsolute(rel)` covers the
+ * Windows cross-drive case, where `relative()` has no relative form and
+ * returns an absolute path (reasoned, not executed: no Windows CI).
  *
  * `cwd` is a parameter rather than a direct `process.cwd()` read, following
  * the injected-seam style used throughout this codebase. It is what lets the
  * `root === cwd` boundary be tested at all: reaching it through `run()` would
  * require a `process.chdir`, which is unavailable in a worker thread and is
  * shared mutable state besides.
+ *
+ * Precondition, ENFORCED rather than trusted: both arguments must be
+ * resolved absolute paths, which the sole caller guarantees
+ * (`root = resolve(invocationCwd, taskDir)`, `cwd` captured from
+ * `process.cwd()`). With a relative argument, `relative()` silently
+ * re-anchors it to the AMBIENT process.cwd(), which is exactly the
+ * unrecorded-ambient-value class this function exists to avoid — and the
+ * verify round executed a mis-call that POPULATED the operator's
+ * home-relative path while passing both checks below (a deep ambient cwd
+ * plus a long `../` walk lands the whole cwd path in the down-walk). A
+ * non-absolute argument therefore suppresses outright: fails safe by
+ * removing information, never by disclosing (ADR-0030).
  */
-export function portableTaskDir(root: string, cwd: string): string {
+export function portableTaskDir(root: string, cwd: string): TaskDirMeta {
+  if (!isAbsolute(root) || !isAbsolute(cwd)) {
+    return { taskDir: null, taskDirForm: 'suppressed' };
+  }
   const rel = relative(cwd, root);
   // `relative(x, x)` is the empty string. An empty path is not a path, and it
   // would read as a missing field rather than as "the working directory".
-  return rel === '' ? '.' : rel;
+  if (rel === '') return { taskDir: '.', taskDirForm: 'relative' };
+  if (!isAbsolute(rel) && rel.split(sep)[0] !== '..') {
+    return { taskDir: rel, taskDirForm: 'relative' };
+  }
+  return { taskDir: null, taskDirForm: 'suppressed' };
 }
 
 function discoverTaskFiles(root: string): string[] {
@@ -483,7 +493,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         meta: {
           createdAt,
           harnessVersion,
-          taskDir: portableTaskDir(root, invocationCwd),
+          ...portableTaskDir(root, invocationCwd),
           models: [...models].sort(),
         },
         rows: sorted,

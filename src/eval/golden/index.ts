@@ -21,6 +21,7 @@ export type {
   GoldenScorecard,
   GoldenTotals,
   RowVolatile,
+  TaskDirMeta,
   VerificationSection,
 } from './scorecard-shape.js';
 // Re-exported so a GoldenScorecard consumer can name a VerificationSection's

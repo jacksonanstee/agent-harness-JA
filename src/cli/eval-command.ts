@@ -249,6 +249,16 @@ export async function runEval(args: EvalArgs): Promise<number> {
       return 2;
     }
     process.stderr.write(`scorecard written to ${written.path}\n`);
+    // Operator-facing only: the terminal already saw the absolute root in the
+    // discovery progress line above, so this discloses nothing new. The
+    // RETAINED artefact is what suppression protects (issue #64, ADR-0030).
+    if (scorecard.meta.taskDirForm === 'suppressed') {
+      process.stderr.write(
+        `${sanitizeForTerminal(
+          'warning: meta.taskDir suppressed in the written scorecard (working directory is not at or above the task directory)',
+        )}\n`,
+      );
+    }
 
     process.stdout.write(sanitizeForTerminal(toMarkdown(scorecard)));
 

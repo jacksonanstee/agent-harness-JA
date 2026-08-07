@@ -214,18 +214,22 @@ describe('createGoldenRunner rows', () => {
 
     const scorecard = await runner.run(taskDir);
 
-    expect(isAbsolute(scorecard.meta.taskDir)).toBe(false);
+    const { meta } = scorecard;
+    expect(meta.taskDirForm).toBe('relative');
+    if (meta.taskDirForm !== 'relative') throw new Error('narrowing: asserted above');
+    expect(isAbsolute(meta.taskDir)).toBe(false);
     // Nothing an investigator needs is lost: on the machine that produced it,
     // the stored value round-trips to exactly the directory that was run.
-    expect(resolve(process.cwd(), scorecard.meta.taskDir)).toBe(taskDir);
+    expect(resolve(process.cwd(), meta.taskDir)).toBe(taskDir);
   });
 
-  // The same field, for a directory OUTSIDE the working directory. `relative`
-  // walks up rather than falling back to an absolute path, so the home prefix
-  // still goes. Documented limit: on Windows a different drive letter has no
-  // relative form and `relative()` returns an absolute path. There is no
-  // Windows CI here, so that path is reasoned about and NOT executed.
-  it('keeps meta.taskDir relative for a task directory outside the working directory', async () => {
+  // The same field, for a directory OUTSIDE the working directory: the
+  // relative form would have to walk up through the common ancestor,
+  // spelling out intervening absolute segments on the way back down, so the
+  // field suppresses instead of storing any walk-up (issue #64, ADR-0030).
+  // End-to-end through run() deliberately: the unit tests below cannot prove
+  // the suppressed pair reaches the actual scorecard object.
+  it('suppresses meta.taskDir for a task directory outside the working directory', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'golden-outside-'));
     writeFileSync(
       join(outside, 'solo.task.md'),
@@ -238,12 +242,17 @@ describe('createGoldenRunner rows', () => {
       now: fakeNow(),
       harnessVersion: '0.1.0-test',
     });
+    // FLOOR: the fixture really is outside the working directory, or the
+    // suppression below could hold vacuously. Deliberately NOT phrased via
+    // the classifier's own predicate (relative + leading-segment), so a
+    // defect in that predicate cannot bend the floor the same way.
     expect(isAbsolute(outside)).toBe(true);
+    expect(outside.startsWith(process.cwd())).toBe(false);
 
     const scorecard = await runner.run(outside);
 
-    expect(isAbsolute(scorecard.meta.taskDir)).toBe(false);
-    expect(resolve(process.cwd(), scorecard.meta.taskDir)).toBe(resolve(outside));
+    expect(scorecard.meta.taskDir).toBeNull();
+    expect(scorecard.meta.taskDirForm).toBe('suppressed');
   });
 
   // The boundary `run()` cannot reach without a process.chdir, which is why
@@ -252,21 +261,43 @@ describe('createGoldenRunner rows', () => {
   // working directory", so it is mapped to '.'.
   describe('portableTaskDir', () => {
     it("maps the working directory itself to '.', never to the empty string", () => {
-      expect(portableTaskDir('/a/b/c', '/a/b/c')).toBe('.');
+      expect(portableTaskDir('/a/b/c', '/a/b/c')).toEqual({
+        taskDir: '.',
+        taskDirForm: 'relative',
+      });
       // The floor: relative() really does return '' here, so the branch above
       // is doing work rather than restating what relative already gives.
       expect(relative('/a/b/c', '/a/b/c')).toBe('');
     });
 
-    it('walks up for a directory outside cwd rather than falling back to absolute', () => {
-      const out = portableTaskDir('/a/b/tasks', '/a/b/c/d');
-      expect(isAbsolute(out)).toBe(false);
-      expect(out).toBe(join('..', '..', 'tasks'));
+    it('populates a directory at or under the working directory, with the form signal', () => {
+      expect(portableTaskDir('/a/b/c/d/e', '/a/b')).toEqual({
+        taskDir: join('c', 'd', 'e'),
+        taskDirForm: 'relative',
+      });
+    });
+
+    // Deliberate supersession of the #62 sibling shape: until issue #64 this
+    // fixture stored join('..', '..', 'tasks'). Even that bounded walk-up
+    // reveals the task directory's own name, which is routinely a client or
+    // project name, and no documented workflow produces the shape. ADR-0030
+    // records the decision.
+    it('suppresses a sibling walk-up rather than storing its .. form', () => {
+      expect(portableTaskDir('/a/b/tasks', '/a/b/c/d')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+    });
+
+    it('suppresses the parent directory itself', () => {
+      expect(portableTaskDir('/a/b', '/a/b/c')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
     });
 
     // An earlier cut of this test set HOME to an unrelated value and asserted
-    // portableTaskDir('/a/b/tasks', '/a/b') === 'tasks'. That passes for an
-    // implementation that reads process.env.HOME on every call, so it could
+    // a value a HOME-reading implementation would also produce, so it could
     // not fail for the reason its name gave. The fixture has to be one where
     // a homedir-keyed implementation and this one MUST disagree: HOME a
     // genuine prefix of root, and cwd somewhere the prefix strip would not
@@ -275,33 +306,68 @@ describe('createGoldenRunner rows', () => {
       const before = process.env['HOME'];
       try {
         process.env['HOME'] = '/a/b';
-        // A homedir-prefix-stripping implementation returns 'tasks' here.
-        // Walking up from cwd is the only correct answer.
-        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
+        // A homedir-prefix-stripping implementation returns a POPULATED
+        // 'tasks' here. Suppression is the only correct answer.
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toEqual({
+          taskDir: null,
+          taskDirForm: 'suppressed',
+        });
         // Same inputs, different HOME: identical output, which is the
         // property the name actually promises.
         process.env['HOME'] = '/completely/elsewhere';
-        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toBe(join('..', 'tasks'));
+        expect(portableTaskDir('/a/b/tasks', '/a/b/c')).toEqual({
+          taskDir: null,
+          taskDirForm: 'suppressed',
+        });
       } finally {
         if (before === undefined) delete process.env['HOME'];
         else process.env['HOME'] = before;
       }
     });
 
-    // ⚠️ The limit of the fix, pinned so it cannot be quietly rediscovered or
-    // quietly changed. When cwd is not at or above the task directory,
-    // `relative()` walks up to the common ancestor and then back down, so the
-    // intervening absolute segments (including the home directory) survive.
-    // The closure claimed in security-model R-17 (b) is scoped to the
-    // invocation shape the CLI defaults to, and this test is the evidence for
-    // that scoping rather than an aspiration to fix it here. Tracked as #64.
-    it('STILL exposes intervening absolute segments when cwd is not above the task directory', () => {
-      const out = portableTaskDir('/Users/someone/clients/acme/tasks', '/tmp/scratch');
-      expect(out.startsWith('..')).toBe(true);
-      // The disclosure this issue is about is present, and saying so in an
-      // assertion is the point: a future change that closes it must come here
-      // and delete this expectation deliberately.
-      expect(out).toContain('/Users/someone');
+    // The segment check is a boundary contract: `..foo` is a legal directory
+    // name that a prefix check (startsWith('..')) would wrongly suppress.
+    // Pinned so the plausible-looking shortcut cannot land (design-panel
+    // finding, 2026-08-04).
+    it("treats a directory literally named '..foo' as populated, not as a walk-up", () => {
+      expect(portableTaskDir('/a/b/..foo/tasks', '/a/b')).toEqual({
+        taskDir: join('..foo', 'tasks'),
+        taskDirForm: 'relative',
+      });
+    });
+
+    // The absolute-paths precondition is ENFORCED, not trusted. The verify
+    // round executed a mis-call that POPULATED the operator's home-relative
+    // path while passing the absolute and leading-`..` checks: with relative
+    // arguments, relative() re-anchors both to the ambient process.cwd(), so
+    // a deep cwd plus a long `../` walk lands the whole cwd path in the
+    // down-walk (portableTaskDir('.', '../'.repeat(14))). Suppressing any
+    // non-absolute argument closes the class by construction.
+    it('suppresses outright when either argument is not an absolute path', () => {
+      expect(portableTaskDir('tasks', '/a/b')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+      expect(portableTaskDir('/a/b/tasks', 'b')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+      // The counterexample's own shape.
+      expect(portableTaskDir('.', '../'.repeat(14))).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
+    });
+
+    // REPLACES the pinned-weakness test whose own comment required a future
+    // fix to come here and delete its expectation deliberately (issue #64).
+    // The shape that exposed intervening absolute segments (the stored value
+    // used to CONTAIN '/Users/someone') now suppresses.
+    it('suppresses the escape shape that previously exposed intervening absolute segments', () => {
+      expect(portableTaskDir('/Users/someone/clients/acme/tasks', '/tmp/scratch')).toEqual({
+        taskDir: null,
+        taskDirForm: 'suppressed',
+      });
     });
   });
 
