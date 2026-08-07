@@ -1129,7 +1129,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // are short vendor-supplied tokens, not model or tool prose.
         refusal,
         resultText: truncate(redactForPersistence(resultText)),
-        denied,
+        // Same redact-then-truncate as prompt/resultText: the deny reason is
+        // harness-authored today, but ANY registered hook's throw message
+        // lands here, and this is a retained sink (R-17 channel d, ADR-0031).
+        denied: denied.map((call) => ({
+          tool: call.tool,
+          reason: truncate(redactForPersistence(call.reason)),
+        })),
         failed: streamError !== null,
       }),
     });

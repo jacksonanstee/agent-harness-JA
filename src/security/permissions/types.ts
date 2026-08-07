@@ -38,8 +38,23 @@ export interface EvaluatorOptions {
 
 export interface Evaluation {
   readonly decision: PermissionDecision;
-  /** Index into the evaluator's rule list; null when defaultDecision applied. */
+  /**
+   * The winning rule's position within its OWN layer's settings file (the
+   * order in that file), NOT the combined user+project list — the reason
+   * string's `[rule N, layer]` must index into the one file the layer tag
+   * names (ADR-0031). Null when defaultDecision applied. `ruleIndex` is only
+   * a complete identity together with `layer`: the same index exists in both
+   * files.
+   */
   readonly ruleIndex: number | null;
+  /**
+   * The layer the winning rule came from; the structured half of the reason
+   * string's `[rule N, layer]`. Null when defaultDecision applied (review
+   * finding on ADR-0031: a per-layer index without its layer recreates for
+   * API consumers the mis-attribution the per-layer change fixed for
+   * operators).
+   */
+  readonly layer: SettingsLayer | null;
   /** Human-readable reason, safe to surface in denial messages. */
   readonly reason: string;
 }

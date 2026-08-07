@@ -819,6 +819,41 @@ describe('createSession', () => {
     expect(content).toContain('[REDACTED:aws-access-key-id]');
   });
 
+  it('denied[] reasons pass through redact-then-truncate before the memory write (R-17 channel d)', async () => {
+    // The deny reason is harness-authored today, but ANY registered hook's
+    // throw message becomes a denied[] entry, and memory is a retained sink.
+    // Same redact-BEFORE-truncate ordering as prompt/resultText, so a marker
+    // rather than a secret fragment survives the cut.
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const redactSecrets = (text: string): RedactResult => ({
+      redacted: text.replaceAll(secret, '[REDACTED:aws-access-key-id]'),
+      findings: [],
+    });
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', (payload) => {
+      if (payload.tool === 'Bash') {
+        throw new HookDenial(`blocked; saw ${secret} ${'x'.repeat(300)}`);
+      }
+    });
+    const session = createSession(makeDeps(fake, { hooks, memory, redactSecrets }), {
+      skillsDir: '/nowhere',
+    });
+    await session.run('do it');
+
+    const content = memory.read({})[0]?.content ?? '';
+    expect(content).not.toContain(secret);
+    expect(content).toContain('[REDACTED:aws-access-key-id]');
+    const parsed = JSON.parse(content) as { denied: Array<{ tool: string; reason: string }> };
+    // truncate() caps at SUMMARY_TEXT_LIMIT (200) plus the ellipsis marker.
+    expect(parsed.denied).toHaveLength(1);
+    expect(parsed.denied[0]?.reason.length).toBeLessThanOrEqual(201);
+    expect(parsed.denied[0]?.reason.endsWith('…')).toBe(true);
+  });
+
   it('streams assistant text through onText', async () => {
     const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
     const chunks: string[] = [];

@@ -131,9 +131,17 @@ function specificity(rule: LayeredRule): number {
   return toolRank + (rule.match === undefined ? 0 : 1);
 }
 
+/**
+ * Human-readable identity of the winning rule for deny reasons. The `match`
+ * glob is deliberately ABSENT: reasons reach two retained sinks (telemetry
+ * hook-event rows and the memory summary's denied[]), and match globs are
+ * routinely absolute paths under the operator's home directory (issue #59,
+ * R-17 channels c/d — ADR-0031). `index` is the rule's position within its
+ * OWN layer's settings file, so `[rule 0, project]` means "the first rule in
+ * your project settings.json" — the one file the layer tag points at.
+ */
 function describeRule(rule: LayeredRule, index: number): string {
-  const scope = rule.match === undefined ? rule.tool : `${rule.tool}(${rule.match})`;
-  return `${rule.decision} ${scope} [rule ${index}, ${rule.layer}]`;
+  return `${rule.decision} ${rule.tool} [rule ${index}, ${rule.layer}]`;
 }
 
 interface Winner {
@@ -177,14 +185,17 @@ function layerWinner(
 export function createPermissionEvaluator(opts: EvaluatorOptions = {}): PermissionEvaluator {
   const rules = opts.rules ?? [];
   const defaultDecision = opts.defaultDecision ?? 'allow';
-  // Rule indexes are positions in the combined list, but the winner is
-  // resolved PER LAYER and then combined by MAX SEVERITY across layers: a
-  // project layer can tighten the user's policy but can never loosen it, no
-  // matter how specific its rules are (ADR-0014 §5 — sticky deny is
-  // cross-layer, specificity is intra-layer only).
+  // The winner is resolved PER LAYER and then combined by MAX SEVERITY across
+  // layers: a project layer can tighten the user's policy but can never
+  // loosen it, no matter how specific its rules are (ADR-0014 §5 — sticky
+  // deny is cross-layer, specificity is intra-layer only). The filters
+  // preserve each settings file's own order, so a layer winner's index IS the
+  // rule's position in that file — the identity the reason string reports,
+  // because a combined-list index shifts by however many user rules exist and
+  // an operator cannot compute it from the one file `[rule N, <layer>]` names
+  // (issue #59 round-2 panel, executed counterexample; ADR-0031).
   const userRules = rules.filter((rule) => rule.layer === 'user');
   const projectRules = rules.filter((rule) => rule.layer === 'project');
-  const indexOfRule = new Map(rules.map((rule, index) => [rule, index]));
 
   return {
     evaluate(tool: string, args: unknown): Evaluation {
@@ -206,14 +217,15 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
         return {
           decision: defaultDecision,
           ruleIndex: null,
+          layer: null,
           reason: `permission: default ${defaultDecision} (no matching rule)`,
         };
       }
-      const index = indexOfRule.get(winner.rule) ?? winner.index;
       return {
         decision: winner.rule.decision,
-        ruleIndex: index,
-        reason: `permission: ${describeRule(winner.rule, index)}`,
+        ruleIndex: winner.index,
+        layer: winner.rule.layer,
+        reason: `permission: ${describeRule(winner.rule, winner.index)}`,
       };
     },
   };
