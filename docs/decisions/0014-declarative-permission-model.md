@@ -43,6 +43,8 @@ Security and hooks are import-free peers (layering rules, enforced by lint + `la
 
 Permission denials flow through the existing `denied-by-hook` telemetry record; the reason string carries the rule (`permission: deny Bash(rm *) [rule 3, project]`). One deny channel, greppable reasons, no schema change.
 
+> **Superseded in part by ADR-0031 (2026-08-07):** the reason format no longer carries the `match` glob (retained sinks must not embed operator paths — issue #59, R-17 channels c/d), and the rule index is now the position within the winning rule's OWN layer's settings file, not the combined list. The example above would read `permission: deny Bash [rule 3, project]`, with 3 counting rules in the project file alone. The one-deny-channel and greppable-prefix decisions stand.
+
 ## Consequences
 
 ### Positive

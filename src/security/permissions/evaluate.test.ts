@@ -274,6 +274,43 @@ describe('createPermissionEvaluator', () => {
     expect(result.decision).toBe('deny');
     expect(result.reason).toContain('user');
   });
+
+  it('the reason never carries the rule’s match glob (issue #59, R-17 channels c/d)', () => {
+    // Match globs are routinely absolute paths under the operator's home
+    // directory, and the reason string reaches two retained sinks. The
+    // [rule N, layer] identifier is the recovery key; the glob itself must
+    // never leave the settings file via a retained reason.
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: 'Write', match: '/Users/op/clients/acme-corp/*', decision: 'deny' }),
+      ],
+    });
+    const result = evaluator.evaluate('Write', {
+      file_path: '/Users/op/clients/acme-corp/plan.md',
+    });
+    expect(result.decision).toBe('deny');
+    expect(result.reason).toBe('permission: deny Write [rule 0, project]');
+    expect(result.reason).not.toContain('acme-corp');
+  });
+
+  it('the reason’s rule index is the position within the winning rule’s OWN layer', () => {
+    // With the glob gone, [rule N, layer] is the only recovery key, so N must
+    // index into the file the layer tag names. A combined-list index shifts
+    // by however many user rules exist — an operator counting rules in their
+    // project settings.json would resolve the wrong rule (panel-executed
+    // counterexample, 2026-08-07).
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: 'Read', decision: 'allow', layer: 'user' }),
+        rule({ tool: 'Glob', decision: 'allow', layer: 'user' }),
+        rule({ tool: 'Write', decision: 'deny', layer: 'project' }),
+      ],
+    });
+    const result = evaluator.evaluate('Write', { file_path: '/tmp/x' });
+    expect(result.decision).toBe('deny');
+    expect(result.reason).toContain('[rule 0, project]');
+    expect(result.ruleIndex).toBe(0);
+  });
 });
 
 describe('permissionHook', () => {
