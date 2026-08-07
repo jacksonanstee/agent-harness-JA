@@ -1,6 +1,6 @@
 # ADR-0031: retained deny reasons drop the permission glob (issue #59 round 2)
 
-- **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). Design E remains accepted-with-panel-changes, pending its own PR
+- **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). **Design E shipped 2026-08-07 in its own PR** (`telemetry export --scrub-prefix`; verification appended below). All three designs of this round are now live
 - **Date:** 2026-08-07
 - **Requirements:** issue #59, second design round (the first is ADR-0027, which killed all three of its designs and constrained any successor)
 - **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; design CD fires no revisit bullet — it is a formatting decision, not a keyed transform — and design E, once shipped, fires the explicit-argument bullet for the FIRST time, that section's third fire overall counting the taskDir bullet's two; the ADR-0027 annotation rides with design E's PR), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
@@ -224,3 +224,47 @@ with a real dropped skill, exported, zero home-directory occurrences and the rel
 stored form confirmed. All measurements darwin, ASCII paths; the Windows cross-drive
 branch of the classifier is reasoned, not executed (no Windows CI), and fails in the
 safe direction.
+
+## Verification for design E (appended 2026-08-07, its own PR)
+
+RED-first where the behaviour is new: six CLI tests were observed failing against the
+shipped exporter before the change (repeatable-flag parse, per-row scrub signal, the
+`--out` copy, the nudge line, the no-nudge-under-flag case, scrubbed-line parseability),
+and the unit file failed wholesale on the missing module. Two pins were GREEN on write
+and are recorded as such rather than claimed as TDD: the invalid-value parse test (every
+unknown flag already parsed to an error) and the no-`scrub`-key-by-default byte-shape
+pin. Their bindingness comes from the mutation gates below, not from a RED moment that
+did not happen. Both panel-executed counterexamples are fixtures: `/home/al` must not
+fire inside `/home/alice`, and a trailing-separator argument still catches the bare
+form.
+
+Mutation gates, each asserting its replacement applied before running and restored from
+a scratch copy (never `git checkout`) verified byte-identical. Counts are a FUNCTION OF
+THE TREE (design A's lesson) and were measured over the full suite at the tree that
+carries this sentence (1223 tests):
+
+- NULL mutation FIRST (transform gutted to identity, count 0): 14 red — every unit pin
+  of the transform plus the two CLI integration pins.
+- Segment-boundary check removed (fires mid-segment): exactly the 2 boundary pins,
+  the alice fixture among them.
+- Count decoupled from replacements (replacement fires, count stays 0): 13 red,
+  including the forged-marker pin that makes the counterfeit arithmetic checkable.
+- Nudge pattern gutted (never home-shaped): exactly its 2 pins.
+- CLI wiring nulled (flag parsed, transform never applied): 3 red — the signal row,
+  the `--out` copy, and the nudge firing despite the flag.
+
+One observation carried from the panel (finding 15), recorded here because it belongs
+to this design's cost side: in a scrubbed export the skill-drop `pathDigest` becomes
+the weakest link — its pre-image stays the raw absolute path (decision 5), so a reader
+holding a guessable path list can confirm a home prefix through the digest that the
+scrub removed from the cleartext. Removal-only still holds (the digest was already
+there); the point is that `--scrub-prefix` does not touch it, and saying so beats a
+reader discovering it.
+
+**Limits.** The live smoke (a real run, exported with and without the flag, zero
+home-directory occurrences in the scrubbed copy, byte-identical default output) is run
+out-of-band and recorded in the PR — the suite deliberately mocks no modules and CI has
+no API key. `parseScrubPrefix` uses this platform's `path.isAbsolute`; Windows-form
+prefixes on a POSIX host are rejected, reasoned rather than executed (no Windows CI),
+and the rejection fails closed. All measurements darwin, ASCII fixtures plus the one
+executed unicode-continuation case.

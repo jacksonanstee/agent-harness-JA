@@ -203,6 +203,7 @@ describe('parseArgs (telemetry export)', () => {
         out: null,
         sessionId: null,
         type: null,
+        scrubPrefixes: [],
       },
     });
   });
@@ -482,6 +483,229 @@ describe('main (telemetry export)', () => {
     } finally {
       spy.mockRestore();
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+    }
+  });
+});
+
+describe('telemetry export --scrub-prefix (design E, ADR-0031 decision 7)', () => {
+  let tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
+    tmpDirs = [];
+    vi.restoreAllMocks();
+  });
+
+  // A fake home prefix, never the machine's real one: the fixture must fail
+  // loudly if the transform ever keys on ambient state instead of the argument.
+  const HOME = '/Users/testhome';
+
+  function homeDb(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-scrub-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    const store = createTelemetryStore(db);
+    store.record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: {
+        kind: 'denied-by-hook',
+        event: 'pre-tool',
+        tool: 'Write',
+        reason: `denied writing ${HOME}/notes.md`,
+        handlerIndex: 0,
+      },
+    });
+    store.record({
+      type: 'tool-trace',
+      sessionId: 's2',
+      turnId: 't2',
+      ts: 200,
+      payload: { tool: 'Read', phase: 'post-tool', resultSummary: `read ${HOME}/a and ${HOME}/b` },
+    });
+    store.record({
+      type: 'hook-event',
+      sessionId: 's3',
+      turnId: 't3',
+      ts: 300,
+      payload: { kind: 'hook-fired', event: 'stop', handlersFired: 1 },
+    });
+    db.close();
+    return path;
+  }
+
+  function captureStreams(): {
+    stdout: () => string;
+    stderr: () => string;
+    restore: () => void;
+  } {
+    const out: string[] = [];
+    const err: string[] = [];
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      out.push(String(chunk));
+      return true;
+    });
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      err.push(String(chunk));
+      return true;
+    });
+    return {
+      stdout: () => out.join(''),
+      stderr: () => err.join(''),
+      restore: () => {
+        outSpy.mockRestore();
+        errSpy.mockRestore();
+      },
+    };
+  }
+
+  it('parses a repeatable --scrub-prefix, stripping trailing separators', () => {
+    const parsed = parseArgs([
+      'telemetry',
+      'export',
+      '--scrub-prefix',
+      '/Users/testhome/',
+      '--scrub-prefix',
+      '/home/al',
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok && parsed.value.command === 'telemetry-export') {
+      expect(parsed.value.scrubPrefixes).toEqual(['/Users/testhome', '/home/al']);
+    }
+  });
+
+  it('rejects invalid --scrub-prefix values at parse time', () => {
+    expect(parseArgs(['telemetry', 'export', '--scrub-prefix', 'relative/path']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', '--scrub-prefix', '/Users']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', '--scrub-prefix', '/']).ok).toBe(false);
+    expect(parseArgs(['telemetry', 'export', '--scrub-prefix']).ok).toBe(false);
+  });
+
+  it('attaches the scrub signal to EVERY emitted row and replaces the prefix', async () => {
+    const path = homeDb();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const body = streams.stdout();
+    expect(body).not.toContain(HOME);
+    const rows = body
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r['scrub'])).toEqual([
+      { applied: true, count: 1, transform: 'prefix-v1' },
+      { applied: true, count: 2, transform: 'prefix-v1' },
+      { applied: false, count: 0, transform: 'prefix-v1' },
+    ]);
+    const denied = rows[0]?.['payload'] as { reason?: string };
+    expect(denied.reason).toBe('denied writing [scrubbed-prefix-1]/notes.md');
+  });
+
+  it('scrubs the --out copy identically to stdout', async () => {
+    const path = homeDb();
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-scrub-out-'));
+    tmpDirs.push(dir);
+    const out = join(dir, 'events.jsonl');
+    expect(
+      await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME, '--out', out]),
+    ).toBe(0);
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const fileBody = readFileSync(out, 'utf8');
+    expect(fileBody).toBe(streams.stdout());
+    expect(fileBody).not.toContain(HOME);
+  });
+
+  it('leaves the default export byte-shape untouched: no scrub key without the flag', async () => {
+    const path = homeDb();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const rows = streams
+      .stdout()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect('scrub' in row).toBe(false);
+    }
+    // The cleartext home-shaped path is still there — the default is lossless.
+    expect(streams.stdout()).toContain(HOME);
+  });
+
+  it('nudges once on stderr when an unscrubbed export carries home-shaped rows', async () => {
+    const path = homeDb();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const nudge = streams.stderr();
+    expect(nudge).toContain('--scrub-prefix');
+    // Exactly one line, echoing none of the row data.
+    expect(nudge.trim().split('\n')).toHaveLength(1);
+    expect(nudge).not.toContain(HOME);
+  });
+
+  it('does not nudge when the flag is given, nor when no row is home-shaped', async () => {
+    const scrubbed = captureStreams();
+    try {
+      expect(
+        await main(['telemetry', 'export', '--db', homeDb(), '--scrub-prefix', HOME]),
+      ).toBe(0);
+    } finally {
+      scrubbed.restore();
+    }
+    expect(scrubbed.stderr()).toBe('');
+
+    // seededDb-shaped content: no home-shaped strings anywhere.
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-noscrub-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    createTelemetryStore(db).record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: { kind: 'hook-fired', event: 'session-start', handlersFired: 0 },
+    });
+    db.close();
+    const plain = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      plain.restore();
+    }
+    expect(plain.stderr()).toBe('');
+  });
+
+  it('keeps the scrubbed export parseable: every line is valid JSON', async () => {
+    const path = homeDb();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const lines = streams.stdout().trim().split('\n');
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
     }
   });
 });
