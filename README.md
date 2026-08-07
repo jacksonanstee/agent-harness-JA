@@ -108,7 +108,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
-As of 2026-08-07:
+As of 2026-08-08:
 
 | Milestone | Status |
 |---|---|

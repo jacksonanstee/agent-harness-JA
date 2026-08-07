@@ -225,7 +225,7 @@ stored form confirmed. All measurements darwin, ASCII paths; the Windows cross-d
 branch of the classifier is reasoned, not executed (no Windows CI), and fails in the
 safe direction.
 
-## Verification for design E (appended 2026-08-07, its own PR)
+## Verification for design E (appended 2026-08-07, amended 2026-08-08 with the review and verify rounds, its own PR)
 
 RED-first where the behaviour is new: six CLI tests were observed failing against the
 shipped exporter before the change (repeatable-flag parse, per-row scrub signal, the
