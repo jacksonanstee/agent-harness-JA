@@ -467,6 +467,114 @@ describe('skill-drop events', () => {
     expect(store.query({ type: 'skill-drop' })).toHaveLength(1);
   });
 
+  // ISSUE #59 ROUND 2 (ADR-0031 decision 6): `path` became root-relative with
+  // a `pathForm` signal. Three admissible shapes, and only three:
+  //   legacy        — path string, NO pathForm (rows predating the field)
+  //   root-relative — path string, pathForm 'root-relative'
+  //   suppressed    — path null,   pathForm 'suppressed'
+  // `pathForm` is OPTIONAL on read for the same reason pathDigest is (one
+  // required field on legacy rows would deny the whole trail via rowToEvent),
+  // while `path: null` is admitted ONLY under the suppressed form — a null
+  // path with no declared form is a malformed row, not a legacy one.
+  it('accepts a suppressed skill-drop row: path null with pathForm suppressed', () => {
+    const { store } = openStore();
+    expect(store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: { ...validPayload, path: null, pathForm: 'suppressed' as const },
+    }).ok).toBe(true);
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(1);
+    const payload = rows[0]?.payload as { path: string | null; pathForm?: string };
+    expect(payload.path).toBeNull();
+    expect(payload.pathForm).toBe('suppressed');
+  });
+
+  it('accepts a root-relative row and preserves pathForm through the store round-trip', () => {
+    const { store } = openStore();
+    expect(store.record({
+      type: 'skill-drop',
+      sessionId: 's',
+      turnId: 't',
+      payload: { ...validPayload, path: 'nested/helper.md', pathForm: 'root-relative' as const },
+    }).ok).toBe(true);
+    const payload = store.query({ type: 'skill-drop' })[0]?.payload as { pathForm?: string };
+    expect(payload.pathForm).toBe('root-relative');
+  });
+
+  it('a suppressed row cannot claim truncation or carry a digest (coherence, issue-#55 style)', () => {
+    // The write site can never produce either shape ('a suppressed row
+    // stores nothing, so nothing was truncated', and the digest spread is
+    // skipped) — this guards the honest-but-buggy DIRECT writer, the same
+    // class the digest-implies-truncated coupling below exists for. A digest
+    // on a suppressed row would attach the row's designated home-prefix
+    // carrier to a row whose whole point is refusing to identify the path.
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, path: null, pathForm: 'suppressed', pathTruncated: true } as never,
+      }),
+    ).toThrow(/skill-drop/);
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: {
+          ...validPayload,
+          path: null,
+          pathForm: 'suppressed',
+          pathDigest: 'a'.repeat(SKILL_DROP_PATH_DIGEST_LEN),
+        } as never,
+      }),
+    ).toThrow(/skill-drop/);
+  });
+
+  it('rejects a null path without the suppressed form, and any unknown pathForm', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, path: null } as never,
+      }),
+    ).toThrow(/skill-drop/);
+    expect(() =>
+      store.record({
+        type: 'skill-drop',
+        sessionId: 's',
+        turnId: 't',
+        payload: { ...validPayload, pathForm: 'bogus' } as never,
+      }),
+    ).toThrow(/skill-drop/);
+  });
+
+  it('UPGRADE: a legacy absolute-path row and a new suppressed row read back from the same trail', () => {
+    // The legacy row is a RAW INSERT because that is what a pre-ADR-0031
+    // database contains; one such row must never deny the whole export
+    // (the pathDigest optionality lesson, re-applied to pathForm).
+    const { db, store } = openStore();
+    db.prepare(
+      `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+       VALUES ('legacy59', 'skill-drop', 's1', 't1', 1,
+         '{"name":"helper","path":"/skills/helper.md","pathTruncated":false,` +
+      `"pathHasEscapes":false,"reason":"injection-block","channels":[],"ruleIds":[]}');`,
+    ).run();
+    expect(store.record({
+      type: 'skill-drop',
+      sessionId: 's1',
+      turnId: 't2',
+      payload: { ...validPayload, path: null, pathForm: 'suppressed' as const },
+    }).ok).toBe(true);
+    const rows = store.query({ type: 'skill-drop' });
+    expect(rows).toHaveLength(2);
+  });
+
   // ...and this same test is what makes the coupling below ONE-DIRECTIONAL.
   // It stores `pathTruncated: true` with NO digest, so anyone who "completes"
   // the implication below into a biconditional turns this row red. That is the

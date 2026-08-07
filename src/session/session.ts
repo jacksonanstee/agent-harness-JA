@@ -36,6 +36,7 @@ import {
   stripInvisibles,
   truncateWellFormed,
 } from '../internal/sanitize.js';
+import { relativeSkillDropPath } from './skill-drop-path.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -572,8 +573,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // entirely (golden eval passes null for a defaulted-and-absent skills
     // dir, so a task with no skills doesn't warn on every run).
     const loadResult = config.skillsDir === null
-      ? { skills: [], errors: [] }
+      ? { skills: [], errors: [], root: null }
       : deps.loadSkills(config.skillsDir);
+    // The resolved root the loader's walk used, held for the skill-drop
+    // telemetry write below: relative(root, path) from a captured operand,
+    // never a fresh ambient resolve at the write seam (ADR-0031 decision 6).
+    const skillsRoot = loadResult.root;
     for (const error of loadResult.errors) {
       warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
     }
@@ -718,23 +723,48 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     for (const record of dropRecords) {
       const dropped = record.skill;
-      // TAIL-preserving: a path's disambiguating part is its filename.
-      // `dropped.path` is already ESCAPED at capture by escapePathUnsafe —
-      // escaped, NOT deleted, so the pre-image stays recoverable. That
-      // satisfies the required TRANSFORM-then-TRUNCATE order: truncating first
+      // The STORED path is root-relative (issue #59 round 2, ADR-0031
+      // decision 6): classified against the loader's own captured root, so
+      // the operator's home directory and everything above the skills root
+      // stay out of this durable, exportable row — for a root at or below
+      // $HOME, or disjoint from it; a root strictly above places home
+      // segments below the root, where they store like any other segment
+      // (documented scope, see relativeSkillDropPath's docstring). Any shape not positively
+      // at-or-under-root — unreachable by construction from the loader's
+      // walk, enforced anyway — stores null with pathForm 'suppressed'.
+      //
+      // Pipeline order is load-bearing (round-2 panel finding): relativise
+      // the RAW path first (escape tokens are not path segments), THEN
+      // escapePathUnsafe on the string actually stored, THEN bound. That
+      // keeps the required TRANSFORM-then-TRUNCATE order: truncating first
       // would let an attacker spend the whole budget on characters a later
-      // transform rewrites, blanking their own audit row.
-      const boundedPath = boundSkillDropPath(dropped.path, record.rawPath);
+      // transform rewrites, blanking their own audit row. TAIL-preserving:
+      // a path's disambiguating part is its filename. The digest pre-image
+      // stays the RAW ABSOLUTE path (ADR-0027 decision 5, issue #54) —
+      // unchanged by any of this.
+      const relativized = relativeSkillDropPath(skillsRoot, record.rawPath);
+      const boundedPath =
+        relativized.path === null
+          ? null
+          : boundSkillDropPath(escapePathUnsafe(relativized.path).value, record.rawPath);
+      if (relativized.path === null) {
+        // Ephemeral operator-facing surface; the retained row deliberately
+        // cannot say which path this was (ADR-0030 decision 6 pattern).
+        warn(`skill-drop path suppressed for ${dropped.name}: outside the skills root`);
+      }
       recordTelemetry({
         type: 'skill-drop',
         sessionId: harnessSessionId,
         turnId,
         payload: {
           name: boundSkillDropName(dropped.name),
-          path: boundedPath.value,
+          ...(boundedPath === null
+            ? { path: null, pathForm: 'suppressed' as const }
+            : { path: boundedPath.value, pathForm: 'root-relative' as const }),
           // Out-of-band, because the in-band ellipsis is attacker-forgeable,
-          // and taken from the helper so it cannot disagree with `path`.
-          pathTruncated: boundedPath.truncated,
+          // and taken from the helper so it cannot disagree with `path`. A
+          // suppressed row stores nothing, so nothing was truncated.
+          pathTruncated: boundedPath === null ? false : boundedPath.truncated,
           // Present only when the path WAS truncated, and taken from the same
           // call, so it can no more disagree with `path` than pathTruncated
           // can. Digests the FULL RAW path, not the escaped or truncated one:
@@ -750,10 +780,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // inspecting the payload before it is serialised. JSON.stringify
           // happens to drop it either way, so this is about the in-memory
           // object telling the same truth as the stored row.
-          ...(boundedPath.digest === undefined ? {} : { pathDigest: boundedPath.digest }),
+          ...(boundedPath === null || boundedPath.digest === undefined
+            ? {}
+            : { pathDigest: boundedPath.digest }),
           // Carried straight through from capture. It describes the RAW
-          // PRE-IMAGE, so it deliberately survives a truncation that drops the
-          // last escape token — do NOT re-derive it by scanning `path`.
+          // PRE-IMAGE (the loader's absolute path), so it deliberately
+          // survives a truncation that drops the last escape token AND a
+          // relativisation that drops an escape-bearing segment above the
+          // root — do NOT re-derive it by scanning `path`.
           pathHasEscapes: dropped.pathHasEscapes,
           reason: dropped.reason,
           // NOT sliced, deliberately, and the asymmetry with ruleIds is the

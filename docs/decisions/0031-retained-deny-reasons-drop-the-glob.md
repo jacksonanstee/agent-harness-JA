@@ -1,6 +1,6 @@
 # ADR-0031: retained deny reasons drop the permission glob (issue #59 round 2)
 
-- **Status:** Accepted — design CD ships with this ADR's PR; designs A and E are accepted with their panel changes and land in their own PRs, which amend this status line
+- **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). Design E remains accepted-with-panel-changes, pending its own PR
 - **Date:** 2026-08-07
 - **Requirements:** issue #59, second design round (the first is ADR-0027, which killed all three of its designs and constrained any successor)
 - **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; design CD fires no revisit bullet — it is a formatting decision, not a keyed transform — and design E, once shipped, fires the explicit-argument bullet for the FIRST time, that section's third fire overall counting the taskDir bullet's two; the ADR-0027 annotation rides with design E's PR), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
@@ -162,3 +162,65 @@ session level, not through a live SDK run in CI (the composition root hardwires 
 SDK; the suite deliberately mocks no modules) — a live match-rule deny smoke is run
 out-of-band and recorded in the PR. The `ask`-path suffixes (`— declined by prompter` and
 friends) append to the same glob-free base string and are covered by existing tests.
+
+## Verification for design A (appended 2026-08-07, its own PR)
+
+RED-first where runtime-visible: the three store-validator tests (suppressed shape
+accepted; null path without the suppressed form and unknown `pathForm` values rejected; the
+legacy-plus-suppressed upgrade trail) were observed failing against the shipped validator
+before it changed. The session-level pins reddened exactly as the design record enumerated
+(`process/designs/2026-08-07-issue-59-round2-design-spec.md`, Design A v2 item 6 — this
+ADR's decision 6 records the design, not the test list): the exact-payload pin, the
+distinct-row pin, the digest fixture that had to MOVE under the mocked root because an
+out-of-root path now suppresses, and `load.test.ts`'s empty-dir equality, plus the
+`loadSkills` mock literals at the type level — 49 shipped, where the spec's 51 was a
+pre-implementation estimate. Suite 1174 → 1187, then 1189 after the review round's two
+additions (the suppressed-arm coherence pins and the strictly-above-home documented-limit
+pin), then 1190 after the verify round's equality-boundary pin. Semver obligation, recorded here so the PR cannot omit it: `LoadResult` gains a
+REQUIRED `root` field (breaks external `loadSkills` implementers) and `SkillDropPayload`
+changed from interface to union — the PR body carries the breaking-change note, version
+implication decided there (package still pre-first-publish).
+
+Mutation gates on `relativeSkillDropPath` and the write site, each asserting its
+replacement applied and restored from a scratch copy (never `git checkout`) verified
+byte-identical:
+
+- NULL mutation FIRST (always-populate with the raw absolute path): 11 red at the
+  implementation tree; 13 at the final tree. These two counts are a FUNCTION OF THE TREE —
+  every later test that pins the populated arm raises them — and the verify round caught
+  this section quoting implementation-tree numbers after the review round's additions had
+  moved them. They are recorded here as measured at the tree that carries this sentence
+  (1190 tests), and any future addition of a populated-arm pin moves them again.
+- Positive branch flipped to suppress: 10 red at the implementation tree; 12 at the final
+  tree, every populated-path pin including the end-to-end session ones.
+- Segment check replaced with `startsWith('..')`: exactly the `..foo` boundary test.
+- Precondition guard removed: exactly the enforced-precondition test — via the
+  `('.', './x.md')` fixture added because the other non-absolute fixtures suppress through
+  the fall-through even without the guard; a guard pin must be an input the unguarded code
+  would POPULATE.
+- Empty-string arm removed: exactly the totality test.
+- Write-site `escapePathUnsafe` deleted: 2 red (the raw-digest test's stored-value
+  assertion and the pathHasEscapes pre-image test), binding the
+  relativise-then-escape-then-bound order.
+
+The verify round on the review fixes produced this project's eighth consecutive
+refutation-of-a-recorded-claim, and it landed on the CORRECTION itself: the qualifying
+clause shipped as "a root at or above `$HOME` re-admits home segments" is false at its own
+boundary — executed, a root EQUAL to `$HOME` strips the entire home prefix, so the
+guarantee HOLDS at equality and only a root STRICTLY above re-admits. Six instances
+corrected (README, R-16, R-17(a), the classifier docstring, the test title whose body only
+ever exercised the strictly-above case, and this section), a seventh unconditional "never"
+found at the session write-site comment and qualified, and the equality case now carries
+its own executed pin. The lesson is the same one this section already records once: the
+author of a correction is the worst-placed person to check it, and a boundary claim needs
+an executed pin AT the boundary, not near it.
+
+**Limits.** Through the real CLI the suppress arm is UNREACHABLE by construction — the
+loader's join-based walk only produces paths under its own root — so no live smoke can
+drive it end-to-end; it is bound instead through `run()` with a caller-supplied
+`loadSkills` returning an out-of-root path (the suppression test), which is the same
+trust boundary the arm exists for. The live smoke covers the populated arm: a real run
+with a real dropped skill, exported, zero home-directory occurrences and the relative
+stored form confirmed. All measurements darwin, ASCII paths; the Windows cross-drive
+branch of the classifier is reasoned, not executed (no Windows CI), and fails in the
+safe direction.

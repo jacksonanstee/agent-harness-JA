@@ -306,6 +306,7 @@ export function load(dir: string): LoadResult {
       return {
         skills: [],
         errors: [skillError(root, 'read', `not a directory: ${root}`)],
+        root,
       };
     }
     realRoot = realpathSync(root);
@@ -313,6 +314,7 @@ export function load(dir: string): LoadResult {
     return {
       skills: [],
       errors: [skillError(root, 'read', errorMessage(cause))],
+      root,
     };
   }
 
@@ -327,5 +329,5 @@ export function load(dir: string): LoadResult {
       errors.push(result.error);
     }
   }
-  return { skills, errors };
+  return { skills, errors, root };
 }

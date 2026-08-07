@@ -76,4 +76,15 @@ export type ValidationResult =
 export interface LoadResult {
   skills: Skill[];
   errors: SkillError[];
+  /**
+   * The resolved root the walk actually used (`resolve(dir)`, captured once
+   * inside `load()`), threaded back so the telemetry write site can compute
+   * `relative(root, skillPath)` from a HELD operand instead of a fresh
+   * ambient `resolve()` — a second independent cwd read would re-open the
+   * process.chdir window (ADR-0031 decision 6, issue #59 round 2). Null only
+   * for a result that ran no scan (the session's skillsDir-null literal);
+   * `load()` itself always sets it, including on its early error returns,
+   * where it is the root the scan WOULD have used.
+   */
+  root: string | null;
 }
