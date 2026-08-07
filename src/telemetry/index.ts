@@ -11,12 +11,19 @@ export {
 export { MIGRATIONS, runMigrations, type Migration } from './migrations/index.js';
 export {
   hasHomeShapedPath,
+  hasHomeShapedStrings,
+  MAX_SCRUB_DEPTH,
   parseScrubPrefix,
   scrubEvent,
   scrubText,
   SCRUB_TRANSFORM_ID,
 } from './scrub.js';
-export type { ScrubbedTelemetryRow, ScrubPrefixParse, ScrubSignal } from './scrub.js';
+export type {
+  ScrubbedTelemetryRow,
+  ScrubPrefixParse,
+  ScrubResult,
+  ScrubSignal,
+} from './scrub.js';
 export {
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,

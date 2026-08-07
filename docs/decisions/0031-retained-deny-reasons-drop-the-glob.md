@@ -238,20 +238,72 @@ did not happen. Both panel-executed counterexamples are fixtures: `/home/al` mus
 fire inside `/home/alice`, and a trailing-separator argument still catches the bare
 form.
 
+**The review round refuted the first cut in four executed places, and the fixes are
+part of this PR** (three lenses; every finding below carried an executed PoC):
+
+1. **The boundary was wider than the spec, and the width was the alice bug.** The
+   first cut fired on any character outside a "segment continuation" class, so a
+   sibling directory named `/Users/jackson (Work Laptop)` was corrupted to
+   `[marker] (Work Laptop)` with `applied: true` — mis-attribution through every
+   filename-legal punctuation character, NFD combining marks included. The shipped
+   boundary is the spec's, literally: separator or end-of-string, nothing else. The
+   cost runs the other way and is a NAMED residual: an occurrence terminated by prose
+   punctuation (`cd /Users/jackson && ls`) survives in cleartext, pinned as documented
+   behaviour.
+2. **Payload KEYS were not scrubbed and the exempting comment was false.** The store
+   validators are positive-conjunct checks that admit extra keys, so a planted row's
+   KEY carried a home path in cleartext on a row stamped `applied: true` (executed
+   through the public `record()` API). Keys are now scrubbed like values; two keys
+   collapsing onto one scrubbed form (a plantable marker-key collision) refuse the row
+   loudly rather than silently dropping data.
+3. **The nudge's Windows arm was dead at its only call site.** Detection ran over the
+   JSON-serialised body, where backslash-doubling made `\Users\` unmatchable — the
+   unit pin was green while the seam never fired (executed with a seeded row; three
+   lenses found this independently). Detection now walks RAW event values, keys
+   included, with an iterative walk so a hostile deep row cannot crash the default
+   export; the CLI seam has its own pins now, and the round-1 mutation gate that
+   "passed" on the unit pin alone is the corrective-artefact lesson re-learned.
+4. **A hostile deep row crashed only the scrubbed export** (stack overflow at depth
+   ~2000, default export fine at 100000) — a downgrade pushing the operator back to
+   cleartext. The walk now refuses beyond `MAX_SCRUB_DEPTH` (64, the skills scanner's
+   cap) with a loud, untrusted-byte-free error naming the row position; the refusal
+   denies the WHOLE scrubbed export, the rowToEvent precedent. The boundary is pinned
+   by execution (62 nest levels scrub, 63 refuse).
+
+Also folded from the round: `parseScrubPrefix` normalises (`/Users/./jackson` matched
+nothing while suppressing the nudge — the likeliest typo was the exact case with no
+signal); a SECOND stderr nudge fires when home-shaped paths SURVIVE a scrub (wrong or
+misspelt prefix, case variant, NFC/NFD mismatch — observe-only, no row data, default
+bytes untouched; an extension beyond the panel spec, argued here: the panel's nudge
+clause covers only the no-flag case, and three review findings converged on "the
+detector goes dark exactly when the operator relies on it"); the counterfeit check is
+documented as AGGREGATE (total marker occurrences of ANY ordinal vs `count` — a
+per-ordinal comparison is unsound once the flag repeats, executed) and pinned; and the
+spec's "help text" venue for the applied-is-not-clean caveat collapsed into USAGE
+because the CLI ships no help command — recorded as the venue's honest state.
+
 Mutation gates, each asserting its replacement applied before running and restored from
 a scratch copy (never `git checkout`) verified byte-identical. Counts are a FUNCTION OF
 THE TREE (design A's lesson) and were measured over the full suite at the tree that
-carries this sentence (1223 tests):
+carries this sentence (1237 tests):
 
-- NULL mutation FIRST (transform gutted to identity, count 0): 14 red — every unit pin
-  of the transform plus the two CLI integration pins.
-- Segment-boundary check removed (fires mid-segment): exactly the 2 boundary pins,
-  the alice fixture among them.
-- Count decoupled from replacements (replacement fires, count stays 0): 13 red,
-  including the forged-marker pin that makes the counterfeit arithmetic checkable.
-- Nudge pattern gutted (never home-shaped): exactly its 2 pins.
-- CLI wiring nulled (flag parsed, transform never applied): 3 red — the signal row,
-  the `--out` copy, and the nudge firing despite the flag.
+- NULL mutation FIRST (transform gutted to identity, count 0): 20 red — every unit pin
+  of the transform plus the three CLI integration pins.
+- Boundary check removed (fires regardless of the following character): exactly its 5
+  pins — the alice fixture, the punctuation-sibling set, the continuation set
+  (dash/dot/unicode/NFD/astral), the longest-fails-fall-through pin, and the
+  prose-residual pin.
+- Count decoupled from replacements (replacement fires, count stays 0): 17 red,
+  including both counterfeit-arithmetic pins.
+- `HOME_SHAPED` gutted to never-match: 6 red — the unit shapes AND both CLI nudge
+  seams plus the survivor seam (the round-1 version of this gate passed with the seam
+  unbound; it cannot any more).
+- CLI wiring nulled (flag parsed, transform never applied): 5 red — signal row,
+  `--out` copy, no-nudge-under-flag, survivor nudge, and the deep-row refusal.
+- Key-scrub removed (keys pass through raw): exactly its 3 pins.
+- Depth cap removed: exactly its 2 pins (unit boundary and the CLI refusal seam).
+- Collision refusal removed: exactly its 1 pin.
+- Survivor nudge removed: exactly its 1 pin.
 
 One observation carried from the panel (finding 15), recorded here because it belongs
 to this design's cost side: in a scrubbed export the skill-drop `pathDigest` becomes
@@ -264,7 +316,13 @@ reader discovering it.
 **Limits.** The live smoke (a real run, exported with and without the flag, zero
 home-directory occurrences in the scrubbed copy, byte-identical default output) is run
 out-of-band and recorded in the PR — the suite deliberately mocks no modules and CI has
-no API key. `parseScrubPrefix` uses this platform's `path.isAbsolute`; Windows-form
-prefixes on a POSIX host are rejected, reasoned rather than executed (no Windows CI),
-and the rejection fails closed. All measurements darwin, ASCII fixtures plus the one
-executed unicode-continuation case.
+no API key. Matching is exact bytes: a case variant of the same directory on a
+case-insensitive filesystem and an NFC/NFD spelling difference both evade the scrub
+(executed), which is why the survivor nudge exists and why the README names both.
+`parseScrubPrefix` uses this platform's `path.isAbsolute`; Windows-form prefixes on a
+POSIX host are rejected, reasoned rather than executed (no Windows CI), and the
+rejection fails closed. A row that cannot be scrubbed (depth, collision) denies the
+scrubbed export while the lossless default stays available — a plantable denial,
+accepted with the rowToEvent precedent and named here. All measurements darwin; the
+executed boundary fixtures cover ASCII, BMP unicode (`ñ`), NFD combining marks, and
+one astral (surrogate-pair) continuation case.

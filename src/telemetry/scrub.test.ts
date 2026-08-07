@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   hasHomeShapedPath,
+  hasHomeShapedStrings,
+  MAX_SCRUB_DEPTH,
   parseScrubPrefix,
   scrubEvent,
   scrubText,
@@ -32,16 +34,54 @@ describe('scrubText — segment-boundary matching', () => {
     expect(result.count).toBe(1);
   });
 
-  it('fires before a non-path-continuation character (quote, space, semicolon)', () => {
-    const result = scrubText('path="/Users/jackson"; cd /Users/jackson && ls', ['/Users/jackson']);
-    expect(result.value).toBe('path="[scrubbed-prefix-1]"; cd [scrubbed-prefix-1] && ls');
-    expect(result.count).toBe(2);
+  it('does not fire on punctuation-named sibling directories (review-executed corruption class)', () => {
+    // Filename-legal punctuation CONTINUES a segment: firing here corrupted
+    // `/Users/jackson (Work Laptop)` to `[marker] (Work Laptop)` with
+    // applied=true in the first cut \u2014 the alice-class mis-attribution, found
+    // by review with executed counterexamples. Boundary is separator/EOS ONLY.
+    const siblings = [
+      '/Users/jackson (Work Laptop)/notes.md',
+      "/Users/jackson's Documents/x",
+      '/Users/jackson,backup/x',
+      '/Users/jackson#2/x',
+    ];
+    for (const text of siblings) {
+      const result = scrubText(text, ['/Users/jackson']);
+      expect(result.value, text).toBe(text);
+      expect(result.count, text).toBe(0);
+    }
   });
 
-  it('does not fire when the next character continues the segment (dash, dot, unicode letter)', () => {
+  it('leaves prose-terminated occurrences in cleartext (named residual, pinned as documented)', () => {
+    // The cost of the literal-spec boundary: a path quoted mid-prose and
+    // terminated by punctuation or whitespace survives. This pin documents
+    // the residual; the post-scrub survivor nudge is what surfaces it.
+    const result = scrubText('cd /Users/jackson && ls', ['/Users/jackson']);
+    expect(result.value).toBe('cd /Users/jackson && ls');
+    expect(result.count).toBe(0);
+  });
+
+  it('does not fire when the next character continues the segment (dash, dot, unicode, NFD, astral)', () => {
     expect(scrubText('/Users/jackson-old/x', ['/Users/jackson']).count).toBe(0);
     expect(scrubText('/Users/jackson.bak/x', ['/Users/jackson']).count).toBe(0);
     expect(scrubText('/Users/jackson\u00F1/x', ['/Users/jackson']).count).toBe(0);
+    // NFD: combining tilde after the final n \u2014 a DIFFERENT rendered directory
+    // name; firing would strand the combining mark on the marker's bracket.
+    expect(scrubText('/Users/jackson\u0303/x', ['/Users/jackson']).count).toBe(0);
+    // Astral (surrogate pair) continuation: must neither fire nor split the pair.
+    const astral = scrubText('/Users/jackson\u{1D4AA}/x', ['/Users/jackson']);
+    expect(astral.count).toBe(0);
+    expect(astral.value).toBe('/Users/jackson\u{1D4AA}/x');
+  });
+
+  it('falls through to a shorter prefix when the longest matches textually but fails its boundary', () => {
+    // Review-built mutant: breaking out of the ranked loop on first textual
+    // match (ignoring the boundary result) passed every then-existing test.
+    // This pin binds the fall-through: `/Users/jackson` matches textually at
+    // position 0 but `x` is not a boundary; `/Users` must still fire.
+    const result = scrubText('/Users/jacksonx/y', ['/Users/jackson', '/Users']);
+    expect(result.value).toBe('[scrubbed-prefix-2]/jacksonx/y');
+    expect(result.count).toBe(1);
   });
 
   it('counts every replacement in the text', () => {
@@ -86,9 +126,23 @@ describe('scrubText — segment-boundary matching', () => {
     const result = scrubText(forged, ['/home/al']);
     expect(result.value).toBe('tool said [scrubbed-prefix-1] and the real [scrubbed-prefix-1]/file');
     expect(result.count).toBe(1);
-    // The consumer-side counterfeit check this enables: marker occurrences (2)
-    // exceed count (1), so one of them was not produced by the transform.
-    const occurrences = result.value.split('[scrubbed-prefix-1]').length - 1;
+    // The consumer-side counterfeit check this enables is AGGREGATE: total
+    // occurrences of ANY ordinal's marker (2) exceed count (1), so one was
+    // not produced by the transform.
+    const occurrences = result.value.match(/\[scrubbed-prefix-\d+\]/gu)?.length ?? 0;
+    expect(occurrences).toBe(2);
+    expect(occurrences).toBeGreaterThan(result.count);
+  });
+
+  it('the counterfeit check must be aggregate across ordinals, not per marker (review-executed)', () => {
+    // A marker planted for ordinal 2 next to a genuine ordinal-1 replacement:
+    // per-marker comparison reads 1 vs aggregate count 1 for each ordinal and
+    // flags nothing; only total-occurrences (2) > count (1) exposes the plant.
+    const text = 'tool output: [scrubbed-prefix-2] then /Users/jackson/x';
+    const result = scrubText(text, ['/Users/jackson', '/srv/app']);
+    expect(result.value).toBe('tool output: [scrubbed-prefix-2] then [scrubbed-prefix-1]/x');
+    expect(result.count).toBe(1);
+    const occurrences = result.value.match(/\[scrubbed-prefix-\d+\]/gu)?.length ?? 0;
     expect(occurrences).toBe(2);
     expect(occurrences).toBeGreaterThan(result.count);
   });
@@ -126,6 +180,19 @@ describe('parseScrubPrefix — validation', () => {
     expect(parseScrubPrefix('/').ok).toBe(false);
     expect(parseScrubPrefix('/Users').ok).toBe(false);
     expect(parseScrubPrefix('/Users/').ok).toBe(false);
+  });
+
+  it('normalises dot segments and doubled separators before matching (review-executed miss)', () => {
+    // An accepted-verbatim `/Users/./jackson` matched nothing while
+    // suppressing the nudge — the operator's likeliest typo was the exact
+    // case with no signal. Normalise first, then validate.
+    expect(parseScrubPrefix('/Users/./jackson')).toEqual({ ok: true, value: '/Users/jackson' });
+    expect(parseScrubPrefix('/Users/jackson/../jackson')).toEqual({
+      ok: true,
+      value: '/Users/jackson',
+    });
+    expect(parseScrubPrefix('/Users//jackson')).toEqual({ ok: true, value: '/Users/jackson' });
+    expect(parseScrubPrefix('/Users/jackson/..').ok).toBe(false);
   });
 });
 
@@ -202,6 +269,121 @@ describe('scrubEvent — whole-row transform with per-row signal', () => {
 
   it('exposes the transform id as a constant', () => {
     expect(SCRUB_TRANSFORM_ID).toBe('prefix-v1');
+  });
+
+  it('scrubs payload KEYS too (review-executed: extra keys pass the store validators)', () => {
+    // The validators are positive-conjunct checks with no extra-key
+    // rejection, so a shared-DB row can carry a home path AS a key. Review
+    // executed exactly this shape against the first cut: the key stayed
+    // cleartext on a row stamped applied=true.
+    const foreign = {
+      ...baseEvent,
+      payload: {
+        kind: 'denied-by-hook',
+        event: 'pre-tool',
+        tool: 'Read',
+        reason: 'denied /Users/jackson/notes.md',
+        handlerIndex: 0,
+        '/Users/jackson/.ssh/id_ed25519': 'seen',
+      },
+    } as TelemetryEvent;
+    const row = scrubEvent(foreign, ['/Users/jackson']);
+    const serialised = JSON.stringify(row);
+    expect(serialised).not.toContain('/Users/jackson');
+    expect(row.scrub).toEqual({ applied: true, count: 2, transform: 'prefix-v1' });
+    expect(Object.keys(row.payload)).toContain('[scrubbed-prefix-1]/.ssh/id_ed25519');
+  });
+
+  it('scrubs keys in nested objects as well', () => {
+    const foreign = {
+      ...baseEvent,
+      payload: {
+        kind: 'hook-fired',
+        event: 'stop',
+        handlersFired: 0,
+        extra: { '/Users/jackson/inner': { '/Users/jackson/deeper': 'v' } },
+      },
+    } as TelemetryEvent;
+    const row = scrubEvent(foreign, ['/Users/jackson']);
+    expect(JSON.stringify(row)).not.toContain('/Users/jackson');
+    expect(row.scrub.count).toBe(2);
+  });
+
+  it('refuses the row loudly when two keys collapse onto one scrubbed form', () => {
+    // A planted marker key colliding with a genuine key's scrubbed form:
+    // last-one-wins would silently drop data from the artefact.
+    const foreign = {
+      ...baseEvent,
+      payload: {
+        kind: 'hook-fired',
+        event: 'stop',
+        handlersFired: 0,
+        '/Users/jackson/x': 1,
+        '[scrubbed-prefix-1]/x': 2,
+      },
+    } as TelemetryEvent;
+    expect(() => scrubEvent(foreign, ['/Users/jackson'])).toThrow(/collapse/u);
+  });
+
+  it('refuses nesting beyond MAX_SCRUB_DEPTH with a loud error, not a stack overflow', () => {
+    const nest = (levels: number): unknown => {
+      let value: unknown = '/Users/jackson/leaf';
+      for (let i = 0; i < levels; i += 1) value = [value];
+      return value;
+    };
+    const withNest = (levels: number): TelemetryEvent =>
+      ({
+        ...baseEvent,
+        payload: {
+          kind: 'hook-fired',
+          event: 'stop',
+          handlersFired: 0,
+          x: nest(levels),
+        },
+      }) as TelemetryEvent;
+    // Boundary pinned by execution at this walk's depth accounting (event=0,
+    // payload value=1, its entries' values=2, array k at depth k+1, leaf at
+    // k+2; refusal when a call enters above 64): 62 levels is the deepest
+    // that scrubs, 63 refuses. Moves if the accounting changes — that is
+    // what the pin is for.
+    const deepest = scrubEvent(withNest(62), ['/Users/jackson']);
+    expect(deepest.scrub.count).toBe(1);
+    expect(() => scrubEvent(withNest(63), ['/Users/jackson'])).toThrow(/depth cap/u);
+    expect(() => scrubEvent(withNest(5000), ['/Users/jackson'])).toThrow(/depth cap/u);
+    expect(MAX_SCRUB_DEPTH).toBe(64);
+  });
+});
+
+describe('hasHomeShapedStrings — raw-value nudge detection', () => {
+  const event = (payload: Record<string, unknown>): TelemetryEvent =>
+    ({
+      id: '00000000-0000-4000-8000-000000000002',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 1,
+      type: 'hook-event',
+      payload: { kind: 'hook-fired', event: 'stop', handlersFired: 0, ...payload },
+    }) as TelemetryEvent;
+
+  it('detects Windows-shaped paths in RAW values (dead at the serialised seam, review-executed)', () => {
+    // JSON.stringify doubles every backslash, so testing the serialised body
+    // can never match the single-backslash \Users\ arm. The detector walks
+    // raw values precisely so this row nudges.
+    expect(hasHomeShapedStrings(event({ reason: 'denied writing C:\\Users\\alice\\notes.md' }))).toBe(
+      true,
+    );
+  });
+
+  it('detects home-shaped paths carried in KEYS and non-ASCII usernames', () => {
+    expect(hasHomeShapedStrings(event({ '/Users/jackson/.ssh': 'seen' }))).toBe(true);
+    expect(hasHomeShapedStrings(event({ reason: 'saw /Users/中村/notes.md' }))).toBe(true);
+  });
+
+  it('stays false for non-home paths and survives hostile nesting without recursion', () => {
+    expect(hasHomeShapedStrings(event({ reason: 'saw /srv/data/file.txt' }))).toBe(false);
+    let deep: unknown = 'clean leaf';
+    for (let i = 0; i < 5000; i += 1) deep = [deep];
+    expect(hasHomeShapedStrings(event({ x: deep }))).toBe(false);
   });
 });
 

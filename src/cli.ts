@@ -35,7 +35,7 @@ import {
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
-  hasHomeShapedPath,
+  hasHomeShapedStrings,
   openTelemetryDatabase,
   parseScrubPrefix,
   scrubEvent,
@@ -242,17 +242,54 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     // TERMINAL_UNSAFE, so it is a superset by construction and the pass would
     // be a no-op. The containment test enforces that instead.
     const scrubbing = args.scrubPrefixes.length > 0;
-    const lines = scrubbing
-      ? events.map((event) => JSON.stringify(scrubEvent(event, args.scrubPrefixes))).join('\n')
-      : events.map((event) => JSON.stringify(event)).join('\n');
-    if (!scrubbing && hasHomeShapedPath(lines)) {
-      // One static stderr line, echoing no row data; stdout/--out bytes are
-      // untouched, so forgetting the flag stays visible without becoming a
-      // silent transform (design E v2, finding 16).
-      process.stderr.write(
-        'note: this export contains home-directory-shaped paths in cleartext; ' +
-          're-run with --scrub-prefix <path> to replace a prefix in the export copy.\n',
-      );
+    let lines: string;
+    if (scrubbing) {
+      let scrubbedRows;
+      try {
+        scrubbedRows = events.map((event, index) => {
+          try {
+            return scrubEvent(event, args.scrubPrefixes);
+          } catch (error: unknown) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(
+              `--scrub-prefix refused row ${index + 1} of ${events.length}: ${reason}`,
+              { cause: error },
+            );
+          }
+        });
+      } catch (error: unknown) {
+        // A hostile row (depth bomb, key-collision plant) refuses the WHOLE
+        // scrubbed export, loudly, with the row's position so the operator can
+        // filter it out via --session/--type — the rowToEvent precedent: never
+        // emit a partial artefact. The message carries no untrusted bytes by
+        // construction; sanitize anyway, this is a terminal sink.
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`error: ${sanitizeForTerminal(message)}\n`);
+        return 1;
+      }
+      lines = scrubbedRows.map((row) => JSON.stringify(row)).join('\n');
+      if (scrubbedRows.some((row) => hasHomeShapedStrings(row))) {
+        // Survivor nudge: the scrub ran but home-shaped paths remain (wrong or
+        // misspelt prefix, case variant, NFC/NFD mismatch). Observe-only,
+        // stderr, no row data echoed; stdout/--out bytes are untouched.
+        process.stderr.write(
+          'note: home-directory-shaped paths remain after --scrub-prefix; ' +
+            'the prefix must match the stored bytes exactly (case and unicode form included).\n',
+        );
+      }
+    } else {
+      lines = events.map((event) => JSON.stringify(event)).join('\n');
+      if (events.some((event) => hasHomeShapedStrings(event))) {
+        // One static stderr line, echoing no row data; stdout/--out bytes are
+        // untouched, so forgetting the flag stays visible without becoming a
+        // silent transform (design E v2, finding 16). Runs on RAW event values:
+        // review executed the serialised form and JSON's backslash-doubling
+        // made the Windows arm unmatchable here.
+        process.stderr.write(
+          'note: this export contains home-directory-shaped paths in cleartext; ' +
+            're-run with --scrub-prefix <path> to replace a prefix in the export copy.\n',
+        );
+      }
     }
     const body = escapeJsonText(events.length > 0 ? `${lines}\n` : '');
     if (args.out !== null) {

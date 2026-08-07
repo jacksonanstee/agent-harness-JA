@@ -695,6 +695,93 @@ describe('telemetry export --scrub-prefix (design E, ADR-0031 decision 7)', () =
     expect(plain.stderr()).toBe('');
   });
 
+  it('nudges for a Windows-shaped row at the CLI seam (dead at the serialised seam, review-executed)', async () => {
+    // The first cut ran the detector over the JSON.stringify'd body, where
+    // backslash-doubling made the \Users\ arm unmatchable — the unit pin was
+    // green while the production seam never fired. This test binds the seam.
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-win-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    createTelemetryStore(db).record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: {
+        kind: 'hook-error',
+        event: 'stop',
+        reason: 'failed reading C:\\Users\\alice\\secrets\\prod.env',
+        handlerIndex: 0,
+      },
+    });
+    db.close();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(streams.stderr()).toContain('--scrub-prefix');
+  });
+
+  it('nudges on stderr when home-shaped paths SURVIVE a scrub (wrong prefix)', async () => {
+    const path = homeDb();
+    const streams = captureStreams();
+    try {
+      expect(
+        await main(['telemetry', 'export', '--db', path, '--scrub-prefix', '/Users/wrongname']),
+      ).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    // Rows still emit (with applied:false) — the survivor nudge is the only
+    // signal that the scrub the operator relied on did not bite.
+    expect(streams.stdout()).toContain(HOME);
+    const nudge = streams.stderr();
+    expect(nudge).toContain('remain after --scrub-prefix');
+    expect(nudge.trim().split('\n')).toHaveLength(1);
+    expect(nudge).not.toContain(HOME);
+  });
+
+  it('refuses the whole scrubbed export on a hostile deep row, while the default export still works', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-deep-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    let deep: unknown = `${HOME}/leaf`;
+    for (let i = 0; i < 2000; i += 1) deep = [deep];
+    // Extra keys pass the positive-conjunct RUNTIME validators
+    // (review-executed), so this goes through the PUBLIC record() API — no
+    // raw INSERT needed. Only the compile-time type objects, hence the cast.
+    createTelemetryStore(db).record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: { kind: 'hook-fired', event: 'stop', handlersFired: 0, x: deep },
+    } as Parameters<ReturnType<typeof createTelemetryStore>['record']>[0]);
+    db.close();
+
+    const scrubbed = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME])).toBe(1);
+    } finally {
+      scrubbed.restore();
+    }
+    expect(scrubbed.stderr()).toContain('refused row 1 of 1');
+    expect(scrubbed.stderr()).toContain('depth cap');
+    expect(scrubbed.stdout()).toBe('');
+
+    const plain = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path])).toBe(0);
+    } finally {
+      plain.restore();
+    }
+    expect(plain.stdout()).toContain('"x"');
+  });
+
   it('keeps the scrubbed export parseable: every line is valid JSON', async () => {
     const path = homeDb();
     const streams = captureStreams();
