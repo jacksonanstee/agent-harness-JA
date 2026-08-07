@@ -3,7 +3,7 @@
 - **Status:** Accepted — design CD ships with this ADR's PR; designs A and E are accepted with their panel changes and land in their own PRs, which amend this status line
 - **Date:** 2026-08-07
 - **Requirements:** issue #59, second design round (the first is ADR-0027, which killed all three of its designs and constrained any successor)
-- **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; its revisit-if fires for the second time), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
+- **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; design CD fires no revisit bullet — it is a formatting decision, not a keyed transform — and design E, once shipped, fires the explicit-argument bullet for the FIRST time, that section's third fire overall counting the taskDir bullet's two; the ADR-0027 annotation rides with design E's PR), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
 
 ## Context
 
@@ -60,7 +60,13 @@ retained string simply never contains the glob.
 4. **`denied[]` passes redact-then-truncate at the memory write**, the same seam and ordering
    as `prompt`/`resultText`. The deny reason is harness-authored today, but ANY registered
    hook's throw message becomes a `denied[]` entry, so the bypass was a standing trap for
-   future reason sources. Defence in depth, not the fix itself.
+   future reason sources. Defence in depth, not the fix itself. **Named asymmetry, found by
+   this ADR's own review round with an executed PoC:** the TELEMETRY copy of the same reason
+   (`denied-by-hook` rows) stays raw — control-char strip only, no redaction, no length
+   bound — which sits below the codebase's own standard for attacker-influenced strings
+   entering telemetry (`resultSummary` is redact-then-truncated at the same seam). No live
+   exposure with the shipped hooks; filed as issue #75 rather than folded in, and this
+   sentence exists so "defence in depth" is not read as covering a sink it does not.
 
 5. **Ephemeral surfaces may carry the glob.** The constraint is on retained sinks. A future
    live deny print or error message may name the glob; nothing here forbids that.
@@ -141,10 +147,15 @@ and the `denied[]` redact-then-truncate test (marker survives, secret does not, 
 at the summary limit plus ellipsis).
 
 Two mutation gates, each asserting its replacement applied before running and restored
-byte-identical after: gutting `describeRule` to the bare decision reddens exactly the six
-reason-binding tests (the two new evaluate tests, the tool-only and cross-layer and
-sticky-deny pins, and the end-to-end S-3 session test); reverting the `denied[]` map to a raw
-passthrough reddens exactly the new channel-(d) test.
+byte-identical after: gutting `describeRule` to the bare decision reddens exactly SEVEN
+reason-binding tests over the full suite (the two new evaluate tests, the tool-only and
+cross-layer and sticky-deny pins, the `mergeLayers` end-to-end pin in `settings.test.ts`,
+and the end-to-end S-3 session test); reverting the `denied[]` map to a raw passthrough
+reddens exactly the new channel-(d) test. The count is a correction with a lesson attached:
+the first run of this mutation covered only the two edited test files and its result was
+recorded as "exactly six", an executed-exhaustiveness claim the review's independent
+re-execution refuted by finding the seventh binding test in a file the author had not
+touched. The gate was re-run over the full suite before this paragraph was amended.
 
 **Limits.** The telemetry `denied-by-hook` row's glob-absence is asserted at the unit and
 session level, not through a live SDK run in CI (the composition root hardwires the real

@@ -217,12 +217,14 @@ export function createPermissionEvaluator(opts: EvaluatorOptions = {}): Permissi
         return {
           decision: defaultDecision,
           ruleIndex: null,
+          layer: null,
           reason: `permission: default ${defaultDecision} (no matching rule)`,
         };
       }
       return {
         decision: winner.rule.decision,
         ruleIndex: winner.index,
+        layer: winner.rule.layer,
         reason: `permission: ${describeRule(winner.rule, winner.index)}`,
       };
     },

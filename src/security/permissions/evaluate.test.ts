@@ -309,7 +309,17 @@ describe('createPermissionEvaluator', () => {
     const result = evaluator.evaluate('Write', { file_path: '/tmp/x' });
     expect(result.decision).toBe('deny');
     expect(result.reason).toContain('[rule 0, project]');
+    // (layer, ruleIndex) is the complete structured identity — a per-layer
+    // index alone is ambiguous between the two files (review finding).
     expect(result.ruleIndex).toBe(0);
+    expect(result.layer).toBe('project');
+  });
+
+  it('default decisions carry null for both halves of the rule identity', () => {
+    const evaluator = createPermissionEvaluator({ defaultDecision: 'deny' });
+    const result = evaluator.evaluate('Bash', {});
+    expect(result.ruleIndex).toBeNull();
+    expect(result.layer).toBeNull();
   });
 });
 

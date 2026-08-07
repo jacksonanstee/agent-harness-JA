@@ -160,3 +160,7 @@ R-17/R-16 re-words ride with the PR that makes them true.
 2. **A + CD** — the two removal-only designs; E deferred with its kills-so-far recorded.
 3. **CD only** — smallest diff; A deferred (LoadResult semver weight).
 4. Defer all — record the panel round in ADR-0031 as analysis-only.
+
+**Outcome 2026-08-07: Jackson picked option 1 (A + CD + E), sequenced per the Sequencing
+section. CD shipped first — see ADR-0031, which also records A and E as accepted with the
+panel changes for their own PRs.**
