@@ -175,8 +175,8 @@ distinct-row pin, the digest fixture that had to MOVE under the mocked root beca
 out-of-root path now suppresses, and `load.test.ts`'s empty-dir equality, plus the
 `loadSkills` mock literals at the type level — 49 shipped, where the spec's 51 was a
 pre-implementation estimate. Suite 1174 → 1187, then 1189 after the review round's two
-additions (the suppressed-arm coherence pins and the root-at-or-above-home documented-limit
-pin). Semver obligation, recorded here so the PR cannot omit it: `LoadResult` gains a
+additions (the suppressed-arm coherence pins and the strictly-above-home documented-limit
+pin), then 1190 after the verify round's equality-boundary pin. Semver obligation, recorded here so the PR cannot omit it: `LoadResult` gains a
 REQUIRED `root` field (breaks external `loadSkills` implementers) and `SkillDropPayload`
 changed from interface to union — the PR body carries the breaking-change note, version
 implication decided there (package still pre-first-publish).
@@ -185,10 +185,14 @@ Mutation gates on `relativeSkillDropPath` and the write site, each asserting its
 replacement applied and restored from a scratch copy (never `git checkout`) verified
 byte-identical:
 
-- NULL mutation FIRST (always-populate with the raw absolute path): 11 tests red across
-  the classifier suite and the session pins.
-- Positive branch flipped to suppress: 10 red, every populated-path pin including the
-  end-to-end session ones.
+- NULL mutation FIRST (always-populate with the raw absolute path): 11 red at the
+  implementation tree; 13 at the final tree. These two counts are a FUNCTION OF THE TREE —
+  every later test that pins the populated arm raises them — and the verify round caught
+  this section quoting implementation-tree numbers after the review round's additions had
+  moved them. They are recorded here as measured at the tree that carries this sentence
+  (1190 tests), and any future addition of a populated-arm pin moves them again.
+- Positive branch flipped to suppress: 10 red at the implementation tree; 12 at the final
+  tree, every populated-path pin including the end-to-end session ones.
 - Segment check replaced with `startsWith('..')`: exactly the `..foo` boundary test.
 - Precondition guard removed: exactly the enforced-precondition test — via the
   `('.', './x.md')` fixture added because the other non-absolute fixtures suppress through
@@ -198,6 +202,18 @@ byte-identical:
 - Write-site `escapePathUnsafe` deleted: 2 red (the raw-digest test's stored-value
   assertion and the pathHasEscapes pre-image test), binding the
   relativise-then-escape-then-bound order.
+
+The verify round on the review fixes produced this project's eighth consecutive
+refutation-of-a-recorded-claim, and it landed on the CORRECTION itself: the qualifying
+clause shipped as "a root at or above `$HOME` re-admits home segments" is false at its own
+boundary — executed, a root EQUAL to `$HOME` strips the entire home prefix, so the
+guarantee HOLDS at equality and only a root STRICTLY above re-admits. Six instances
+corrected (README, R-16, R-17(a), the classifier docstring, the test title whose body only
+ever exercised the strictly-above case, and this section), a seventh unconditional "never"
+found at the session write-site comment and qualified, and the equality case now carries
+its own executed pin. The lesson is the same one this section already records once: the
+author of a correction is the worst-placed person to check it, and a boundary claim needs
+an executed pin AT the boundary, not near it.
 
 **Limits.** Through the real CLI the suppress arm is UNREACHABLE by construction — the
 loader's join-based walk only produces paths under its own root — so no live smoke can

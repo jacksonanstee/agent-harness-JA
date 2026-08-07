@@ -45,12 +45,15 @@ export type SkillDropPathMeta =
  * relative form (same drive) or suppression via the cross-drive arm, both
  * safe directions (reasoned, not executed).
  *
- * SCOPE OF THE GUARANTEE, stated because a review executed its edge: the
- * home-prefix removal holds when the skills root sits below or disjoint
- * from the operator's home directory. A root at or ABOVE `$HOME` (`/`,
- * `/Users`) places home segments BELOW the root, where they store in
- * cleartext like any other below-root segment (ADR-0027 decision 4's
- * ceiling; operator-chosen configuration, not attacker-triggerable).
+ * SCOPE OF THE GUARANTEE, stated because two review passes executed its
+ * edges: the home-prefix removal holds when the skills root sits at or
+ * below the operator's home directory, or disjoint from it — a root EQUAL
+ * to `$HOME` strips the entire home prefix (executed at the boundary; the
+ * first wording said "at or above" re-admits, which the verify pass
+ * refuted at equality). A root STRICTLY above `$HOME` (`/`, `/Users`)
+ * places home segments BELOW the root, where they store in cleartext like
+ * any other below-root segment (ADR-0027 decision 4's ceiling;
+ * operator-chosen configuration, not attacker-triggerable).
  *
  * Precondition, ENFORCED rather than trusted (the ADR-0030 verify round
  * executed the mis-call this guard exists for): with a relative argument,

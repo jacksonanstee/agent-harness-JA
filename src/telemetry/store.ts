@@ -419,6 +419,12 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
       (value.path === null &&
         value.pathForm === 'suppressed' &&
         value.pathTruncated === false &&
+        // DELIBERATELY REDUNDANT with the digest-implies-truncated coupling
+        // below (pathTruncated === false on this arm already makes a digest
+        // unreachable), so removing this conjunct alone reddens nothing — it
+        // stays because the suppressed arm should state its FULL contract
+        // locally rather than lean on a conjunct thirty lines away (verify
+        // pass, 2026-08-07: recorded as unpinnable-by-design, not missed).
         value.pathDigest === undefined)) &&
     typeof value.pathTruncated === 'boolean' &&
     typeof value.pathHasEscapes === 'boolean' &&

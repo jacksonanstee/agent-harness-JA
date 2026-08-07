@@ -79,16 +79,28 @@ describe('relativeSkillDropPath', () => {
     });
   });
 
-  it('DOCUMENTED LIMIT: a root at or above the home directory stores home segments like any other below-root segment', () => {
-    // The home-prefix guarantee holds when the skills root sits below or
-    // disjoint from $HOME. An operator who points the harness at '/Users'
-    // (or '/') puts the home directory BELOW the root, and below-root
-    // segments store in cleartext by design (ADR-0027 decision 4 ceiling).
-    // Pinned as intended-and-documented, not accidental (review finding).
+  it('DOCUMENTED LIMIT: a root STRICTLY above the home directory stores home segments like any other below-root segment', () => {
+    // The home-prefix guarantee holds when the skills root sits at or below
+    // $HOME, or disjoint from it. An operator who points the harness at
+    // '/Users' (or '/') puts the home directory BELOW the root, and
+    // below-root segments store in cleartext by design (ADR-0027 decision 4
+    // ceiling). Pinned as intended-and-documented, not accidental (review
+    // finding).
     expect(relativeSkillDropPath('/Users', '/Users/op/skills/x.md')).toEqual({
       path: 'op/skills/x.md',
       pathForm: 'root-relative',
     });
+  });
+
+  it('BOUNDARY: a root EQUAL to the home directory strips the full home prefix (the guarantee holds at equality)', () => {
+    // The verify pass refuted the first wording of the documented limit
+    // ("at or above" re-admits home segments): at equality the stored value
+    // contains no home segment at all. Pinned so the corrected wording has
+    // an executed pin at its exact boundary.
+    const result = relativeSkillDropPath('/Users/op', '/Users/op/skills/x.md');
+    expect(result).toEqual({ path: 'skills/x.md', pathForm: 'root-relative' });
+    expect(JSON.stringify(result)).not.toContain('/Users/op');
+    expect(JSON.stringify(result)).not.toContain('op/');
   });
 
   it('a null root (the no-scan case) suppresses', () => {

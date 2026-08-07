@@ -726,7 +726,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // The STORED path is root-relative (issue #59 round 2, ADR-0031
       // decision 6): classified against the loader's own captured root, so
       // the operator's home directory and everything above the skills root
-      // never reaches this durable, exportable row. Any shape not positively
+      // stay out of this durable, exportable row — for a root at or below
+      // $HOME, or disjoint from it; a root strictly above places home
+      // segments below the root, where they store like any other segment
+      // (documented scope, see relativeSkillDropPath's docstring). Any shape not positively
       // at-or-under-root — unreachable by construction from the loader's
       // walk, enforced anyway — stores null with pathForm 'suppressed'.
       //
