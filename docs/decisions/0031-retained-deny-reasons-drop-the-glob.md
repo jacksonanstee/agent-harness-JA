@@ -246,10 +246,11 @@ part of this PR** (three lenses; every finding below carried an executed PoC):
    sibling directory named `/Users/jackson (Work Laptop)` was corrupted to
    `[marker] (Work Laptop)` with `applied: true` — mis-attribution through every
    filename-legal punctuation character, NFD combining marks included. The shipped
-   boundary is the spec's, literally: separator or end-of-string, nothing else. The
-   cost runs the other way and is a NAMED residual: an occurrence terminated by prose
-   punctuation (`cd /Users/jackson && ls`) survives in cleartext, pinned as documented
-   behaviour.
+   boundary is the spec's, literally: separator or end-of-string, nothing else — with
+   "separator" resolved PER PREFIX FORM (see the ninth-refutation paragraph below).
+   The cost runs the other way and is a NAMED residual: an occurrence terminated by
+   prose punctuation (`cd /Users/jackson && ls`) survives in cleartext, pinned as
+   documented behaviour.
 2. **Payload KEYS were not scrubbed and the exempting comment was false.** The store
    validators are positive-conjunct checks that admit extra keys, so a planted row's
    KEY carried a home path in cleartext on a row stamped `applied: true` (executed
@@ -282,28 +283,50 @@ per-ordinal comparison is unsound once the flag repeats, executed) and pinned; a
 spec's "help text" venue for the applied-is-not-clean caveat collapsed into USAGE
 because the CLI ships no help command — recorded as the venue's honest state.
 
+**The verify round on those fixes produced this project's NINTH consecutive
+refutation-of-a-recorded-claim, again at the correction's own boundary.** The fixed
+boundary treated `\` as a separator on EVERY platform; backslash is filename-legal on
+POSIX and `parseScrubPrefix` admits only POSIX-form prefixes on this host, so on darwin
+the `\` arm could only ever fire as mis-attribution — executed end-to-end:
+`/Users/testhome\backup/prod.env` was consumed to `[marker]\backup/prod.env`, stamped
+`applied: true`, and NUDGE-SILENT, because consuming the home-shaped bytes also blinds
+the survivor nudge. The correction's correction: the separator set is resolved per
+prefix form (`/` for a POSIX-form prefix; both separators for a Windows-form prefix,
+which only a win32 host's `parseScrubPrefix` admits). Both refuter fixtures are pinned,
+the Windows-form arm is pinned directly through `scrubText` (which trusts its input, so
+the form is exercisable on darwin), the near-miss now leaves the bytes intact so the
+survivor nudge FIRES (pinned at the CLI seam), and the separator rule has its own
+mutation gate. The verifier also independently re-executed all nine prior mutation-count
+claims (measured equalled claimed at that tree) and byte-diffed the default export
+against a scratch build of main across five seeded databases: identical.
+
 Mutation gates, each asserting its replacement applied before running and restored from
 a scratch copy (never `git checkout`) verified byte-identical. Counts are a FUNCTION OF
 THE TREE (design A's lesson) and were measured over the full suite at the tree that
-carries this sentence (1237 tests):
+carries this sentence (1240 tests):
 
-- NULL mutation FIRST (transform gutted to identity, count 0): 20 red — every unit pin
-  of the transform plus the three CLI integration pins.
-- Boundary check removed (fires regardless of the following character): exactly its 5
+- NULL mutation FIRST (transform gutted to identity, count 0): 21 red — every unit pin
+  of the transform plus the CLI integration pins.
+- Boundary check removed (fires regardless of the following character): exactly its 8
   pins — the alice fixture, the punctuation-sibling set, the continuation set
-  (dash/dot/unicode/NFD/astral), the longest-fails-fall-through pin, and the
-  prose-residual pin.
-- Count decoupled from replacements (replacement fires, count stays 0): 17 red,
+  (dash/dot/unicode/NFD/astral), the longest-fails-fall-through pin, the
+  prose-residual pin, both ninth-refutation backslash fixtures, and the Windows-form
+  pin.
+- Count decoupled from replacements (replacement fires, count stays 0): 18 red,
   including both counterfeit-arithmetic pins.
-- `HOME_SHAPED` gutted to never-match: 6 red — the unit shapes AND both CLI nudge
-  seams plus the survivor seam (the round-1 version of this gate passed with the seam
-  unbound; it cannot any more).
-- CLI wiring nulled (flag parsed, transform never applied): 5 red — signal row,
-  `--out` copy, no-nudge-under-flag, survivor nudge, and the deep-row refusal.
+- `HOME_SHAPED` gutted to never-match: 7 red — the unit shapes AND both CLI nudge
+  seams plus both survivor seams (the round-1 version of this gate passed with the
+  seam unbound; it cannot any more).
+- CLI wiring nulled (flag parsed, transform never applied): 6 red — signal row,
+  `--out` copy, no-nudge-under-flag, both survivor-nudge seams, and the deep-row
+  refusal.
 - Key-scrub removed (keys pass through raw): exactly its 3 pins.
 - Depth cap removed: exactly its 2 pins (unit boundary and the CLI refusal seam).
 - Collision refusal removed: exactly its 1 pin.
-- Survivor nudge removed: exactly its 1 pin.
+- Survivor nudge removed: exactly its 2 pins (wrong-prefix and backslash-near-miss
+  seams).
+- Separator set collapsed to always-both (the ninth refutation re-introduced):
+  exactly the 2 ninth-refutation pins.
 
 One observation carried from the panel (finding 15), recorded here because it belongs
 to this design's cost side: in a scrubbed export the skill-drop `pathDigest` becomes

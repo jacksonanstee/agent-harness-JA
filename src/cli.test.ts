@@ -744,6 +744,43 @@ describe('telemetry export --scrub-prefix (design E, ADR-0031 decision 7)', () =
     expect(nudge).not.toContain(HOME);
   });
 
+  it('surfaces a backslash-sibling near-miss through the survivor nudge (ninth-refutation seam)', async () => {
+    // With backslash no longer a boundary after a POSIX prefix, the sibling
+    // is NOT consumed — its home-shaped bytes remain, so the survivor nudge
+    // fires where the previous cut was silently corrupting.
+    const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-bslash-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'telemetry.db');
+    const db = openTelemetryDatabase({ path });
+    createTelemetryStore(db).record({
+      type: 'hook-event',
+      sessionId: 's1',
+      turnId: 't1',
+      ts: 100,
+      payload: {
+        kind: 'hook-error',
+        event: 'stop',
+        reason: `failed reading ${HOME}\\backup/prod.env`,
+        handlerIndex: 0,
+      },
+    });
+    db.close();
+    const streams = captureStreams();
+    try {
+      expect(await main(['telemetry', 'export', '--db', path, '--scrub-prefix', HOME])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(streams.stdout()).toContain(`${HOME}\\\\backup`);
+    const rows = streams
+      .stdout()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows[0]?.['scrub']).toEqual({ applied: false, count: 0, transform: 'prefix-v1' });
+    expect(streams.stderr()).toContain('remain after --scrub-prefix');
+  });
+
   it('refuses the whole scrubbed export on a hostile deep row, while the default export still works', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-telemetry-deep-'));
     tmpDirs.push(dir);

@@ -74,6 +74,30 @@ describe('scrubText — segment-boundary matching', () => {
     expect(astral.value).toBe('/Users/jackson\u{1D4AA}/x');
   });
 
+  it('does not treat backslash as a boundary after a POSIX prefix (ninth-refutation fixture)', () => {
+    // Backslash is filename-legal on POSIX, so after a POSIX-form prefix it
+    // CONTINUES a sibling name. The verify round executed both of these
+    // against the previous cut: the sibling was consumed, stamped
+    // applied:true, and the survivor nudge stayed dark because the
+    // home-shaped bytes were gone.
+    expect(scrubText('/Users/jackson\\backup/file.txt', ['/Users/jackson'])).toEqual({
+      value: '/Users/jackson\\backup/file.txt',
+      count: 0,
+    });
+    expect(scrubText('ls /Users/jackson\\ (Work Laptop)/x', ['/Users/jackson']).count).toBe(0);
+  });
+
+  it('treats both separators as boundaries after a Windows-form prefix', () => {
+    // scrubText trusts its input, so Windows-form prefixes are exercisable on
+    // any host even though parseScrubPrefix only admits them on win32.
+    expect(scrubText('C:\\Users\\jackson\\file.txt', ['C:\\Users\\jackson'])).toEqual({
+      value: '[scrubbed-prefix-1]\\file.txt',
+      count: 1,
+    });
+    expect(scrubText('C:\\Users\\jackson/file.txt', ['C:\\Users\\jackson']).count).toBe(1);
+    expect(scrubText('C:\\Users\\jackson2\\file.txt', ['C:\\Users\\jackson']).count).toBe(0);
+  });
+
   it('falls through to a shorter prefix when the longest matches textually but fails its boundary', () => {
     // Review-built mutant: breaking out of the ranked loop on first textual
     // match (ignoring the boundary result) passed every then-existing test.

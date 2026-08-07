@@ -61,6 +61,23 @@ interface RankedPrefix {
   prefix: string;
   /** 1-based position of the `--scrub-prefix` argument; the marker's N. */
   ordinal: number;
+  /** Separator characters that can legitimately CONTINUE this prefix's form. */
+  separators: readonly string[];
+}
+
+/**
+ * The separator set is PER PREFIX FORM, not global — the verify round's
+ * refutation (the ninth of this project, again at the correction's own
+ * boundary): treating `\` as a boundary after a POSIX prefix let a darwin
+ * sibling whose name contains a backslash (`/Users/jackson\backup`, or a
+ * shell-escaped path captured in recorded prose) be consumed and stamped
+ * `applied: true`, silently — the home-shaped bytes were eaten, so even the
+ * survivor nudge stayed dark. Backslash is filename-legal on POSIX; only a
+ * Windows-form prefix (drive letter or UNC, which `parseScrubPrefix` accepts
+ * only on win32 hosts) is legitimately continued by either separator.
+ */
+function separatorsFor(prefix: string): readonly string[] {
+  return /^[A-Za-z]:|^\\/u.test(prefix) ? ['/', '\\'] : ['/'];
 }
 
 /**
@@ -70,7 +87,7 @@ interface RankedPrefix {
  */
 function rankPrefixes(prefixes: readonly string[]): RankedPrefix[] {
   return prefixes
-    .map((prefix, index) => ({ prefix, ordinal: index + 1 }))
+    .map((prefix, index) => ({ prefix, ordinal: index + 1, separators: separatorsFor(prefix) }))
     .filter((entry) => entry.prefix.length > 0)
     .sort((a, b) => b.prefix.length - a.prefix.length);
 }
@@ -89,14 +106,19 @@ function rankPrefixes(prefixes: readonly string[]): RankedPrefix[] {
  * terminated by prose punctuation (`cd /Users/jackson && ls`) survives in
  * cleartext; the post-scrub nudge exists to make that class visible.
  *
- * Comparing code units is sound here: `/` and `\` are BMP single units, so a
- * surrogate half can never equal either and astral characters after the
- * prefix correctly read as non-boundary.
+ * "Separator" is resolved per prefix form (see `separatorsFor`). Comparing
+ * code units is sound here: `/` and `\` are BMP single units, so a surrogate
+ * half can never equal either and astral characters after the prefix
+ * correctly read as non-boundary.
  */
-function isSegmentBoundary(text: string, index: number): boolean {
+function isSegmentBoundary(
+  text: string,
+  index: number,
+  separators: readonly string[],
+): boolean {
   if (index >= text.length) return true;
   const char = text[index];
-  return char === '/' || char === '\\';
+  return char !== undefined && separators.includes(char);
 }
 
 function scrubRanked(text: string, ranked: readonly RankedPrefix[]): ScrubResult {
@@ -105,8 +127,11 @@ function scrubRanked(text: string, ranked: readonly RankedPrefix[]): ScrubResult
   let count = 0;
   while (index < text.length) {
     let matched = false;
-    for (const { prefix, ordinal } of ranked) {
-      if (text.startsWith(prefix, index) && isSegmentBoundary(text, index + prefix.length)) {
+    for (const { prefix, ordinal, separators } of ranked) {
+      if (
+        text.startsWith(prefix, index) &&
+        isSegmentBoundary(text, index + prefix.length, separators)
+      ) {
         // The marker is appended to OUTPUT and the scan resumes past the
         // matched input, so replaced text is never rescanned: one pass, no
         // marker can feed a later match.
