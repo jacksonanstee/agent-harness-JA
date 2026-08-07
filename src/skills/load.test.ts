@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { load, scanMarkdownFiles, validate } from './load.js';
@@ -183,7 +183,9 @@ describe('skills: load', () => {
     afterAll(() => rmSync(emptyDir, { recursive: true, force: true }));
 
     it('returns no skills and no errors', () => {
-      expect(load(emptyDir)).toEqual({ skills: [], errors: [] });
+      // `root` is the resolved scan root, threaded back so the telemetry
+      // write site holds both relative() operands (ADR-0031 decision 6).
+      expect(load(emptyDir)).toEqual({ skills: [], errors: [], root: resolve(emptyDir) });
     });
   });
 

@@ -307,9 +307,11 @@ function isBoundedStringArray(value: unknown, maxItems: number, maxLen: number):
  * rows most worth having) fails isSkillDropPayload and vanishes as a warning.
  *
  * The input here has ALREADY been through `escapePathUnsafe` (session.ts
- * capture site, round-1 fix issue #46 Finding 1) — escape THEN truncate, not
- * the other order, so the cap bounds what is actually stored rather than a
- * pre-image that can grow past it during escaping. That ordering creates a
+ * write site; since ADR-0031 the escape runs on the ROOT-RELATIVE form —
+ * relativise, then escape, then bound; round-1 fix issue #46 Finding 1) —
+ * escape THEN truncate, not the other order, so the cap bounds what is
+ * actually stored rather than a pre-image that can grow past it during
+ * escaping. That ordering creates a
  * hazard `truncateTailWellFormed` alone does not guard: a raw tail-cut can
  * land INSIDE one of `escapePathUnsafe`'s own tokens (`\\` or `\u{HEX}`,
  * `PATH_ESCAPE_SEQUENCE`), keeping a fragment like `00B}rest.md` that reads as
@@ -324,9 +326,12 @@ export function boundSkillDropPath(
 ): { value: string; truncated: boolean; digest?: string } {
   const cap = SKILL_DROP_PATH_MAX - 1;
   const truncated = path.length > cap;
-  // No digest when nothing was discarded: a complete path is its own identity,
-  // and the key is omitted rather than set to undefined so a consumer can use
-  // presence as the signal (issue #50).
+  // No digest when nothing was discarded: a complete stored value is its own
+  // identity WITHIN its root — since ADR-0031 the value is root-relative, so
+  // two sub-cap rows under different roots can store identically with no
+  // digest to separate them, an accepted cost recorded there (rows carry
+  // sessionId). The key is omitted rather than set to undefined so a consumer
+  // can use presence as the signal (issue #50).
   if (!truncated) return { value: path, truncated };
   const naiveFrom = path.length - cap;
   let effectiveMax = cap;
@@ -393,8 +398,19 @@ function isSkillDropPayload(value: unknown): value is SkillDropPayload {
     isObject(value) &&
     typeof value.name === 'string' &&
     value.name.length <= SKILL_DROP_NAME_MAX &&
-    typeof value.path === 'string' &&
-    value.path.length <= SKILL_DROP_PATH_MAX &&
+    // path/pathForm coherence (issue #59 round 2, ADR-0031 decision 6).
+    // Three admissible shapes and only three: a legacy row (string path, no
+    // pathForm — rows predating the field must still read, the pathDigest
+    // optionality lesson re-applied), a root-relative row (string path,
+    // pathForm 'root-relative'), and a suppressed row (null path, pathForm
+    // 'suppressed'). A null path WITHOUT the declared suppressed form is
+    // malformed, not legacy, and an unknown pathForm value is rejected the
+    // same way a malformed digest is: an unusable signal a consumer would
+    // trust is worse than none.
+    ((typeof value.path === 'string' &&
+      value.path.length <= SKILL_DROP_PATH_MAX &&
+      (value.pathForm === undefined || value.pathForm === 'root-relative')) ||
+      (value.path === null && value.pathForm === 'suppressed')) &&
     typeof value.pathTruncated === 'boolean' &&
     typeof value.pathHasEscapes === 'boolean' &&
     // OPTIONAL: absent is valid, because rows predating the field must still
@@ -497,6 +513,18 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
     const p = event.payload;
     // sanitizeText is a 1:1 space substitution, so lengths are preserved and
     // the caps validated above still hold after sanitization.
+    // Branched rather than a ternary override so each union arm keeps its
+    // own path/pathForm pairing under the spread (a suppressed row's path is
+    // null and must stay null — ADR-0031; pathForm rides through the spread
+    // untouched, a closed union the validator enforced).
+    if (p.path === null) {
+      return {
+        ...p,
+        name: sanitizeText(p.name),
+        channels: p.channels.map(sanitizeText),
+        ruleIds: p.ruleIds.map(sanitizeText),
+      };
+    }
     return {
       ...p,
       name: sanitizeText(p.name),
