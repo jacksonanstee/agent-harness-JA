@@ -477,8 +477,10 @@ added, green on write, before the claim was allowed to stand); the grep output i
 MEDIUM, MEDIUM, LOW, then a HIGH that was a false closure claim over LOW code defects: the code
 converged while the prose overclaimed one round longer than the code did.
 
-**Mutation gates: seventeen, each over the FULL suite (1215 tests) at this tree, each asserting the
-replacement landed before running and the restore byte-identical after.** NULL (the mapper passes
+**Mutation gates: seventeen, each over the FULL suite, each asserting the replacement landed before
+running and the restore byte-identical after. First measured at 1215 tests, then re-measured after
+the rebase onto design E (PR #79) at the tree that carries this sentence (1265 tests, 2026-08-25):
+every gate reddened the same count and the same named set.** NULL (the mapper passes
 the reason through) reddens exactly the seven mapper behaviour pins. Truncate-before-redact reddens
 exactly the order pin. Raw-on-throw reddens exactly the throwing-redactor pin. Dropping the bound
 call reddens exactly the cap pin. Dropping the mapper's `typeof` guard reddens exactly the
