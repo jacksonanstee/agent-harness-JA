@@ -6,6 +6,7 @@ import { escapePathUnsafe } from '../internal/sanitize.js';
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import type { HookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
+import type { MemoryError } from '../memory/index.js';
 import { route } from '../router/index.js';
 import {
   SKILL_DROP_CHANNEL_MAX,
@@ -1047,6 +1048,49 @@ describe('createSession', () => {
     const result = await session.run('say hello');
     expect(result.resultText).toBe('hello from claude');
     expect(warnings).toContain(expected);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // The two Result-error renderings (a failed record, a failed memory write)
+  // take an injected dependency's error object too. Green on write: the code
+  // already routed them through describeError; these bind against reversion.
+  const boobyResultError = <T extends object>(base: T): T => {
+    Object.defineProperty(base, 'message', { get: () => { throw new Error('getter leak'); } });
+    return base;
+  };
+  it.each([
+    ['telemetry.record returns a failed result', 'telemetry record failed', (): Partial<SessionDeps> => ({
+      telemetry: {
+        record: () => ({
+          ok: false as const,
+          error: boobyResultError({ kind: 'db' as const, message: 'x' }),
+        }),
+      },
+    })],
+    ['memory.write returns a failed result', 'memory write failed', (): Partial<SessionDeps> => {
+      const real = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+      return {
+        memory: {
+          ...real,
+          write: () => ({
+            ok: false as const,
+            error: boobyResultError({ kind: 'db', message: 'x' } as MemoryError),
+          }),
+        },
+      };
+    }],
+  ])('an unrepresentable Result error from %s degrades to a warning and the run completes', async (_label, prefix, overrides) => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, overrides()), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(`${prefix}: unrepresentable error`);
     expect(warnings.join('\n')).not.toContain('getter leak');
   });
 

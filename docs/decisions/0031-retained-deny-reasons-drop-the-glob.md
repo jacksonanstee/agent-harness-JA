@@ -379,7 +379,10 @@ closes a pre-existing crash at the memory write for `prompt`, `resultText` and `
 round-four review then found the same shape at four more catches in `session.ts` (telemetry
 record, secret redaction, injection scan, post-tool fire), so round five replaced every error
 rendering in that file, eight sites including the skill-load warning over loader-supplied error
-objects, with one `describeError` helper that never throws and always returns a string.
+objects, with one `describeError` helper that never throws and always returns a string. One
+observable change rides with that: the `memory write failed` warning was the single site that had
+never sanitised its message, and now does (a hardening for well-formed input, named so it is not
+read as accidental).
 
 **Where the cap lives, and the options named.** The first cut kept the constant in `cli/shared.ts`;
 the architecture review moved it. The skill-drop precedent has three parts: a constant in
@@ -430,7 +433,9 @@ a malformed redactor result reached the `fire failed:` row raw and crashed the m
 the throwing-getter session pin green on write, named as such because it binds a branch no test
 had exercised. Round five, after the round-four review: six pins observed red, one per remaining
 catch and two for the skill-load warning (a throwing `message` getter and a throwing `kind`
-getter), each rejecting the run with the getter's own error. Two fixture corrections in round one
+getter), each rejecting the run with the getter's own error; then two pins green on write for the
+two Result-error renderings (a failed telemetry record, a failed memory write), added after the
+final scoped review showed those sites unbound, named as such. Two fixture corrections in round one
 and two, recorded so they are not tidied out of the story: the straddling key was first glued to
 the filler and the AWS rule is `\b`-anchored; and once the cap moved from 201 to 200 the redaction
 marker was sliced before its colon, so the key was shifted to indices 180 to 199 (under a
@@ -466,12 +471,13 @@ instance, not the family, and the first draft of this paragraph said otherwise: 
 code review grepped `session.ts` for the same shape, found four more catches rendering
 `error.message` through the untyped replace (telemetry record, secret redaction, injection scan,
 post-tool fire), and reproduced three of them rejecting `run()` by execution. Round five closed the
-family with a single `describeError` helper at all eight rendering sites in the file and one pin
-per site; the grep output is the evidence, not this sentence. Severity across the rounds ran
+family with a single `describeError` helper at all eight rendering sites in the file and pins at
+every site (the final scoped review found the two Result-error sites unpinned, and their pins were
+added, green on write, before the claim was allowed to stand); the grep output is the evidence, not this sentence. Severity across the rounds ran
 MEDIUM, MEDIUM, LOW, then a HIGH that was a false closure claim over LOW code defects: the code
 converged while the prose overclaimed one round longer than the code did.
 
-**Mutation gates: seventeen, each over the FULL suite (1213 tests) at this tree, each asserting the
+**Mutation gates: seventeen, each over the FULL suite (1215 tests) at this tree, each asserting the
 replacement landed before running and the restore byte-identical after.** NULL (the mapper passes
 the reason through) reddens exactly the seven mapper behaviour pins. Truncate-before-redact reddens
 exactly the order pin. Raw-on-throw reddens exactly the throwing-redactor pin. Dropping the bound
@@ -487,8 +493,9 @@ three runtime pins. Writing the session's `fire failed:` row raw reddens exactly
 redact-then-bound pin and the malformed-redactor pin. Dropping `reasonOf`'s string check reddens
 exactly the replace-method runtime pin. Dropping `redactForPersistence`'s string check reddens
 exactly the malformed-redactor pin. Dropping `describeError`'s string check reddens exactly the
-replace-method session pin. Rethrowing from `describeError`'s catch reddens exactly six: the
-throwing-getter fire pin, the four injected-dependency catch pins and the skill-load message pin.
+replace-method session pin. Rethrowing from `describeError`'s catch reddens exactly eight: the
+throwing-getter fire pin, the four injected-dependency catch pins, the skill-load message pin and
+the two Result-error pins.
 Restoring the raw `error.message` read in the skill-load warning reddens exactly its pin. Compared
 with round two, the malformed-result pin no longer reddens under the order, sentinel or no-bound
 mutations, because the `typeof` guard now catches a malformed result on every path; the
