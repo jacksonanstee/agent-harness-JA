@@ -14,8 +14,8 @@ import {
   PermissionSettingsError,
   SandboxSettingsError,
 } from '../security/index.js';
-import type { EvaluatorOptions, SandboxConfig } from '../security/index.js';
-import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
+import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
+import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
@@ -200,14 +200,72 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 }
 
 /**
+ * Telemetry sentinel when the secret redactor fails (fail-closed, never raw).
+ * Third copy of this literal (src/session/session.ts, src/eval/scorecard/
+ * sanitize.ts); each site pins it by test, and ADR-0008's Revisit-if fires at
+ * the FOURTH copy: extract to src/internal/ then, not before.
+ */
+const REDACTION_FAILED = '[REDACTION FAILED]';
+
+/**
+ * REQUIRED, not optional, on purpose: an optional redactor with a raw fallback
+ * is exactly the standing trap this closes (the memory seam has one because
+ * the session's redactor is an injected optional dep; here the composition
+ * root always holds `redact`, so the type can demand it). This is a
+ * compile-time pin against OMISSION (a caller cannot leave the redactor out),
+ * not a runtime guarantee about what the supplied redactor does.
+ */
+export interface HookTelemetryDeps {
+  redactSecrets: (text: string) => RedactResult;
+}
+
+/**
+ * Redact THEN bound, in that order (session.ts's transform-then-truncate
+ * contract): truncating first can slice a secret at the boundary into a
+ * fragment too short for its rule to match. The cap itself belongs to
+ * telemetry (`boundHookEventReason`, HOOK_EVENT_REASON_MAX): the module that
+ * owns the payload shape owns its bound, and the memory copy of the same
+ * string is designed to the same ceiling (see the constant's doc comment for
+ * the one-unit convention difference). The WHOLE transform sits inside the
+ * try and the result is type-checked: a redactor that throws, or returns
+ * anything but a string, stores the sentinel. Either failure escaping here
+ * would reach the hook sink, which swallows throws (src/hooks/runtime.ts),
+ * and the row would be dropped silently.
+ * Control characters are not stripped here: the store's write-path
+ * sanitizer already does that for every payload string.
+ */
+function boundReason(reason: string, deps: HookTelemetryDeps): string {
+  try {
+    const { redacted } = deps.redactSecrets(reason);
+    // An array or array-like with a small .length passes a length cut
+    // without throwing; the store would then reject the non-string reason
+    // with a throw the sink swallows, and the row would vanish silently.
+    if (typeof redacted !== 'string') return REDACTION_FAILED;
+    return boundHookEventReason(redacted);
+  } catch {
+    return REDACTION_FAILED;
+  }
+}
+
+/**
  * Maps a hook runtime record onto telemetry's structural hook-event payload.
  * Lives in cli/shared.ts (not hooks/ or telemetry/) so those two modules stay
  * import-free peers (ADR-0011); cli.ts (and any other cli/ command module)
  * imports it from here.
+ *
+ * The `reason` of a denied-by-hook or hook-error row is ANY registered hook's
+ * throw message, so it is attacker-influenced in principle even though the
+ * shipped hooks emit value-free reasons (ADR-0031 decision 1). It passes the
+ * same ORDER of redact-then-truncate as the memory summary's `denied[]` copy,
+ * to the same ceiling (ADR-0031 decision 4; issue #75). The sibling `tool`
+ * field is model-requested too; it is control-char sanitized by the store but
+ * neither redacted nor length-bound here, outside #75's scope, named so this
+ * mapper is not read as bounding every attacker-influenced string on the row.
  */
 export function hookRecordToTelemetryInput(
   record: HookEventRecord,
   ids: { sessionId: string; turnId: string },
+  deps: HookTelemetryDeps,
 ): TelemetryEventInput {
   const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
   if (record.kind === 'denied-by-hook') {
@@ -217,7 +275,7 @@ export function hookRecordToTelemetryInput(
         kind: record.kind,
         event: record.event,
         tool: record.tool,
-        reason: record.reason,
+        reason: boundReason(record.reason, deps),
         handlerIndex: record.handlerIndex,
       },
     };
@@ -228,7 +286,7 @@ export function hookRecordToTelemetryInput(
       payload: {
         kind: record.kind,
         event: record.event,
-        reason: record.reason,
+        reason: boundReason(record.reason, deps),
         handlerIndex: record.handlerIndex,
       },
     };

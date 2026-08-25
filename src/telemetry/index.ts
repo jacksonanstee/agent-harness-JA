@@ -1,5 +1,6 @@
 export {
   assertValidCorrelationId,
+  boundHookEventReason,
   boundSkillDropName,
   boundSkillDropPath,
   createTelemetryStore,
@@ -25,6 +26,7 @@ export type {
   ScrubSignal,
 } from './scrub.js';
 export {
+  HOOK_EVENT_REASON_MAX,
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,
   SKILL_DROP_NAME_MAX,

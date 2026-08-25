@@ -37,8 +37,33 @@ export class HookDenial extends Error {
 }
 
 
+/**
+ * Stored when a thrown value cannot be rendered at all: a `String()` that
+ * throws, an Error whose `message` is a throwing getter, a null-prototype
+ * object. Fixed text, never derived from the value.
+ */
+const UNREPRESENTABLE_REASON = '[unrepresentable hook error]';
+
+/**
+ * Must not throw. This runs INSIDE the catch that contains a handler's throw;
+ * before it was guarded, a handler could throw a value whose coercion throws,
+ * the coercion error escaped the catch, `fire()` rejected with the
+ * handler-chosen text, and the session's own `fire failed:` telemetry row
+ * carried it raw and unbounded (issue #75, found by execution in review).
+ * The deny path must resolve wherever the accept path would.
+ */
 function reasonOf(thrown: unknown): string {
-  return sanitize(thrown instanceof Error ? thrown.message : String(thrown));
+  try {
+    const rendered: unknown = thrown instanceof Error ? thrown.message : String(thrown);
+    // `message` is a property a subclass or defineProperty can turn into a
+    // getter returning anything; sanitize() is a string replace with no type
+    // check, so an object carrying a `replace` method would pass its own
+    // return value out as the reason. String or nothing.
+    if (typeof rendered !== 'string') return UNREPRESENTABLE_REASON;
+    return sanitize(rendered);
+  } catch {
+    return UNREPRESENTABLE_REASON;
+  }
 }
 
 function assertValidEvent(event: HookEvent): void {

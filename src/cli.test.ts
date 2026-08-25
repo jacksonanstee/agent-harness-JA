@@ -9,7 +9,7 @@ import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRed
 import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
-import { scan } from './security/index.js';
+import { redact, scan } from './security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
 import type { TelemetryEvent } from './telemetry/index.js';
 
@@ -248,41 +248,145 @@ describe('parseArgs (telemetry export)', () => {
 
 describe('hookRecordToTelemetryInput', () => {
   const ids = { sessionId: 'harness-1', turnId: 'turn-1' };
+  const deps = { redactSecrets: redact };
+  // Assembled from fragments so the repo's own secret scan never sees a literal
+  // (the S-2 fixture idiom, src/security/secrets/redact.test.ts).
+  const AWS_KEY = 'AKIA' + 'IOSFODNN7EXAMPLE';
+
+  const denied = (reason: string): HookEventRecord => ({
+    kind: 'denied-by-hook',
+    event: 'pre-tool',
+    handlerIndex: 2,
+    tool: 'Bash',
+    reason,
+  });
+  const errored = (reason: string): HookEventRecord => ({
+    kind: 'hook-error',
+    event: 'post-tool',
+    handlerIndex: 0,
+    reason,
+  });
+  const reasonOf = (record: HookEventRecord, d = deps): string | undefined => {
+    const input = hookRecordToTelemetryInput(record, ids, d);
+    if (input.type !== 'hook-event') throw new Error('expected a hook-event input');
+    return input.payload.reason;
+  };
 
   it('maps all three HookEventRecord kinds', () => {
-    const denied: HookEventRecord = {
-      kind: 'denied-by-hook',
-      event: 'pre-tool',
-      handlerIndex: 2,
-      tool: 'Bash',
-      reason: 'blocked',
-    };
-    const errored: HookEventRecord = {
-      kind: 'hook-error',
-      event: 'post-tool',
-      handlerIndex: 0,
-      reason: 'observer broke',
-    };
     const fired: HookEventRecord = { kind: 'hook-fired', event: 'stop', handlersFired: 3 };
 
-    expect(hookRecordToTelemetryInput(denied, ids)).toEqual({
+    expect(hookRecordToTelemetryInput(denied('blocked'), ids, deps)).toEqual({
       type: 'hook-event',
       sessionId: 'harness-1',
       turnId: 'turn-1',
       payload: { kind: 'denied-by-hook', event: 'pre-tool', tool: 'Bash', reason: 'blocked', handlerIndex: 2 },
     });
-    expect(hookRecordToTelemetryInput(errored, ids)).toEqual({
+    expect(hookRecordToTelemetryInput(errored('observer broke'), ids, deps)).toEqual({
       type: 'hook-event',
       sessionId: 'harness-1',
       turnId: 'turn-1',
       payload: { kind: 'hook-error', event: 'post-tool', reason: 'observer broke', handlerIndex: 0 },
     });
-    expect(hookRecordToTelemetryInput(fired, ids)).toEqual({
+    expect(hookRecordToTelemetryInput(fired, ids, deps)).toEqual({
       type: 'hook-event',
       sessionId: 'harness-1',
       turnId: 'turn-1',
       payload: { kind: 'hook-fired', event: 'stop', handlersFired: 3 },
     });
+  });
+
+  // Issue #75: the telemetry copy of a hook reason sat below the codebase's own
+  // standard for attacker-influenced strings entering a retained sink (memory's
+  // denied[] and tool-trace resultSummary are both redact-then-truncated). ANY
+  // registered hook's throw message becomes this row, not only harness-authored
+  // reasons — the review's executed PoC was a hook throwing a message that
+  // carried an AWS key, and the key landed in the denied-by-hook row verbatim.
+  it('redacts a secret in a denied-by-hook reason before it reaches telemetry (issue #75)', () => {
+    const reason = reasonOf(denied(`blocked; saw ${AWS_KEY} in args`));
+    expect(reason).not.toContain(AWS_KEY);
+    expect(reason).not.toContain('AKIA');
+    expect(reason).toContain('[REDACTED:');
+  });
+
+  it('redacts a secret in a hook-error reason on the same seam', () => {
+    const reason = reasonOf(errored(`observer broke on ${AWS_KEY}`));
+    expect(reason).not.toContain(AWS_KEY);
+    expect(reason).toContain('[REDACTED:');
+  });
+
+  // 200 is the TOTAL stored length including the ellipsis (telemetry's cap
+  // convention, HOOK_EVENT_REASON_MAX in src/telemetry/types.ts), so the
+  // content is cut at 199. Literal, not the constant: a tautological pin
+  // would stay green when the constant moves.
+  it('caps the reason at 200 stored units including the ellipsis', () => {
+    const reason = reasonOf(denied('x'.repeat(500)));
+    expect(reason).toHaveLength(200);
+    expect(reason?.startsWith('x'.repeat(199))).toBe(true);
+    expect(reason?.endsWith('…')).toBe(true);
+  });
+
+  // Order pin. The key occupies indices 180-199 (after the \b the rule needs)
+  // and the content cut is at 199, so the cap falls INSIDE the key. Truncating
+  // first would leave a 19-char fragment: too short for the rule's {16} tail
+  // to match, too long to be harmless — the same transform-then-truncate
+  // contract session.ts enforces. Redacting first leaves the marker's head.
+  it('redacts BEFORE truncating: a secret straddling the cap never survives as a fragment', () => {
+    const reason = reasonOf(denied('x'.repeat(179) + ' ' + AWS_KEY + ' tail'));
+    expect(reason).not.toContain('AKIA');
+    expect(reason).toContain('[REDACTED:');
+  });
+
+  it('fails closed to the sentinel when the redactor throws, and still produces the row', () => {
+    const throwing = {
+      redactSecrets: (): never => {
+        throw new Error('redactor exploded');
+      },
+    };
+    const input = hookRecordToTelemetryInput(denied(`saw ${AWS_KEY}`), ids, throwing);
+    expect(input).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: {
+        kind: 'denied-by-hook',
+        event: 'pre-tool',
+        tool: 'Bash',
+        reason: '[REDACTION FAILED]',
+        handlerIndex: 2,
+      },
+    });
+  });
+
+  // A redactor that returns a malformed result instead of throwing must fail
+  // closed the same way: the sink swallows throws (src/hooks/runtime.ts), so
+  // a TypeError escaping the mapper would drop the row with no trace at all.
+  it('fails closed to the sentinel when the redactor returns a malformed result', () => {
+    const malformed = {
+      redactSecrets: () => ({ redacted: undefined as unknown as string, findings: [] }),
+    };
+    expect(reasonOf(denied(`saw ${AWS_KEY}`), malformed)).toBe('[REDACTION FAILED]');
+  });
+
+  // An array (or any array-like with a small .length) slips through a naive
+  // length-based cut without throwing; the store then rejects the non-string
+  // reason with a throw the sink swallows, and the row vanishes silently.
+  it('fails closed to the sentinel when the redactor returns a non-string redacted value', () => {
+    const arrayShaped = {
+      redactSecrets: () => ({ redacted: ['a'] as unknown as string, findings: [] }),
+    };
+    expect(reasonOf(denied(`saw ${AWS_KEY}`), arrayShaped)).toBe('[REDACTION FAILED]');
+  });
+
+  it('leaves hook-fired rows untouched and never invokes the redactor for them', () => {
+    const spy = vi.fn(redact);
+    const fired: HookEventRecord = { kind: 'hook-fired', event: 'stop', handlersFired: 3 };
+    expect(hookRecordToTelemetryInput(fired, ids, { redactSecrets: spy })).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: { kind: 'hook-fired', event: 'stop', handlersFired: 3 },
+    });
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

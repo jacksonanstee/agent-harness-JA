@@ -183,7 +183,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
       const hooks = createHookRuntime({
         onEvent: (record) => {
           const result = telemetry.record(
-            hookRecordToTelemetryInput(record, { sessionId, turnId }),
+            hookRecordToTelemetryInput(record, { sessionId, turnId }, { redactSecrets: redact }),
           );
           if (!result.ok) {
             process.stderr.write(

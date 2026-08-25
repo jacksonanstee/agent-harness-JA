@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { escapePathUnsafe } from '../internal/sanitize.js';
 
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
+import type { HookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
+import type { MemoryError } from '../memory/index.js';
 import { route } from '../router/index.js';
 import {
   SKILL_DROP_CHANNEL_MAX,
@@ -849,10 +851,247 @@ describe('createSession', () => {
     expect(content).not.toContain(secret);
     expect(content).toContain('[REDACTED:aws-access-key-id]');
     const parsed = JSON.parse(content) as { denied: Array<{ tool: string; reason: string }> };
-    // truncate() caps at SUMMARY_TEXT_LIMIT (200) plus the ellipsis marker.
+    // truncate() caps CONTENT at SUMMARY_TEXT_LIMIT (200) and appends the
+    // ellipsis, so a truncated reason is exactly 201 units. Exact, not a
+    // ceiling: the telemetry seam (issue #75) is designed to the same bound
+    // and this pin is what makes that parity claim checkable from this side.
     expect(parsed.denied).toHaveLength(1);
-    expect(parsed.denied[0]?.reason.length).toBeLessThanOrEqual(201);
+    expect(parsed.denied[0]?.reason).toHaveLength(201);
     expect(parsed.denied[0]?.reason.endsWith('…')).toBe(true);
+  });
+
+  it('the fire-failed hook-error row passes redact-then-bound before the telemetry write (issue #75, third writer)', async () => {
+    // fire() rejecting is the runtime's own failure path, but the verify pass
+    // showed a registered handler can drive attacker-chosen text into it
+    // (a thrown value whose String() throws). The runtime now hardens that,
+    // and this row is bounded as defence in depth like the other two seams.
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool'
+          ? Promise.reject(new Error(`leak ${secret} ${'x'.repeat(300)}`))
+          : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const redactSecrets = (text: string): RedactResult => ({
+      redacted: text.replaceAll(secret, '[REDACTED:aws-access-key-id]'),
+      findings: [],
+    });
+    const session = createSession(makeDeps(fake, { hooks, telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    await session.run('do it');
+
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason?.startsWith('fire failed: ')).toBe(true);
+    expect(row.payload.reason).not.toContain(secret);
+    expect(row.payload.reason).toContain('[REDACTED:');
+    // HOOK_EVENT_REASON_MAX stored units, ellipsis included.
+    expect(row.payload.reason).toHaveLength(200);
+    expect(row.payload.reason?.endsWith('…')).toBe(true);
+  });
+
+  // A rejection value the session cannot render must not turn the deny path
+  // into a throw: no redactor injected, so nothing downstream can absorb it.
+  it.each([
+    ['a throwing message getter', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', { get: () => { throw new Error('getter leak'); } });
+      return booby;
+    }],
+    ['a message getter returning an object with a replace method', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', {
+        get: () => ({ replace: () => Object.create(null) as unknown }),
+      });
+      return booby;
+    }],
+  ])('a fire() rejection with %s stores the fixed detail and the run still resolves', async (_label, make) => {
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool' ? Promise.reject(make()) : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const session = createSession(makeDeps(fake, { hooks, telemetry }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    const result = await session.run('do it');
+    expect(result.denied).toEqual([{ tool: 'Bash', reason: 'pre-tool hook failure' }]);
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason).toBe('fire failed: unrepresentable error');
+  });
+
+  // redactForPersistence trusted .redacted; a malformed result used to reach
+  // the fire-failed row RAW (the ?? fallback chose the detail) and to crash
+  // the memory write for denied[]/prompt/resultText. Same posture as the
+  // mapper now: a non-string redaction result is the sentinel.
+  it('a malformed redactor result stores the sentinel on the fire-failed row and in denied[], never the raw text', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool' ? Promise.reject(new Error(`leak ${secret}`)) : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const redactSecrets = (): RedactResult => ({ redacted: undefined as unknown as string, findings: [] });
+    const session = createSession(makeDeps(fake, { hooks, telemetry, memory, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    await session.run('do it');
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason).toBe('fire failed: [REDACTION FAILED]');
+    const content = memory.read({})[0]?.content ?? '';
+    expect(content).not.toContain(secret);
+    const parsed = JSON.parse(content) as { denied: Array<{ reason: string }>; prompt: string };
+    expect(parsed.denied[0]?.reason).toBe('[REDACTION FAILED]');
+    expect(parsed.prompt).toBe('[REDACTION FAILED]');
+  });
+
+  // The round-four review found the same unguarded error.message rendering
+  // at every other injected-dependency catch in this file. Each of these deps
+  // is an arbitrary implementation at the same trust boundary as hooks; a
+  // throw whose message getter throws must degrade to a warning, never reject
+  // the run.
+  const booby = (): Error => {
+    const err = new Error('placeholder');
+    Object.defineProperty(err, 'message', { get: () => { throw new Error('getter leak'); } });
+    return err;
+  };
+  it.each([
+    ['telemetry.record throws', 'telemetry record threw', (): Partial<SessionDeps> => ({
+      telemetry: { record: () => { throw booby(); } },
+    })],
+    ['redactSecrets throws', 'secret redaction failed', (): Partial<SessionDeps> => ({
+      redactSecrets: () => { throw booby(); },
+    })],
+    ['scanInjection throws', 'injection scan failed', (): Partial<SessionDeps> => ({
+      scanInjection: () => { throw booby(); },
+    })],
+    ['post-tool fire() rejects', 'post-tool fire failed', (): Partial<SessionDeps> => {
+      const real = createHookRuntime();
+      const hooks: HookRuntime = {
+        register: real.register,
+        fire: ((event, payload) =>
+          event === 'post-tool' ? Promise.reject(booby()) : real.fire(event, payload)) as HookRuntime['fire'],
+      };
+      return { hooks };
+    }],
+  ])('an unrepresentable error from %s degrades to a warning and the run completes', async (_label, prefix, overrides) => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, overrides()), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(`${prefix}: unrepresentable error`);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // The one non-catch rendering of an injected dependency's error: the
+  // skill-load warning reads loader-supplied error objects field by field.
+  type LoadError = ReturnType<SessionDeps['loadSkills']>['errors'][number];
+  it.each([
+    ['message', 'skill load parse error in evil.md: unrepresentable error'],
+    ['kind', 'skill load error: unrepresentable error'],
+  ])('a skill-load error whose %s getter throws degrades to a warning and the run completes', async (field, expected) => {
+    const err = { kind: 'parse', file: 'evil.md', message: 'x' } as unknown as LoadError;
+    Object.defineProperty(err, field, { get: () => { throw new Error('getter leak'); } });
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], []);
+    const warnings: string[] = [];
+    const session = createSession(
+      makeDeps(fake, { loadSkills: () => ({ skills: [], errors: [err], root: '/skills' }) }),
+      { skillsDir: '/nowhere', onWarning: (w) => warnings.push(w) },
+    );
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(expected);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // The two Result-error renderings (a failed record, a failed memory write)
+  // take an injected dependency's error object too. Green on write: the code
+  // already routed them through describeError; these bind against reversion.
+  const boobyResultError = <T extends object>(base: T): T => {
+    Object.defineProperty(base, 'message', { get: () => { throw new Error('getter leak'); } });
+    return base;
+  };
+  it.each([
+    ['telemetry.record returns a failed result', 'telemetry record failed', (): Partial<SessionDeps> => ({
+      telemetry: {
+        record: () => ({
+          ok: false as const,
+          error: boobyResultError({ kind: 'db' as const, message: 'x' }),
+        }),
+      },
+    })],
+    ['memory.write returns a failed result', 'memory write failed', (): Partial<SessionDeps> => {
+      const real = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+      return {
+        memory: {
+          ...real,
+          write: () => ({
+            ok: false as const,
+            error: boobyResultError({ kind: 'db', message: 'x' } as MemoryError),
+          }),
+        },
+      };
+    }],
+  ])('an unrepresentable Result error from %s degrades to a warning and the run completes', async (_label, prefix, overrides) => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, overrides()), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(`${prefix}: unrepresentable error`);
+    expect(warnings.join('\n')).not.toContain('getter leak');
   });
 
   it('streams assistant text through onText', async () => {
