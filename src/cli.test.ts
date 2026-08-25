@@ -314,19 +314,24 @@ describe('hookRecordToTelemetryInput', () => {
     expect(reason).toContain('[REDACTED:');
   });
 
-  it('caps the reason at the summary limit with an ellipsis', () => {
+  // 200 is the TOTAL stored length including the ellipsis (telemetry's cap
+  // convention, HOOK_EVENT_REASON_MAX in src/telemetry/types.ts), so the
+  // content is cut at 199. Literal, not the constant: a tautological pin
+  // would stay green when the constant moves.
+  it('caps the reason at 200 stored units including the ellipsis', () => {
     const reason = reasonOf(denied('x'.repeat(500)));
-    expect(reason).toHaveLength(201);
-    expect(reason?.startsWith('x'.repeat(200))).toBe(true);
+    expect(reason).toHaveLength(200);
+    expect(reason?.startsWith('x'.repeat(199))).toBe(true);
     expect(reason?.endsWith('…')).toBe(true);
   });
 
-  // Order pin. The key starts at index 190 (after a boundary the rule needs)
-  // and ends at 210, straddling the 200-char cap. Truncating first would slice
-  // it into a 10-char fragment too short for the rule to match and too long to
-  // be harmless — the same transform-then-truncate contract session.ts enforces.
+  // Order pin. The key occupies indices 180-199 (after the \b the rule needs)
+  // and the content cut is at 199, so the cap falls INSIDE the key. Truncating
+  // first would leave a 19-char fragment: too short for the rule's {16} tail
+  // to match, too long to be harmless — the same transform-then-truncate
+  // contract session.ts enforces. Redacting first leaves the marker's head.
   it('redacts BEFORE truncating: a secret straddling the cap never survives as a fragment', () => {
-    const reason = reasonOf(denied('x'.repeat(189) + ' ' + AWS_KEY + ' tail'));
+    const reason = reasonOf(denied('x'.repeat(179) + ' ' + AWS_KEY + ' tail'));
     expect(reason).not.toContain('AKIA');
     expect(reason).toContain('[REDACTED:');
   });
@@ -350,6 +355,16 @@ describe('hookRecordToTelemetryInput', () => {
         handlerIndex: 2,
       },
     });
+  });
+
+  // A redactor that returns a malformed result instead of throwing must fail
+  // closed the same way: the sink swallows throws (src/hooks/runtime.ts), so
+  // a TypeError escaping the mapper would drop the row with no trace at all.
+  it('fails closed to the sentinel when the redactor returns a malformed result', () => {
+    const malformed = {
+      redactSecrets: () => ({ redacted: undefined as unknown as string, findings: [] }),
+    };
+    expect(reasonOf(denied(`saw ${AWS_KEY}`), malformed)).toBe('[REDACTION FAILED]');
   });
 
   it('leaves hook-fired rows untouched and never invokes the redactor for them', () => {

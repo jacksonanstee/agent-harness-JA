@@ -132,6 +132,22 @@ export type SkillDropReason = 'injection-block' | 'prompt-budget';
 export const SKILL_DROP_NAME_MAX = 200;
 export const SKILL_DROP_PATH_MAX = 1024;
 /**
+ * TOTAL stored length of `HookEventPayload.reason`, INCLUDING the ellipsis
+ * (same convention as the two caps above; `boundHookEventReason` owns the
+ * `MAX - 1` arithmetic). A hook reason is ANY registered hook's throw message,
+ * so it is attacker-influenced in principle (issue #75, ADR-0031 decision 4);
+ * the capture seam (`hookRecordToTelemetryInput`, src/cli/shared.ts) redacts
+ * first and then calls the bound helper. Chosen to match the memory summary's
+ * SUMMARY_TEXT_LIMIT (src/session/session.ts) for the OTHER retained copy of
+ * the same string — but that constant bounds CONTENT before its ellipsis, so
+ * a truncated memory reason is 201 units where this row is 200. The parity
+ * that matters is the order (redact before truncate) and the ceiling, not
+ * byte-equal lengths; both seams pin their own value exactly. NOT enforced by
+ * the read-path validator on purpose: `rowToEvent` denies a whole export on
+ * one rejected row, and rows written before this cap existed may exceed it.
+ */
+export const HOOK_EVENT_REASON_MAX = 200;
+/**
  * Length of `SkillDropPayload.pathDigest`, in lowercase hex characters (issue
  * #50). Each hex character carries 4 bits, so the value below is a 128-bit
  * digest.

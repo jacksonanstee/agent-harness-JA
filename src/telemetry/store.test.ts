@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { escapePathUnsafe } from '../internal/sanitize.js';
 
 import {
+  boundHookEventReason,
   boundSkillDropName,
   boundSkillDropPath,
   createTelemetryStore,
@@ -17,6 +18,7 @@ import {
   TELEMETRY_EVENT_TYPES,
 } from './store.js';
 import {
+  HOOK_EVENT_REASON_MAX,
   SKILL_DROP_NAME_MAX,
   SKILL_DROP_PATH_DIGEST_LEN,
   SKILL_DROP_PATH_MAX,
@@ -1247,6 +1249,16 @@ describe('boundSkillDropPath / boundSkillDropName', () => {
     const longName = 'n'.repeat(SKILL_DROP_NAME_MAX * 2);
     const result = boundSkillDropName(longName);
     expect(result).toHaveLength(SKILL_DROP_NAME_MAX);
+    expect(result.endsWith('…')).toBe(true);
+  });
+
+  it('boundHookEventReason returns a short reason unchanged', () => {
+    expect(boundHookEventReason('deny Bash [rule 0, project]')).toBe('deny Bash [rule 0, project]');
+  });
+
+  it('boundHookEventReason bounds a long reason at exactly HOOK_EVENT_REASON_MAX units (not MAX + 1)', () => {
+    const result = boundHookEventReason('r'.repeat(HOOK_EVENT_REASON_MAX * 2));
+    expect(result).toHaveLength(HOOK_EVENT_REASON_MAX);
     expect(result.endsWith('…')).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ import type {
 import {
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,
+  HOOK_EVENT_REASON_MAX,
   SKILL_DROP_NAME_MAX,
   SKILL_DROP_PATH_DIGEST_LEN,
   SKILL_DROP_PATH_MAX,
@@ -384,6 +385,21 @@ function skillDropPathDigest(fullPath: string): string {
  */
 export function boundSkillDropName(name: string): string {
   return truncateWellFormed(name, SKILL_DROP_NAME_MAX - 1);
+}
+
+/**
+ * Write-side bound for `HookEventPayload.reason` (issue #75). Truncation
+ * only: redaction is the CAPTURE seam's job (it holds the redactor; telemetry
+ * is a leaf and imports no security module), and it must run BEFORE this cut
+ * so a secret straddling the boundary becomes a marker, not a fragment.
+ * Surrogate-safe like its siblings. Lives here rather than in the capture
+ * seam so the module that owns the payload shape owns its cap, and so any
+ * future writer of hook-event rows (there is one in src/session/session.ts,
+ * writing the runtime's own `fire failed:` message) can reuse it without an
+ * upward import.
+ */
+export function boundHookEventReason(reason: string): string {
+  return truncateWellFormed(reason, HOOK_EVENT_REASON_MAX - 1);
 }
 
 /** Anchored and length-pinned: a partial match would admit a longer string. */

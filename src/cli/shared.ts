@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { loadJsonSettings } from '../internal/settings.js';
-import { TERMINAL_UNSAFE, truncateWellFormed } from '../internal/sanitize.js';
+import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   mergeLayers,
   mergeSandboxLayers,
@@ -15,7 +15,7 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
-import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
+import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
@@ -200,47 +200,45 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 }
 
 /**
- * Length bound on a hook reason persisted to telemetry. Deliberately the same
- * value as the memory summary's SUMMARY_TEXT_LIMIT (src/session/session.ts):
- * the SAME reason string reaches both retained sinks, and issue #75 was the
- * asymmetry between them — the memory copy redact-then-truncated, the telemetry
- * copy raw. Not imported from session because cli/ owning a session-internal
- * constant would couple the two for one number; drift is pinned by the tests
- * asserting 200 on both seams.
+ * Telemetry sentinel when the secret redactor fails (fail-closed — never raw).
+ * Third copy of this literal (src/session/session.ts, src/eval/scorecard/
+ * sanitize.ts); each site pins it by test, and ADR-0008's Revisit-if fires at
+ * the FOURTH copy — extract to src/internal/ then, not before.
  */
-export const HOOK_REASON_LIMIT = 200;
-
-/** Telemetry sentinel when the secret redactor throws (fail-closed — never raw). */
 const REDACTION_FAILED = '[REDACTION FAILED]';
 
 /**
  * REQUIRED, not optional, on purpose: an optional redactor with a raw fallback
  * is exactly the standing trap this closes (the memory seam has one because
  * the session's redactor is an injected optional dep; here the composition
- * root always holds `redact`, so the type can demand it). A new caller that
- * forgets the redactor fails to compile instead of persisting raw.
+ * root always holds `redact`, so the type can demand it). This is a
+ * compile-time pin against OMISSION — a caller cannot leave the redactor out —
+ * not a runtime guarantee about what the supplied redactor does.
  */
 export interface HookTelemetryDeps {
   redactSecrets: (text: string) => RedactResult;
 }
 
 /**
- * Redact THEN truncate, in that order (session.ts's transform-then-truncate
+ * Redact THEN bound, in that order (session.ts's transform-then-truncate
  * contract): truncating first can slice a secret at the boundary into a
- * fragment too short for its rule to match. Control characters are not
- * stripped here — the store's write-path sanitizer already does that for
- * every payload string (src/telemetry/store.ts), so a second pass would be
- * a duplicate, not a defence. On redactor failure the sentinel is stored,
- * never the raw reason.
+ * fragment too short for its rule to match. The cap itself belongs to
+ * telemetry (`boundHookEventReason`, HOOK_EVENT_REASON_MAX): the module that
+ * owns the payload shape owns its bound, and the memory copy of the same
+ * string is designed to the same ceiling (see the constant's doc comment for
+ * the one-unit convention difference). The WHOLE transform sits inside the
+ * try: a redactor that returns a malformed result instead of throwing must
+ * fail closed too, because the hook sink swallows throws (src/hooks/
+ * runtime.ts) and a TypeError escaping here would drop the row silently.
+ * Control characters are not stripped here — the store's write-path
+ * sanitizer already does that for every payload string.
  */
 function boundReason(reason: string, deps: HookTelemetryDeps): string {
-  let redacted: string;
   try {
-    redacted = deps.redactSecrets(reason).redacted;
+    return boundHookEventReason(deps.redactSecrets(reason).redacted);
   } catch {
     return REDACTION_FAILED;
   }
-  return truncateWellFormed(redacted, HOOK_REASON_LIMIT);
 }
 
 /**
@@ -252,8 +250,11 @@ function boundReason(reason: string, deps: HookTelemetryDeps): string {
  * The `reason` of a denied-by-hook or hook-error row is ANY registered hook's
  * throw message, so it is attacker-influenced in principle even though the
  * shipped hooks emit value-free reasons (ADR-0031 decision 1). It passes the
- * same redact-then-truncate the memory summary's `denied[]` copy does
- * (ADR-0031 decision 4; issue #75).
+ * same ORDER of redact-then-truncate as the memory summary's `denied[]` copy,
+ * to the same ceiling (ADR-0031 decision 4; issue #75). The sibling `tool`
+ * field is model-requested too; it is control-char sanitized by the store but
+ * neither redacted nor length-bound here — outside #75's scope, named so this
+ * mapper is not read as bounding every attacker-influenced string on the row.
  */
 export function hookRecordToTelemetryInput(
   record: HookEventRecord,

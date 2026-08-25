@@ -849,9 +849,12 @@ describe('createSession', () => {
     expect(content).not.toContain(secret);
     expect(content).toContain('[REDACTED:aws-access-key-id]');
     const parsed = JSON.parse(content) as { denied: Array<{ tool: string; reason: string }> };
-    // truncate() caps at SUMMARY_TEXT_LIMIT (200) plus the ellipsis marker.
+    // truncate() caps CONTENT at SUMMARY_TEXT_LIMIT (200) and appends the
+    // ellipsis, so a truncated reason is exactly 201 units. Exact, not a
+    // ceiling: the telemetry seam (issue #75) is designed to the same bound
+    // and this pin is what makes that parity claim checkable from this side.
     expect(parsed.denied).toHaveLength(1);
-    expect(parsed.denied[0]?.reason.length).toBeLessThanOrEqual(201);
+    expect(parsed.denied[0]?.reason).toHaveLength(201);
     expect(parsed.denied[0]?.reason.endsWith('…')).toBe(true);
   });
 
