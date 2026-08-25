@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { escapePathUnsafe } from '../internal/sanitize.js';
 
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
+import type { HookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import {
@@ -856,6 +857,50 @@ describe('createSession', () => {
     expect(parsed.denied).toHaveLength(1);
     expect(parsed.denied[0]?.reason).toHaveLength(201);
     expect(parsed.denied[0]?.reason.endsWith('…')).toBe(true);
+  });
+
+  it('the fire-failed hook-error row passes redact-then-bound before the telemetry write (issue #75, third writer)', async () => {
+    // fire() rejecting is the runtime's own failure path, but the verify pass
+    // showed a registered handler can drive attacker-chosen text into it
+    // (a thrown value whose String() throws). The runtime now hardens that,
+    // and this row is bounded as defence in depth like the other two seams.
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool'
+          ? Promise.reject(new Error(`leak ${secret} ${'x'.repeat(300)}`))
+          : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const redactSecrets = (text: string): RedactResult => ({
+      redacted: text.replaceAll(secret, '[REDACTED:aws-access-key-id]'),
+      findings: [],
+    });
+    const session = createSession(makeDeps(fake, { hooks, telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    await session.run('do it');
+
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason?.startsWith('fire failed: ')).toBe(true);
+    expect(row.payload.reason).not.toContain(secret);
+    expect(row.payload.reason).toContain('[REDACTED:');
+    // HOOK_EVENT_REASON_MAX stored units, ellipsis included.
+    expect(row.payload.reason).toHaveLength(200);
+    expect(row.payload.reason?.endsWith('…')).toBe(true);
   });
 
   it('streams assistant text through onText', async () => {

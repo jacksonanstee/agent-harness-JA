@@ -139,7 +139,7 @@ export const SKILL_DROP_PATH_MAX = 1024;
  * the capture seam (`hookRecordToTelemetryInput`, src/cli/shared.ts) redacts
  * first and then calls the bound helper. Chosen to match the memory summary's
  * SUMMARY_TEXT_LIMIT (src/session/session.ts) for the OTHER retained copy of
- * the same string — but that constant bounds CONTENT before its ellipsis, so
+ * the same string, but that constant bounds CONTENT before its ellipsis, so
  * a truncated memory reason is 201 units where this row is 200. The parity
  * that matters is the order (redact before truncate) and the ceiling, not
  * byte-equal lengths; both seams pin their own value exactly. NOT enforced by

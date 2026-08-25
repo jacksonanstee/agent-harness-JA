@@ -414,3 +414,60 @@ describe('hooks: bare default-instance API', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
+
+// Issue #75, third writer. reasonOf() used to run INSIDE the catch, so a
+// thrown value whose String() or .message throws escaped the catch, rejected
+// fire(), and its text reached the session's own 'fire failed:' telemetry row
+// unredacted and unbounded (found by the adversarial verify pass, executed).
+describe('hooks: unrepresentable throws', () => {
+  const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+
+  it('a pre-tool handler throwing a value whose String() throws still denies, with a fixed reason and no leaked text', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => {
+      throw {
+        toString(): string {
+          throw new Error(`leak ${secret}`);
+        },
+      };
+    });
+    const result = await runtime.fire('pre-tool', preTool);
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe('[unrepresentable hook error]');
+    expect(records).toEqual([
+      {
+        kind: 'denied-by-hook',
+        event: 'pre-tool',
+        handlerIndex: 0,
+        tool: 'Read',
+        reason: '[unrepresentable hook error]',
+      },
+    ]);
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
+  it('a post-tool handler throwing an Error whose message getter throws is recorded as a hook-error with the fixed reason', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('post-tool', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', {
+        get(): string {
+          throw new Error(`getter leak ${secret}`);
+        },
+      });
+      throw booby;
+    });
+    const result = await runtime.fire('post-tool', postTool);
+    expect(result.denied).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.reason).toBe('[unrepresentable hook error]');
+    expect(records[0]).toEqual({
+      kind: 'hook-error',
+      event: 'post-tool',
+      handlerIndex: 0,
+      reason: '[unrepresentable hook error]',
+    });
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
+});

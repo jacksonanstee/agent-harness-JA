@@ -367,6 +367,16 @@ describe('hookRecordToTelemetryInput', () => {
     expect(reasonOf(denied(`saw ${AWS_KEY}`), malformed)).toBe('[REDACTION FAILED]');
   });
 
+  // An array (or any array-like with a small .length) slips through a naive
+  // length-based cut without throwing; the store then rejects the non-string
+  // reason with a throw the sink swallows, and the row vanishes silently.
+  it('fails closed to the sentinel when the redactor returns a non-string redacted value', () => {
+    const arrayShaped = {
+      redactSecrets: () => ({ redacted: ['a'] as unknown as string, findings: [] }),
+    };
+    expect(reasonOf(denied(`saw ${AWS_KEY}`), arrayShaped)).toBe('[REDACTION FAILED]');
+  });
+
   it('leaves hook-fired rows untouched and never invokes the redactor for them', () => {
     const spy = vi.fn(redact);
     const fired: HookEventRecord = { kind: 'hook-fired', event: 'stop', handlersFired: 3 };

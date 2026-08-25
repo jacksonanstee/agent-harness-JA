@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { TaskDescriptor } from '../router/index.js';
 import type { Skill } from '../skills/index.js';
 import {
+  boundHookEventReason,
   boundSkillDropName,
   boundSkillDropPath,
   assertValidCorrelationId,
@@ -940,15 +941,32 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       } catch (error: unknown) {
         // fire() itself failing must fail closed, not SDK-defined. The reason
         // sent to the model is generic; the detail goes to warnings only.
-        const detail = error instanceof Error ? sanitizeText(error.message) : 'unknown';
-        warn(`pre-tool fire failed: ${detail}`);
+        // Rendering the error is itself guarded: a rejection value whose
+        // message getter throws must not turn the deny path into a throw.
+        let detail = 'unknown';
+        try {
+          if (error instanceof Error) detail = sanitizeText(error.message);
+        } catch {
+          detail = 'unrepresentable error';
+        }
+        // Redact-then-bound, like the other two retained copies of a hook
+        // reason (issue #75). The runtime now keeps handler-chosen text out
+        // of fire() rejections, but any HookRuntime implementation can reject
+        // with anything, and this is a retained sink: defence in depth, the
+        // same posture as denied[] at the memory write.
+        const safeDetail = redactForPersistence(detail) ?? detail;
+        warn(`pre-tool fire failed: ${safeDetail}`);
         // The hook sink never saw this failure (it lives inside fire()), so
-        // record it here — every failure path leaves a telemetry trace.
+        // record it here: every failure path leaves a telemetry trace.
         recordTelemetry({
           type: 'hook-event',
           sessionId: harnessSessionId,
           turnId,
-          payload: { kind: 'hook-error', event: 'pre-tool', reason: `fire failed: ${detail}` },
+          payload: {
+            kind: 'hook-error',
+            event: 'pre-tool',
+            reason: boundHookEventReason(`fire failed: ${safeDetail}`),
+          },
         });
         deniedReason = 'pre-tool hook failure';
       }

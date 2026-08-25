@@ -200,10 +200,10 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 }
 
 /**
- * Telemetry sentinel when the secret redactor fails (fail-closed — never raw).
+ * Telemetry sentinel when the secret redactor fails (fail-closed, never raw).
  * Third copy of this literal (src/session/session.ts, src/eval/scorecard/
  * sanitize.ts); each site pins it by test, and ADR-0008's Revisit-if fires at
- * the FOURTH copy — extract to src/internal/ then, not before.
+ * the FOURTH copy: extract to src/internal/ then, not before.
  */
 const REDACTION_FAILED = '[REDACTION FAILED]';
 
@@ -212,7 +212,7 @@ const REDACTION_FAILED = '[REDACTION FAILED]';
  * is exactly the standing trap this closes (the memory seam has one because
  * the session's redactor is an injected optional dep; here the composition
  * root always holds `redact`, so the type can demand it). This is a
- * compile-time pin against OMISSION — a caller cannot leave the redactor out —
+ * compile-time pin against OMISSION (a caller cannot leave the redactor out),
  * not a runtime guarantee about what the supplied redactor does.
  */
 export interface HookTelemetryDeps {
@@ -227,15 +227,21 @@ export interface HookTelemetryDeps {
  * owns the payload shape owns its bound, and the memory copy of the same
  * string is designed to the same ceiling (see the constant's doc comment for
  * the one-unit convention difference). The WHOLE transform sits inside the
- * try: a redactor that returns a malformed result instead of throwing must
- * fail closed too, because the hook sink swallows throws (src/hooks/
- * runtime.ts) and a TypeError escaping here would drop the row silently.
- * Control characters are not stripped here — the store's write-path
+ * try and the result is type-checked: a redactor that throws, or returns
+ * anything but a string, stores the sentinel. Either failure escaping here
+ * would reach the hook sink, which swallows throws (src/hooks/runtime.ts),
+ * and the row would be dropped silently.
+ * Control characters are not stripped here: the store's write-path
  * sanitizer already does that for every payload string.
  */
 function boundReason(reason: string, deps: HookTelemetryDeps): string {
   try {
-    return boundHookEventReason(deps.redactSecrets(reason).redacted);
+    const { redacted } = deps.redactSecrets(reason);
+    // An array or array-like with a small .length passes a length cut
+    // without throwing; the store would then reject the non-string reason
+    // with a throw the sink swallows, and the row would vanish silently.
+    if (typeof redacted !== 'string') return REDACTION_FAILED;
+    return boundHookEventReason(redacted);
   } catch {
     return REDACTION_FAILED;
   }
@@ -253,7 +259,7 @@ function boundReason(reason: string, deps: HookTelemetryDeps): string {
  * same ORDER of redact-then-truncate as the memory summary's `denied[]` copy,
  * to the same ceiling (ADR-0031 decision 4; issue #75). The sibling `tool`
  * field is model-requested too; it is control-char sanitized by the store but
- * neither redacted nor length-bound here — outside #75's scope, named so this
+ * neither redacted nor length-bound here, outside #75's scope, named so this
  * mapper is not read as bounding every attacker-influenced string on the row.
  */
 export function hookRecordToTelemetryInput(

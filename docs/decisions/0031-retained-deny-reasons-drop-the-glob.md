@@ -2,7 +2,7 @@
 
 - **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). **Design E shipped 2026-08-07 in its own PR** (`telemetry export --scrub-prefix`; verification appended below). All three designs of this round are now live
 - **Date:** 2026-08-07
-- **Amended:** 2026-08-25 — decision 4's named asymmetry closed (issue #75, its own PR; verification appended below)
+- **Amended:** 2026-08-25: decision 4's named asymmetry closed (issue #75, its own PR; verification appended below)
 - **Requirements:** issue #59, second design round (the first is ADR-0027, which killed all three of its designs and constrained any successor)
 - **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; design CD fires no revisit bullet — it is a formatting decision, not a keyed transform — and design E, once shipped, fires the explicit-argument bullet for the FIRST time, that section's third fire overall counting the taskDir bullet's two; the ADR-0027 annotation rides with design E's PR), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
 
@@ -72,8 +72,8 @@ retained string simply never contains the glob.
    same ORDER of redact-then-truncate, to the same ceiling, at the mapping seam
    (`hookRecordToTelemetryInput`, `src/cli/shared.ts`), with the cap owned by telemetry
    (`HOOK_EVENT_REASON_MAX`, `boundHookEventReason`) and the redactor a REQUIRED dependency of
-   the mapper — a compile-time pin against omitting it, not a guarantee about what the supplied
-   redactor does. Verification, the exact parity, and what remains uncovered are appended below.
+   the mapper, a compile-time pin against omitting it rather than a guarantee about what the
+   supplied redactor does. Verification, the exact parity, and what remains uncovered are appended below.
 
 5. **Ephemeral surfaces may carry the glob.** The constraint is on retained sinks. A future
    live deny print or error message may name the glob; nothing here forbids that.
@@ -364,23 +364,28 @@ argument `{ redactSecrets }` and passes the `reason` of `denied-by-hook` and `ho
 through redact-then-bound before the row reaches the store: redact first, then
 `boundHookEventReason` (`src/telemetry/store.ts`), which cuts surrogate-safe to
 `HOOK_EVENT_REASON_MAX = 200` (`src/telemetry/types.ts`, that file's total-stored-length
-convention, ellipsis included). The whole transform sits inside one `try`: a redactor that throws
-OR returns a malformed result stores `[REDACTION FAILED]`, never the raw reason. Both
-composition-root call sites (`src/cli.ts` run, `src/cli/eval-command.ts`) supply the real
-`redact`. The payload SHAPE is unchanged and there is no validator bound.
+convention, ellipsis included). The whole transform sits inside one `try` and its result is
+type-checked: a redactor that throws, or returns anything but a string, stores
+`[REDACTION FAILED]`, never the raw reason. Both composition-root call sites (`src/cli.ts` run,
+`src/cli/eval-command.ts`) supply the real `redact`. The payload SHAPE is unchanged and there is
+no validator bound. Two further changes came out of the verify round (recorded below): `reasonOf`
+in the hook runtime can no longer throw, and the session's own `fire failed:` hook-error row now
+passes redact-then-bound as well, so all three writers of a hook reason are bounded.
 
 **Where the cap lives, and the options named.** The first cut kept the constant in `cli/shared.ts`;
-the architecture review moved it. The skill-drop precedent is not a validator bound but a constant
-in `telemetry/types.ts` plus an exported write-side truncator the capture site calls
-(`boundSkillDropName`), with the read-path check a separate decision. The module that owns the
-payload shape now owns its cap, and a telemetry constant is importable from session, cli and eval
-alike, so it is the only placement that could ever cover every writer of these rows. Rejected: a
-validator conjunct in `isHookEventPayload` (it serves `record()` and `rowToEvent` symmetrically,
-so a legacy over-long row would be rejected on READ, and `rowToEvent` denies a whole export on one
-bad row — the pathDigest-optionality precedent); write-only validation (it would introduce the
-first `record()`/`rowToEvent` asymmetry in that file, a property `store.ts` states on purpose);
-and "optional on read like `pathForm`", which does not apply at all — optionality is about field
-PRESENCE, and a legacy over-long reason is present and type-valid. No fired-signal, on decision 3's
+the architecture review moved it. The skill-drop precedent has three parts: a constant in
+`telemetry/types.ts`, an exported write-side truncator the capture site calls
+(`boundSkillDropName`), and a symmetric conjunct in the validator (`isSkillDropPayload` rejects an
+over-long field on write and on read alike). This change takes the first two and deliberately not
+the third. The module that owns the payload shape now owns its cap, and a telemetry constant is
+importable from session, cli and eval alike, which is what let the third writer reuse it. Rejected:
+the validator conjunct (it would serve `record()` and `rowToEvent` symmetrically, so a legacy
+over-long row would be rejected on READ, and `rowToEvent` denies a whole export on one bad row, the
+pathDigest-optionality precedent; skill-drop could afford the conjunct because no rows predate its
+cap, and this field has rows that do); write-only validation (it would introduce the first
+`record()`/`rowToEvent` asymmetry in that file, a property `store.ts` states on purpose); and
+"optional on read like `pathForm`", which does not apply at all, since optionality is about field
+PRESENCE and a legacy over-long reason is present and type-valid. No fired-signal, on decision 3's
 reasoning: the transform keys on nothing ambient, and the `…` suffix is the same signal the memory
 copy carries. Control characters are not stripped at this seam because the store's write-path
 sanitiser strips them from every payload string (pinned in `store.test.ts`).
@@ -390,7 +395,7 @@ sanitiser strips them from every payload string (pinned in `store.test.ts`).
 while `SUMMARY_TEXT_LIMIT` bounds content (a truncated memory reason is 201); the memory seam cuts
 with a bare `slice` where this one is surrogate-safe; the memory seam strips control characters in
 band where this one leaves it to the store; and `redactForPersistence` passes the value raw when no
-redactor is injected, which this seam's required dependency forbids. Every difference runs in the
+redactor is injected, which the mapper's required dependency forbids. Every difference runs in the
 safe direction. Both seams now pin their value EXACTLY (`cli.test.ts`: 200; `session.test.ts`:
 201, tightened in this PR from a `≤ 201` ceiling). That tightening is a correction: the first
 cut's code comment claimed "drift is pinned by the tests asserting 200 on both seams" and the
@@ -401,50 +406,71 @@ caught the false verification claim; the fix was to add the pin, not to soften t
 raw passthrough (a secret persists on a denied-by-hook reason; on a hook-error reason; a
 500-character reason stores at 500; a key straddling the cap survives; a throwing redactor is never
 consulted); two pins green on write and named as such (the updated three-kinds shape test, and the
-hook-fired pin — no reason, redactor never invoked). Round two, after review: three pins observed
-red before the code moved (the cap at 200 stored units, was 201; a malformed `RedactResult` — the
-`TypeError` escaped the mapper, exactly the swallowed-throw hazard the architecture review named;
-`boundHookEventReason` not yet a function), and the session-seam exact pin green on write. Two
-fixture corrections, recorded so they are not tidied out of the story: the straddling key was first
-glued to the filler and the AWS rule is `\b`-anchored; and once the cap moved from 201 to 200 the
-redaction marker was sliced before its colon, so the key was shifted to indices 180–199 — under a
+hook-fired pin: no reason, redactor never invoked). Round two, after review: three pins observed
+red before the code moved (the cap at 200 stored units, was 201; a malformed `RedactResult`, where
+the `TypeError` escaped the mapper, exactly the swallowed-throw hazard the architecture review
+named; `boundHookEventReason` not yet a function), and the session-seam exact pin green on write.
+Round three, after the verify pass: four pins observed red, each reproducing the verifier's
+executed counterexample (a pre-tool handler throwing an object whose `String()` throws made
+`fire()` reject with the handler's text; a post-tool handler throwing an `Error` with a throwing
+`message` getter did the same; the session's `fire failed:` row stored a secret raw; an
+array-shaped `redacted` value passed the mapper untouched). Two fixture corrections in round one
+and two, recorded so they are not tidied out of the story: the straddling key was first glued to
+the filler and the AWS rule is `\b`-anchored; and once the cap moved from 201 to 200 the redaction
+marker was sliced before its colon, so the key was shifted to indices 180 to 199 (under a
 truncate-first mutation a 19-character fragment remains, which still cannot satisfy the rule's
-`{16}` tail, so the pin keeps its teeth.
+`{16}` tail, so the pin keeps its teeth).
 
-**Mutation gates: nine, each over the FULL suite (1199 tests) at this tree, each asserting the
+**The tenth refutation, and what it landed on.** The first cut and the review round both scoped
+the session's `fire failed:` writer OUT of this issue, on the claim that handler throws are caught
+inside `fire()` and never reach it. The security review confirmed that claim by reading
+`runtime.ts` and by executing throwing handlers on all four event kinds. The verify pass refuted it
+by execution: `reasonOf()` ran INSIDE the catch that holds a handler's throw, so a handler throwing
+a value whose coercion throws (an object with a throwing `toString`, an `Error` with a throwing
+`message` getter, a null-prototype object) escaped the catch, `fire()` rejected with the
+handler-chosen text, and the third writer stored it unredacted and unbounded. That is the exact
+threat the issue names, landing on the one writer the record had declared handler-proof. Fixed at
+both ends: `reasonOf` is guarded and falls back to a fixed string, and the session row passes
+redact-then-bound as defence in depth, because any `HookRuntime` implementation can reject with
+anything. The same pass found that an array-shaped `redacted` value passed the mapper's length cut
+without throwing and was then rejected by the store with a throw the sink swallows (row dropped
+silently); the mapper now type-checks the redactor's result. Lesson, recorded in the process log: a
+scope-out is a security claim, and "confirmed by reading" plus a happy-path execution is not a
+counterexample search.
+
+**Mutation gates: twelve, each over the FULL suite (1203 tests) at this tree, each asserting the
 replacement landed before running and the restore byte-identical after.** NULL (the mapper passes
-the reason through) reddens exactly the six behaviour pins. Truncate-before-redact reddens exactly
-two: the order pin and the malformed-result pin — with the order swapped, the malformed `redacted`
-is returned without ever entering the bound call, so nothing throws and the sentinel never fires;
-that pin binds "the transform's result is USED inside the try", not only the ordering. Raw-on-throw
-reddens exactly the two fail-closed pins. Dropping the bound call reddens exactly two: the cap pin
-and, for the same reason as above, the malformed pin. `HOOK_EVENT_REASON_MAX` 200 → 10 000 reddens
-exactly the cap pin. The helper's `MAX - 1` → `MAX` off-by-one reddens exactly two: the cap pin
-and the store's exact-length helper pin. Raw passthrough on the hook-error arm alone reddens
-exactly the hook-error pin. Raw passthrough on the denied arm alone reddens exactly the five
-denied-side pins. `SUMMARY_TEXT_LIMIT` 200 → 50 on the memory seam reddens exactly the
-session-seam exact pin — the gate that did not exist before this PR, and the one the first cut's
-comment had claimed. No pin outside the three edited test files binds either seam, and that is
-expected rather than a gap: the shipped hooks' reasons are value-free (decision 1), so every
-existing end-to-end test passes clean strings through the identity half of the transform.
+the reason through) reddens exactly the seven mapper behaviour pins. Truncate-before-redact reddens
+exactly the order pin. Raw-on-throw reddens exactly the throwing-redactor pin. Dropping the bound
+call reddens exactly the cap pin. Dropping the `typeof` guard reddens exactly the non-string pin.
+`HOOK_EVENT_REASON_MAX` 200 → 10 000 reddens exactly two: the cap pin and the session
+`fire failed:` pin, the third writer proving it shares the constant. The helper's `MAX - 1` →
+`MAX` off-by-one reddens exactly three: the cap pin, the `fire failed:` pin and the store's
+exact-length helper pin. Raw passthrough on the hook-error arm alone reddens exactly the
+hook-error pin. Raw passthrough on the denied arm alone reddens exactly the six denied-side pins.
+`SUMMARY_TEXT_LIMIT` 200 → 50 on the memory seam reddens exactly the session-seam exact pin, the
+gate that did not exist before this PR. Unguarding `reasonOf` (restoring the pre-fix body) reddens
+exactly the two runtime pins. Writing the session's `fire failed:` row raw reddens exactly its pin.
+Compared with round two, the malformed-result pin no longer reddens under the order, sentinel or
+no-bound mutations, because the `typeof` guard now catches a malformed result on every path; the
+non-string pin binds the guard on its own. No pin outside the four edited test files binds any
+seam, and that is expected rather than a gap: the shipped hooks' reasons are value-free
+(decision 1), so every existing end-to-end test passes clean strings through the identity half of
+the transform.
 
 **Limits.** No live SDK run drives a secret-bearing reason through the composition root: the
 shipped hooks (`permissionHook`, `sandboxHook`) emit value-free reasons, so a live smoke can only
 confirm the identity case. The required dependency is a compile-time pin against OMISSION (neither
-call site compiles without it), not a runtime guarantee about the supplied redactor — an identity
-redactor would persist raw. The security review executed the off-label case, calling the mapper
-with no third argument at all from plain JavaScript, and it still stored the sentinel, because the
-property access sits inside the `try`. Out of scope, and named so this section is not read as
-covering them: (1) the THIRD writer of `hook-event` rows, `src/session/session.ts`, which writes
-`{kind: 'hook-error', reason: 'fire failed: <detail>'}` directly when `fire()` itself throws,
-`detail` sanitised but unbounded — the security review confirmed, by reading `runtime.ts` and by
-executing throwing handlers on all four event kinds, that handler throws are caught inside
-`fire()` and never reach it, so it carries only the runtime's own scaffold errors; it can now
-reuse `boundHookEventReason` without an upward import. (2) The sibling `tool` field on the same
-row: model-requested, control-char sanitised by the store, neither redacted nor bounded. (3) Two
-inherited limits of `redact()` itself, shared with the memory seam and not introduced here, both
-executed by the reviews: the `\b`-anchored fixed-length rules do not match a credential glued to
-an adjacent word character (or split by a control character, which the runtime's `reasonOf` has
-already turned into a space before the mapper sees it), so such a reason passes through
-unredacted; and the memory seam's `truncate()` is not surrogate-safe. Both are follow-up issues,
-not folded in.
+call site compiles without it), not a runtime guarantee about the supplied redactor; an identity
+redactor would persist raw. The verify pass executed the off-label case, calling the mapper with no
+third argument at all from plain JavaScript, and it still stored the sentinel, because the property
+access sits inside the `try`. Out of scope, and named so this section is not read as covering
+them: (1) the sibling `tool` field on the same row, model-requested, control-char sanitised by the
+store, neither redacted nor bounded; (2) two inherited limits of `redact()` itself, shared with the
+memory seam and not introduced here, both executed by the reviews: the `\b`-anchored fixed-length
+rules do not match a credential glued to an adjacent word character (or split by a control
+character, which the runtime's `reasonOf` has already turned into a space before the mapper sees
+it), so such a reason passes through unredacted; and the memory seam's `truncate()` is not
+surrogate-safe. Both are follow-up issues, not folded in. (3) The session's `fire failed:` row
+redacts through `redactForPersistence`, which passes the value raw when no redactor is injected
+(the memory seam's optional-dependency posture); the composition root always injects one.
