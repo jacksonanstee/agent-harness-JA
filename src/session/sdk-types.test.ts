@@ -10,6 +10,7 @@ import type {
   HookJSONOutput,
   PostToolUseHookInput,
   PreToolUseHookInput,
+  PreToolUseHookSpecificOutput,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   SdkHookMatcher,
@@ -34,12 +35,21 @@ const _postNoExtra: NoExtraKeys<SdkPostToolUseInput, PostToolUseHookInput> = tru
 
 // Output side: the deny bridge is the harness's one enforced model-facing
 // control, so its shape must be ACCEPTABLE to the SDK (our output assignable to
-// the SDK's), and the matcher must invent no key the SDK's matcher lacks. A
-// misnamed key here fails exactly as #83 did (fail-open, suite green) unless
-// pinned. Note the direction: for inputs the SDK value flows to us (SDK ->
-// view); for outputs our value flows to the SDK (view -> SDK).
+// the SDK's), and the matcher must invent no key the SDK's matcher lacks. Note
+// the direction: for inputs the SDK value flows to us (SDK -> view); for outputs
+// our value flows to the SDK (view -> SDK).
 const _denyOutputAccepted: Assignable<SdkPreToolDenyOutput, HookJSONOutput> = true;
 const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
+// Assignability alone does NOT catch a renamed deny key: the SDK declares
+// `permissionDecision?`/`permissionDecisionReason?` optional, so a payload that
+// renames one stays assignable to `HookJSONOutput` (the rename is caught only
+// by the enforced producers, not by this contract pin). Pin the nested payload
+// with NoExtraKeys so a renamed or invented key on our deny output reddens HERE
+// too, at the contract boundary rather than only at the call site.
+const _denyPayloadNoExtra: NoExtraKeys<
+  SdkPreToolDenyOutput['hookSpecificOutput'],
+  PreToolUseHookSpecificOutput
+> = true;
 
 // A literal using the old `tool_output` name no longer type-checks.
 const _rejectsOldField: SdkPostToolUseInput = {
@@ -60,6 +70,7 @@ describe('SDK hook-input type parity', () => {
       _postNoExtra,
       _denyOutputAccepted,
       _matcherNoExtra,
+      _denyPayloadNoExtra,
       _rejectsOldField,
     ]).toBeDefined();
   });

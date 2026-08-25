@@ -92,7 +92,8 @@ Third Week-2 deliverable, off merged main (S-1 → `7e240a1`).
   slot.
 - **Observe-only** (SDK has no rewrite channel — model still sees raw, same as
   S-1 gating). One combined model-facing-enforcement follow-up logged in the
-  week plan.
+  week plan. *(Corrected 2026-08-25, ADR-0032: the "no rewrite channel"
+  premise was false; the channel existed. Left in place as dated history.)*
 
 135 new tests (444 total); secrets module 99% line.
 
