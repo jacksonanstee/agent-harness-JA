@@ -93,7 +93,12 @@ function fakeQuery(
         for (const matcher of pre) {
           for (const cb of matcher.hooks as SdkHookCallback[]) {
             const out = await cb(
-              { hook_event_name: 'PreToolUse', tool_name: call.tool, tool_input: call.input },
+              {
+                hook_event_name: 'PreToolUse',
+                tool_name: call.tool,
+                tool_input: call.input,
+                tool_use_id: 'toolu_1',
+              },
               'toolu_1',
               { signal },
             );
@@ -114,7 +119,8 @@ function fakeQuery(
                 hook_event_name: 'PostToolUse',
                 tool_name: call.tool,
                 tool_input: call.input,
-                tool_output: call.output,
+                tool_response: call.output,
+                tool_use_id: 'toolu_1',
               },
               'toolu_1',
               { signal },

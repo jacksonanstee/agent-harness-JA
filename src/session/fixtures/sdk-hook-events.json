@@ -1,0 +1,50 @@
+{
+  "_provenance": {
+    "capturedFrom": "@anthropic-ai/claude-agent-sdk",
+    "sdkVersion": "0.3.201",
+    "marker": "harness-fixture-capture-marker",
+    "note": "Genuine SDK hook inputs, volatile fields replaced with placeholders. Re-capture with scripts/capture-sdk-hook-fixture.mjs after an SDK bump."
+  },
+  "preToolUse": {
+    "session_id": "<session>",
+    "transcript_path": "<transcript>",
+    "cwd": "<cwd>",
+    "prompt_id": "<prompt>",
+    "permission_mode": "default",
+    "effort": {
+      "level": "xhigh"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo harness-fixture-capture-marker",
+      "description": "Print fixture capture marker"
+    },
+    "tool_use_id": "<tool_use_id>"
+  },
+  "postToolUse": {
+    "session_id": "<session>",
+    "transcript_path": "<transcript>",
+    "cwd": "<cwd>",
+    "prompt_id": "<prompt>",
+    "permission_mode": "default",
+    "effort": {
+      "level": "xhigh"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo harness-fixture-capture-marker",
+      "description": "Print fixture capture marker"
+    },
+    "tool_response": {
+      "stdout": "harness-fixture-capture-marker",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+    },
+    "tool_use_id": "<tool_use_id>",
+    "duration_ms": 0
+  }
+}

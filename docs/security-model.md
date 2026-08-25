@@ -213,7 +213,7 @@ of the loader's per-file 1 MB cap). The named follow-up is a stricter policy
 for this channel specifically — unlike arbitrary tool output, a legitimate
 skill has no reason to contain scanner-flagged override phrasing, and unlike
 tool output the harness owns this channel, so blocking is implementable
-without an SDK rewrite channel.
+without an SDK rewrite channel. (The SDK's tool-output rewrite channel does in fact exist — ADR-0032 — but the skill channel never needed it, being harness-assembled.)
 
 **Update 2026-07-28 ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)): that follow-up shipped, and this
 risk acceptance is largely discharged.** A high-confidence `block` on a skill's
@@ -309,8 +309,8 @@ the session wiring a redactor throw records the sentinel
 The disclosure paths that remain open are stated in R-3 and R-4: network
 egress tools (`WebFetch`/`WebSearch`) are ungated by design — they need a
 URL/domain dimension the path gate cannot honestly claim — and the *model*
-still sees unredacted output in v1, because redaction is a data-plane control
-without an SDK rewrite channel. `Glob`/`Grep` — read-shaped tools an
+still sees unredacted output in v1, because redaction is a data-plane control and
+adopting the SDK's tool-output rewrite channel is a deferred decision (ADR-0032, issue #84), not the absence the earlier text asserted. `Glob`/`Grep` — read-shaped tools an
 exfiltrating agent reaches for first — are gated since the dual-table fix,
 including the bare-directory case (`Glob(path='/secrets')` vs `/secrets/*`,
 a verify-pass finding).
@@ -364,7 +364,7 @@ R-1/R-2 rather than half-solved.
 | R-1 | Symlink inside an allowed directory pointing outside defeats the path gate | High (targeted) | `realpath` is impure, needs existence fallbacks, still TOCTOU-racy; documented over half-solved | ADR-0015 §2, revisit-if |
 | R-2 | Interpreter-as-wrapper (`node -e`, `python -c`) and argv-level exec when the interpreter is allowlisted | Medium | argv[0] honesty: the gate bounds which program starts; containment beyond that needs an OS sandbox | ADR-0015 §3 |
 | R-3 | Network egress ungated (`WebFetch`/`WebSearch` absent from the tool table) | Medium | Needs a URL/domain dimension, not a path prefix; deliberate exclusion over false claim | ADR-0015 revisit-if |
-| R-4 | Model-facing enforcement gap for TOOL OUTPUT: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. NARROWED 2026-07-28 (ADR-0026): the skill channel — descriptions and bodies, which enter the system prompt at system-prompt authority — is now ENFORCED, because R-4's no-rewrite-channel rationale never applied to a prompt the harness assembles itself. A high-confidence block drops the whole skill | High | No SDK result-rewrite channel exists yet; harness data plane (persist/emit) is covered. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel SHIPPED 2026-07-28 (ADR-0026), with its accepted false-positive classes named there; enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
+| R-4 | Model-facing enforcement gap for TOOL OUTPUT: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. NARROWED 2026-07-28 (ADR-0026): the skill channel — descriptions and bodies, which enter the system prompt at system-prompt authority — is now ENFORCED, because R-4's no-rewrite-channel rationale never applied to a prompt the harness assembles itself. A high-confidence block drops the whole skill | High | **Corrected 2026-08-25 (ADR-0032):** the SDK's `updatedToolOutput` rewrite channel DOES exist (it was present in the pinned SDK all along); model-facing enforcement of tool output is a deferred design decision (issue #84), not an upstream blocker. Separately, the observe-only data plane was itself blind until issue #83 — `postToolCallback` read a `tool_output` field the SDK never sends, so scan/redact/`resultSummary` were no-ops on every live run; #83 repaired the field name and pinned the SDK contract, so persist/emit is now genuinely covered. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel SHIPPED 2026-07-28 (ADR-0026), with its accepted false-positive classes named there; enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
 | R-5 | LLM judge is injectable once implemented | Low (bounded) | Tighten-only authority converts compromise into false positives at worst | ADR-0016 §2 |
 | R-6 | Path canonicalization conflates distinct files that share a canonical form: case folding on opt-in case-sensitive volumes (darwin/win32), and NFC folding of a file that genuinely differs only by Unicode form (added 2026-07-15, audit finding V11, to close the NFC/NFD deny-rule bypass) | Low | Both fold toward "same file → same string"; the bypasses they close (`/ETC/passwd`, NFC-vs-NFD deny dodge) were live-verified, and both conflation cases are rare and fail toward stricter for deny rules | ADR-0015 §2 |
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
@@ -385,7 +385,7 @@ v1, a malicious tool result that the scanner flags still reaches the model,
 and a secret the redactor catches is still visible to the model. The security
 layer currently protects the *record* and gates the *next action*
 (pre-tool denies are fully enforced); protecting the model's own context
-requires a result-rewrite channel and is the named cross-cutting follow-up.
+requires adopting the SDK's result-rewrite channel, which exists (ADR-0032); doing so is the named cross-cutting follow-up (issue #84).
 
 **Residual risks compose.** R-3 and R-4 chain into the most exploitable
 end-to-end path under this attacker model: an adversarial tool result steers
@@ -442,6 +442,7 @@ not live values:
 | [0027](./decisions/0027-cleartext-paths-in-retained-sinks.md) | Cleartext paths in retained sinks: three fixes designed and all three killed on evidence; `taskDir` closure begun (R-16, R-17; completed by ADR-0030) |
 | [0028](./decisions/0028-skill-section-nonce-delimiter.md) | Nonce-authenticated skill-section delimiter; bodies keep their markdown; `description` fence defanged and the body fence accepted as residual after two appending mitigations were withdrawn (R-18) |
 | [0030](./decisions/0030-taskdir-escape-suppression.md) | Golden scorecard `meta.taskDir` suppresses every escaping form: null plus an always-present `taskDirForm` signal instead of any walk-up; R-17 channel (b) closed, the other four channels unchanged |
+| [0032](./decisions/0032-post-tool-hook-field-name-and-rewrite-channel.md) | The post-tool hook read `tool_output`; the SDK sends `tool_response`, so scan/redact/`resultSummary` were no-ops on every live run (issue #83, fixed with a compile-time SDK-parity pin and a genuine-traffic replay fixture); the `updatedToolOutput` rewrite channel R-4 called absent existed all along (enforcement deferred to issue #84) |
 | [0031](./decisions/0031-retained-deny-reasons-drop-the-glob.md) | Retained deny reasons drop the permission glob and index within the rule's own layer file (R-17 channels (c) and (d) closed); skill-drop paths store root-relative with a `pathForm` signal (channel (a) narrowed); the explicit-argument export scrub shipped as `telemetry export --scrub-prefix` (opt-in, per-row `scrub` signal, export copy only, channels unchanged); telemetry hook-event reasons redact-then-truncated at the mapping seam (issue #75, 2026-08-25) |
 
 ## 9. OWASP Agentic Top 10 mapping

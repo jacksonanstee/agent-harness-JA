@@ -43,9 +43,11 @@ export interface TurnCostPayload {
 }
 
 /**
- * No success/failure flag: the SDK's PostToolUse input does not surface tool
- * outcome, and a hardcoded value would assert something false into a
- * persisted, exported surface. Add one only when it can be derived truthfully.
+ * No success/failure flag: the SDK's PostToolUse `tool_response` carries
+ * structured output (e.g. BashOutput's stdout/stderr/interrupted) but no single
+ * outcome boolean, and a hardcoded value would assert something false into a
+ * persisted, exported surface. Add one only when it can be derived truthfully
+ * from `tool_response` (ADR-0032 made that field actually readable).
  */
 export interface ToolTracePayload {
   tool: string;

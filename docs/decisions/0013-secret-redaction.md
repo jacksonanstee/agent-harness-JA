@@ -61,7 +61,7 @@ before they get there.
    hooks import-free of security).
 9. **Observe-only (documented limitation, shared with S-1).**
    `SdkHookOutput` allows only a PreToolUse `deny`; PostToolUse returns `{}` —
-   neither hook can rewrite `tool_input`/`tool_output`. So S-2 redacts
+   neither hook was thought to expose a rewrite channel — corrected 2026-08-25 (ADR-0032): the SDK's `updatedInput` (PreToolUse) and `updatedToolOutput` (PostToolUse) do exist, and adopting them is issue #84. So in v1 S-2 redacts
    everything the **harness** persists or emits (telemetry, warnings, hook
    `redactions` payload) — satisfying "redacted with a logged event" for the
    harness data plane — but the **model still sees the raw** tool result and the

@@ -74,7 +74,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** redaction of secrets in tool inputs and outputs.
 - **Public API:** `redact(text: string): { redacted: string, findings: SecretFinding[] }`.
 - **Depends on:** built-in pattern registry; optional user-supplied patterns via config.
-- **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)); **observe-only** — redacts everything the harness persists/emits, but the model still sees the raw result (no SDK rewrite channel), same limit as S-1.
+- **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)); **observe-only** — redacts everything the harness persists/emits, but the model still sees the raw result (adopting the SDK's `updatedToolOutput` rewrite channel is deferred, ADR-0032/issue #84; it is not the absence once claimed), same limit as S-1.
 
 #### `security/permissions`
 
@@ -261,7 +261,7 @@ The sequence below traces what happens when the user sends a message to a harnes
 12. hooks.fire('post-tool', { result, scan, redactions })[harness]
     │
     ▼
-13. SDK receives the tool result — NB: scan/redact are observe-only in v1 (harness data plane); model-facing rewriting is a documented follow-up (ADR-0012 §9, ADR-0013 §9)
+13. SDK receives the tool result — NB: scan/redact are observe-only in v1 (harness data plane; the data plane itself was blind until issue #83 / ADR-0032 fixed the hook field name); model-facing rewriting via the SDK's `updatedToolOutput` channel is a deferred follow-up (ADR-0032, issue #84)
     │
     ▼
 14. SDK turn completes

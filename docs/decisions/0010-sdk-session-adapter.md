@@ -90,6 +90,10 @@ Three design questions:
   observe-only; data-flow step 13 ("SDK receives the scanned, redacted tool
   result") cannot be expressed through it. Week 2 must either use the SDK's
   `updatedToolOutput` hook output or rework this seam — do not assume drop-in.
+  **(2026-08-25, ADR-0032: this note was right and was not acted on; the seam
+  shipped reading a `tool_output` field the SDK never sends, blinding the
+  post-tool data plane for seven weeks — issue #83. security-model R-4's later
+  "no rewrite channel exists" statement contradicted this very paragraph.)**
 - **SDK hook-timeout semantics are unverified.** The deny path is fail-closed
   on the harness side (any pre-tool throw denies, including `fire()` itself
   failing), but whether the SDK fails open on a hook *timeout* is SDK-defined.
