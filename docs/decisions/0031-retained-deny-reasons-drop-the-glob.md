@@ -1,6 +1,6 @@
 # ADR-0031: retained deny reasons drop the permission glob (issue #59 round 2)
 
-- **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). Design E remains accepted-with-panel-changes, pending its own PR
+- **Status:** Accepted — design CD shipped 2026-08-07 (PR #76). **Design A shipped 2026-08-07 in its own PR** (root-relative skill-drop paths; verification appended below). **Design E shipped 2026-08-07 in its own PR** (`telemetry export --scrub-prefix`; verification appended below). All three designs of this round are now live
 - **Date:** 2026-08-07
 - **Requirements:** issue #59, second design round (the first is ADR-0027, which killed all three of its designs and constrained any successor)
 - **Relates to:** ADR-0027 (decisions 3, 4 and 5 bind everything here; design CD fires no revisit bullet — it is a formatting decision, not a keyed transform — and design E, once shipped, fires the explicit-argument bullet for the FIRST time, that section's third fire overall counting the taskDir bullet's two; the ADR-0027 annotation rides with design E's PR), ADR-0030 (the computed-value distinction and suppress-not-normalise precedent this round applies), ADR-0014 §8 (the reason format this supersedes), ADR-0011 decisions 16 and 17, ADR-0028 (removal-only transforms), security-model R-16 and R-17
@@ -224,3 +224,128 @@ with a real dropped skill, exported, zero home-directory occurrences and the rel
 stored form confirmed. All measurements darwin, ASCII paths; the Windows cross-drive
 branch of the classifier is reasoned, not executed (no Windows CI), and fails in the
 safe direction.
+
+## Verification for design E (appended 2026-08-07, amended 2026-08-08 with the review and verify rounds, its own PR)
+
+RED-first where the behaviour is new: six CLI tests were observed failing against the
+shipped exporter before the change (repeatable-flag parse, per-row scrub signal, the
+`--out` copy, the nudge line, the no-nudge-under-flag case, scrubbed-line parseability),
+and the unit file failed wholesale on the missing module. Two pins were GREEN on write
+and are recorded as such rather than claimed as TDD: the invalid-value parse test (every
+unknown flag already parsed to an error) and the no-`scrub`-key-by-default byte-shape
+pin. Their bindingness comes from the mutation gates below, not from a RED moment that
+did not happen. Both panel-executed counterexamples are fixtures: `/home/al` must not
+fire inside `/home/alice`, and a trailing-separator argument still catches the bare
+form.
+
+**The review round refuted the first cut in four executed places, and the fixes are
+part of this PR** (three lenses; every finding below carried an executed PoC):
+
+1. **The boundary was wider than the spec, and the width was the alice bug.** The
+   first cut fired on any character outside a "segment continuation" class, so a
+   sibling directory named `/Users/jackson (Work Laptop)` was corrupted to
+   `[marker] (Work Laptop)` with `applied: true` — mis-attribution through every
+   filename-legal punctuation character, NFD combining marks included. The shipped
+   boundary is the spec's, literally: separator or end-of-string, nothing else — with
+   "separator" resolved PER PREFIX FORM (see the ninth-refutation paragraph below).
+   The cost runs the other way and is a NAMED residual: an occurrence terminated by
+   prose punctuation (`cd /Users/jackson && ls`) survives in cleartext, pinned as
+   documented behaviour.
+2. **Payload KEYS were not scrubbed and the exempting comment was false.** The store
+   validators are positive-conjunct checks that admit extra keys, so a planted row's
+   KEY carried a home path in cleartext on a row stamped `applied: true` (executed
+   through the public `record()` API). Keys are now scrubbed like values; two keys
+   collapsing onto one scrubbed form (a plantable marker-key collision) refuse the row
+   loudly rather than silently dropping data.
+3. **The nudge's Windows arm was dead at its only call site.** Detection ran over the
+   JSON-serialised body, where backslash-doubling made `\Users\` unmatchable — the
+   unit pin was green while the seam never fired (executed with a seeded row; three
+   lenses found this independently). Detection now walks RAW event values, keys
+   included, with an iterative walk so a hostile deep row cannot crash the default
+   export; the CLI seam has its own pins now, and the round-1 mutation gate that
+   "passed" on the unit pin alone is the corrective-artefact lesson re-learned.
+4. **A hostile deep row crashed only the scrubbed export** (stack overflow at depth
+   ~2000, default export fine at 100000) — a downgrade pushing the operator back to
+   cleartext. The walk now refuses beyond `MAX_SCRUB_DEPTH` (64, the skills scanner's
+   cap) with a loud, untrusted-byte-free error naming the row position; the refusal
+   denies the WHOLE scrubbed export, the rowToEvent precedent. The boundary is pinned
+   by execution (62 nest levels scrub, 63 refuse).
+
+Also folded from the round: `parseScrubPrefix` normalises (`/Users/./jackson` matched
+nothing while suppressing the nudge — the likeliest typo was the exact case with no
+signal); a SECOND stderr nudge fires when home-shaped paths SURVIVE a scrub (wrong or
+misspelt prefix, case variant, NFC/NFD mismatch — observe-only, no row data, default
+bytes untouched; an extension beyond the panel spec, argued here: the panel's nudge
+clause covers only the no-flag case, and three review findings converged on "the
+detector goes dark exactly when the operator relies on it"); the counterfeit check is
+documented as AGGREGATE (total marker occurrences of ANY ordinal vs `count` — a
+per-ordinal comparison is unsound once the flag repeats, executed) and pinned; and the
+spec's "help text" venue for the applied-is-not-clean caveat collapsed into USAGE
+because the CLI ships no help command — recorded as the venue's honest state.
+
+**The verify round on those fixes produced this project's NINTH consecutive
+refutation-of-a-recorded-claim, again at the correction's own boundary.** The fixed
+boundary treated `\` as a separator on EVERY platform; backslash is filename-legal on
+POSIX and `parseScrubPrefix` admits only POSIX-form prefixes on this host, so on darwin
+the `\` arm could only ever fire as mis-attribution — executed end-to-end:
+`/Users/testhome\backup/prod.env` was consumed to `[marker]\backup/prod.env`, stamped
+`applied: true`, and NUDGE-SILENT, because consuming the home-shaped bytes also blinds
+the survivor nudge. The correction's correction: the separator set is resolved per
+prefix form (`/` for a POSIX-form prefix; both separators for a Windows-form prefix,
+which only a win32 host's `parseScrubPrefix` admits). Both refuter fixtures are pinned,
+the Windows-form arm is pinned directly through `scrubText` (which trusts its input, so
+the form is exercisable on darwin), the near-miss now leaves the bytes intact so the
+survivor nudge FIRES (pinned at the CLI seam), and the separator rule has its own
+mutation gate. The verifier also independently re-executed all nine prior mutation-count
+claims (measured equalled claimed at that tree) and byte-diffed the default export
+against a scratch build of main across five seeded databases: identical.
+
+Mutation gates, each asserting its replacement applied before running and restored from
+a scratch copy (never `git checkout`) verified byte-identical. Counts are a FUNCTION OF
+THE TREE (design A's lesson) and were measured over the full suite at the tree that
+carries this sentence (1240 tests):
+
+- NULL mutation FIRST (transform gutted to identity, count 0): 21 red — every unit pin
+  of the transform plus the CLI integration pins.
+- Boundary check removed (fires regardless of the following character): exactly its 8
+  pins — the alice fixture, the punctuation-sibling set, the continuation set
+  (dash/dot/unicode/NFD/astral), the longest-fails-fall-through pin, the
+  prose-residual pin, both ninth-refutation backslash fixtures, and the Windows-form
+  pin.
+- Count decoupled from replacements (replacement fires, count stays 0): 18 red,
+  including both counterfeit-arithmetic pins.
+- `HOME_SHAPED` gutted to never-match: 7 red — the unit shapes AND both CLI nudge
+  seams plus both survivor seams (the round-1 version of this gate passed with the
+  seam unbound; it cannot any more).
+- CLI wiring nulled (flag parsed, transform never applied): 6 red — signal row,
+  `--out` copy, no-nudge-under-flag, both survivor-nudge seams, and the deep-row
+  refusal.
+- Key-scrub removed (keys pass through raw): exactly its 3 pins.
+- Depth cap removed: exactly its 2 pins (unit boundary and the CLI refusal seam).
+- Collision refusal removed: exactly its 1 pin.
+- Survivor nudge removed: exactly its 2 pins (wrong-prefix and backslash-near-miss
+  seams).
+- Separator set collapsed to always-both (the ninth refutation re-introduced):
+  exactly the 2 ninth-refutation pins.
+
+One observation carried from the panel (finding 15), recorded here because it belongs
+to this design's cost side: in a scrubbed export the skill-drop `pathDigest` becomes
+the weakest link — its pre-image stays the raw absolute path (decision 5), so a reader
+holding a guessable path list can confirm a home prefix through the digest that the
+scrub removed from the cleartext. Removal-only still holds (the digest was already
+there); the point is that `--scrub-prefix` does not touch it, and saying so beats a
+reader discovering it.
+
+**Limits.** The live smoke (a real run, exported with and without the flag, zero
+home-directory occurrences in the scrubbed copy, byte-identical default output) is run
+out-of-band and recorded in the PR — the suite deliberately mocks no modules and CI has
+no API key. Matching is exact bytes: a case variant of the same directory on a
+case-insensitive filesystem and an NFC/NFD spelling difference both evade the scrub
+(executed), which is why the survivor nudge exists and why the README names both.
+`parseScrubPrefix` uses this platform's `path.isAbsolute`; Windows-form prefixes on a
+POSIX host are rejected, reasoned rather than executed (no Windows CI), and the
+rejection fails closed. A row that cannot be scrubbed (depth, collision) denies the
+scrubbed export while the lossless default stays available — a plantable denial,
+accepted with the rowToEvent precedent and named here. All measurements darwin; the
+executed boundary fixtures cover ASCII, BMP unicode (`ñ`), NFD combining marks, and
+one astral (surrogate-pair) continuation case.

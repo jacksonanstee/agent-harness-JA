@@ -55,7 +55,7 @@ node dist/cli.js run "your prompt"
 node dist/cli.js eval                  # golden eval suite
 node dist/cli.js eval --challenge      # report-only second-pass adversarial challenge
 npm run redteam                        # keyless drift gate (see docs/decisions/0019)
-node dist/cli.js telemetry export      # JSONL; filter by --session / --type
+node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --scrub-prefix to share
 node dist/cli.js init my-agent         # scaffold a starter project
 ```
 
@@ -108,7 +108,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
-As of 2026-08-07:
+As of 2026-08-08:
 
 | Milestone | Status |
 |---|---|
@@ -118,7 +118,7 @@ As of 2026-08-07:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0031 |
-| Tests | 1190 at the 2026-08-07 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 1240 at the 2026-08-08 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
@@ -129,6 +129,8 @@ Shipping plan: [process/05-week-plan.md](./process/05-week-plan.md).
 ## Telemetry & privacy
 
 Everything stays on your machine. Sessions and eval runs persist to a local SQLite file (`.harness/telemetry.db`, gitignored); there is no network telemetry, no phone-home, and no external endpoint anywhere in the codebase. Secrets are redacted before anything is retained (fail-closed: if redaction errors, the write is dropped, not passed through), and findings store rule IDs and offsets, never secret bytes. Export is operator-invoked only (`telemetry export` → JSONL). There is currently no retention TTL: delete `.harness/telemetry.db` to erase history (a `telemetry purge` subcommand is on the roadmap).
+
+Before sharing an export, `telemetry export --scrub-prefix <path>` (repeatable) replaces occurrences of the named prefix, when followed by a path separator or end-of-string (the separator set follows the prefix's own form: `/` after a POSIX prefix, either separator after a Windows-form one), with `[scrubbed-prefix-N]` in the export copy only; the stored rows are untouched, and this is the one opt-in lossy exception to the otherwise byte-stable export. Every emitted row is stamped `scrub: {applied, count, transform}` so a reader can tell a scrubbed export from a raw one; `count` totals replacements across all prefixes and all string sites (keys included), so marker occurrences of any ordinal beyond `count` were planted by the data, not the transform. `applied: true` means at least one replacement fired, never that the row is clean: an occurrence terminated by prose punctuation (`cd /Users/name && ls`), a case variant on a case-insensitive filesystem, an NFC/NFD spelling difference, and everything below the prefix all survive verbatim (ADR-0031, decision 7). Two stderr nudges keep that visible without touching stdout bytes: an unscrubbed export whose rows look home-directory-shaped gets one line, and a scrubbed export where home-shaped paths REMAIN gets one line saying the prefix did not match the stored bytes. A row that cannot be scrubbed safely (hostile nesting, key collision) refuses the whole scrubbed export loudly; the lossless default export is never affected.
 
 ### Worked example: why did a skill not load?
 

@@ -35,7 +35,10 @@ import {
 import { load as loadSkills } from './skills/index.js';
 import {
   createTelemetryStore,
+  hasHomeShapedStrings,
   openTelemetryDatabase,
+  parseScrubPrefix,
+  scrubEvent,
   TELEMETRY_EVENT_TYPES,
 } from './telemetry/index.js';
 import type { TelemetryEventType, TelemetryFilter } from './telemetry/index.js';
@@ -70,6 +73,12 @@ export interface TelemetryExportArgs {
   out: string | null;
   sessionId: string | null;
   type: TelemetryEventType | null;
+  /**
+   * Validated `--scrub-prefix` values in argument order (marker ordinals are
+   * 1-based positions in this array). Empty means no scrub: the default
+   * export body is byte-identical to what it was before the flag existed.
+   */
+  scrubPrefixes: string[];
 }
 
 export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs | InitArgs;
@@ -104,11 +113,18 @@ function parseTelemetryArgs(argv: string[]): ParseResult {
   let out: string | null = null;
   let sessionId: string | null = null;
   let type: TelemetryEventType | null = null;
+  const scrubPrefixes: string[] = [];
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === undefined) break;
-    if (arg === '--db' || arg === '--out' || arg === '--session' || arg === '--type') {
+    if (
+      arg === '--db' ||
+      arg === '--out' ||
+      arg === '--session' ||
+      arg === '--type' ||
+      arg === '--scrub-prefix'
+    ) {
       const value = rest[i + 1];
       if (value === undefined) {
         return { ok: false, error: `Missing value for ${arg}. ${USAGE}` };
@@ -125,13 +141,23 @@ function parseTelemetryArgs(argv: string[]): ParseResult {
         }
         type = value as TelemetryEventType;
       }
+      if (arg === '--scrub-prefix') {
+        const parsedPrefix = parseScrubPrefix(value);
+        if (!parsedPrefix.ok) {
+          return { ok: false, error: `${parsedPrefix.error}. ${USAGE}` };
+        }
+        scrubPrefixes.push(parsedPrefix.value);
+      }
       i += 1;
     } else {
       return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
     }
   }
 
-  return { ok: true, value: { command: 'telemetry-export', dbPath, out, sessionId, type } };
+  return {
+    ok: true,
+    value: { command: 'telemetry-export', dbPath, out, sessionId, type, scrubPrefixes },
+  };
 }
 
 export function parseRunArgs(argv: string[]): ParseResult {
@@ -203,7 +229,10 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     // escapeJsonText
     // re-encodes each of those as a `\uXXXX` JSON escape: valid JSON that
     // parses back to the identical value, so the export stays lossless for
-    // machine consumers while the file is safe to `cat`.
+    // machine consumers while the file is safe to `cat`. Lossless holds for
+    // the DEFAULT export only: `--scrub-prefix` is the one opt-in LOSSY
+    // transform, applied to the events before this stringify pass and
+    // signalled per emitted row (ADR-0031 decision 7).
     //
     // Applied ONCE to the whole body so the two sinks are byte-identical. The
     // previous stdout-only `sanitizeForTerminal` pass was both insufficient
@@ -212,7 +241,56 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
     // It is not kept as a second pass: JSON_TEXT_UNSAFE is derived from
     // TERMINAL_UNSAFE, so it is a superset by construction and the pass would
     // be a no-op. The containment test enforces that instead.
-    const lines = events.map((event) => JSON.stringify(event)).join('\n');
+    const scrubbing = args.scrubPrefixes.length > 0;
+    let lines: string;
+    if (scrubbing) {
+      let scrubbedRows;
+      try {
+        scrubbedRows = events.map((event, index) => {
+          try {
+            return scrubEvent(event, args.scrubPrefixes);
+          } catch (error: unknown) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(
+              `--scrub-prefix refused row ${index + 1} of ${events.length}: ${reason}`,
+              { cause: error },
+            );
+          }
+        });
+      } catch (error: unknown) {
+        // A hostile row (depth bomb, key-collision plant) refuses the WHOLE
+        // scrubbed export, loudly, with the row's position so the operator can
+        // filter it out via --session/--type — the rowToEvent precedent: never
+        // emit a partial artefact. The message carries no untrusted bytes by
+        // construction; sanitize anyway, this is a terminal sink.
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`error: ${sanitizeForTerminal(message)}\n`);
+        return 1;
+      }
+      lines = scrubbedRows.map((row) => JSON.stringify(row)).join('\n');
+      if (scrubbedRows.some((row) => hasHomeShapedStrings(row))) {
+        // Survivor nudge: the scrub ran but home-shaped paths remain (wrong or
+        // misspelt prefix, case variant, NFC/NFD mismatch). Observe-only,
+        // stderr, no row data echoed; stdout/--out bytes are untouched.
+        process.stderr.write(
+          'note: home-directory-shaped paths remain after --scrub-prefix; ' +
+            'the prefix must match the stored bytes exactly (case and unicode form included).\n',
+        );
+      }
+    } else {
+      lines = events.map((event) => JSON.stringify(event)).join('\n');
+      if (events.some((event) => hasHomeShapedStrings(event))) {
+        // One static stderr line, echoing no row data; stdout/--out bytes are
+        // untouched, so forgetting the flag stays visible without becoming a
+        // silent transform (design E v2, finding 16). Runs on RAW event values:
+        // review executed the serialised form and JSON's backslash-doubling
+        // made the Windows arm unmatchable here.
+        process.stderr.write(
+          'note: this export contains home-directory-shaped paths in cleartext; ' +
+            're-run with --scrub-prefix <path> to replace a prefix in the export copy.\n',
+        );
+      }
+    }
     const body = escapeJsonText(events.length > 0 ? `${lines}\n` : '');
     if (args.out !== null) {
       writeFileSync(args.out, body);
