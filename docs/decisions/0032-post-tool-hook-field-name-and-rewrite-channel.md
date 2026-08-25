@@ -51,18 +51,48 @@ that from the day it was written. This was an internal contradiction, not SDK dr
    assignable to its harness view and that the view declares no field the SDK does not (which is
    exactly what `tool_output` violated). A future rename fails typecheck here.
 
-3. **A genuine-traffic replay gate.** `scripts/capture-sdk-hook-fixture.mjs` records real SDK hook
-   inputs from one keyed run and freezes them (volatile fields placeholdered) as
+3. **A genuine-traffic replay gate, with its reach stated exactly.** `scripts/capture-sdk-hook-fixture.mjs`
+   records real SDK hook inputs from one keyed run and freezes them (volatile fields placeholdered,
+   the captured pair asserted to be the fixed benign marker before writing) as
    `src/session/fixtures/sdk-hook-events.json`; `src/session/sdk-fixture.test.ts` replays them
-   through the session and fails if the recorded shape stops feeding the post-tool path. CI has no
-   API key, so the capture is out-of-band and the replay runs per PR. A hand-written fake of a vendor
-   contract can only confirm its author's beliefs; this is the structural answer to that.
+   through the session. This gate is a REGRESSION pin (harness code must keep feeding the recorded
+   shape into the post-tool path) and a view-staleness detector (a view that requires a field the
+   frozen JSON lacks reddens the fixture guard). It replays a snapshot through a fake `query`, so it
+   does NOT observe the live SDK: an SDK-side rename is caught by decision 2's compile-time parity
+   pin (which reads the installed SDK types), not here. The one thing that would let a stale fixture
+   run against a newer SDK is a caret-range bump, so the replay test asserts the fixture's captured
+   `sdkVersion` equals the installed one, forcing a re-capture on any bump. CI has no API key, so the
+   capture is out-of-band and the replay runs per PR. A hand-written fake of a vendor contract can
+   only confirm its author's beliefs; the three legs together (view, parity pin, genuine replay) are
+   the structural answer to that, each with a different reach.
 
 4. **Correct the "no channel exists" record, do not adopt the channel here.** R-4, ADR-0012 §9,
    ADR-0013 §9 and ADR-0026 R4 are corrected to say the channel exists and that model-facing
    enforcement is a deferred design decision (issue #84), not an upstream blocker. Adopting
    `updatedToolOutput` means deciding shape-preservation, a false-positive policy, and what "enforce"
-   means for an `ask` verdict; that is issue #84's scope, deliberately not folded in here.
+   means for an `ask` verdict; that is issue #84's scope, deliberately not folded in here. The
+   correction also reopens the INPUT side: ADR-0013 §9 rejected secret-in-input enforcement because
+   the only option was deny (over-eager), but `updatedInput` is the redact-in-place middle option it
+   lacked. That too is issue #84's scope, not a v1 change; it is named here so the next reader does
+   not re-derive it.
+
+## Alternatives considered
+
+- **Import the SDK's `HookCallback` / `PostToolUseHookInput` into `src/session` and delete the
+  structural view.** Rejected. It would prevent this exact bug, but it couples a core module's
+  compile to a pre-1.0 package whose type surface the repo already treats as dated facts about a pin
+  (ADR-0025), so an SDK bump would break the module rather than one test; it forces every session
+  fake to construct the SDK's full required field set; and it does nothing about the leg that
+  actually failed, since the SDK's declared type is a claim about the wire, not the wire itself
+  (only the fixture speaks to that). ADR-0010's revisit-if for depending on the SDK's types has not
+  fired: there is no separate versioned type package.
+- **A derived view, `type SdkPostToolUseInput = Pick<PostToolUseHookInput, ...>`.** Rejected, but
+  close. It makes parity structural by construction (no separate pin to go stale) and makes
+  `tool_output` unspellable. But the hand-written views carry deliberate widenings a `Pick` cannot
+  express (e.g. `SdkResultMessage.stop_reason?: string | null`, declared optional so drift yields
+  null) plus load-bearing doc comments, and the explicit compile-time pin is greppable where a
+  `Pick` is not. The pin plus the reverse-direction output checks (`sdk-types.test.ts`) buy the same
+  guarantee without losing the widenings.
 
 ## Consequences
 
@@ -77,7 +107,10 @@ just the instance.
 
 ## Revisit if
 
-- The SDK renames or restructures a hook field again: the parity pin fails first; re-capture the
-  fixture and update the views.
+- The SDK renames a hook field: the compile-time parity pin fails first; update the views and
+  re-capture the fixture. ADDITIVE drift (a new field the harness ought to read) is caught by
+  NEITHER gate, by design (`NoExtraKeys` checks view ⊆ SDK, never the reverse); the fixture
+  re-capture forced by the version assertion on an SDK bump is the only place it surfaces, so read
+  a bump's captured diff.
 - Issue #84 adopts `updatedToolOutput`: R-4 moves from "observe-only, deferred" to "enforced", and
   this ADR's decision 4 is superseded on that point.

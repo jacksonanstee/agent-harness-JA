@@ -10,6 +10,8 @@ export type {
   SdkHookInput,
   SdkHookMatcher,
   SdkHookOutput,
+  SdkPostToolUseInput,
+  SdkPreToolUseInput,
   SdkMessage,
   SdkModelRefusalMessage,
   SdkResultMessage,

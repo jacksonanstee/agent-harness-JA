@@ -151,4 +151,60 @@ describe('SDK hook contract: PostToolUse delivers the result as tool_response', 
     expect(payload.result).toEqual(bashResponse(stdout));
     expect(payload.scan?.verdict).toBe('block');
   });
+
+  it('warns and skips safely if a non-conforming query drives the post matcher with a non-PostToolUse event', async () => {
+    // Simulates a mis-registered or non-conforming injected `deps.query`: it
+    // pushes a PreToolUse-shaped event through the PostToolUse callbacks. The
+    // guard must WARN (not stay silent, the #83 failure mode) and skip: no
+    // tool-trace row, no custom post-tool hook fire.
+    const query: QueryFn = (args) =>
+      (async function* () {
+        const signal = new AbortController().signal;
+        const wrongEvent = {
+          session_id: 'sdk-1',
+          transcript_path: '/tmp/t.jsonl',
+          cwd: '/tmp/p',
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_input: { command: 'echo hi' },
+          tool_use_id: 'toolu_01',
+        };
+        for (const matcher of args.options?.hooks?.PostToolUse ?? []) {
+          for (const cb of matcher.hooks as SdkHookCallback[]) {
+            await cb(wrongEvent as Parameters<SdkHookCallback>[0], 'toolu_01', { signal });
+          }
+        }
+        yield INIT;
+        yield RESULT;
+      })();
+
+    const events: TelemetryEventInput[] = [];
+    const seenByCustomHook: unknown[] = [];
+    const hooks = createHookRuntime();
+    hooks.register('post-tool', (p) => {
+      seenByCustomHook.push(p);
+    });
+    const warnings: string[] = [];
+    const deps = makeDeps(query, {
+      hooks,
+      scanInjection: (text) => scan(text),
+      redactSecrets: (text) => redact(text),
+      telemetry: {
+        record: (event) => {
+          events.push(event);
+          return { ok: true, value: { ...event, id: 'evt', ts: 1 } };
+        },
+      },
+    });
+    const session = createSession(deps, {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+
+    await session.run('drive the wrong event');
+
+    expect(warnings.some((w) => w.includes('non-PostToolUse event'))).toBe(true);
+    expect(events.some((e) => e.type === 'tool-trace')).toBe(false);
+    expect(seenByCustomHook).toHaveLength(0);
+  });
 });

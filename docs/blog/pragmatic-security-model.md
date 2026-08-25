@@ -22,8 +22,15 @@ statement in this document": in v1, a tool result the scanner flags **still
 reaches the model**, and a secret the redactor catches **is still visible to
 the model**. The scanner and redactor protect the *record* (telemetry,
 memory, logs) and gate the *next action*; they do not yet rewrite the
-model's context, because the SDK exposes no channel for it. Most agent
-frameworks have this exact gap. Few write it down in bold.
+model's context. Most agent frameworks have this exact gap. Few write it
+down in bold.
+
+> Correction (2026-08-25): this piece originally said the SDK exposed no
+> channel for the rewrite. It did (`updatedToolOutput`), in the version pinned
+> when this was written. The gap is real but the cause was wrong: the rewrite
+> is a deferred decision, not a missing capability. ADR-0032 has the full
+> account, including how the wrong premise survived. The essay is left standing
+> with this note rather than quietly rewritten.
 
 Why does writing it down matter beyond ethics? Because named gaps compose.
 The model's §6 chains R-4 with R-3 (ungated network egress) into the

@@ -20,11 +20,21 @@ import type {
 
 /**
  * Replays GENUINE SDK hook events, captured by scripts/capture-sdk-hook-fixture.mjs
- * from a real keyed run, through the session. This is the structural gate that
- * a hand-written fake could not be: if a future SDK renames the result field
- * (as `tool_output` vs `tool_response` already caught us, issue #83), the
- * recorded event stops feeding the post-tool path and this test fails. CI has
- * no API key, so the capture is out-of-band; this replay runs per PR.
+ * from a real keyed run, through the session. What each gate actually catches,
+ * stated precisely because overstating this gate is the same class of error as
+ * issue #83 itself:
+ *   - This replay is a REGRESSION pin (harness code must keep feeding the
+ *     recorded shape into the post-tool path) AND a view-staleness detector: if
+ *     the view changes to require a field the frozen JSON lacks, the guard below
+ *     goes red. It replays a snapshot through a fake `query`, so it does NOT
+ *     observe the live SDK and cannot, on its own, detect an SDK-side rename.
+ *   - The SDK-side rename detector is the compile-time parity pin in
+ *     sdk-types.test.ts, which reads the installed SDK's own types.
+ *   - ADDITIVE SDK drift (a new field the harness ought to read) is caught by
+ *     NEITHER; only a re-capture on an SDK bump surfaces it, which is why the
+ *     version assertion below forces a re-capture rather than letting a caret
+ *     bump run the old fixture against a new SDK.
+ * CI has no API key, so the capture is out-of-band and this replay runs per PR.
  */
 interface Fixture {
   _provenance: { sdkVersion: string; marker: string };
@@ -32,12 +42,20 @@ interface Fixture {
   postToolUse: SdkPostToolUseInput;
 }
 
+const here = dirname(fileURLToPath(import.meta.url));
 const fixture: Fixture = JSON.parse(
+  readFileSync(join(here, 'fixtures', 'sdk-hook-events.json'), 'utf8'),
+) as Fixture;
+
+// The version the SDK is pinned at right now (read, not hard-coded). If the
+// fixture was captured from a different SDK, the replay proves nothing about
+// the installed one: re-capture with scripts/capture-sdk-hook-fixture.mjs.
+const installedSdkVersion: string = JSON.parse(
   readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'sdk-hook-events.json'),
+    join(here, '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'),
     'utf8',
   ),
-) as Fixture;
+).version;
 
 const RESULT: SdkMessage = {
   type: 'result',
@@ -82,6 +100,13 @@ function makeDeps(overrides: Partial<SessionDeps> = {}): SessionDeps {
 }
 
 describe('genuine SDK hook fixture', () => {
+  it('was captured from the SDK version currently installed', () => {
+    // A version field nothing compares is a proxy check (DEC-0016): assert it,
+    // so an SDK bump under the caret range fails here until the fixture is
+    // re-captured, instead of replaying a stale snapshot against a new SDK.
+    expect(fixture._provenance.sdkVersion).toBe(installedSdkVersion);
+  });
+
   it('carries the recorded Bash stdout into the post-tool telemetry summary', async () => {
     // Guard the fixture itself: it must be a PostToolUse event with the field
     // the SDK actually sends. If a re-capture wrote the wrong shape, fail here

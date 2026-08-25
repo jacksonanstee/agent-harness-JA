@@ -125,23 +125,28 @@ export interface SdkPreToolDenyOutput {
 
 export type SdkHookOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
 
-export type SdkHookCallback = (
-  input: SdkHookInput,
+export type SdkHookCallback<I extends SdkHookInput = SdkHookInput> = (
+  input: I,
   toolUseID: string | undefined,
   context: { signal: AbortSignal },
 ) => Promise<SdkHookOutput>;
 
-export interface SdkHookMatcher {
-  hooks: SdkHookCallback[];
+export interface SdkHookMatcher<I extends SdkHookInput = SdkHookInput> {
+  hooks: SdkHookCallback<I>[];
 }
 
 export interface QueryOptions {
   model?: string;
   systemPrompt?: string;
   maxTurns?: number;
+  // Typed per event so a callback that reads a post-only field (`tool_response`)
+  // cannot be registered under `PreToolUse`, and vice versa. A callback typed
+  // over the wider union stays assignable to either slot by contravariance, so
+  // the defaults keep the bare `SdkHookCallback`/`SdkHookMatcher` spelling
+  // source-compatible for the published surface (ADR-0023).
   hooks?: {
-    PreToolUse?: SdkHookMatcher[];
-    PostToolUse?: SdkHookMatcher[];
+    PreToolUse?: SdkHookMatcher<SdkPreToolUseInput>[];
+    PostToolUse?: SdkHookMatcher<SdkPostToolUseInput>[];
   };
 }
 

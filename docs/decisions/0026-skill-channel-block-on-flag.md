@@ -11,7 +11,7 @@ Skill descriptions and bodies enter the system prompt whole, at system-prompt au
 
 > "unlike arbitrary tool output, a legitimate skill has no reason to contain scanner-flagged override phrasing, and unlike tool output the harness owns this channel, so blocking is implementable without an SDK rewrite channel."
 
-R-4 is the harness's most important honest statement: flagged content still reaches the model. But R-4's *rationale* is specifically that no SDK result-rewrite channel exists. **That rationale does not hold for the system prompt, which the harness assembles itself.** ADR-0012 §9's revisit-if ("Enforcement is needed → revisit the observe-only decision") is precisely this trigger firing.
+R-4 is the harness's most important honest statement: flagged content still reaches the model. But R-4's *rationale*, as written at the time, was that no SDK result-rewrite channel exists (**corrected 2026-08-25, ADR-0032: the channel did exist; the true rationale is that adopting it is a deferred decision, issue #84**). Either way that rationale does not hold for the system prompt, which the harness assembles itself. ADR-0012 §9's revisit-if ("Enforcement is needed → revisit the observe-only decision") is precisely this trigger firing.
 
 ## Decisions
 

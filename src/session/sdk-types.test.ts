@@ -6,11 +6,15 @@ import { describe, it, expect } from 'vitest';
 // runtime assertion exists so vitest counts the file; the real work is the
 // type-level constants, which only compile when the relations below hold.
 import type {
+  HookCallbackMatcher,
+  HookJSONOutput,
   PostToolUseHookInput,
   PreToolUseHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  SdkHookMatcher,
   SdkPostToolUseInput,
+  SdkPreToolDenyOutput,
   SdkPreToolUseInput,
 } from './types.js';
 
@@ -27,6 +31,15 @@ const _postAssignable: Assignable<PostToolUseHookInput, SdkPostToolUseInput> = t
 // field would violate, and did).
 const _preNoExtra: NoExtraKeys<SdkPreToolUseInput, PreToolUseHookInput> = true;
 const _postNoExtra: NoExtraKeys<SdkPostToolUseInput, PostToolUseHookInput> = true;
+
+// Output side: the deny bridge is the harness's one enforced model-facing
+// control, so its shape must be ACCEPTABLE to the SDK (our output assignable to
+// the SDK's), and the matcher must invent no key the SDK's matcher lacks. A
+// misnamed key here fails exactly as #83 did (fail-open, suite green) unless
+// pinned. Note the direction: for inputs the SDK value flows to us (SDK ->
+// view); for outputs our value flows to the SDK (view -> SDK).
+const _denyOutputAccepted: Assignable<SdkPreToolDenyOutput, HookJSONOutput> = true;
+const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
 
 // A literal using the old `tool_output` name no longer type-checks.
 const _rejectsOldField: SdkPostToolUseInput = {
@@ -45,6 +58,8 @@ describe('SDK hook-input type parity', () => {
       _postAssignable,
       _preNoExtra,
       _postNoExtra,
+      _denyOutputAccepted,
+      _matcherNoExtra,
       _rejectsOldField,
     ]).toBeDefined();
   });
