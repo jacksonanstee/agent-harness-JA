@@ -436,7 +436,7 @@ export async function main(argv: string[]): Promise<number> {
   const hooks = createHookRuntime({
     onEvent: (record) => {
       const result = telemetry.record(
-        hookRecordToTelemetryInput(record, { sessionId: harnessSessionId, turnId }),
+        hookRecordToTelemetryInput(record, { sessionId: harnessSessionId, turnId }, { redactSecrets: redact }),
       );
       if (!result.ok) {
         process.stderr.write(

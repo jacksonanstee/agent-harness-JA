@@ -67,6 +67,10 @@ retained string simply never contains the glob.
    entering telemetry (`resultSummary` is redact-then-truncated at the same seam). No live
    exposure with the shipped hooks; filed as issue #75 rather than folded in, and this
    sentence exists so "defence in depth" is not read as covering a sink it does not.
+   **Asymmetry CLOSED 2026-08-25 (issue #75, its own PR):** the telemetry copy now passes the
+   same redact-then-truncate at the mapping seam (`hookRecordToTelemetryInput`,
+   `src/cli/shared.ts`), with the redactor a REQUIRED dependency of the mapper so a new caller
+   cannot fall back to raw. Verification appended below.
 
 5. **Ephemeral surfaces may carry the glob.** The constraint is on retained sinks. A future
    live deny print or error message may name the glob; nothing here forbids that.
@@ -349,3 +353,53 @@ scrubbed export while the lossless default stays available — a plantable denia
 accepted with the rowToEvent precedent and named here. All measurements darwin; the
 executed boundary fixtures cover ASCII, BMP unicode (`ñ`), NFD combining marks, and
 one astral (surrogate-pair) continuation case.
+
+## Verification for issue #75 (appended 2026-08-25, its own PR)
+
+**What changed.** `hookRecordToTelemetryInput` (`src/cli/shared.ts`) takes a REQUIRED third
+argument `{ redactSecrets }` and passes the `reason` of `denied-by-hook` and `hook-error` rows
+through redact-then-truncate before the row reaches the store: redact first, then cut to
+`HOOK_REASON_LIMIT = 200` (the memory summary's bound, cut surrogate-safe by
+`truncateWellFormed`); a throwing redactor stores `[REDACTION FAILED]`, never the raw reason.
+Both composition-root call sites (`src/cli.ts` run, `src/cli/eval-command.ts`) supply the real
+`redact`. The payload SHAPE is unchanged: no new field and no validator bound in
+`src/telemetry/store.ts` — a read-path bound would reject legacy rows whose reason exceeds it,
+and `rowToEvent` denies a whole export on one bad row (the pathDigest-optionality precedent),
+so the bound is enforced at the write seam only. No fired-signal, on decision 3's reasoning:
+the transform keys on nothing ambient, and the `…` suffix is the same signal the memory copy
+carries. Control characters are not stripped at this seam because the store's write-path
+sanitiser already strips them from every payload string (pinned in `store.test.ts`).
+
+**RED-first.** Five behaviour pins were observed red against the shipped mapper before the fix,
+each for raw passthrough: a denied-by-hook reason carrying an assembled AWS key persists it
+verbatim; the same on a hook-error reason; a 500-character reason stores at 500; a key
+straddling the cap survives; a throwing redactor is never consulted. Two pins were green on
+write and are named as such: the updated three-kinds shape test (clean reasons pass through
+unchanged) and the hook-fired pin (no reason, redactor never invoked). One fixture correction
+during RED, recorded because it is the kind of thing that gets tidied out of the story: the
+straddling key was first glued to the `x` filler, and the AWS rule is `\b`-anchored, so the
+key was moved to index 190 after a space; the pin had reddened for a fixture reason, not a code
+reason, and was re-run before GREEN.
+
+**Mutation gates: six, each over the FULL suite (1196 tests) at this tree, each asserting the
+replacement landed before running and the restore byte-identical after.** NULL (the mapper
+passes the reason through) reddens exactly the five behaviour pins. Truncate-before-redact
+reddens exactly the order pin. Raw-on-throw reddens exactly the fail-closed pin. Limit 200 →
+10 000 reddens exactly the cap pin. Raw passthrough on the hook-error arm alone reddens exactly
+the hook-error pin. Raw passthrough on the denied arm alone reddens exactly the four
+denied-side pins. No pin outside `src/cli.test.ts` binds the seam, and that is expected rather
+than a gap: the shipped hooks' reasons are value-free (decision 1), so every existing
+end-to-end test passes clean strings through the identity half of the transform.
+
+**Limits.** No live SDK run drives a secret-bearing reason through the composition root: the
+shipped hooks (`permissionHook`, `sandboxHook`) emit value-free reasons, so a live smoke can
+only confirm the identity case (a real deny stores the same glob-free string as before). The
+production seam is bound by the type system rather than by an executed test — the redactor
+is a required parameter, so neither call site compiles without it — and that is stated as
+what it is: a compile-time pin, not an executed one. A THIRD writer of `hook-event` rows is
+out of this PR's scope and is recorded here so it is not read as covered:
+`src/session/session.ts` writes `{kind: 'hook-error', reason: 'fire failed: <detail>'}`
+directly when `fire()` itself throws, with `detail` sanitised but unbounded. That reason is
+the hook runtime's own error message (handler throws are caught inside `fire()` and never
+reach it), so it is not attacker-influenced in the sense this issue is about, but it carries no
+length bound.

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { loadJsonSettings } from '../internal/settings.js';
-import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
+import { TERMINAL_UNSAFE, truncateWellFormed } from '../internal/sanitize.js';
 import {
   mergeLayers,
   mergeSandboxLayers,
@@ -14,7 +14,7 @@ import {
   PermissionSettingsError,
   SandboxSettingsError,
 } from '../security/index.js';
-import type { EvaluatorOptions, SandboxConfig } from '../security/index.js';
+import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -200,14 +200,65 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 }
 
 /**
+ * Length bound on a hook reason persisted to telemetry. Deliberately the same
+ * value as the memory summary's SUMMARY_TEXT_LIMIT (src/session/session.ts):
+ * the SAME reason string reaches both retained sinks, and issue #75 was the
+ * asymmetry between them — the memory copy redact-then-truncated, the telemetry
+ * copy raw. Not imported from session because cli/ owning a session-internal
+ * constant would couple the two for one number; drift is pinned by the tests
+ * asserting 200 on both seams.
+ */
+export const HOOK_REASON_LIMIT = 200;
+
+/** Telemetry sentinel when the secret redactor throws (fail-closed — never raw). */
+const REDACTION_FAILED = '[REDACTION FAILED]';
+
+/**
+ * REQUIRED, not optional, on purpose: an optional redactor with a raw fallback
+ * is exactly the standing trap this closes (the memory seam has one because
+ * the session's redactor is an injected optional dep; here the composition
+ * root always holds `redact`, so the type can demand it). A new caller that
+ * forgets the redactor fails to compile instead of persisting raw.
+ */
+export interface HookTelemetryDeps {
+  redactSecrets: (text: string) => RedactResult;
+}
+
+/**
+ * Redact THEN truncate, in that order (session.ts's transform-then-truncate
+ * contract): truncating first can slice a secret at the boundary into a
+ * fragment too short for its rule to match. Control characters are not
+ * stripped here — the store's write-path sanitizer already does that for
+ * every payload string (src/telemetry/store.ts), so a second pass would be
+ * a duplicate, not a defence. On redactor failure the sentinel is stored,
+ * never the raw reason.
+ */
+function boundReason(reason: string, deps: HookTelemetryDeps): string {
+  let redacted: string;
+  try {
+    redacted = deps.redactSecrets(reason).redacted;
+  } catch {
+    return REDACTION_FAILED;
+  }
+  return truncateWellFormed(redacted, HOOK_REASON_LIMIT);
+}
+
+/**
  * Maps a hook runtime record onto telemetry's structural hook-event payload.
  * Lives in cli/shared.ts (not hooks/ or telemetry/) so those two modules stay
  * import-free peers (ADR-0011); cli.ts (and any other cli/ command module)
  * imports it from here.
+ *
+ * The `reason` of a denied-by-hook or hook-error row is ANY registered hook's
+ * throw message, so it is attacker-influenced in principle even though the
+ * shipped hooks emit value-free reasons (ADR-0031 decision 1). It passes the
+ * same redact-then-truncate the memory summary's `denied[]` copy does
+ * (ADR-0031 decision 4; issue #75).
  */
 export function hookRecordToTelemetryInput(
   record: HookEventRecord,
   ids: { sessionId: string; turnId: string },
+  deps: HookTelemetryDeps,
 ): TelemetryEventInput {
   const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
   if (record.kind === 'denied-by-hook') {
@@ -217,7 +268,7 @@ export function hookRecordToTelemetryInput(
         kind: record.kind,
         event: record.event,
         tool: record.tool,
-        reason: record.reason,
+        reason: boundReason(record.reason, deps),
         handlerIndex: record.handlerIndex,
       },
     };
@@ -228,7 +279,7 @@ export function hookRecordToTelemetryInput(
       payload: {
         kind: record.kind,
         event: record.event,
-        reason: record.reason,
+        reason: boundReason(record.reason, deps),
         handlerIndex: record.handlerIndex,
       },
     };
