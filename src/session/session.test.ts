@@ -985,6 +985,71 @@ describe('createSession', () => {
     expect(parsed.prompt).toBe('[REDACTION FAILED]');
   });
 
+  // The round-four review found the same unguarded error.message rendering
+  // at every other injected-dependency catch in this file. Each of these deps
+  // is an arbitrary implementation at the same trust boundary as hooks; a
+  // throw whose message getter throws must degrade to a warning, never reject
+  // the run.
+  const booby = (): Error => {
+    const err = new Error('placeholder');
+    Object.defineProperty(err, 'message', { get: () => { throw new Error('getter leak'); } });
+    return err;
+  };
+  it.each([
+    ['telemetry.record throws', 'telemetry record threw', (): Partial<SessionDeps> => ({
+      telemetry: { record: () => { throw booby(); } },
+    })],
+    ['redactSecrets throws', 'secret redaction failed', (): Partial<SessionDeps> => ({
+      redactSecrets: () => { throw booby(); },
+    })],
+    ['scanInjection throws', 'injection scan failed', (): Partial<SessionDeps> => ({
+      scanInjection: () => { throw booby(); },
+    })],
+    ['post-tool fire() rejects', 'post-tool fire failed', (): Partial<SessionDeps> => {
+      const real = createHookRuntime();
+      const hooks: HookRuntime = {
+        register: real.register,
+        fire: ((event, payload) =>
+          event === 'post-tool' ? Promise.reject(booby()) : real.fire(event, payload)) as HookRuntime['fire'],
+      };
+      return { hooks };
+    }],
+  ])('an unrepresentable error from %s degrades to a warning and the run completes', async (_label, prefix, overrides) => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, overrides()), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(`${prefix}: unrepresentable error`);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // The one non-catch rendering of an injected dependency's error: the
+  // skill-load warning reads loader-supplied error objects field by field.
+  type LoadError = ReturnType<SessionDeps['loadSkills']>['errors'][number];
+  it.each([
+    ['message', 'skill load parse error in evil.md: unrepresentable error'],
+    ['kind', 'skill load error: unrepresentable error'],
+  ])('a skill-load error whose %s getter throws degrades to a warning and the run completes', async (field, expected) => {
+    const err = { kind: 'parse', file: 'evil.md', message: 'x' } as unknown as LoadError;
+    Object.defineProperty(err, field, { get: () => { throw new Error('getter leak'); } });
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], []);
+    const warnings: string[] = [];
+    const session = createSession(
+      makeDeps(fake, { loadSkills: () => ({ skills: [], errors: [err], root: '/skills' }) }),
+      { skillsDir: '/nowhere', onWarning: (w) => warnings.push(w) },
+    );
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(expected);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
   it('streams assistant text through onText', async () => {
     const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
     const chunks: string[] = [];

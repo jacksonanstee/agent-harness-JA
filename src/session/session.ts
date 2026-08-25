@@ -216,6 +216,25 @@ function assertValidSkillNonce(value: string): string {
 const REDACTION_FAILED = '[REDACTION FAILED]';
 
 
+/**
+ * Renders a thrown value or a Result error for a warning or a retained row.
+ * Never throws and always returns a string: `message` may be a getter that
+ * throws or returns a non-string (found by execution, issue #75), and
+ * `sanitizeText` is an untyped replace that would pass a non-string through.
+ * Every injected dependency is an arbitrary implementation at the same trust
+ * boundary as a hook, so every catch that renders one goes through here.
+ * Non-object throws render as 'unknown', the behaviour these sites had.
+ */
+function describeError(error: unknown): string {
+  try {
+    if (typeof error !== 'object' || error === null || !('message' in error)) return 'unknown';
+    const rendered: unknown = (error as { message: unknown }).message;
+    return typeof rendered === 'string' ? sanitizeText(rendered) : 'unrepresentable error';
+  } catch {
+    return 'unrepresentable error';
+  }
+}
+
 function truncate(value: string | null): string | null {
   if (value === null) return null;
   const clean = sanitizeText(value);
@@ -581,7 +600,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // never a fresh ambient resolve at the write seam (ADR-0031 decision 6).
     const skillsRoot = loadResult.root;
     for (const error of loadResult.errors) {
-      warn(`skill load ${error.kind} error in ${error.file}: ${error.message}`);
+      // Loader-supplied objects read field by field: `message` through
+      // describeError, and the whole line guarded because `kind`/`file` are
+      // the same kind of untrusted read (an injected loader can return
+      // anything). A warning that cannot be rendered must not end the run.
+      let line: string;
+      try {
+        line = `skill load ${error.kind} error in ${error.file}: ${describeError(error)}`;
+      } catch {
+        line = 'skill load error: unrepresentable error';
+      }
+      warn(line);
     }
     // Skill descriptions and bodies enter the system prompt at system-prompt
     // authority (buildSystemPrompt), so scan them like any other untrusted
@@ -671,11 +700,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       try {
         const result = deps.telemetry.record(event);
         if (!result.ok) {
-          warn(`telemetry record failed: ${sanitizeText(result.error.message)}`);
+          warn(`telemetry record failed: ${describeError(result.error)}`);
         }
       } catch (error: unknown) {
         warn(
-          `telemetry record threw: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+          `telemetry record threw: ${describeError(error)}`,
         );
       }
     }
@@ -864,7 +893,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         return { redacted: result.redacted, findings: result.findings };
       } catch (error: unknown) {
         warn(
-          `secret redaction failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+          `secret redaction failed: ${describeError(error)}`,
         );
         return { redacted: REDACTION_FAILED, findings: null };
       }
@@ -919,7 +948,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         return result;
       } catch (error: unknown) {
         warn(
-          `injection scan failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+          `injection scan failed: ${describeError(error)}`,
         );
         return null;
       }
@@ -946,24 +975,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       } catch (error: unknown) {
         // fire() itself failing must fail closed, not SDK-defined. The reason
         // sent to the model is generic; the detail goes to warnings only.
-        // Rendering the error is itself guarded: a rejection value whose
-        // message getter throws must not turn the deny path into a throw.
-        let detail = 'unknown';
-        try {
-          if (error instanceof Error) {
-            const rendered: unknown = error.message;
-            // Same hole as the runtime's reasonOf: a getter can return a
-            // non-string that survives sanitizeText's untyped replace.
-            detail = typeof rendered === 'string' ? sanitizeText(rendered) : 'unrepresentable error';
-          }
-        } catch {
-          detail = 'unrepresentable error';
-        }
+        // describeError never throws, so a rejection value whose message
+        // getter throws cannot turn the deny path into a throw.
+        const detail = describeError(error);
         // Redact-then-bound, like the other two retained copies of a hook
         // reason (issue #75). The runtime now keeps handler-chosen text out
         // of fire() rejections, but any HookRuntime implementation can reject
         // with anything, and this is a retained sink: defence in depth, the
-        // same posture as denied[] at the memory write.
+        // same posture as denied[] at the memory write. redactForPersistence
+        // returns null only for a null input and detail is always a string,
+        // so the fallback is unreachable; it exists to satisfy the type.
         const safeDetail = redactForPersistence(detail) ?? detail;
         warn(`pre-tool fire failed: ${safeDetail}`);
         // The hook sink never saw this failure (it lives inside fire()), so
@@ -1034,7 +1055,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         }
       } catch (error: unknown) {
         warn(
-          `post-tool fire failed: ${error instanceof Error ? sanitizeText(error.message) : 'unknown'}`,
+          `post-tool fire failed: ${describeError(error)}`,
         );
       }
       return {};
@@ -1204,7 +1225,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     if (writeResult.ok) {
       memoryEntryId = writeResult.value.id;
     } else {
-      warn(`memory write failed: ${writeResult.error.message}`);
+      warn(`memory write failed: ${describeError(writeResult.error)}`);
     }
 
     if (streamError !== null) throw streamError;

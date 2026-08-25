@@ -375,7 +375,11 @@ verify round added three more guards of one family: `reasonOf` rejects a non-str
 `message` getter can return an object carrying a `replace` method, which `sanitize`'s untyped
 replace would pass through as the reason), the session renders a rejection's message under the same
 check, and `redactForPersistence` treats a non-string redaction result as the sentinel, which also
-closes a pre-existing crash at the memory write for `prompt`, `resultText` and `denied[]`.
+closes a pre-existing crash at the memory write for `prompt`, `resultText` and `denied[]`. The
+round-four review then found the same shape at four more catches in `session.ts` (telemetry
+record, secret redaction, injection scan, post-tool fire), so round five replaced every error
+rendering in that file, eight sites including the skill-load warning over loader-supplied error
+objects, with one `describeError` helper that never throws and always returns a string.
 
 **Where the cap lives, and the options named.** The first cut kept the constant in `cli/shared.ts`;
 the architecture review moved it. The skill-drop precedent has three parts: a constant in
@@ -424,7 +428,10 @@ pass: three pins observed red (a `message` getter returning an object with a `re
 leaked an array through the runtime; the same shape with no redactor injected made `run()` reject;
 a malformed redactor result reached the `fire failed:` row raw and crashed the memory write), and
 the throwing-getter session pin green on write, named as such because it binds a branch no test
-had exercised. Two fixture corrections in round one and two, recorded so they are not tidied out of the story: the straddling key was first glued to
+had exercised. Round five, after the round-four review: six pins observed red, one per remaining
+catch and two for the skill-load warning (a throwing `message` getter and a throwing `kind`
+getter), each rejecting the run with the getter's own error. Two fixture corrections in round one
+and two, recorded so they are not tidied out of the story: the straddling key was first glued to
 the filler and the AWS rule is `\b`-anchored; and once the cap moved from 201 to 200 the redaction
 marker was sliced before its colon, so the key was shifted to indices 180 to 199 (under a
 truncate-first mutation a 19-character fragment remains, which still cannot satisfy the rule's
@@ -454,10 +461,17 @@ mapper storing the sentinel for every non-string redaction result, and the mutat
 matching the measurement line for line. Nothing was refuted. It found four LOWs of one family, a
 `typeof` hole behind every string-shaped assumption (the runtime's `sanitize`, the session's
 detail rendering, `redactForPersistence`'s trust in `.redacted`) plus one unbound branch; all
-fixed in round four with the pins above, closing the family rather than the instance. Severity
-across the rounds ran MEDIUM, MEDIUM, LOW: converging.
+fixed in round four with the pins above, for the three sites the pass had executed. That was the
+instance, not the family, and the first draft of this paragraph said otherwise: the round-four
+code review grepped `session.ts` for the same shape, found four more catches rendering
+`error.message` through the untyped replace (telemetry record, secret redaction, injection scan,
+post-tool fire), and reproduced three of them rejecting `run()` by execution. Round five closed the
+family with a single `describeError` helper at all eight rendering sites in the file and one pin
+per site; the grep output is the evidence, not this sentence. Severity across the rounds ran
+MEDIUM, MEDIUM, LOW, then a HIGH that was a false closure claim over LOW code defects: the code
+converged while the prose overclaimed one round longer than the code did.
 
-**Mutation gates: fifteen, each over the FULL suite (1207 tests) at this tree, each asserting the
+**Mutation gates: seventeen, each over the FULL suite (1213 tests) at this tree, each asserting the
 replacement landed before running and the restore byte-identical after.** NULL (the mapper passes
 the reason through) reddens exactly the seven mapper behaviour pins. Truncate-before-redact reddens
 exactly the order pin. Raw-on-throw reddens exactly the throwing-redactor pin. Dropping the bound
@@ -471,18 +485,22 @@ hook-error pin. Raw passthrough on the denied arm alone reddens exactly the six 
 gate that did not exist before this PR. Restoring `reasonOf`'s pre-fix body reddens exactly the
 three runtime pins. Writing the session's `fire failed:` row raw reddens exactly two: its
 redact-then-bound pin and the malformed-redactor pin. Dropping `reasonOf`'s string check reddens
-exactly the replace-method runtime pin. Dropping the session's string check on the rendered
-message reddens exactly the replace-method session pin. Dropping `redactForPersistence`'s string
-check reddens exactly the malformed-redactor pin. Compared with round two, the malformed-result pin
-no longer reddens under the order, sentinel or no-bound mutations, because the `typeof` guard now
-catches a malformed result on every path; the non-string pin binds the guard on its own. No pin
-outside the four edited test files binds any seam, and that is expected rather than a gap: the
-shipped hooks' reasons are value-free (decision 1), so every existing end-to-end test passes clean
-strings through the identity half of the transform. One process note, recorded because it is the
-kind of thing that gets tidied out: the round-four batch stalled twice on runner defects (a stale
-anchor after the code moved, then a shell word-splitting bug that left one mutation applied after
-its run); both were caught by the byte-identical restore check before anything else ran, and the
-affected gates were re-run from a verified-clean tree.
+exactly the replace-method runtime pin. Dropping `redactForPersistence`'s string check reddens
+exactly the malformed-redactor pin. Dropping `describeError`'s string check reddens exactly the
+replace-method session pin. Rethrowing from `describeError`'s catch reddens exactly six: the
+throwing-getter fire pin, the four injected-dependency catch pins and the skill-load message pin.
+Restoring the raw `error.message` read in the skill-load warning reddens exactly its pin. Compared
+with round two, the malformed-result pin no longer reddens under the order, sentinel or no-bound
+mutations, because the `typeof` guard now catches a malformed result on every path; the
+non-string pin binds the guard on its own. No pin outside the four edited test files binds any
+seam, and that is expected rather than a gap: the shipped hooks' reasons are value-free
+(decision 1), so every existing end-to-end test passes clean strings through the identity half of
+the transform. One process note, recorded because it is the kind of thing that gets tidied out:
+the round-four and round-five batches stalled three times on runner defects (a stale anchor after
+the code moved; a botched patch that dropped three mutation entries; a shell word-splitting bug in
+a foreground loop that left one mutation applied after its run), each caught by the apply or
+restore check before anything else ran; the affected gates were re-run from a verified-clean tree,
+and the final batch used a corrected runner over the whole set at the final tree.
 
 **Limits.** No live SDK run drives a secret-bearing reason through the composition root: the
 shipped hooks (`permissionHook`, `sandboxHook`) emit value-free reasons, so a live smoke can only
@@ -501,4 +519,11 @@ surrogate-safe. Both are follow-up issues, not folded in. (3) The session's memo
 `fire failed:` row redact through `redactForPersistence`, which passes the value raw when NO
 redactor is injected (the optional-dependency posture; the composition root always injects one).
 A redactor that throws or returns a non-string yields the sentinel on that seam too, since round
-four.
+four. (4) The family grep that backs round five (`instanceof Error ? <sanitizer>(error.message)`
+and `<sanitizer>(x.message)` over `src`, non-test files) has zero hits of the first shape after
+round five and ten of the second, all in the CLI layer (`src/cli.ts`, `src/cli/eval-command.ts`,
+`src/cli/redteam-command.ts`): top-level catches and store Result errors rendered for stderr, where
+the composition root wires the concrete in-tree implementations and no caller injects anything, so
+they sit outside this issue's trust boundary and are unchanged. The one non-catch rendering of an
+injected dependency's error in `session.ts` (the skill-load warning over `loadSkills` errors) is
+routed through the same helper in round five.
