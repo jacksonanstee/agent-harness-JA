@@ -54,7 +54,13 @@ const UNREPRESENTABLE_REASON = '[unrepresentable hook error]';
  */
 function reasonOf(thrown: unknown): string {
   try {
-    return sanitize(thrown instanceof Error ? thrown.message : String(thrown));
+    const rendered: unknown = thrown instanceof Error ? thrown.message : String(thrown);
+    // `message` is a property a subclass or defineProperty can turn into a
+    // getter returning anything; sanitize() is a string replace with no type
+    // check, so an object carrying a `replace` method would pass its own
+    // return value out as the reason. String or nothing.
+    if (typeof rendered !== 'string') return UNREPRESENTABLE_REASON;
+    return sanitize(rendered);
   } catch {
     return UNREPRESENTABLE_REASON;
   }

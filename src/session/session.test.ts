@@ -903,6 +903,88 @@ describe('createSession', () => {
     expect(row.payload.reason?.endsWith('…')).toBe(true);
   });
 
+  // A rejection value the session cannot render must not turn the deny path
+  // into a throw: no redactor injected, so nothing downstream can absorb it.
+  it.each([
+    ['a throwing message getter', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', { get: () => { throw new Error('getter leak'); } });
+      return booby;
+    }],
+    ['a message getter returning an object with a replace method', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', {
+        get: () => ({ replace: () => Object.create(null) as unknown }),
+      });
+      return booby;
+    }],
+  ])('a fire() rejection with %s stores the fixed detail and the run still resolves', async (_label, make) => {
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool' ? Promise.reject(make()) : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const session = createSession(makeDeps(fake, { hooks, telemetry }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    const result = await session.run('do it');
+    expect(result.denied).toEqual([{ tool: 'Bash', reason: 'pre-tool hook failure' }]);
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason).toBe('fire failed: unrepresentable error');
+  });
+
+  // redactForPersistence trusted .redacted; a malformed result used to reach
+  // the fire-failed row RAW (the ?? fallback chose the detail) and to crash
+  // the memory write for denied[]/prompt/resultText. Same posture as the
+  // mapper now: a non-string redaction result is the sentinel.
+  it('a malformed redactor result stores the sentinel on the fire-failed row and in denied[], never the raw text', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const real = createHookRuntime();
+    const hooks: HookRuntime = {
+      register: real.register,
+      fire: ((event, payload) =>
+        event === 'pre-tool' ? Promise.reject(new Error(`leak ${secret}`)) : real.fire(event, payload)) as HookRuntime['fire'],
+    };
+    const redactSecrets = (): RedactResult => ({ redacted: undefined as unknown as string, findings: [] });
+    const session = createSession(makeDeps(fake, { hooks, telemetry, memory, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: () => {},
+    });
+    await session.run('do it');
+    const row = events.find((e) => e.type === 'hook-event' && e.payload.kind === 'hook-error');
+    if (row?.type !== 'hook-event') throw new Error('no hook-error row');
+    expect(row.payload.reason).toBe('fire failed: [REDACTION FAILED]');
+    const content = memory.read({})[0]?.content ?? '';
+    expect(content).not.toContain(secret);
+    const parsed = JSON.parse(content) as { denied: Array<{ reason: string }>; prompt: string };
+    expect(parsed.denied[0]?.reason).toBe('[REDACTION FAILED]');
+    expect(parsed.prompt).toBe('[REDACTION FAILED]');
+  });
+
   it('streams assistant text through onText', async () => {
     const fake = fakeQuery([INIT, ASSISTANT, RESULT]);
     const chunks: string[] = [];

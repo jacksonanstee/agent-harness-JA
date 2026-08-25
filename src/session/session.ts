@@ -870,13 +870,18 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
-    // Redacts a plain string for a persistent sink (memory summary). Fail-
-    // closed: on redactor error it returns the REDACTION_FAILED sentinel so a
-    // secret can never persist. Absent redactor → raw (nothing configured).
+    // Redacts a plain string for a persistent sink (memory summary, and the
+    // fire-failed telemetry row). Fail-closed on a redactor that throws OR
+    // returns a non-string: the sentinel, never the raw value. A malformed
+    // result used to pass through as undefined and crash the memory write
+    // (issue #75 verify round). Absent redactor → raw (nothing configured),
+    // which is the one path where a secret can still persist here; the
+    // composition root always injects one.
     function redactForPersistence(value: string | null): string | null {
       if (value === null || deps.redactSecrets === undefined) return value;
       try {
-        return deps.redactSecrets(value).redacted;
+        const { redacted } = deps.redactSecrets(value);
+        return typeof redacted === 'string' ? redacted : REDACTION_FAILED;
       } catch {
         return REDACTION_FAILED;
       }
@@ -945,7 +950,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // message getter throws must not turn the deny path into a throw.
         let detail = 'unknown';
         try {
-          if (error instanceof Error) detail = sanitizeText(error.message);
+          if (error instanceof Error) {
+            const rendered: unknown = error.message;
+            // Same hole as the runtime's reasonOf: a getter can return a
+            // non-string that survives sanitizeText's untyped replace.
+            detail = typeof rendered === 'string' ? sanitizeText(rendered) : 'unrepresentable error';
+          }
         } catch {
           detail = 'unrepresentable error';
         }

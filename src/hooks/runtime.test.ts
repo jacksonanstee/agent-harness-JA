@@ -470,4 +470,26 @@ describe('hooks: unrepresentable throws', () => {
     });
     expect(JSON.stringify(records)).not.toContain(secret);
   });
+
+  // sanitize() is a string replace with no type check, so a message getter
+  // returning an object that HAS a replace method used to pass its own return
+  // value out as the reason (found by the second verify pass, executed).
+  it('a message getter returning a non-string with a replace method still yields the fixed reason', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => {
+      const booby = new Error('placeholder');
+      Object.defineProperty(booby, 'message', {
+        get: () => ({ replace: () => [`leak ${secret}`] }),
+      });
+      throw booby;
+    });
+    const result = await runtime.fire('pre-tool', preTool);
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe('[unrepresentable hook error]');
+    const first = records[0];
+    if (first?.kind !== 'denied-by-hook') throw new Error('expected a denied-by-hook record');
+    expect(first.reason).toBe('[unrepresentable hook error]');
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
 });

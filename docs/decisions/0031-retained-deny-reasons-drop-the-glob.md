@@ -370,7 +370,12 @@ type-checked: a redactor that throws, or returns anything but a string, stores
 `src/cli/eval-command.ts`) supply the real `redact`. The payload SHAPE is unchanged and there is
 no validator bound. Two further changes came out of the verify round (recorded below): `reasonOf`
 in the hook runtime can no longer throw, and the session's own `fire failed:` hook-error row now
-passes redact-then-bound as well, so all three writers of a hook reason are bounded.
+passes redact-then-bound as well, so all three writers of a hook reason are bounded. The second
+verify round added three more guards of one family: `reasonOf` rejects a non-string rendering (a
+`message` getter can return an object carrying a `replace` method, which `sanitize`'s untyped
+replace would pass through as the reason), the session renders a rejection's message under the same
+check, and `redactForPersistence` treats a non-string redaction result as the sentinel, which also
+closes a pre-existing crash at the memory write for `prompt`, `resultText` and `denied[]`.
 
 **Where the cap lives, and the options named.** The first cut kept the constant in `cli/shared.ts`;
 the architecture review moved it. The skill-drop precedent has three parts: a constant in
@@ -382,7 +387,7 @@ importable from session, cli and eval alike, which is what let the third writer 
 the validator conjunct (it would serve `record()` and `rowToEvent` symmetrically, so a legacy
 over-long row would be rejected on READ, and `rowToEvent` denies a whole export on one bad row, the
 pathDigest-optionality precedent; skill-drop could afford the conjunct because no rows predate its
-cap, and this field has rows that do); write-only validation (it would introduce the first
+cap, and this field may have rows that do); write-only validation (it would introduce the first
 `record()`/`rowToEvent` asymmetry in that file, a property `store.ts` states on purpose); and
 "optional on read like `pathForm`", which does not apply at all, since optionality is about field
 PRESENCE and a legacy over-long reason is present and type-valid. No fired-signal, on decision 3's
@@ -414,8 +419,12 @@ Round three, after the verify pass: four pins observed red, each reproducing the
 executed counterexample (a pre-tool handler throwing an object whose `String()` throws made
 `fire()` reject with the handler's text; a post-tool handler throwing an `Error` with a throwing
 `message` getter did the same; the session's `fire failed:` row stored a secret raw; an
-array-shaped `redacted` value passed the mapper untouched). Two fixture corrections in round one
-and two, recorded so they are not tidied out of the story: the straddling key was first glued to
+array-shaped `redacted` value passed the mapper untouched). Round four, after the second verify
+pass: three pins observed red (a `message` getter returning an object with a `replace` method
+leaked an array through the runtime; the same shape with no redactor injected made `run()` reject;
+a malformed redactor result reached the `fire failed:` row raw and crashed the memory write), and
+the throwing-getter session pin green on write, named as such because it binds a branch no test
+had exercised. Two fixture corrections in round one and two, recorded so they are not tidied out of the story: the straddling key was first glued to
 the filler and the AWS rule is `\b`-anchored; and once the cap moved from 201 to 200 the redaction
 marker was sliced before its colon, so the key was shifted to indices 180 to 199 (under a
 truncate-first mutation a 19-character fragment remains, which still cannot satisfy the rule's
@@ -428,7 +437,8 @@ inside `fire()` and never reach it. The security review confirmed that claim by 
 by execution: `reasonOf()` ran INSIDE the catch that holds a handler's throw, so a handler throwing
 a value whose coercion throws (an object with a throwing `toString`, an `Error` with a throwing
 `message` getter, a null-prototype object) escaped the catch, `fire()` rejected with the
-handler-chosen text, and the third writer stored it unredacted and unbounded. That is the exact
+handler-chosen text (or, for the null-prototype object, the engine's own conversion error), and
+the third writer stored it unredacted and unbounded. That is the exact
 threat the issue names, landing on the one writer the record had declared handler-proof. Fixed at
 both ends: `reasonOf` is guarded and falls back to a fixed string, and the session row passes
 redact-then-bound as defence in depth, because any `HookRuntime` implementation can reject with
@@ -438,25 +448,41 @@ silently); the mapper now type-checks the redactor's result. Lesson, recorded in
 scope-out is a security claim, and "confirmed by reading" plus a happy-path execution is not a
 counterexample search.
 
-**Mutation gates: twelve, each over the FULL suite (1203 tests) at this tree, each asserting the
+**The second verify pass.** All three refutations were upheld as resolved by execution: forty-two
+hostile throw shapes across pre-tool and post-tool handlers with `fire()` rejecting in none, the
+mapper storing the sentinel for every non-string redaction result, and the mutation paragraph
+matching the measurement line for line. Nothing was refuted. It found four LOWs of one family, a
+`typeof` hole behind every string-shaped assumption (the runtime's `sanitize`, the session's
+detail rendering, `redactForPersistence`'s trust in `.redacted`) plus one unbound branch; all
+fixed in round four with the pins above, closing the family rather than the instance. Severity
+across the rounds ran MEDIUM, MEDIUM, LOW: converging.
+
+**Mutation gates: fifteen, each over the FULL suite (1207 tests) at this tree, each asserting the
 replacement landed before running and the restore byte-identical after.** NULL (the mapper passes
 the reason through) reddens exactly the seven mapper behaviour pins. Truncate-before-redact reddens
 exactly the order pin. Raw-on-throw reddens exactly the throwing-redactor pin. Dropping the bound
-call reddens exactly the cap pin. Dropping the `typeof` guard reddens exactly the non-string pin.
-`HOOK_EVENT_REASON_MAX` 200 → 10 000 reddens exactly two: the cap pin and the session
-`fire failed:` pin, the third writer proving it shares the constant. The helper's `MAX - 1` →
-`MAX` off-by-one reddens exactly three: the cap pin, the `fire failed:` pin and the store's
-exact-length helper pin. Raw passthrough on the hook-error arm alone reddens exactly the
+call reddens exactly the cap pin. Dropping the mapper's `typeof` guard reddens exactly the
+non-string pin. `HOOK_EVENT_REASON_MAX` 200 → 10 000 reddens exactly two: the cap pin and the
+session `fire failed:` pin, the third writer proving it shares the constant. The helper's
+`MAX - 1` → `MAX` off-by-one reddens exactly three: the cap pin, the `fire failed:` pin and the
+store's exact-length helper pin. Raw passthrough on the hook-error arm alone reddens exactly the
 hook-error pin. Raw passthrough on the denied arm alone reddens exactly the six denied-side pins.
 `SUMMARY_TEXT_LIMIT` 200 → 50 on the memory seam reddens exactly the session-seam exact pin, the
-gate that did not exist before this PR. Unguarding `reasonOf` (restoring the pre-fix body) reddens
-exactly the two runtime pins. Writing the session's `fire failed:` row raw reddens exactly its pin.
-Compared with round two, the malformed-result pin no longer reddens under the order, sentinel or
-no-bound mutations, because the `typeof` guard now catches a malformed result on every path; the
-non-string pin binds the guard on its own. No pin outside the four edited test files binds any
-seam, and that is expected rather than a gap: the shipped hooks' reasons are value-free
-(decision 1), so every existing end-to-end test passes clean strings through the identity half of
-the transform.
+gate that did not exist before this PR. Restoring `reasonOf`'s pre-fix body reddens exactly the
+three runtime pins. Writing the session's `fire failed:` row raw reddens exactly two: its
+redact-then-bound pin and the malformed-redactor pin. Dropping `reasonOf`'s string check reddens
+exactly the replace-method runtime pin. Dropping the session's string check on the rendered
+message reddens exactly the replace-method session pin. Dropping `redactForPersistence`'s string
+check reddens exactly the malformed-redactor pin. Compared with round two, the malformed-result pin
+no longer reddens under the order, sentinel or no-bound mutations, because the `typeof` guard now
+catches a malformed result on every path; the non-string pin binds the guard on its own. No pin
+outside the four edited test files binds any seam, and that is expected rather than a gap: the
+shipped hooks' reasons are value-free (decision 1), so every existing end-to-end test passes clean
+strings through the identity half of the transform. One process note, recorded because it is the
+kind of thing that gets tidied out: the round-four batch stalled twice on runner defects (a stale
+anchor after the code moved, then a shell word-splitting bug that left one mutation applied after
+its run); both were caught by the byte-identical restore check before anything else ran, and the
+affected gates were re-run from a verified-clean tree.
 
 **Limits.** No live SDK run drives a secret-bearing reason through the composition root: the
 shipped hooks (`permissionHook`, `sandboxHook`) emit value-free reasons, so a live smoke can only
@@ -471,6 +497,8 @@ memory seam and not introduced here, both executed by the reviews: the `\b`-anch
 rules do not match a credential glued to an adjacent word character (or split by a control
 character, which the runtime's `reasonOf` has already turned into a space before the mapper sees
 it), so such a reason passes through unredacted; and the memory seam's `truncate()` is not
-surrogate-safe. Both are follow-up issues, not folded in. (3) The session's `fire failed:` row
-redacts through `redactForPersistence`, which passes the value raw when no redactor is injected
-(the memory seam's optional-dependency posture); the composition root always injects one.
+surrogate-safe. Both are follow-up issues, not folded in. (3) The session's memory seam and its
+`fire failed:` row redact through `redactForPersistence`, which passes the value raw when NO
+redactor is injected (the optional-dependency posture; the composition root always injects one).
+A redactor that throws or returns a non-string yields the sentinel on that seam too, since round
+four.
