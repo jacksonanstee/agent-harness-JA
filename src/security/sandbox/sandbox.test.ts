@@ -251,10 +251,58 @@ describe('sandboxHook', () => {
     await expect(
       hook(preTool('NotebookEdit', { notebook_path: '/etc/cron.d/x.ipynb' })),
     ).rejects.toThrowError(SandboxViolation);
-    await expect(hook(preTool('MultiEdit', { file_path: '/etc/hosts' }))).rejects.toThrowError(
+    await expect(hook(preTool('Glob', { pattern: '*', path: '/safe/sub' }))).resolves.toBeUndefined();
+  });
+
+  it('gates the five tools the table lacked at the pinned SDK; they passed both gates (issue #86)', async () => {
+    // Verified 2026-08-25: at 0.3.201 these five declare a path or command
+    // field and were never in the table, so the sandbox returned early on each
+    // as an unknown tool. Workflow is proven exposed in headless runs.
+    await expect(
+      hook(preTool('Artifact', { file_path: '/etc/passwd', favicon: 'x' })),
+    ).rejects.toThrowError(SandboxViolation);
+    await expect(hook(preTool('Workflow', { scriptPath: '/etc/passwd' }))).rejects.toThrowError(
       SandboxViolation,
     );
-    await expect(hook(preTool('Glob', { pattern: '*', path: '/safe/sub' }))).resolves.toBeUndefined();
+    await expect(hook(preTool('EnterWorktree', { path: '/etc' }))).rejects.toThrowError(
+      SandboxViolation,
+    );
+    await expect(
+      hook(preTool('Projects', { method: 'project_write', local_path: '/etc/passwd' })),
+    ).rejects.toThrowError(SandboxViolation);
+    await expect(
+      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' })),
+    ).rejects.toThrowError(SandboxViolation);
+    // An entry is a gate, not a blanket deny: allowlisted targets pass.
+    await expect(
+      hook(preTool('Artifact', { file_path: '/safe/page.html', favicon: 'x' })),
+    ).resolves.toBeUndefined();
+    await expect(hook(preTool('Workflow', { scriptPath: '/safe/wf.js' }))).resolves.toBeUndefined();
+    await expect(
+      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'git status' })),
+    ).resolves.toBeUndefined();
+  });
+
+  it('an absent optional target field denies: the gate refuses to guess what a mode it cannot see does (ADR-0033)', async () => {
+    await expect(hook(preTool('Workflow', { script: 'export const meta = {}' }))).rejects.toThrow(
+      /refusing to guess/,
+    );
+    await expect(
+      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, ws: { url: 'wss://x' } })),
+    ).rejects.toThrow(/refusing to guess/);
+    await expect(hook(preTool('EnterWorktree', { name: 'feature' }))).rejects.toThrow(
+      /refusing to guess/,
+    );
+    // Projects.path is a remote knowledge-base doc key, not a filesystem path;
+    // the gated field is local_path, so a call without it is a mode the
+    // sandbox cannot see.
+    await expect(
+      hook(preTool('Projects', { method: 'project_read', path: '/safe/doc.md' })),
+    ).rejects.toThrow(/refusing to guess/);
+  });
+
+  it('MultiEdit is no longer an entry: the pinned SDK does not declare it, so it is an unknown tool (R-9), not a gated one', async () => {
+    await expect(hook(preTool('MultiEdit', { file_path: '/etc/hosts' }))).resolves.toBeUndefined();
   });
 
   it('Glob/Grep with no path gate the cwd (SDK default), not a guess', async () => {

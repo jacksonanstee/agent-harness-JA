@@ -242,6 +242,34 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('Grep', { pattern: 'x', path: '/home/ok' }).decision).toBe('allow');
   });
 
+  it('match rules reach the five tools the table lacked at the pinned SDK (issue #86)', () => {
+    // Before #86 the match target for each was JSON.stringify(args), which
+    // starts with `{"` and so no path or command glob could ever fire.
+    const evaluator = createPermissionEvaluator({
+      rules: [
+        rule({ tool: '*', match: '/etc/*', decision: 'deny' }),
+        rule({ tool: '*', match: 'rm *', decision: 'deny' }),
+      ],
+    });
+    expect(evaluator.evaluate('Artifact', { file_path: '/etc/passwd', favicon: 'x' }).decision).toBe(
+      'deny',
+    );
+    expect(evaluator.evaluate('Workflow', { scriptPath: '/etc/../etc/passwd' }).decision).toBe('deny');
+    expect(evaluator.evaluate('EnterWorktree', { path: '/etc' }).decision).toBe('deny');
+    expect(
+      evaluator.evaluate('Projects', { method: 'project_write', local_path: '/etc/shadow' }).decision,
+    ).toBe('deny');
+    expect(
+      evaluator.evaluate('Monitor', {
+        description: 'd',
+        timeout_ms: 1,
+        persistent: false,
+        command: 'rm -rf /',
+      }).decision,
+    ).toBe('deny');
+    expect(evaluator.evaluate('Workflow', { scriptPath: '/home/ok/wf.js' }).decision).toBe('allow');
+  });
+
   it('a dir/* path deny rule also matches the bare directory (inclusive boundary)', () => {
     // Verify-pass finding: {tool:'Glob', match:'/secrets/*'} missed
     // Glob(path='/secrets'), which still enumerates the whole directory.
