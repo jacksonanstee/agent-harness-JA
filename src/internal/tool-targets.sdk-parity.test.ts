@@ -22,9 +22,10 @@ import { ACKNOWLEDGED_NON_TARGET_FIELDS, TOOL_TARGET_FIELDS } from './tool-targe
 //            a path carried inside an object-typed field (only top-level
 //            fields are read); WHICH of two target-shaped fields an entry
 //            gates (bound by the sandbox and evaluate pins instead); a tool
-//            whose dangerous dimension is not a path or a command (REPL
-//            `code`, WebFetch `url`: R-3); and anything at production time,
-//            because this is a test.
+//            whose dangerous dimension is not a path or a command (`WebFetch.url`
+//            network egress is R-3; `REPL.code` is arbitrary code execution,
+//            outside the path/command axis, no residual row of its own yet); and
+//            anything at production time, because this is a test.
 //
 // Proxy-parser caveat (the same shape as src/ci-drift.test.ts): there is no
 // TypeScript AST walk here, only regex over a generated .d.ts. A proxy that
