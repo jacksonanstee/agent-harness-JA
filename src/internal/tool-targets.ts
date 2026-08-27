@@ -3,8 +3,9 @@ import { resolve } from 'node:path';
 /**
  * The tool→argument-field table both security gates share (ADR-0015 review
  * finding: two hand-copied four-tool tables drifted from the SDK's real
- * surface — Glob/Grep/NotebookEdit bypassed BOTH modules because each assumed
- * the other covered them). One table, one place to extend when the SDK grows
+ * surface — Glob/Grep/NotebookEdit/MultiEdit bypassed BOTH modules because each
+ * assumed the other covered them; MultiEdit was later found undeclared by the
+ * SDK and dropped, issue #86). One table, one place to extend when the SDK grows
  * a tool. Source of truth: @anthropic-ai/claude-agent-sdk sdk-tools.d.ts, and
  * since issue #86 that is enforced, not asserted: tool-targets.sdk-parity.test.ts
  * reads the installed declarations and fails when a declared path/command

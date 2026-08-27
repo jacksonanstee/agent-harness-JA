@@ -3,8 +3,9 @@ import { canonicalizePath, TOOL_TARGET_FIELDS } from './tool-targets.js';
 
 describe('TOOL_TARGET_FIELDS', () => {
   it('covers every path/command-taking SDK tool the gates must not silently pass', () => {
-    // Review finding: Glob/Grep/NotebookEdit bypassed both gates when the two
-    // modules kept private four-tool tables. This test pins the shared table's
+    // Review finding: Glob/Grep/NotebookEdit/MultiEdit bypassed both gates when
+    // the two modules kept private four-tool tables (MultiEdit later found
+    // undeclared by the SDK, dropped in #86). This test pins the shared table's
     // surface so a change to it is a visible act in the diff; it cannot say the
     // surface is COMPLETE (issue #86: five tools were missing for seven weeks
     // under this test), which is tool-targets.sdk-parity.test.ts's job.

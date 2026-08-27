@@ -231,9 +231,16 @@ describe('sandboxHook', () => {
     );
   });
 
-  it('denies a gated tool whose target field is missing or non-string', async () => {
-    await expect(hook(preTool('Write', {}))).rejects.toThrow(/refusing to guess/);
-    await expect(hook(preTool('Bash', { command: 42 }))).rejects.toThrowError(SandboxViolation);
+  it('denies a gated tool whose target field is missing or non-string, with a reason that fits which', async () => {
+    // Missing field: nothing to gate (a no-target mode or a malformed call).
+    // Present but not a string: refuse to guess. The two get different reasons
+    // (ADR-0033), and both persist to telemetry, so both are pinned.
+    await expect(hook(preTool('Write', {}))).rejects.toThrow(
+      /Write has no file_path; this mode has no path target/,
+    );
+    await expect(hook(preTool('Bash', { command: 42 }))).rejects.toThrow(
+      /command is not a string; refusing to guess/,
+    );
     await expect(hook(preTool('Read', null))).rejects.toThrowError(SandboxViolation);
   });
 
@@ -283,22 +290,24 @@ describe('sandboxHook', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('an absent optional target field denies: the gate refuses to guess what a mode it cannot see does (ADR-0033)', async () => {
+  it('an absent optional target field denies with a no-target reason, not refuse-to-guess (ADR-0033)', async () => {
+    // A legitimate no-filesystem-target mode, not a malformed call: the reason
+    // says so rather than "requires a string".
     await expect(hook(preTool('Workflow', { script: 'export const meta = {}' }))).rejects.toThrow(
-      /refusing to guess/,
+      /Workflow has no scriptPath; this mode has no path target/,
     );
     await expect(
       hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, ws: { url: 'wss://x' } })),
-    ).rejects.toThrow(/refusing to guess/);
+    ).rejects.toThrow(/Monitor has no command; this mode has no command target/);
     await expect(hook(preTool('EnterWorktree', { name: 'feature' }))).rejects.toThrow(
-      /refusing to guess/,
+      /EnterWorktree has no path; this mode has no path target/,
     );
     // Projects.path is a remote knowledge-base doc key, not a filesystem path;
     // the gated field is local_path, so a call without it is a mode the
     // sandbox cannot see.
     await expect(
       hook(preTool('Projects', { method: 'project_read', path: '/safe/doc.md' })),
-    ).rejects.toThrow(/refusing to guess/);
+    ).rejects.toThrow(/Projects has no local_path; this mode has no path target/);
   });
 
   it('MultiEdit is no longer an entry: the pinned SDK does not declare it, so it is an unknown tool (R-9), not a gated one', async () => {

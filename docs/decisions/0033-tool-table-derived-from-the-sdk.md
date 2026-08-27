@@ -63,9 +63,18 @@ surface it never read.
    native CLI, a sibling optional dependency, does name them, and `Cd`'s target field is knowable
    from the binary; the harness derives its gate from the typed SDK surface, not the binary, so a
    field only the binary knows is out of reach by construction.) One policy for the class: tools the
-   typed surface declares are derived and gated; the rest are R-9. The removal is visible in
-   the commit, in the pin test's list, and in a sandbox test that now records `MultiEdit` passing
-   through as an unknown tool.
+   typed surface declares are derived and gated; the rest are R-9.
+
+   Dropping `MultiEdit` needs its own evidence, because the removal converts a table entry into an
+   unknown tool, and if the runtime could dispatch `MultiEdit` that would UNGATE it. The bundled
+   binary (0.3.201) names `MultiEdit` (grep: seven hits), but only in permission-rule guidance prose
+   ("a rule that an Edit/Write/MultiEdit deny rule covers"), a display gerund map
+   (`MultiEdit:"Editing"`) and tool-name string lists; there is no tool-registration shape
+   (`name:"MultiEdit"`, an input schema) for it, exactly as for `NotebookRead` and `Cd`. So at the
+   pinned version `MultiEdit` is not a dispatchable tool and dropping it ungates nothing reachable;
+   a later SDK that declares a `MultiEditInput` lands it as an entry on the next `npm ci`. The
+   removal is visible in the commit, in the pin test's list, and in a sandbox test that now records
+   `MultiEdit` passing through as an unknown tool.
 
 4. **A derived gate, both directions, with its reach written down.**
    `src/internal/tool-targets.sdk-parity.test.ts` reads the installed `sdk-tools.d.ts` and asserts:
@@ -95,7 +104,9 @@ surface it never read.
    `Cd`); a target field whose name falls outside the vocabulary; a path carried inside an
    object-typed field, because the parse reads top-level fields only; WHICH of two target-shaped
    fields an entry gates (the sandbox and evaluate pins bind that instead); a tool whose dangerous
-   dimension is not a path or a command (`REPL.code`, `WebFetch.url`, R-3); anything at production
+   dimension is not a path or a command (`WebFetch.url`, network egress, is R-3; `REPL.code` is
+   arbitrary code execution, outside the path/command axis and carrying no residual row of its own
+   yet); anything at production
    time, because it is a test (an operator whose caret range resolves a newer SDK gets no runtime
    check). An interface shape the regex cannot parse (`extends`, a type alias, a generic) is not a
    silent miss: it fails the union cross-check loudly (none but the acknowledged output alias exist
@@ -117,9 +128,19 @@ surface it never read.
   would widen for no gated surface. Revisit-if below.
 - **Pass through when an optional target field is absent.** Rejected: fail-open on a mode the gate
   cannot see, which is the defect being fixed.
-- **Keep `MultiEdit` as a fail-closed extra.** Rejected per decision 3; it also breaks the invariant
-  the gate enforces in the table-to-SDK direction, and a gate with a standing exemption is a gate
-  with a second hand-maintained list.
+- **A mode-aware gate keyed on `Projects.method`.** `ProjectsInput.method` is a required enum in the
+  typed surface (`project_info|project_read|project_search|project_write|project_delete`), so the
+  gate could pass `project_search`/`project_info` (no filesystem contact) and gate only
+  `project_write` + `local_path`, removing that tool's share of decision 2's over-blocking. Rejected
+  for now: a per-tool special case in a table whose value is being uniform, relieving over-blocking
+  that has no operator report behind it yet. Recorded as a Revisit-if trigger instead of adopted, so
+  the cost stays visible.
+- **Keep `MultiEdit` as a fail-closed extra.** Rejected per decision 3 (no tool-registration shape
+  in the pinned binary, so nothing reachable to keep gated); it also breaks the invariant the gate
+  enforces in the table-to-SDK direction, and a gate with a standing exemption is a gate with a
+  second hand-maintained list. If a future SDK made a runtime-only tool both dispatchable and
+  typeless, the `ACKNOWLEDGED_NON_TARGET_FIELDS` mechanism could carry an acknowledged fail-closed
+  extra with a reason, rather than a bare exemption.
 - **Guess entries for `NotebookRead` and `Cd`.** Rejected: "never guess" is the sandbox's own rule,
   and a wrong field name would deny every call while claiming knowledge the package does not hold.
 - **Restrict `allowedTools` or `disallowedTools` at the session** so these tools are never exposed.
@@ -146,8 +167,11 @@ surface it never read.
   has a canonical path target instead of the JSON blob. ADR-0014 marks such rules best-effort, so
   this is a behaviour note, not a regression; the tool is now gated on its real field.
 - Under an enabled sandbox dimension, the non-filesystem modes of `Workflow`, `Monitor`,
-  `EnterWorktree` and `Projects` are denied (decision 2). Operators who want them need the sandbox
-  dimension off or a permissions rule; the sandbox does not gain a per-mode carve-out.
+  `EnterWorktree` and `Projects` are denied (decision 2). An operator who needs those modes turns
+  the sandbox dimension off (and, if path policy is still wanted, expresses it as permissions deny
+  rules instead); a permissions ALLOW rule cannot undo a sandbox denial, because the hook runtime
+  denies on any pre-tool throw and permissions can only add denials, never suppress one. The sandbox
+  does not gain a per-mode carve-out.
 - The vocabulary is a heuristic on field names. A future filesystem field with a name outside it is
   unseen; the acknowledgement list is the place a reviewer will notice, not the gate.
 - R-9 keeps its class (undeclared runtime tools); it is narrower and named, not closed.
@@ -155,8 +179,13 @@ surface it never read.
 
 ## Revisit if
 
-- An SDK tool declares two filesystem fields: adopt the multi-field `ToolTarget` and decide the
-  permissions combinator (most restrictive decision across fields).
+- An SDK tool declares two GATEABLE fields (any mix of path and command, not only two filesystem
+  paths): adopt the multi-field `ToolTarget` and decide the permissions combinator (most restrictive
+  decision across fields).
+- Operators hit the absent-optional-field deny wall (a denied `Projects` search or inline `Workflow`
+  under an enabled sandbox dimension is reported as friction): consider the mode-aware
+  `Projects.method` gate above, or a per-tool "no-target modes pass" opt-in, with a threat-model
+  review. Same shape as ADR-0015's "users hit the metacharacter false-deny wall" trigger.
 - The SDK ships a tool-name map or per-tool metadata: replace the alias map and the
   `<Tool>Input` naming heuristic with it.
 - The SDK declares an input type for `NotebookRead` or `Cd`: the gate fails on the next `npm ci`

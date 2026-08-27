@@ -61,7 +61,7 @@ const INTERFACE_TO_TOOL: Readonly<Record<string, string>> = {
 
 /** Tools that must parse, or the parser is broken rather than the SDK small. */
 const ANCHOR_TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'] as const;
-const MIN_INTERFACES = 30;
+const MIN_UNION_MEMBERS = 30;
 
 /**
  * `ToolInputSchemas` names one member that is not a tool-input interface:
@@ -128,8 +128,8 @@ function loadSdkTools(): SdkTool[] {
   const members = [...new Set(parseUnionMembers(source))];
   expect(
     members.length,
-    `the ToolInputSchemas union in ${SDK_TOOLS_DTS} names ${members.length} members; below ${MIN_INTERFACES} the parser is broken, not the SDK`,
-  ).toBeGreaterThanOrEqual(MIN_INTERFACES);
+    `the ToolInputSchemas union in ${SDK_TOOLS_DTS} names ${members.length} members; below ${MIN_UNION_MEMBERS} the parser is broken, not the SDK`,
+  ).toBeGreaterThanOrEqual(MIN_UNION_MEMBERS);
   const nonInterface = members.filter((member) => !interfaces.has(member));
   expect(
     [...nonInterface].sort(),
@@ -162,7 +162,16 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
   });
 
   it('parses the SDK declarations completely (a partial parse fails here, not as clean elsewhere)', () => {
-    expect(loadSdkTools().length).toBe(sdkTools.length);
+    // Independent of the union-driven parse: count the interface headers by a
+    // second regex, so this can actually fail if the two disagree (review: the
+    // old `loadSdkTools().length).toBe(sdkTools.length)` compared a pure
+    // function on one file to itself).
+    const interfaceHeaders = (readFileSync(SDK_TOOLS_DTS, 'utf8').match(/^export interface \w+Input \{/gm) ?? [])
+      .length;
+    expect(
+      sdkTools.length,
+      'the union-derived tool list must equal the count of *Input interface headers in the file',
+    ).toBe(interfaceHeaders);
     // The vocabulary itself is pinned: an edit that widens it to everything or
     // narrows it to nothing would turn every check below vacuous.
     for (const name of ['file_path', 'path', 'notebook_path', 'local_path', 'scriptPath', 'command']) {
@@ -174,7 +183,7 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
     expect(targetBearing.length).toBeGreaterThan(0);
   });
 
-  it('every SDK tool that declares a path/command field has a table entry on a field the SDK declares, with the right kind', () => {
+  it('every SDK tool that declares a path/command field has a table entry (completeness direction)', () => {
     const missing = targetBearing
       .filter((tool) => TOOL_TARGET_FIELDS[tool.tool] === undefined)
       .map(
@@ -182,25 +191,6 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
           `${tool.tool} (${tool.iface}: ${tool.fields.filter(isTargetShaped).map((f) => f.name).join(', ')})`,
       );
     expect(missing, 'SDK tools with a path/command field but no table entry: both gates pass them').toEqual([]);
-
-    for (const tool of targetBearing) {
-      const entry = TOOL_TARGET_FIELDS[tool.tool];
-      if (entry === undefined) continue;
-      const declared = tool.fields.find((field) => field.name === entry.field);
-      expect(
-        declared,
-        `${tool.tool}: table field '${entry.field}' is not declared by the SDK (renamed or removed)`,
-      ).toBeDefined();
-      expect(entry.kind, `${tool.tool}.${entry.field}: kind must follow the field's class`).toBe(
-        COMMAND_FIELD_NAME.test(entry.field) ? 'command' : 'path',
-      );
-      if (declared !== undefined && !declared.optional) {
-        expect(
-          entry.missingMeansCwd,
-          `${tool.tool}.${entry.field} is required in the SDK, so missingMeansCwd is meaningless`,
-        ).toBeUndefined();
-      }
-    }
   });
 
   it('every other target-shaped field is acknowledged with a reason, and no acknowledgement is stale', () => {
@@ -239,12 +229,40 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
     expect(stale).toEqual([]);
   });
 
-  it('every table entry names a tool the SDK declares (a field name nothing can verify is not a gate)', () => {
-    const declared = new Set(sdkTools.map((tool) => tool.tool));
-    const undeclared = Object.keys(TOOL_TARGET_FIELDS).filter((tool) => !declared.has(tool));
+  it('every table entry names an SDK tool and gates a field that tool declares, with the right kind (table -> SDK direction)', () => {
+    // Sourced from sdkTools, NOT targetBearing: a tool leaves targetBearing the
+    // moment it has no target-shaped field, so a renamed Artifact.file_path
+    // (Artifact still declared, now with no gateable field) or a bogus entry on
+    // a non-target-bearing tool (WebSearch: { field: 'queryy' }) would slip a
+    // check that only iterated targetBearing (code + architecture review). This
+    // is the direction the "a field name nothing can verify is not a gate"
+    // argument (ADR-0033 decision 3) rests on.
+    const sdkByTool = new Map(sdkTools.map((tool) => [tool.tool, tool] as const));
+    const problems: string[] = [];
+    for (const [toolName, entry] of Object.entries(TOOL_TARGET_FIELDS)) {
+      const sdk = sdkByTool.get(toolName);
+      if (sdk === undefined) {
+        problems.push(
+          `${toolName}: not an SDK-declared tool (MultiEdit was one); undeclared runtime tools are R-9, not table entries`,
+        );
+        continue;
+      }
+      const declared = sdk.fields.find((field) => field.name === entry.field);
+      if (declared === undefined) {
+        problems.push(`${toolName}.${entry.field}: a field the SDK does not declare (renamed or removed)`);
+        continue;
+      }
+      const wantKind = COMMAND_FIELD_NAME.test(entry.field) ? 'command' : 'path';
+      if (entry.kind !== wantKind) {
+        problems.push(`${toolName}.${entry.field}: kind '${entry.kind}' but the field's class is '${wantKind}'`);
+      }
+      if (!declared.optional && entry.missingMeansCwd !== undefined) {
+        problems.push(`${toolName}.${entry.field}: required in the SDK, so missingMeansCwd is meaningless`);
+      }
+    }
     expect(
-      undeclared,
-      'table entries for tools the pinned SDK does not declare (MultiEdit was one); undeclared runtime tools are R-9, not table entries',
+      problems,
+      'every table entry must name an SDK tool and gate a field it declares, whether or not the tool still has OTHER target-shaped fields',
     ).toEqual([]);
   });
 
