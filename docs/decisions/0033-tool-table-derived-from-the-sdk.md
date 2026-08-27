@@ -51,9 +51,9 @@ surface it never read.
    `Monitor` over a websocket, `EnterWorktree` by name, `Projects` search, info or inline write) are
    denied. That is over-blocking by construction and is the accepted cost: the sandbox cannot see
    what those modes do, and a gate that passes what it cannot see is the defect this decision
-   closes. The permissions evaluator keeps its JSON-of-args fallback for a call without the field,
-   governed by a tool-only rule or the default decision, exactly as `Read` without `file_path` is
-   today.
+   closes. The permissions evaluator keeps its JSON-of-args fallback for a call whose field is
+   absent or not a string, governed by a tool-only rule or the default decision, exactly as `Read`
+   without `file_path` is today (executed for all five tools; the sandbox denies every such call).
 
 3. **`MultiEdit` leaves the table.** The table's stated source of truth is `sdk-tools.d.ts`. An entry
    the SDK does not declare is a field name nothing can verify: the DEC-0016 shape (a hand-copied
@@ -85,8 +85,11 @@ surface it never read.
    declare; a stale acknowledgement; a kind mismatch. It does not catch: a tool the SDK dispatches
    without a declared input type (`NotebookRead`, `Cd`); a target field whose name falls outside the
    vocabulary; a tool whose dangerous dimension is not a path or a command (`REPL.code`,
-   `WebFetch.url`, R-3); anything at production time, because it is a test (an operator whose
-   caret range resolves a newer SDK gets no runtime check). Mutations run for this ADR: the old
+   `WebFetch.url`, R-3); a path carried inside an object-typed field, because the parse reads
+   top-level fields only; anything at production time, because it is a test (an operator whose
+   caret range resolves a newer SDK gets no runtime check). An interface shape the regex cannot
+   parse (`extends`, a type alias, a generic) is not a silent miss: it fails the union cross-check
+   loudly (none exist at 0.3.201, executed). Mutations run for this ADR: the old
    eight-entry table reddens nine pins across five files; an emptied vocabulary reddens its own pin
    and, through the `Projects.path` acknowledgement becoming "dead weight", the acknowledgement
    check; a removed acknowledgement, a flipped `kind`, and an acknowledgement for an undeclared
@@ -111,7 +114,7 @@ surface it never read.
   and a wrong field name would deny every call while claiming knowledge the package does not hold.
 - **Restrict `allowedTools` or `disallowedTools` at the session** so these tools are never exposed.
   Not this issue's fix surface; it changes what a headless run can do at all and deserves its own
-  decision. Recorded under Revisit if.
+  decision: filed as issue #105, recorded under Revisit if.
 - **A TypeScript AST walk instead of regex.** The compiler API is available, but the generated
   `.d.ts` is regular enough that a regex with a union cross-check is simpler to read and to
   mutation-test; `src/ci-drift.test.ts` sets the precedent for a proxy parser that is made loud.
@@ -144,8 +147,8 @@ surface it never read.
   `<Tool>Input` naming heuristic with it.
 - The SDK declares an input type for `NotebookRead` or `Cd`: the gate fails on the next `npm ci`
   and they land as entries.
-- The harness restricts the exposed tool set at the session (`allowedTools`/`disallowedTools`):
-  R-9's class changes from "gate what is declared" to "expose only what is gated"; that decision
-  should also say what happens to `ToolSearch`, which can surface deferred tools.
+- The harness restricts the exposed tool set at the session (`allowedTools`/`disallowedTools`,
+  issue #105): R-9's class changes from "gate what is declared" to "expose only what is gated";
+  that decision must also say what happens to `ToolSearch`, which can surface deferred tools.
 - A caret-range SDK bump lands: read the gate's failures as the changelog of the tool surface, not
   as noise to silence.

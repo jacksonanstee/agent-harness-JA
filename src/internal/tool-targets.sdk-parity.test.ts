@@ -18,9 +18,10 @@ import { ACKNOWLEDGED_NON_TARGET_FIELDS, TOOL_TARGET_FIELDS } from './tool-targe
 //            does not declare; a stale acknowledgement; a kind mismatch.
 //   misses   runtime-only tools the SDK dispatches without a declared input
 //            type (R-9 by name); a target field whose name falls outside
-//            TARGET_FIELD_NAME; a tool whose dangerous dimension is not a path
-//            or a command (REPL `code`, WebFetch `url`: R-3); and anything at
-//            production time, because this is a test.
+//            TARGET_FIELD_NAME; a path carried inside an object-typed field
+//            (only top-level fields are read); a tool whose dangerous dimension
+//            is not a path or a command (REPL `code`, WebFetch `url`: R-3); and
+//            anything at production time, because this is a test.
 //
 // Proxy-parser caveat (the same shape as src/ci-drift.test.ts): there is no
 // TypeScript AST walk here, only regex over a generated .d.ts. A proxy that
