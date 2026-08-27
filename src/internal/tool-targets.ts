@@ -24,9 +24,11 @@ import { resolve } from 'node:path';
  * Network-egress tools (WebFetch/WebSearch) are deliberately absent: gating
  * them needs a URL/domain dimension, not a path prefix — tracked as future
  * work in ADR-0015 §Revisit-if, not silently half-covered here. Tools the SDK
- * dispatches without a declared input type (its permission-syntax validator
- * names NotebookRead and Cd) are not here either: their field names cannot be
- * verified, and an unverifiable field name is not a gate (R-9).
+ * dispatches without a declared input type are not here either: NotebookRead
+ * and Cd are named by the bundled native CLI (a sibling optional dependency,
+ * @anthropic-ai/claude-agent-sdk-<platform>) but declared by no *Input
+ * interface in sdk-tools.d.ts, and this table derives from the typed surface,
+ * not from the binary (R-9).
  */
 export interface ToolTarget {
   readonly field: string;

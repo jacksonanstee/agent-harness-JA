@@ -59,9 +59,11 @@ surface it never read.
    the SDK does not declare is a field name nothing can verify: the DEC-0016 shape (a hand-copied
    value with no re-derivation) inside a security table. The class it would defend against, tools
    the SDK dispatches without a declared input type, is R-9 by name and would equally need
-   `NotebookRead` and `Cd`, which appear exactly once in the SDK package (a permission-syntax
-   validator list) with no input schema, so their field names are unknowable. One policy for the
-   class: declared tools are derived and gated; undeclared tools are R-9. The removal is visible in
+   `NotebookRead` and `Cd`, which no `*Input` interface in `sdk-tools.d.ts` declares. (The bundled
+   native CLI, a sibling optional dependency, does name them, and `Cd`'s target field is knowable
+   from the binary; the harness derives its gate from the typed SDK surface, not the binary, so a
+   field only the binary knows is out of reach by construction.) One policy for the class: tools the
+   typed surface declares are derived and gated; the rest are R-9. The removal is visible in
    the commit, in the pin test's list, and in a sandbox test that now records `MultiEdit` passing
    through as an unknown tool.
 
@@ -72,24 +74,32 @@ surface it never read.
    agrees with the field's class; (c) every other target-shaped field of that tool is acknowledged
    with a reason, and every acknowledgement names a tool and field that still exist and are still
    target-shaped; (d) every table key is an SDK-declared tool; (e) an entry whose SDK field is
-   required does not claim `missingMeansCwd`. The parse is three-state: the file must exist, yield
-   at least thirty interfaces, include anchor tools, and its interface set must equal the members of
-   the SDK's own `ToolInputSchemas` union, so a short or inconsistent parse fails as "could not
-   check", never as clean (mutation-verified: a broken interface regex exits 1 with "parsed 0
-   *Input interfaces ... the parser is broken, not the SDK"). The vocabulary is pinned against a
-   known-good and a known-bad sample so an edit that widens it to everything or narrows it to
-   nothing is caught.
+   required does not claim `missingMeansCwd`, and the set of entries that DO claim it is pinned to
+   `{Glob, Grep}`, so a new cwd-default (which would turn an optional field's deny into gate-cwd) is
+   a visible act. The parse takes its tool list from the SDK's own `ToolInputSchemas` union and
+   requires every union member to resolve to a parsed `export interface` except the one known
+   output-union alias (`ToolOutputSchemas`), acknowledged by name; a new alias, `extends` or generic
+   member therefore fails loudly rather than being dropped for not ending in `Input` (a
+   self-referential cross-check whose two sides shared one naming heuristic was the review finding
+   that prompted this). Declarations are split at `export` boundaries so a stray column-0 brace
+   cannot truncate a body, and quoted or `readonly` keys the generator may emit are read. The parse
+   is three-state: the union must exist, name at least thirty members, and resolve its anchor tools,
+   so a short or inconsistent parse fails as "could not check", never as clean. The vocabulary is
+   pinned against a known-good and a known-bad sample so an edit that widens it to everything or
+   narrows it to nothing is caught.
 
    Reach, stated so nobody reads it as total coverage. It catches: a declared path/command tool
    missing from the table; a table field the SDK renamed or removed; a table entry the SDK does not
-   declare; a stale acknowledgement; a kind mismatch. It does not catch: a tool the SDK dispatches
-   without a declared input type (`NotebookRead`, `Cd`); a target field whose name falls outside the
-   vocabulary; a tool whose dangerous dimension is not a path or a command (`REPL.code`,
-   `WebFetch.url`, R-3); a path carried inside an object-typed field, because the parse reads
-   top-level fields only; anything at production time, because it is a test (an operator whose
-   caret range resolves a newer SDK gets no runtime check). An interface shape the regex cannot
-   parse (`extends`, a type alias, a generic) is not a silent miss: it fails the union cross-check
-   loudly (none exist at 0.3.201, executed). Mutations run for this ADR: the old
+   declare; a stale acknowledgement; a kind mismatch; a new `missingMeansCwd` outside `{Glob, Grep}`.
+   It does not catch: a tool the SDK dispatches without a declared input type (`NotebookRead`,
+   `Cd`); a target field whose name falls outside the vocabulary; a path carried inside an
+   object-typed field, because the parse reads top-level fields only; WHICH of two target-shaped
+   fields an entry gates (the sandbox and evaluate pins bind that instead); a tool whose dangerous
+   dimension is not a path or a command (`REPL.code`, `WebFetch.url`, R-3); anything at production
+   time, because it is a test (an operator whose caret range resolves a newer SDK gets no runtime
+   check). An interface shape the regex cannot parse (`extends`, a type alias, a generic) is not a
+   silent miss: it fails the union cross-check loudly (none but the acknowledged output alias exist
+   at 0.3.201, executed). Mutations run for this ADR: the old
    eight-entry table reddens nine pins across five files; an emptied vocabulary reddens its own pin
    and, through the `Projects.path` acknowledgement becoming "dead weight", the acknowledgement
    check; a removed acknowledgement, a flipped `kind`, and an acknowledgement for an undeclared
@@ -131,6 +141,10 @@ surface it never read.
 
 ### Negative / accepted
 
+- A permissions `match` rule an operator wrote against the OLD `JSON.stringify(args)` fallback for
+  one of the five tools (e.g. `match: '{"file_path":"/etc/*'`) stops firing, because the tool now
+  has a canonical path target instead of the JSON blob. ADR-0014 marks such rules best-effort, so
+  this is a behaviour note, not a regression; the tool is now gated on its real field.
 - Under an enabled sandbox dimension, the non-filesystem modes of `Workflow`, `Monitor`,
   `EnterWorktree` and `Projects` are denied (decision 2). Operators who want them need the sandbox
   dimension off or a permissions rule; the sandbox does not gain a per-mode carve-out.

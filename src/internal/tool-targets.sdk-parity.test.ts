@@ -15,19 +15,27 @@ import { ACKNOWLEDGED_NON_TARGET_FIELDS, TOOL_TARGET_FIELDS } from './tool-targe
 // Reach, stated so nobody reads it as total coverage (ADR-0033):
 //   catches  a declared tool with a target-shaped field and no table entry;
 //            a table field the SDK renamed or removed; a table entry the SDK
-//            does not declare; a stale acknowledgement; a kind mismatch.
-//   misses   runtime-only tools the SDK dispatches without a declared input
-//            type (R-9 by name); a target field whose name falls outside
-//            TARGET_FIELD_NAME; a path carried inside an object-typed field
-//            (only top-level fields are read); a tool whose dangerous dimension
-//            is not a path or a command (REPL `code`, WebFetch `url`: R-3); and
-//            anything at production time, because this is a test.
+//            does not declare; a stale acknowledgement; a kind mismatch; a
+//            new `missingMeansCwd` outside the {Glob, Grep} pin.
+//   misses   tools the SDK dispatches without a declared input type (R-9 by
+//            name); a target field whose name falls outside TARGET_FIELD_NAME;
+//            a path carried inside an object-typed field (only top-level
+//            fields are read); WHICH of two target-shaped fields an entry
+//            gates (bound by the sandbox and evaluate pins instead); a tool
+//            whose dangerous dimension is not a path or a command (REPL
+//            `code`, WebFetch `url`: R-3); and anything at production time,
+//            because this is a test.
 //
 // Proxy-parser caveat (the same shape as src/ci-drift.test.ts): there is no
 // TypeScript AST walk here, only regex over a generated .d.ts. A proxy that
-// finds nothing reads green, so the parse is cross-checked against the SDK's
-// own `ToolInputSchemas` union and anchored on tools that must exist; a short
-// or inconsistent parse fails as "could not check", never as clean.
+// finds nothing reads green, so: the tool list is taken from the SDK's own
+// `ToolInputSchemas` union, every identifier in it whatever its name (review
+// finding: a cross-check whose two sides share one naming heuristic is not a
+// check); every union member must have a parsed interface, so an alias, an
+// `extends` or a generic member fails loudly; declarations are split at
+// `export` boundaries, so a stray column-0 `}` cannot truncate a body; and the
+// parse is anchored on tools that must exist. A short or inconsistent parse
+// fails as "could not check", never as clean.
 
 const SDK_TOOLS_DTS = join(
   process.cwd(),
@@ -55,6 +63,17 @@ const INTERFACE_TO_TOOL: Readonly<Record<string, string>> = {
 const ANCHOR_TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'] as const;
 const MIN_INTERFACES = 30;
 
+/**
+ * `ToolInputSchemas` names one member that is not a tool-input interface:
+ * `ToolOutputSchemas`, the SDK's own nested union of the *Output types. It is
+ * acknowledged here so the union-member check can require every OTHER member to
+ * resolve to a parsed interface; a NEW non-interface member (an alias, an
+ * extends clause, a generic) then fails as "could not check" rather than being
+ * dropped for not ending in `Input` (review finding: the old collector's
+ * `\w+Input` filter shared the parser's naming heuristic and hid exactly this).
+ */
+const KNOWN_NON_INTERFACE_UNION_MEMBERS = ['ToolOutputSchemas'] as const;
+
 interface SdkField {
   readonly name: string;
   readonly optional: boolean;
@@ -66,48 +85,64 @@ interface SdkTool {
   readonly fields: readonly SdkField[];
 }
 
-function parseInterfaces(source: string): SdkTool[] {
-  // The first alternative matches a one-line `{}` body so an empty interface
-  // never swallows its successor.
-  const blocks = source.matchAll(/^export interface (\w+Input) \{(\}|[\s\S]*?^\})/gm);
-  const tools: SdkTool[] = [];
-  for (const block of blocks) {
-    const iface = block[1] ?? '';
-    const body = block[2] ?? '';
-    // Top-level fields sit at exactly two spaces; nested object members are
-    // deeper and an index signature starts with `[`, so neither matches.
-    const fields = [...body.matchAll(/^ {2}(\w+)(\?)?:/gm)].map((field) => ({
-      name: field[1] ?? '',
-      optional: field[2] === '?',
+/** Every `export interface X {` declaration, keyed by name, with its top-level fields. */
+function parseInterfaces(source: string): Map<string, SdkField[]> {
+  const interfaces = new Map<string, SdkField[]>();
+  // Split at declaration boundaries rather than at the first `}`: a body is
+  // everything up to the next `export`, so a column-0 brace inside it cannot
+  // end the block early and silently drop the fields after it.
+  for (const declaration of source.split(/^(?=export )/m)) {
+    const header = /^export interface (\w+) \{/.exec(declaration);
+    if (header === null) continue;
+    // Top-level fields sit at exactly two spaces; nested object members and
+    // JSDoc lines are deeper, an index signature starts with `[`, and a
+    // generator may emit `readonly` or a quoted key, all read here.
+    const fields = [
+      ...declaration.matchAll(/^ {2}(?:readonly )?(?:"([^"]+)"|'([^']+)'|(\w+))(\?)?:/gm),
+    ].map((field) => ({
+      name: field[1] ?? field[2] ?? field[3] ?? '',
+      optional: field[4] === '?',
     }));
-    tools.push({ iface, tool: INTERFACE_TO_TOOL[iface] ?? iface.replace(/Input$/, ''), fields });
+    interfaces.set(header[1] ?? '', fields);
   }
-  return tools;
+  return interfaces;
 }
 
+/** Every identifier the `ToolInputSchemas` union names, whatever it is called. */
 function parseUnionMembers(source: string): string[] {
-  const union = /^export type ToolInputSchemas =([\s\S]*?);/m.exec(source);
-  if (union === null) return [];
-  return [...(union[1] ?? '').matchAll(/\b(\w+Input)\b/g)].map((member) => member[1] ?? '');
+  // Bounded at the next declaration, not at a `;`: the generated union has no
+  // terminator, and a lazy match to the first `;` swallowed the next `export`.
+  const union = source
+    .split(/^(?=export )/m)
+    .find((declaration) => declaration.startsWith('export type ToolInputSchemas ='));
+  if (union === undefined) return [];
+  return [...union.matchAll(/\|\s*(\w+)/g)].map((member) => member[1] ?? '');
 }
+
+const toolNameOf = (iface: string): string => INTERFACE_TO_TOOL[iface] ?? iface.replace(/Input$/, '');
 
 /** Loads and sanity-checks the SDK declarations; every check here is "could not check", not "clean". */
 function loadSdkTools(): SdkTool[] {
   const source = readFileSync(SDK_TOOLS_DTS, 'utf8');
-  const tools = parseInterfaces(source);
+  const interfaces = parseInterfaces(source);
+  const members = [...new Set(parseUnionMembers(source))];
   expect(
-    tools.length,
-    `parsed ${tools.length} *Input interfaces from ${SDK_TOOLS_DTS}; below ${MIN_INTERFACES} the parser is broken, not the SDK`,
+    members.length,
+    `the ToolInputSchemas union in ${SDK_TOOLS_DTS} names ${members.length} members; below ${MIN_INTERFACES} the parser is broken, not the SDK`,
   ).toBeGreaterThanOrEqual(MIN_INTERFACES);
-  const parsedNames = tools.map((tool) => tool.iface).sort();
-  const unionNames = [...new Set(parseUnionMembers(source))].sort();
+  const nonInterface = members.filter((member) => !interfaces.has(member));
   expect(
-    parsedNames,
-    "the interfaces parsed must equal the members of the SDK's own ToolInputSchemas union; a mismatch means the regex missed or double-counted a block",
-  ).toEqual(unionNames);
+    [...nonInterface].sort(),
+    'union members with no parsed `export interface X {` declaration (an alias, an extends clause or a generic lands here); only the known output-union alias is expected, anything else is "could not check"',
+  ).toEqual([...KNOWN_NON_INTERFACE_UNION_MEMBERS].sort());
+  const orphaned = [...interfaces.keys()].filter((name) => /Input$/.test(name) && !members.includes(name));
+  expect(orphaned, '*Input interfaces the union does not name: the union is no longer the tool list').toEqual([]);
   for (const alias of Object.keys(INTERFACE_TO_TOOL)) {
-    expect(parsedNames.includes(alias), `alias ${alias} no longer exists in the SDK; update INTERFACE_TO_TOOL`).toBe(true);
+    expect(members.includes(alias), `alias ${alias} no longer exists in the SDK; update INTERFACE_TO_TOOL`).toBe(true);
   }
+  const tools = members
+    .filter((member) => interfaces.has(member))
+    .map((iface) => ({ iface, tool: toolNameOf(iface), fields: interfaces.get(iface) ?? [] }));
   const toolNames = new Set(tools.map((tool) => tool.tool));
   for (const anchor of ANCHOR_TOOLS) {
     expect(toolNames.has(anchor), `anchor tool ${anchor} did not parse`).toBe(true);
@@ -211,5 +246,17 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
       undeclared,
       'table entries for tools the pinned SDK does not declare (MultiEdit was one); undeclared runtime tools are R-9, not table entries',
     ).toEqual([]);
+  });
+
+  it('missingMeansCwd is pinned to the tools whose SDK contract defines a missing path as cwd', () => {
+    // The SDK declares optionality, not what absence MEANS; that is prose in
+    // the tool description, so it cannot be derived. Pinning the set makes a
+    // new cwd-default a visible act rather than a way to turn "deny, refuse to
+    // guess" into "gate cwd" for an optional field (review finding).
+    const cwdDefaulting = Object.entries(TOOL_TARGET_FIELDS)
+      .filter(([, entry]) => entry.missingMeansCwd === true)
+      .map(([tool]) => tool)
+      .sort();
+    expect(cwdDefaulting).toEqual(['Glob', 'Grep']);
   });
 });
