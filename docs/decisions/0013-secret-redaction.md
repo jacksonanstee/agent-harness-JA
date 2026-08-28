@@ -63,7 +63,11 @@ before they get there.
    `SdkHookOutput` allows only a PreToolUse `deny`; PostToolUse returns `{}` —
    neither hook was thought to expose a rewrite channel — corrected 2026-08-25 (ADR-0032): the SDK's `updatedInput` (PreToolUse) and `updatedToolOutput` (PostToolUse) do exist, and adopting them is issue #84. So in v1 S-2 redacts
    everything the **harness** persists or emits (telemetry, warnings, hook
-   `redactions` payload) — satisfying "redacted with a logged event" for the
+   `redactions` payload; *amended 2026-08-28, issue #91: this list omitted the
+   memory summary, redacted since the 2026-07-06 review below, and assistant
+   text streamed to `onText`, the CLI's stdout, which went out raw until this
+   date and is now redacted at the session's emission point, fail-closed to
+   the sentinel; see the memory bullet under the review amendments*) — satisfying "redacted with a logged event" for the
    harness data plane — but the **model still sees the raw** tool result and the
    tool still receives the raw input. Adopting the SDK's rewrite channels
    (`updatedToolOutput`, `updatedInput`) for that is the same deferred decision
@@ -111,9 +115,11 @@ before they get there.
   did an unterminated block past the bound; the regression test reached 9,600
   and never the boundary. The body is now unbounded (`*?`); tests bind 16,384
   as the control, then 16,385, 100,000, and an unterminated 40,000-character
-  body, each to the exact redacted string. Residual: a bare BEGIN header with
-  no END fence now redacts to end-of-input (up to `MAX_INPUT`) rather than to
-  16 KiB, which is the fail-closed side of the trade.*
+  body, each to the exact redacted string. Reach: a bare BEGIN header with
+  no END fence redacts to end-of-input, as it always did below the bound;
+  above the bound the old form did not match at all and emitted the header
+  and everything after it raw, so the change is leak to redact and adds no
+  over-redaction at any length.*
 - **MEDIUM — memory session-summary now redacted.** `prompt` and `resultText`
   are redacted before the memory write (redact-then-truncate), closing the
   second retained-sink path (the model can echo a tool-read secret into its
@@ -123,9 +129,12 @@ before they get there.
   captures, reached the terminal raw while the memory copy of the same reply
   was redacted. Each text block is now redacted at the session's emission
   point before `onText` sees it, fail-closed to the same sentinel on a throw
-  or a non-string, with a warning per redacted block. Absent an injected
-  redactor the text passes raw, as for memory; the composition root always
-  injects one.*
+  or a non-string, with a warning per redacted block. Redaction sits in the
+  session rather than in the CLI's `onText` handler (the issue's other
+  option) so every `onText` consumer, library callers included, receives
+  redacted text, and the CLI's `sanitizeForTerminal` stays a terminal-safety
+  pass applied after it. Absent an injected redactor the text passes raw, as
+  for memory; both composition roots inject one.*
 - **MEDIUM — raw hook `result`/`scan` documented** as a deliberate exception
   (above + type-level warning on `PostToolPayload`).
 - **MEDIUM (differential review) — ReDoS/DoS on oversized input fixed.** The

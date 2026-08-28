@@ -170,10 +170,14 @@ export interface SessionDeps {
    */
   scanInjection?: (text: string) => ScanResult;
   /**
-   * Optional secret redactor (S-2). Runs on tool inputs (pre-tool) and outputs
-   * (pre-telemetry, so secrets never reach the telemetry store); findings feed
-   * the hook `redactions` field. Failures warn, never abort; on failure the
-   * telemetry text is fail-closed to a sentinel, never the raw output.
+   * Optional secret redactor (S-2). Applied to tool inputs (pre-tool), tool
+   * outputs (before the telemetry row; findings feed the hook `redactions`
+   * field), the memory summary (`prompt`, `resultText`, `denied[]` reasons)
+   * and each assistant text block before `onText` (issue #91). When absent,
+   * none of those are redacted: both CLI composition roots inject `redact`;
+   * a library caller must too. Failures warn on the tool-output and `onText`
+   * paths and are silent on the memory path; every failing path writes the
+   * `[REDACTION FAILED]` sentinel, never the raw text.
    */
   redactSecrets?: (text: string) => RedactResult;
 }
@@ -246,6 +250,11 @@ export interface SessionRefusal {
 }
 
 export interface SessionResult {
+  /**
+   * The SDK's final result text, RAW: not redacted here. The memory copy is
+   * redacted at the write and each `onText` block at emission (issue #91); a
+   * caller that persists or prints this field must run it through `redact`.
+   */
   resultText: string | null;
   /** SDK result subtype, e.g. 'success' or 'error_max_turns'; null if no result message arrived. */
   resultSubtype: string | null;

@@ -821,6 +821,34 @@ describe('createSession', () => {
     expect(warnings.some((w) => w.includes('secret redaction failed'))).toBe(true);
   });
 
+  // The architecture lens of the #90/#91 review found runSecretRedaction
+  // trusting `.redacted` the way redactForPersistence once did: a non-string
+  // result fell through `?? stringifyForScan(toolResponse)` and the tool-trace
+  // row stored the RAW tool output. Same posture as the other sinks now.
+  it('fail-closes telemetry to the sentinel when the redactor returns a non-string, never the raw output', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: secret }]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const warnings: string[] = [];
+    const redactSecrets = (): RedactResult => ({ redacted: undefined as unknown as string, findings: [] });
+    const session = createSession(makeDeps(fake, { telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    await session.run('hi');
+    const trace = events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
+    expect(trace.payload.resultSummary).toBe('[REDACTION FAILED]');
+    expect(trace.payload.resultSummary).not.toContain(secret);
+    expect(warnings).toContain('secret redaction failed: redactor returned a non-string');
+  });
+
   it('records raw output in telemetry when no redactor is injected (unchanged behavior)', async () => {
     const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'plain output' }]);
     const events: TelemetryEventInput[] = [];

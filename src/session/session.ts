@@ -878,7 +878,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Stringifies internally (symmetry with runInjectionScan) so callers never
     // double-stringify. Returns null when no redactor is injected (nothing to
     // do → caller uses the raw text); `{redacted: REDACTION_FAILED,
-    // findings: null}` when the redactor throws — distinct states that
+    // findings: null}` when the redactor throws or returns a non-string —
+    // distinct states that
     // deliberately both surface as `redactions: null` on the hook payload
     // (which is typed `unknown`, so richer signalling isn't available there).
     function runSecretRedaction(
@@ -888,6 +889,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       if (deps.redactSecrets === undefined) return null;
       try {
         const result = deps.redactSecrets(stringifyForScan(output));
+        if (typeof result.redacted !== 'string') {
+          // A non-string `redacted` used to fall through the caller's
+          // `?? stringifyForScan(...)` and store the RAW output (#90/#91
+          // review). Same posture as the other sinks: the sentinel.
+          warn('secret redaction failed: redactor returned a non-string');
+          return { redacted: REDACTION_FAILED, findings: null };
+        }
         if (result.findings.length > 0) {
           warn(`secrets redacted in ${tool} (${result.findings.length} finding(s))`);
         }
