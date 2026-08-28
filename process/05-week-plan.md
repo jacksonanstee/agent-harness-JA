@@ -85,7 +85,7 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 - [x] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash. *(2026-07-06, ADR-0015)*
 - [x] `docs/security-model.md` — STRIDE-style threat model, anchored to the modules built this week. *(2026-07-08)*
 
-> **Follow-up (deferred, cross-cutting):** model-facing enforcement — S-1 injection block/drop AND S-2 output redaction that the *model* sees — both need an SDK result-rewrite channel or a tool-wrapping layer the current PostToolUse hook lacks. Tracked as one item (ADR-0012 §9, ADR-0013 §9).
+> **Follow-up (deferred, cross-cutting):** model-facing enforcement — S-1 injection block/drop AND S-2 output redaction that the *model* sees — both were tracked as blocked on an SDK result-rewrite channel. **Corrected 2026-08-25 (ADR-0032):** that channel (`updatedToolOutput`/`updatedInput`) exists in the pinned SDK; the work is a deferred decision (issue #84), not an upstream blocker. Tracked as one item (ADR-0012 §9, ADR-0013 §9).
 
 **Checkpoint:** A test agent with `security` enabled blocks ≥10 deliberately-malicious inputs from a starter red-team set. No regressions on the harness-layer test suite. `docs/security-model.md` reads as a senior engineer's threat analysis, not a checklist.
 

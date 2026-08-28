@@ -620,10 +620,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // on the raw text first, so stripping cannot HIDE anything from it, and on
     // the assembled cleaned section, so stripping cannot CREATE anything either.
     //
-    // ENFORCED, not observe-only (ADR-0026), unlike tool results: R-4's
-    // rationale is that no SDK result-rewrite channel exists, but the harness
-    // assembles this prompt itself, so refusing to inject is implementable
-    // here. A high-confidence block on EITHER channel drops the whole skill —
+    // ENFORCED, not observe-only (ADR-0026), unlike tool results: model-facing
+    // enforcement of tool output is deferred (ADR-0032, issue #84), whereas the
+    // harness assembles this prompt itself, so refusing to inject is
+    // implementable here and needs no SDK channel at all. A high-confidence
+    // block on EITHER channel drops the whole skill —
     // description as well as body, because otherwise the payload just moves
     // to the description, which lands at the same authority.
     // One nonce per RUN, minted before the enforcement pass so the string the
@@ -956,11 +957,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
     const preToolCallback: SdkHookCallback = async (input) => {
+      // `tool_name` is required on both union members; the `?? 'unknown'` guards
+      // only a non-conforming injected `deps.query` (a fake, or a future SDK
+      // shape), not the real SDK, which always sends it.
       const tool = sanitizeText(input.tool_name ?? 'unknown');
-      // Step 11 (inputs): scan tool arguments for secrets. Observe-only — the
-      // tool still receives the raw input (the SDK gives no rewrite channel);
-      // findings ride the hook payload and warn. `input` may carry a secret an
-      // attacker-influenced prior tool result told the model to pass along.
+      // Step 11 (inputs): scan tool arguments for secrets. Observe-only in v1 —
+      // the tool still receives the raw input. The SDK's `updatedInput` rewrite
+      // channel does exist (ADR-0032); adopting it for input redaction is part
+      // of the deferred enforcement decision (issue #84). Findings ride the hook
+      // payload and warn. `input` may carry a secret an attacker-influenced
+      // prior tool result told the model to pass along.
       const inputRedaction = runSecretRedaction(tool, input.tool_input);
 
       let deniedReason: string | null = null;
@@ -1015,21 +1021,34 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     };
 
     const postToolCallback: SdkHookCallback = async (input) => {
+      // The SDK only ever drives this matcher with PostToolUse events; the
+      // guard narrows the union to the post shape (so `tool_response` is typed).
+      // If a non-conforming injected `deps.query` ever trips it, warn rather
+      // than return silently: a quiet no-op on the post-tool path is exactly
+      // the failure mode issue #83 fixed, so it must not recur unobserved.
+      if (input.hook_event_name !== 'PostToolUse') {
+        warn(`post-tool callback received a non-PostToolUse event (${sanitizeText(input.hook_event_name)}); skipped`);
+        return {};
+      }
+      // `tool_name` is required on the post member; the `?? 'unknown'` guards a
+      // non-conforming injected query only (see preToolCallback).
       const toolName = sanitizeText(input.tool_name ?? 'unknown');
 
       // Step 10: prompt-injection scan of the FULL raw tool output before it is
       // surfaced to the agent. S-1 observes + warns; model-facing enforcement
-      // is deferred (ADR-0012/0013 — no SDK rewrite channel).
-      const scan = runInjectionScan(toolName, input.tool_output);
+      // is deferred to its own decision (the SDK's updatedToolOutput rewrite
+      // channel exists — ADR-0032 — and adopting it is a separate change).
+      const toolResponse = input.tool_response;
+      const scan = runInjectionScan(toolName, toolResponse);
 
       // Step 11: redact secrets. This runs BEFORE telemetry so a secret in the
       // tool output never reaches the (indefinitely-retained) telemetry store
       // (ADR-0011 retention finding). Telemetry sees the redacted text; on
       // redactor failure it sees a sentinel, never the raw output.
-      const hasOutput = input.tool_output !== undefined && input.tool_output !== null;
-      const redaction = hasOutput ? runSecretRedaction(toolName, input.tool_output) : null;
+      const hasOutput = toolResponse !== undefined && toolResponse !== null;
+      const redaction = hasOutput ? runSecretRedaction(toolName, toolResponse) : null;
       const telemetryText = hasOutput
-        ? (redaction?.redacted ?? stringifyForScan(input.tool_output))
+        ? (redaction?.redacted ?? stringifyForScan(toolResponse))
         : null;
       recordTelemetry({
         type: 'tool-trace',
@@ -1046,7 +1065,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
           tool: toolName,
-          result: input.tool_output,
+          result: toolResponse,
           scan,
           redactions: redaction?.findings ?? null,
         });

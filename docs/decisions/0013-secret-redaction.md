@@ -61,24 +61,29 @@ before they get there.
    hooks import-free of security).
 9. **Observe-only (documented limitation, shared with S-1).**
    `SdkHookOutput` allows only a PreToolUse `deny`; PostToolUse returns `{}` —
-   neither hook can rewrite `tool_input`/`tool_output`. So S-2 redacts
+   neither hook was thought to expose a rewrite channel — corrected 2026-08-25 (ADR-0032): the SDK's `updatedInput` (PreToolUse) and `updatedToolOutput` (PostToolUse) do exist, and adopting them is issue #84. So in v1 S-2 redacts
    everything the **harness** persists or emits (telemetry, warnings, hook
    `redactions` payload) — satisfying "redacted with a logged event" for the
    harness data plane — but the **model still sees the raw** tool result and the
-   tool still receives the raw input. This is the same SDK constraint that
-   deferred S-1's block/drop gating (ADR-0012 §9).
+   tool still receives the raw input. Adopting the SDK's rewrite channels
+   (`updatedToolOutput`, `updatedInput`) for that is the same deferred decision
+   that governs S-1's block/drop gating (ADR-0012 §9, ADR-0032, issue #84); it
+   is a choice, not the missing capability the pre-2026-08-25 text called it.
    - **Deliberate exception — the post-tool hook `result`/`scan` fields carry
      RAW bytes** (a hook may need real content to act; injection detection needs
      raw text). These are typed `unknown` with a doc warning that handlers must
      redact before persisting/forwarding. Only the built-in `onEvent` sink
      consumes hooks and it never reads `result`, so nothing leaks today; the
      warning guards future/third-party handlers.
-   - **Scope of the combined follow-up:** only the model-facing *output* paths
-     (S-1 block/drop + S-2 output rewriting) share the missing SDK capability.
-     Secret-in-*input* enforcement is buildable now (`SdkPreToolDenyOutput`
-     exists → deny the call), but is deliberately NOT built: a secret in tool
-     input is often legitimate, so denial would be over-eager. Redact-and-log
-     is the right input-side default for v1.
+   - **Scope of the combined follow-up (corrected 2026-08-25, ADR-0032):** the
+     model-facing *output* paths (S-1 block/drop + S-2 output rewriting) are
+     deferred, not blocked — `updatedToolOutput` exists. Secret-in-*input*
+     enforcement has TWO buildable shapes now: deny (`SdkPreToolDenyOutput`,
+     already present) and redact-in-place (`updatedInput`, the middle option the
+     earlier text did not have). Denial stays rejected as over-eager (a secret
+     in tool input is often legitimate); redact-in-place via `updatedInput` is a
+     live option folded into issue #84, not a v1 default. Redact-and-log remains
+     the input-side default for v1.
 
 ## Alternatives considered
 

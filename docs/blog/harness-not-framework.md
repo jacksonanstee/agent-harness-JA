@@ -121,14 +121,20 @@ aspiration.
 The cost is real too. A harness cannot invent control points; if the SDK
 does not expose a seam, you do not get to enforce there. The sharpest case:
 the secret redactor was built to rewrite tool output before the model reads
-it, and the SDK's post-tool hook is observe-only, so the redactor protects
-the record while the model still sees the raw secret. The enforcement code
-exists; the seam does not. That is the security model's most consequential
-named residual risk (R-4), and it is there *because* the loop isn't mine:
-enforcement a framework would implement in a weekend waits on an upstream
-channel. I have chosen to document that boundary rather than fork my way
-around it, and week by week that choice keeps being tested. So far it has
-held.
+it, and in v1 it protects the record while the model still sees the raw
+secret. The enforcement code exists; adopting the rewrite is deferred. That is the security model's most consequential
+named residual risk (R-4). I have chosen to document that boundary rather
+than fork my way around it, and week by week that choice keeps being tested.
+So far it has held.
+
+> Correction (2026-08-25): the original version of this passage said the SDK
+> exposed no rewrite seam, and used that as the essay's sharpest example of a
+> control point a harness cannot invent. That was wrong: the seam
+> (`updatedToolOutput`) existed in the pinned SDK all along, so R-4 is a
+> deferred decision, not an upstream block (ADR-0032). The genuine instance of
+> the argument is R-11: the bundled Claude Code runtime carries ambient config
+> the harness cannot inspect or suppress. The thesis holds; this example did
+> not, and the honest thing is to say so rather than rewrite the history.
 
 If these essays share one stance, it is this: constrain power, make claims
 falsifiable, and prefer a visible limitation to a hidden capability.

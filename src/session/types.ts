@@ -88,13 +88,32 @@ export type SdkMessage =
   | SdkResultMessage
   | { type: string };
 
-export interface SdkHookInput {
-  hook_event_name: string;
-  tool_name?: string;
-  tool_input?: unknown;
-  tool_output?: unknown;
+/**
+ * Structural views of the SDK's tool-hook inputs (ADR-0010 decision 2: minimal
+ * views, no SDK import in this layer). The field names MUST match the installed
+ * SDK's `PreToolUseHookInput` / `PostToolUseHookInput`; `src/session/sdk-types.test.ts`
+ * pins that parity at compile time. In particular the post-tool result arrives as
+ * `tool_response` (a `tool_output` field the SDK never sends silently blinded the
+ * whole post-tool security path, issue #83).
+ */
+export interface SdkPreToolUseInput {
+  hook_event_name: 'PreToolUse';
+  tool_name: string;
+  tool_input: unknown;
+  tool_use_id?: string;
   session_id?: string;
 }
+
+export interface SdkPostToolUseInput {
+  hook_event_name: 'PostToolUse';
+  tool_name: string;
+  tool_input: unknown;
+  tool_response: unknown;
+  tool_use_id?: string;
+  session_id?: string;
+}
+
+export type SdkHookInput = SdkPreToolUseInput | SdkPostToolUseInput;
 
 export interface SdkPreToolDenyOutput {
   hookSpecificOutput: {
@@ -106,23 +125,28 @@ export interface SdkPreToolDenyOutput {
 
 export type SdkHookOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
 
-export type SdkHookCallback = (
-  input: SdkHookInput,
+export type SdkHookCallback<I extends SdkHookInput = SdkHookInput> = (
+  input: I,
   toolUseID: string | undefined,
   context: { signal: AbortSignal },
 ) => Promise<SdkHookOutput>;
 
-export interface SdkHookMatcher {
-  hooks: SdkHookCallback[];
+export interface SdkHookMatcher<I extends SdkHookInput = SdkHookInput> {
+  hooks: SdkHookCallback<I>[];
 }
 
 export interface QueryOptions {
   model?: string;
   systemPrompt?: string;
   maxTurns?: number;
+  // Typed per event so a callback that reads a post-only field (`tool_response`)
+  // cannot be registered under `PreToolUse`, and vice versa. A callback typed
+  // over the wider union stays assignable to either slot by contravariance, so
+  // the defaults keep the bare `SdkHookCallback`/`SdkHookMatcher` spelling
+  // source-compatible for the published surface (ADR-0023).
   hooks?: {
-    PreToolUse?: SdkHookMatcher[];
-    PostToolUse?: SdkHookMatcher[];
+    PreToolUse?: SdkHookMatcher<SdkPreToolUseInput>[];
+    PostToolUse?: SdkHookMatcher<SdkPostToolUseInput>[];
   };
 }
 
