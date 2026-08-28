@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
-import { loadJsonSettings, readSettingsFile } from '../internal/settings.js';
+import { loadJsonSettings } from '../internal/settings.js';
 import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   mergeLayers,
@@ -60,7 +60,8 @@ export function scorecardFilename(nowMs: number): string {
  * settings loader became its third consumer (ADR-0034 decision 4); this
  * keeps the eval layer's error type and message. A stat failure other than
  * ENOENT now surfaces as a message-bearing `GuardedReadError` rather than the
- * raw fs error; both call sites map any error to a message.
+ * raw fs error; both call sites (writeScorecard, the eval pre-flight) map
+ * both errors this can raise to a message and an exit 2.
  */
 export function refuseSymlinkedDir(path: string): void {
   try {
@@ -131,9 +132,10 @@ export interface SecurityComposition {
 
 export interface ComposeSecurityDeps {
   /**
-   * Test seam only. Production callers omit it and get `readSettingsFile`,
-   * the guarded reader (symlink refusal, byte cap, O_NOFOLLOW; ADR-0034
-   * decision 5), which is pinned at the `main()` entrypoint.
+   * Test seam only, passed through to the shared loader. Omitted, every
+   * loader reads through `readSettingsFile`, the guarded reader (symlink
+   * refusal, byte cap, O_NOFOLLOW, regular-file check; ADR-0034 decision 5),
+   * which is pinned at the `main()` entrypoint for both `run` and `eval`.
    */
   readFile?: (path: string) => string;
   userDir: string;
@@ -149,14 +151,12 @@ export interface ComposeSecurityDeps {
  * without an SDK or API key.
  */
 export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
-  const readFile = deps.readFile ?? readSettingsFile;
   const layers = [
     join(deps.userDir, '.harness', 'settings.json'),
     join(deps.projectDir, '.harness', 'settings.json'),
   ].map((path) =>
     loadJsonSettings(
       path,
-      readFile,
       (doc) => {
         try {
           return {
@@ -175,6 +175,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       },
       { permissions: { rules: [] }, sandbox: {} },
       SettingsLoadError,
+      deps.readFile,
     ),
   );
   const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];

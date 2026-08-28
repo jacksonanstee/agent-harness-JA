@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSandbox,
-  hasGlobCharacter,
+  hasShellRewriteCharacter,
   isBlockedFirstToken,
   mergeSandboxLayers,
   sandboxHook,
@@ -392,33 +392,50 @@ describe('path gate folds Unicode form (V11, gate level)', () => {
   });
 });
 
-describe('allowCommand refuses glob characters in argv[0] (ADR-0034, issue #93)', () => {
+describe('allowCommand refuses shell-rewrite characters in argv[0] (ADR-0034, issue #93)', () => {
   // A programmatic createSandbox() caller never goes through the settings
   // parser, so the gate carries the same rule: an argv[0] the executing shell
-  // would expand names a different program from the one the string says.
-  const sandbox = createSandbox({ commands: { allow: ['/bin/s?', '/bin/*', '[s]h', 's?', 'git'] } });
-
-  it.each(['/bin/s? -c id', '/bin/s?', '[s]h', 's?', '/bin/* -c id'])(
-    'denies %s even though the entry matches it exactly',
-    (cmd) => {
-      expect(sandbox.allowCommand(cmd)).toBe(false);
+  // would rewrite names a different program from the one the string says.
+  // Every entry below is the exact argv[0] of a denied command, so the
+  // refusal, not a missing entry, is what denies it.
+  const sandbox = createSandbox({
+    commands: {
+      allow: ['/bin/s?', '/bin/*', '[s]h', 's?', '/bin/s"h"', "/bin/'sh'", '=sh', '/bin/^ls', 'FOO=bar', 'git'],
     },
-  );
+  });
 
-  it.each(['git add *', 'git log -- [a]*', 'git show HEAD?'])(
-    'still allows glob characters in ARGUMENTS (%s): expansion there stays inside the allowed program',
+  it.each([
+    '/bin/s? -c id',
+    '/bin/s?',
+    '[s]h',
+    's?',
+    '/bin/* -c id',
+    '/bin/s"h" -c id',
+    "/bin/'sh' -c id",
+    '=sh -c id',
+    '/bin/^ls',
+    'FOO=bar sh -c id',
+  ])('denies %s even though the entry matches it exactly', (cmd) => {
+    expect(sandbox.allowCommand(cmd)).toBe(false);
+  });
+
+  it.each(['git add *', 'git log -- [a]*', 'git show HEAD?', 'git commit -m "x"', "git log --format='%h'", 'git config user.name=x'])(
+    'still allows rewrite characters in ARGUMENTS (%s): expansion there stays inside the allowed program',
     (cmd) => {
       expect(sandbox.allowCommand(cmd)).toBe(true);
     },
   );
 });
 
-describe('hasGlobCharacter (the shared brain of the parser rejection AND the gate)', () => {
-  it.each(['*', '?', '[', '/bin/s?', '/usr/local/bin/*', '[s]h'])('%s -> true', (token) => {
-    expect(hasGlobCharacter(token)).toBe(true);
-  });
+describe('hasShellRewriteCharacter (the shared brain of the parser refusal AND the gate)', () => {
+  it.each(['*', '?', '[', '^', '#', '"', "'", '=', '\u0000', '/bin/s?', '/usr/local/bin/*', '[s]h', '/bin/s"h"', '=sh'])(
+    '%s -> true',
+    (word) => {
+      expect(hasShellRewriteCharacter(word)).toBe(true);
+    },
+  );
 
-  it.each(['git', '/bin/git', 'sh', ']', '~/bin/git', ''])('%s -> false', (token) => {
-    expect(hasGlobCharacter(token)).toBe(false);
+  it.each(['git', '/bin/git', 'sh', ']', '~/bin/git', '~root/bin/x', ''])('%s -> false', (word) => {
+    expect(hasShellRewriteCharacter(word)).toBe(false);
   });
 });

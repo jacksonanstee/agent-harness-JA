@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { MESSAGE_ECHO_MAX } from '../../internal/settings.js';
 import { createPermissionEvaluator } from './evaluate.js';
 import {
   loadSettingsFile,
@@ -58,7 +64,7 @@ describe('parsePermissionSettings', () => {
     }
     expect(message).toMatch(/unknown key/);
     expect(message).not.toContain(longKey);
-    expect(message.length).toBeLessThan(200);
+    expect(message).toContain(`'${'k'.repeat(MESSAGE_ECHO_MAX)}…'`);
   });
 
   it.each([
@@ -91,6 +97,25 @@ describe('parsePermissionSettings rule cap', () => {
 });
 
 describe('loadSettingsFile', () => {
+  const tmp: string[] = [];
+  afterEach(() => {
+    for (const dir of tmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads through the guarded reader when no readFile is given: a symlinked file is refused', () => {
+    // The public loader carries the envelope itself (ADR-0034 decision 5);
+    // a library caller cannot end up with a plain read by omission.
+    const dir = mkdtempSync(join(tmpdir(), 'perm-settings-'));
+    tmp.push(dir);
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const link = join(dir, 'settings.json');
+    symlinkSync(real, link);
+    expect(() => loadSettingsFile(link)).toThrowError(PermissionSettingsError);
+    expect(() => loadSettingsFile(link)).toThrow(/symlink/);
+    expect(loadSettingsFile(join(dir, 'missing.json'))).toEqual({ rules: [] });
+  });
+
   it('returns an empty layer when the file is missing', () => {
     const missing = (): string => {
       const err = new Error('ENOENT') as NodeJS.ErrnoException;

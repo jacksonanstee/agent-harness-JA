@@ -19,14 +19,14 @@ const enoent = (): string => {
 
 describe('loadJsonSettings', () => {
   it('returns the empty value when the file is missing', () => {
-    expect(loadJsonSettings('/nope.json', enoent, parseEcho, 'EMPTY', wrap)).toBe('EMPTY');
+    expect(loadJsonSettings('/nope.json', parseEcho, 'EMPTY', wrap, enoent)).toBe('EMPTY');
   });
 
   it('fails loud with a path-prefixed error on invalid JSON', () => {
-    expect(() => loadJsonSettings('/x.json', () => '{oops', parseEcho, null, wrap)).toThrowError(
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, () => '{oops')).toThrowError(
       FakeSettingsError,
     );
-    expect(() => loadJsonSettings('/x.json', () => '{oops', parseEcho, null, wrap)).toThrow(
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, () => '{oops')).toThrow(
       /\/x\.json/,
     );
   });
@@ -35,7 +35,7 @@ describe('loadJsonSettings', () => {
     const parse = (): never => {
       throw new FakeSettingsError('bad shape');
     };
-    expect(() => loadJsonSettings('/x.json', () => '{}', parse, null, wrap)).toThrow(
+    expect(() => loadJsonSettings('/x.json', parse, null, wrap, () => '{}')).toThrow(
       /\/x\.json: bad shape/,
     );
   });
@@ -46,19 +46,19 @@ describe('loadJsonSettings', () => {
       err.code = 'EACCES';
       throw err;
     };
-    expect(() => loadJsonSettings('/x.json', eacces, parseEcho, null, wrap)).toThrow('EACCES');
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, eacces)).toThrow('EACCES');
   });
 
   it('propagates non-wrapError throwables from the parser unwrapped', () => {
     const parse = (): never => {
       throw new TypeError('programmer bug');
     };
-    expect(() => loadJsonSettings('/x.json', () => '{}', parse, null, wrap)).toThrow(TypeError);
+    expect(() => loadJsonSettings('/x.json', parse, null, wrap, () => '{}')).toThrow(TypeError);
   });
 
   it('parses a valid file through the supplied parser', () => {
     const parse = (doc: unknown): number => (doc as { n: number }).n * 2;
-    expect(loadJsonSettings('/x.json', () => '{"n": 21}', parse, 0, wrap)).toBe(42);
+    expect(loadJsonSettings('/x.json', parse, 0, wrap, () => '{"n": 21}')).toBe(42);
   });
 });
 
@@ -69,7 +69,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach } from 'vitest';
 import { GuardedReadError } from './guarded-read.js';
-import { MAX_SETTINGS_BYTES, readSettingsFile, unknownKeys } from './settings.js';
+import { boundEcho, MAX_SETTINGS_BYTES, MESSAGE_ECHO_MAX, readSettingsFile, unknownKeys } from './settings.js';
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -89,12 +89,12 @@ describe('loadJsonSettings hostile-file envelope (ADR-0034)', () => {
     // with one), and that message used to reach stderr. The marker must not
     // survive into the error.
     const body = 'BODY_MARKER_9f3c{';
-    expect(() => loadJsonSettings('/x.json', () => body, parseEcho, null, wrap)).toThrow(
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, () => body)).toThrow(
       /\/x\.json/,
     );
     let message = '';
     try {
-      loadJsonSettings('/x.json', () => body, parseEcho, null, wrap);
+      loadJsonSettings('/x.json', parseEcho, null, wrap, () => body);
     } catch (error: unknown) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -105,10 +105,10 @@ describe('loadJsonSettings hostile-file envelope (ADR-0034)', () => {
     const refuse = (): string => {
       throw new GuardedReadError('symlink', '/x.json', 'file /x.json is a symlink');
     };
-    expect(() => loadJsonSettings('/x.json', refuse, parseEcho, null, wrap)).toThrowError(
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, refuse)).toThrowError(
       FakeSettingsError,
     );
-    expect(() => loadJsonSettings('/x.json', refuse, parseEcho, null, wrap)).toThrow(
+    expect(() => loadJsonSettings('/x.json', parseEcho, null, wrap, refuse)).toThrow(
       /\/x\.json.*symlink/,
     );
   });
@@ -138,9 +138,41 @@ describe('readSettingsFile (the production reader)', () => {
   });
 
   it('propagates ENOENT with its code so a missing file is still an empty layer', () => {
-    expect(() =>
-      loadJsonSettings(join(freshDir(), 'nope.json'), readSettingsFile, parseEcho, 'EMPTY', wrap),
-    ).not.toThrow();
+    expect(loadJsonSettings(join(freshDir(), 'nope.json'), parseEcho, 'EMPTY', wrap)).toBe('EMPTY');
+  });
+});
+
+describe('loadJsonSettings default reader (ADR-0034 decision 5)', () => {
+  it('reads through the guarded reader when no readFile is given: a symlinked file is refused', () => {
+    // The default lives HERE, not at the composition root, so the public
+    // module loaders and any library caller get the envelope without
+    // choosing it (architecture review of the first cut).
+    const dir = freshDir();
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const link = join(dir, 'settings.json');
+    symlinkSync(real, link);
+    expect(() => loadJsonSettings(link, parseEcho, null, wrap)).toThrowError(FakeSettingsError);
+    expect(() => loadJsonSettings(link, parseEcho, null, wrap)).toThrow(/refusing settings: .*symlink/);
+  });
+
+  it('reads a regular file when no readFile is given', () => {
+    const path = join(freshDir(), 'settings.json');
+    writeFileSync(path, '{"ok":1}');
+    expect(loadJsonSettings(path, parseEcho, null, wrap)).toEqual({ ok: 1 });
+  });
+});
+
+describe('boundEcho', () => {
+  it('bounds to MESSAGE_ECHO_MAX and neutralises newline, bidi and invisible characters before the cut', () => {
+    // A newline would forge a second stderr line; the CLI's terminal
+    // sanitiser keeps newlines by contract, so the echo must not carry one.
+    const hostile = 'x\nwarning: settings OK\u202e\u200b' + 'k'.repeat(100);
+    const out = boundEcho(hostile);
+    expect(out).not.toMatch(/[\n\u202e\u200b]/);
+    expect(out.length).toBeLessThanOrEqual(MESSAGE_ECHO_MAX + 1);
+    expect(out.endsWith('…')).toBe(true);
+    expect(boundEcho('rules')).toBe('rules');
   });
 });
 

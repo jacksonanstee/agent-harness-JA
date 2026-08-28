@@ -1,10 +1,12 @@
 import {
   boundEcho,
   loadJsonSettings,
+  readSettingsFile,
   unknownKeyMessage,
   unknownKeys,
 } from '../../internal/settings.js';
-import { hasGlobCharacter } from './sandbox.js';
+import type { ReadFile } from '../../internal/settings.js';
+import { hasShellRewriteCharacter } from './sandbox.js';
 import type { SandboxAllowlist, SandboxConfig } from './types.js';
 
 /** Same fail-loud contract as PermissionSettingsError (ADR-0014 §6). */
@@ -59,15 +61,16 @@ function parseAllowlist(value: unknown, key: string): SandboxAllowlist {
         `sandbox.${key}.allow[${index}] must be a non-empty string`,
       );
     }
-    // A glob-shaped COMMAND entry names one program and the executing shell
-    // starts another: `/bin/s?` passes the shell-runner blocklist as written
-    // and expands to `/bin/sh` (issue #93, ADR-0034 decision 2). The gate
-    // refuses the same characters in argv[0] with the same predicate. Path
-    // entries are prefix-matched, so a glob there is inert (fail closed) and
-    // is not refused here.
-    if (key === 'commands' && hasGlobCharacter(entry)) {
+    // A COMMAND entry the shell rewrites names one program and another
+    // starts: `/bin/s?` (glob), `/bin/s"h"` (quote removal) and `=sh` (zsh
+    // equals expansion) all pass the shell-runner blocklist as written and
+    // run `/bin/sh` (issue #93, ADR-0034 decision 2). The gate refuses the
+    // same characters in argv[0] with the same predicate. Path entries are
+    // prefix-matched, so a glob there is inert (fail closed) and is not
+    // refused here.
+    if (key === 'commands' && hasShellRewriteCharacter(entry)) {
       throw new SandboxSettingsError(
-        `sandbox.commands.allow[${index}] '${boundEcho(entry)}' contains a glob character; the shell would expand it to a different program from the one the entry names (ADR-0034)`,
+        `sandbox.commands.allow[${index}] '${boundEcho(entry)}' contains a character the shell rewrites before exec (glob, quote, equals or NUL), so the program that starts is not the one the entry names (ADR-0034)`,
       );
     }
     return entry;
@@ -101,16 +104,19 @@ export function parseSandboxSettings(doc: unknown): SandboxConfig {
   };
 }
 
-/** Loads one sandbox settings layer via the shared internal loader. */
+/**
+ * Loads one sandbox settings layer via the shared internal loader. `readFile`
+ * defaults to the guarded reader and is a test seam (ADR-0034 decision 5).
+ */
 export function loadSandboxSettingsFile(
   path: string,
-  readFile: (path: string) => string,
+  readFile: ReadFile = readSettingsFile,
 ): SandboxConfig {
   return loadJsonSettings(
     path,
-    readFile,
     parseSandboxSettings,
     {},
     SandboxSettingsError,
+    readFile,
   );
 }

@@ -186,10 +186,13 @@ function toBaselineError(error: GuardedReadError): BaselineError {
       return new BaselineError(`cannot read baseline ${error.path} (EISDIR)`);
     case 'oversize':
       return new BaselineError(`baseline ${error.message}`);
+    case 'not-a-file':
+      return new BaselineError(`cannot read baseline ${error.path} (not a regular file)`);
     case 'unreadable':
-      return new BaselineError(
-        `cannot read baseline ${error.path} (${error.code ?? 'read error'})`,
-      );
+      // Forwarded rather than rebuilt: the primitive's message says WHICH
+      // operation failed (a stat on an ancestor, the open, the read) and on
+      // which path, and rebuilding it here lost that (review finding).
+      return new BaselineError(`baseline ${error.path}: ${error.message}`);
   }
 }
 

@@ -80,7 +80,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 - **Owns:** allow / ask / deny decisions for tool invocations, plus the settings-file loader (`~/.harness/settings.json` under `<cwd>/.harness/settings.json`).
 - **Public API:** `createPermissionEvaluator(opts).evaluate(tool, args): Evaluation`; `permissionHook(evaluator, prompter?)` (a pre-tool handler that throws `PermissionDenied` on deny); `loadSettingsFile` / `mergeLayers` / `parsePermissionSettings`.
-- **Depends on:** nothing in this repo — the composition root loads settings and registers the hook (injected, not imported).
+- **Depends on:** `internal/settings` for its settings-file loader (which reads through `internal/guarded-read` since ADR-0034); the composition root composes the layers and registers the hook (injected, not imported).
 - **Design notes:** Rules are `{ tool, match?, decision }` with trailing-`*` prefix globs only. Precedence is specificity (match > tool > wildcard) then severity (deny > ask > allow), so merged layers evaluate order-independently and a user deny survives a project allow (sticky deny). Unmatched tools get `defaultDecision` (default allow; harden with one settings line). `ask` fails closed without a prompter; malformed settings fail loud at startup. Shipped ([ADR-0014](./decisions/0014-declarative-permission-model.md)).
 
 #### `security/sandbox`

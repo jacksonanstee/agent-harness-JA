@@ -1380,6 +1380,19 @@ describe('composeSecurity with the default reader: the hostile-file envelope (AD
     expect(message).toMatch(/symlink/);
   });
 
+  it('refuses a symlinked USER settings file too: the envelope is uniform across layers', () => {
+    // Ratified 2026-08-28 (ADR-0034 decision 3): one rule on both layers, so
+    // a stow-style ~/.harness symlink is an exit-2 line, not a silent read.
+    const user = layerDir();
+    const project = layerDir();
+    const real = join(user, 'real.json');
+    writeFileSync(real, JSON.stringify({ permissions: { defaultDecision: 'deny', rules: [] } }));
+    symlinkSync(real, settingsPath(user));
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toContain(settingsPath(user));
+    expect(message).toMatch(/symlink/);
+  });
+
   it('refuses a symlinked .harness directory (a committed link redirects the whole layer)', () => {
     const user = layerDir();
     const project = mkdtempSync(join(tmpdir(), 'compose-envelope-'));
@@ -1426,10 +1439,12 @@ describe('main() runs the guarded settings reader (the wiring pin, ADR-0034 deci
   // and is derived from process.cwd(), which a spy can redirect (chdir throws
   // under vitest's threads pool, and process.env.HOME never reaches libuv's
   // getenv there, so the user layer cannot be redirected from a test). Both
-  // commands compose security after the API-key check and BEFORE the SDK
-  // import, so a refused file exits 2 with no SDK involved; if the guard ever
+  // commands compose security after the API-key check and before the SDK is
+  // USED, so a refused file exits 2 with no SDK call; if the guard ever
   // regresses, the run reaches the SDK with the dummy key and fails there,
-  // loudly, without spend.
+  // loudly, without spend. What this pins is the reader wiring; importing
+  // the SDK is side-effect-free, so the position of the import relative to
+  // composeSecurity is a reading of cli.ts, not an assertion here.
   const tmp: string[] = [];
   const saved = process.env.ANTHROPIC_API_KEY;
   afterEach(() => {

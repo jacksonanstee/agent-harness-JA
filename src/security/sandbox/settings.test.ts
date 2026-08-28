@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
 import {
   loadSandboxSettingsFile,
   MAX_ALLOW_ENTRIES,
@@ -49,8 +54,20 @@ describe('parseSandboxSettings', () => {
     expect(() => parseSandboxSettings(doc)).toThrow(knownPattern);
   });
 
-  it.each(['/bin/s?', '/bin/*', '/usr/local/bin/*', '[s]h', 's?'])(
-    'refuses the glob-shaped command entry %s: the shell would expand it to a different program',
+  it.each([
+    '/bin/s?',
+    '/bin/*',
+    '/usr/local/bin/*',
+    '[s]h',
+    's?',
+    '/bin/s"h"',
+    "/bin/'sh'",
+    's""h',
+    '=sh',
+    '/bin/^ls',
+    'FOO=bar',
+  ])(
+    'refuses the command entry %s: the shell would rewrite it to a different program',
     (entry) => {
       const doc = { sandbox: { commands: { allow: [entry] } } };
       expect(() => parseSandboxSettings(doc)).toThrowError(SandboxSettingsError);
@@ -65,6 +82,18 @@ describe('parseSandboxSettings', () => {
       expect(message).toContain(entry);
     },
   );
+
+  it('refuses a command entry carrying NUL and does not echo the NUL', () => {
+    const doc = { sandbox: { commands: { allow: ['sh\u0000'] } } };
+    let message = '';
+    try {
+      parseSandboxSettings(doc);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/rewrites/);
+    expect(message).not.toContain('\u0000');
+  });
 
   it('still accepts the same strings as PATH entries (prefix semantics; a glob there is inert, not open)', () => {
     // Pins the scope of ADR-0034 decision 2 so a later warning or rejection on
@@ -87,6 +116,23 @@ describe('parseSandboxSettings', () => {
 });
 
 describe('loadSandboxSettingsFile', () => {
+  const tmp: string[] = [];
+  afterEach(() => {
+    for (const dir of tmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads through the guarded reader when no readFile is given: a symlinked file is refused', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sandbox-settings-'));
+    tmp.push(dir);
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const link = join(dir, 'settings.json');
+    symlinkSync(real, link);
+    expect(() => loadSandboxSettingsFile(link)).toThrowError(SandboxSettingsError);
+    expect(() => loadSandboxSettingsFile(link)).toThrow(/symlink/);
+    expect(loadSandboxSettingsFile(join(dir, 'missing.json'))).toEqual({});
+  });
+
   it('missing file → empty config', () => {
     const enoent = (): string => {
       const err = new Error('ENOENT') as NodeJS.ErrnoException;

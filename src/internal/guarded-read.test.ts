@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -164,5 +165,40 @@ describe('refuseAncestorSymlinks', () => {
       join(base, 'eval', 'symlinkdir') + sep + '..' + sep + 'real' + sep + 'f.json';
     expect(refusalOf(() => refuseAncestorSymlinks(viaDotDot)).refusal).toBe('ancestor-symlink');
     expect(() => refuseAncestorSymlinks(join(base, 'eval', 'real', 'f.json'))).not.toThrow();
+  });
+});
+
+describe('readFileGuarded refuses what is not a regular file (ADR-0034 decision 3)', () => {
+  it.skipIf(process.platform === 'win32')('a character device (/dev/null) is refused rather than read', () => {
+    // A device's size is 0 or unbounded, so the byte cap bounds nothing; the
+    // fstat type check refuses it before any read.
+    const refusal = refusalOf(() => readFileGuarded('/dev/null', CAP));
+    expect(refusal.refusal).toBe('not-a-file');
+    expect(refusal.message).toMatch(/not a regular file/);
+  });
+
+  it.skipIf(process.platform === 'win32')('a FIFO is refused at once, without waiting for a writer', () => {
+    // A blocking open of a FIFO with no writer hangs forever (found by
+    // execution in review); O_NONBLOCK makes the open return at once and the
+    // fstat refuses the type. Two properties, pinned separately: the TYPE
+    // refusal is the `not-a-file` assertion; the NON-BLOCKING open is the
+    // elapsed-time bound. A writer connects in the background only after a
+    // delay, so a regression of the non-blocking open waits for that writer
+    // (seconds, then still refused on type) and FAILS the time bound instead
+    // of hanging the worker, and the test never depends on dist/ or a child
+    // process running the module. Under the fix the writer never connects
+    // and is killed in the finally.
+    const fifo = join(freshDir(), 'settings.json');
+    execFileSync('mkfifo', [fifo]);
+    const writer = spawn('sh', ['-c', `sleep 3; cat /dev/null > "${fifo}"`], { stdio: 'ignore' });
+    try {
+      const started = Date.now();
+      const refusal = refusalOf(() => readFileGuarded(fifo, CAP));
+      const elapsedMs = Date.now() - started;
+      expect(refusal.refusal).toBe('not-a-file');
+      expect(elapsedMs).toBeLessThan(1500);
+    } finally {
+      writer.kill('SIGKILL');
+    }
   });
 });

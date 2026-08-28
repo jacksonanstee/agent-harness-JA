@@ -1,4 +1,10 @@
-import { loadJsonSettings, unknownKeyMessage, unknownKeys } from '../../internal/settings.js';
+import {
+  loadJsonSettings,
+  readSettingsFile,
+  unknownKeyMessage,
+  unknownKeys,
+} from '../../internal/settings.js';
+import type { ReadFile } from '../../internal/settings.js';
 import type {
   EvaluatorOptions,
   LayeredRule,
@@ -119,19 +125,21 @@ export type { ReadFile } from '../../internal/settings.js';
 
 /**
  * Loads one settings layer. Missing file (ENOENT) → empty layer; a file that
- * exists but is unreadable or invalid throws (fail loud at startup).
- * Mechanics live in the shared internal loader (ADR-0015).
+ * exists but is unreadable, refused by the file envelope, or invalid throws
+ * (fail loud at startup). Mechanics live in the shared internal loader
+ * (ADR-0015); `readFile` defaults to the guarded reader and is a test seam
+ * (ADR-0034 decision 5).
  */
 export function loadSettingsFile(
   path: string,
-  readFile: (path: string) => string,
+  readFile: ReadFile = readSettingsFile,
 ): PermissionSettings {
   return loadJsonSettings(
     path,
-    readFile,
     parsePermissionSettings,
     { rules: [] },
     PermissionSettingsError,
+    readFile,
   );
 }
 

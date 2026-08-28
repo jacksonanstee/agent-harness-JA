@@ -11,8 +11,13 @@
  * - a directory (EISDIR at fstat, before any read).
  * - a body over the caller's byte cap (fstat on the same descriptor the read
  *   uses, so the cap and the read see one file).
- * ENOENT is NOT a refusal: it is rethrown untouched, code intact, because
- * every consumer treats a missing file as an empty value.
+ * - anything that is not a regular file (a FIFO, a socket, a device): the
+ *   open is non-blocking so a FIFO with no writer cannot hang startup, and
+ *   the fstat refuses the type before any read (a FIFO's size is 0 and a
+ *   device's is unbounded, so the cap alone bounds neither).
+ * ENOENT is NOT a refusal: it is rethrown untouched, code intact, so each
+ * consumer decides what absence means (the settings loaders read it as an
+ * empty layer; the baseline loader names the missing file).
  *
  * Messages carry the path and a reason and never a byte of the file's
  * content; consumers map `refusal` to their own error class and prefix.
@@ -25,6 +30,7 @@ export type GuardedReadRefusal =
   | 'symlink'
   | 'ancestor-symlink'
   | 'directory'
+  | 'not-a-file'
   | 'oversize'
   | 'unreadable';
 
@@ -118,24 +124,35 @@ export function refuseAncestorSymlinks(path: string): void {
 // O_NOFOLLOW is a POSIX belt-and-braces backstop for the lstat checks above
 // (an fd opened with it can never traverse a leaf symlink, even one raced in
 // after the lstat). Absent on platforms without it; the lstat checks remain
-// the primary, message-bearing guard everywhere.
+// the primary, message-bearing guard everywhere. Proven live by mutation
+// (ADR-0034): with refuseSymlink disabled, every leaf-symlink case still
+// refused through the ELOOP branch below, and no ancestor case did.
 const O_NOFOLLOW: number = fsConstants.O_NOFOLLOW ?? 0;
+// O_NONBLOCK makes the open of a FIFO return at once instead of waiting for
+// a writer that never comes (a review found the hang by execution). It has
+// no effect on the read of a regular file, which is the only type that gets
+// past the fstat below.
+const O_NONBLOCK: number = fsConstants.O_NONBLOCK ?? 0;
 
 /**
  * Single-descriptor guarded read: refuse symlinks (leaf, then ancestors),
- * open with O_NOFOLLOW, fstat the SAME descriptor for EISDIR and the byte
- * cap, then read it. ENOENT propagates untouched (see the module header).
+ * open with O_NOFOLLOW and O_NONBLOCK, fstat the SAME descriptor for the
+ * type and the byte cap, then read it. ENOENT propagates untouched (see the
+ * module header).
  */
 export function readFileGuarded(path: string, maxBytes: number): string {
   refuseSymlink(path, 'file');
   refuseAncestorSymlinks(path);
   let fd: number;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch (error: unknown) {
     const code = errorCode(error);
     if (code === 'ENOENT') throw error;
     if (code === 'ELOOP') {
+      // Reached only if a symlink lands between the lstat above and this
+      // open; no suite test can stage that race, so the branch is covered by
+      // the refuseSymlink-disabled mutation, not by a test.
       throw new GuardedReadError('symlink', path, `file ${path} is a symlink`, code);
     }
     throw new GuardedReadError('unreadable', path, `cannot read ${path} (${code ?? 'open error'})`, code);
@@ -144,6 +161,9 @@ export function readFileGuarded(path: string, maxBytes: number): string {
     const stat = fstatSync(fd);
     if (stat.isDirectory()) {
       throw new GuardedReadError('directory', path, `${path} is a directory`, 'EISDIR');
+    }
+    if (!stat.isFile()) {
+      throw new GuardedReadError('not-a-file', path, `${path} is not a regular file`);
     }
     if (stat.size > maxBytes) {
       throw new GuardedReadError(
