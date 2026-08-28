@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 
 import {
   composeSecurity,
@@ -12,6 +13,7 @@ import {
   USAGE,
 } from './cli/shared.js';
 import { escapeJsonText } from './internal/sanitize.js';
+import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import type { SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
@@ -393,6 +395,30 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
+
+  // A malicious clone can commit its skills directory as a symlink whose
+  // target escapes the project; load() realpaths the root and scans the
+  // target, injecting skill-shaped files into the system prompt at
+  // system-prompt authority (issue #92, ADR-0006). Refuse a symlink AT the
+  // named directory, before the SDK is reached. This is deliberately narrower
+  // than the eval path's containSkillsDir (ADR-0017): on the run path the
+  // OPERATOR chooses the directory and may legitimately point it outside cwd
+  // (`--skills-dir /abs/dir`, whose ancestors like macOS /tmp are OS-owned
+  // symlinks), so containment against cwd would reject a valid choice, and the
+  // repo-committable component the default `./skills` exposes is the leaf. A
+  // non-symlink error (unreadable) is NOT made fatal here: load() already
+  // treats a directory it cannot stat as a non-fatal empty load, and lstat
+  // failing means load() cannot follow a symlink silently either, so the gap
+  // does not reopen.
+  try {
+    refuseSymlink(resolve(skillsDir), 'skills directory');
+  } catch (error: unknown) {
+    if (error instanceof GuardedReadError && error.refusal === 'symlink') {
+      process.stderr.write(`refusing to load skills: ${sanitizeForTerminal(error.message)}\n`);
+      return 2;
+    }
+    if (!(error instanceof GuardedReadError)) throw error;
+  }
 
   // Security settings composition (permissions ADR-0014, sandbox ADR-0015).
   // A present-but-malformed file aborts the run before any tool executes —
