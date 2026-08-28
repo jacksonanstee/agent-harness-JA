@@ -286,6 +286,41 @@ describe('createSession', () => {
     expect(postFired).toEqual(['Read', 'Bash']);
   });
 
+  it('issue #86: the SDK tools the table lacked are gated end-to-end under a real parsed sandbox', async () => {
+    // Workflow is proven exposed in headless runs (verifier notes, 2026-08-25).
+    // Before #86 all five passed both gates because neither gate knew the tool.
+    const project = parseSandboxSettings({
+      sandbox: { paths: { allow: ['/safe'] }, commands: { allow: ['git'] } },
+    });
+    const sandbox = createSandbox(mergeSandboxLayers({}, project));
+    const fake = fakeQuery([INIT, RESULT], [
+      { tool: 'Workflow', input: { scriptPath: '/etc/passwd' }, output: 'never' },
+      {
+        tool: 'Monitor',
+        input: { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' },
+        output: 'never',
+      },
+      { tool: 'Artifact', input: { file_path: '/etc/passwd', favicon: 'x' }, output: 'never' },
+      { tool: 'Workflow', input: { scriptPath: '/safe/wf.js' }, output: 'ran' },
+    ]);
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', sandboxHook(sandbox));
+    const postFired: string[] = [];
+    hooks.register('post-tool', (payload) => {
+      postFired.push(payload.tool);
+    });
+    const session = createSession(makeDeps(fake, { hooks }), { skillsDir: '/nowhere' });
+
+    const result = await session.run('do things');
+
+    expect(result.denied).toEqual([
+      { tool: 'Workflow', reason: expect.stringContaining('sandbox') },
+      { tool: 'Monitor', reason: expect.stringContaining('sandbox') },
+      { tool: 'Artifact', reason: expect.stringContaining('sandbox') },
+    ]);
+    expect(postFired).toEqual(['Workflow']);
+  });
+
   it('skillsDir null skips skill loading entirely: loadSkills never called, no warnings (Week-4)', async () => {
     const fake = fakeQuery([INIT, RESULT]);
     const warnings: string[] = [];

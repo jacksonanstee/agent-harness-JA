@@ -3,14 +3,33 @@ import { resolve } from 'node:path';
 /**
  * The tool→argument-field table both security gates share (ADR-0015 review
  * finding: two hand-copied four-tool tables drifted from the SDK's real
- * surface — Glob/Grep/NotebookEdit/MultiEdit bypassed BOTH modules because
- * each assumed the other covered them). One table, one place to extend when
- * the SDK grows a tool. Source of truth: @anthropic-ai/claude-agent-sdk
- * sdk-tools.d.ts.
+ * surface — Glob/Grep/NotebookEdit/MultiEdit bypassed BOTH modules because each
+ * assumed the other covered them; MultiEdit was later found undeclared by the
+ * SDK and dropped, issue #86). One table, one place to extend when the SDK grows
+ * a tool. Source of truth: @anthropic-ai/claude-agent-sdk sdk-tools.d.ts, and
+ * since issue #86 that is enforced, not asserted: tool-targets.sdk-parity.test.ts
+ * reads the installed declarations and fails when a declared path/command
+ * tool is missing here, when an entry names a field or a tool the SDK does
+ * not declare, or when a target-shaped field is neither gated nor listed in
+ * ACKNOWLEDGED_NON_TARGET_FIELDS with a reason (ADR-0033). The table was
+ * never complete before that gate existed: five tools were absent for seven
+ * weeks under a pin test that only pinned the table to itself.
+ *
+ * A gated tool whose field is absent is DENIED by the sandbox unless the SDK
+ * defines "missing" as cwd (ADR-0015 §2). For Workflow, Monitor, EnterWorktree
+ * and Projects the field is optional and absence means a mode the gates
+ * cannot see (an inline script, a websocket, a new worktree by name, a remote
+ * doc operation); denying those under an enabled sandbox dimension is the
+ * accepted cost (ADR-0033).
  *
  * Network-egress tools (WebFetch/WebSearch) are deliberately absent: gating
  * them needs a URL/domain dimension, not a path prefix — tracked as future
- * work in ADR-0015 §Revisit-if, not silently half-covered here.
+ * work in ADR-0015 §Revisit-if, not silently half-covered here. Tools the SDK
+ * dispatches without a declared input type are not here either: NotebookRead
+ * and Cd are named by the bundled native CLI (a sibling optional dependency,
+ * @anthropic-ai/claude-agent-sdk-<platform>) but declared by no *Input
+ * interface in sdk-tools.d.ts, and this table derives from the typed surface,
+ * not from the binary (R-9).
  */
 export interface ToolTarget {
   readonly field: string;
@@ -28,10 +47,35 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
   Read: { field: 'file_path', kind: 'path' },
   Write: { field: 'file_path', kind: 'path' },
   Edit: { field: 'file_path', kind: 'path' },
-  MultiEdit: { field: 'file_path', kind: 'path' },
   NotebookEdit: { field: 'notebook_path', kind: 'path' },
   Glob: { field: 'path', kind: 'path', missingMeansCwd: true },
   Grep: { field: 'path', kind: 'path', missingMeansCwd: true },
+  // Issue #86: declared at the pinned SDK since day one, never in the table.
+  Artifact: { field: 'file_path', kind: 'path' },
+  Workflow: { field: 'scriptPath', kind: 'path' },
+  Monitor: { field: 'command', kind: 'command' },
+  EnterWorktree: { field: 'path', kind: 'path' },
+  // Projects has two target-shaped fields; only local_path is a filesystem
+  // path (an upload read from the working directory). See the acknowledgement
+  // below for `path`.
+  Projects: { field: 'local_path', kind: 'path' },
+};
+
+/**
+ * Target-shaped SDK fields (name says path or command) that are deliberately
+ * NOT gated, each with its reason. The derived gate fails on a target-shaped
+ * field that is neither gated nor listed here, and on an entry here that names
+ * a tool or field the SDK no longer declares, so this list cannot go stale
+ * silently. It is documentation the gate reads.
+ */
+export const ACKNOWLEDGED_NON_TARGET_FIELDS: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  Projects: {
+    path:
+      'a remote knowledge-base document key ("project_read/project_write/project_delete: doc path" ' +
+      'in the SDK declaration), not a filesystem path; the filesystem field is local_path',
+  },
 };
 
 /**

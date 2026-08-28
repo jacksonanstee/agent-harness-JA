@@ -215,11 +215,18 @@ export function sandboxHook(sandbox: Sandbox): (payload: PreToolLike) => Promise
     const value =
       raw === undefined && gate.missingMeansCwd === true ? process.cwd() : raw;
     if (typeof value !== 'string') {
-      return Promise.reject(
-        new SandboxViolation(
-          `sandbox: ${payload.tool} requires a string ${gate.field}; refusing to guess`,
-        ),
-      );
+      // Absent and present-but-wrong-type get different reasons. A missing
+      // OPTIONAL field is a legitimate mode with no filesystem/command target
+      // the sandbox can gate (a Workflow inline script, a Monitor websocket, an
+      // EnterWorktree by name, a Projects search), not a malformed call, so
+      // "requires a string" would misdiagnose it (ADR-0033). These reasons
+      // persist to telemetry and the memory denied[] list, so they get the same
+      // care as any deny reason (ADR-0031).
+      const reason =
+        raw === undefined
+          ? `sandbox: ${payload.tool} has no ${gate.field}; this mode has no ${gate.kind} target the sandbox can gate under the enabled dimension, so it is denied (ADR-0033)`
+          : `sandbox: ${payload.tool} ${gate.field} is not a string; refusing to guess`;
+      return Promise.reject(new SandboxViolation(reason));
     }
     const allowed = gate.kind === 'path' ? sandbox.allowPath(value) : sandbox.allowCommand(value);
     if (!allowed) {
