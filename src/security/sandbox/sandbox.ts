@@ -39,12 +39,13 @@ const SHELL_METACHARACTERS = [
 /**
  * Characters the executing shell rewrites in a word before exec, or that
  * make the word not a program name at all. In argv[0] any of them means the
- * string names one program and another starts: glob (`*`, `?`, `[`, and the
- * zsh extendedglob operators `^` and `#`), quote removal (`"`, `'`:
- * `/bin/s"h"` IS `/bin/sh` to bash and zsh), equals expansion and assignment
- * prefixes (`=sh` is `/bin/sh` to zsh; `FOO=bar sh` runs sh behind an argv[0]
- * the gate compared), and NUL (dropped by a shell reading its command from
- * stdin). One predicate for the parser's entry refusal and the gate's argv[0]
+ * string names one program and another starts: glob (`*`, `?`, `[`; bash
+ * and zsh), the zsh extendedglob operators `^` and `#` (under `setopt
+ * extendedglob`), quote removal (`"`, `'`: `/bin/s"h"` IS `/bin/sh` to bash
+ * and zsh), equals expansion (`=sh` is `/bin/sh` to zsh) and assignment
+ * prefixes (`FOO=bar sh` runs sh behind an argv[0] the gate compared), and
+ * NUL (bash drops the byte from a command read on stdin; zsh cuts the word
+ * there; either way a different program starts). One predicate for the parser's entry refusal and the gate's argv[0]
  * refusal, the `isBlockedFirstToken` pattern, so they cannot drift (issue
  * #93; ADR-0034 decision 2, widened from three glob characters by the
  * security review of that change, which produced the quote and equals

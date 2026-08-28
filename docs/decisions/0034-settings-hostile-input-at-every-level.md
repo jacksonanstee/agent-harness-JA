@@ -60,14 +60,18 @@ as executed.
 2. **Every character the shell rewrites in a word before exec is refused in command allowlist
    entries at parse time and in argv[0] at the gate, through one predicate.** The class is "the
    shell starts a program other than the one the string names", and its members at the pinned
-   shells are: glob (`*`, `?`, `[`, and the zsh extendedglob operators `^` and `#`), quote
-   removal (`"` and `'`: `/bin/s"h"` and `/bin/'sh'` are `/bin/sh` to bash and zsh), equals
-   expansion and assignment prefixes (`=sh` is `/bin/sh` to zsh; `FOO=bar sh` runs `sh` behind
-   an argv[0] the gate compared), and NUL (dropped by a shell reading its command from stdin).
-   The first cut of this ADR enumerated the three glob characters the issue named; the security
-   lens of its review produced the quote and equals counterexamples by execution (each passed
-   the parser, the blocklist and the gate, and bash and zsh each ran `/bin/sh`), which is the
-   instance-versus-class lesson this project keeps relearning, applied to a character set.
+   shells are, attributed per shell: glob (`*`, `?`, `[`: bash and zsh); the zsh extendedglob
+   operators `^` and `#` (zsh only, and only under `setopt extendedglob`, which is off by default
+   and on for every non-interactive `zsh -c` once a `.zshenv` sets it); quote removal (`"` and
+   `'`: `/bin/s"h"` and `/bin/'sh'` are `/bin/sh` to bash and to zsh); equals expansion (`=sh` is
+   `/bin/sh` to zsh; bash reports `=sh: command not found`) and assignment prefixes (`FOO=bar sh`
+   runs `sh` behind an argv[0] the gate compared, in both shells); and NUL (bash drops the byte
+   from a command read on stdin and runs `sh`; zsh cuts the word there and runs `s`, so the
+   program that starts is still not the one named). The first cut of this ADR enumerated the
+   three glob characters the issue named; the security lens of its review produced the quote and
+   equals counterexamples by execution (each passed the parser, the blocklist and the gate, and a
+   listed shell started under bash for the quote forms and under zsh for all of them), which is
+   the instance-versus-class lesson this project keeps relearning, applied to a character set.
    `hasShellRewriteCharacter` in `src/security/sandbox/sandbox.ts` is the shared brain of both
    refusals, the `isBlockedFirstToken` pattern, so the parser and the gate cannot drift. The gate
    check runs before the allowlist is consulted, so an entry that matches the argv[0] exactly
@@ -104,8 +108,10 @@ as executed.
 4. **The envelope is hoisted to `src/internal/guarded-read.ts`,** a zero-dependency leaf (node
    builtins only): `GuardedReadError` with a `refusal` discriminator (`symlink`,
    `ancestor-symlink`, `directory`, `oversize`, `unreadable`) and the path; `refuseSymlink`;
-   `refuseAncestorSymlinks` (the raw-component walk, verbatim from the baseline including the
-   `symlinkdir/..` rationale a security review produced); and `readFileGuarded(path, maxBytes)`.
+   `refuseAncestorSymlinks` (the raw-component walk verbatim from the baseline, including the
+   `symlinkdir/..` rationale a security review produced, with each refusal re-tagged as
+   `ancestor-symlink` and suffixed with the path it guards); and `readFileGuarded(path,
+   maxBytes)`.
    ENOENT on open is rethrown as the original error, code intact, so each consumer decides what
    absence means (the settings loaders read it as an empty layer; the baseline names the missing
    file). Consumers map `refusal` to their own error class: the baseline keeps every message
@@ -113,8 +119,9 @@ as executed.
    the behavioural proof of the hoist that ADR-0015 §5 used for the loader; two untested wordings
    changed, recorded here rather than claimed away: an ancestor refusal now carries an
    `(ancestor of <path>)` suffix, and a stat failure forwards the primitive's message (`baseline
-   <path>: cannot stat directory <dir> (ENOTDIR)`) instead of a rebuilt "cannot read" that lost
-   which operation failed. Its `refuseSymlink` and `refuseAncestorSymlinks` exports remain as
+   <path>: cannot stat file <path> (ENOTDIR)` for a path that runs through a regular file, since
+   the leaf lstat fails first) instead of a rebuilt "cannot read" that lost which operation
+   failed. Its `refuseSymlink` and `refuseAncestorSymlinks` exports remain as
    thin wrappers because `redteam --update-baseline` consumes them and the eval barrel publishes
    them; `refuseSymlinkedDir` in `src/cli/shared.ts` wraps the primitive and keeps the eval
    layer's error type (its stat-failure case now throws a message-bearing `GuardedReadError`
@@ -196,7 +203,10 @@ it does not bound anything the parsers do after the read beyond what `MAX_RULES`
 `MAX_ALLOW_ENTRIES` already bound; a duplicated JSON key keeps its LAST value inside `JSON.parse`
 before any parser sees the document, so `"defaultDecision": "deny"` followed by `"allow"` is
 `allow` with no signal (found by the security lens; issue #108 scans the raw body); the rewrite
-character set is an enumeration at bash and zsh (R-13's shape one gate over); and a well-formed
+character set is an enumeration at bash and zsh (R-13's shape one gate over); a trailing `/.` or
+`/..` on a path-shaped argv[0] (`/bin/sh/.`) passes the parser and the gate, because the basename
+the blocklist keys on is `.`, and is inert: `execve` of a regular file through `/.` is ENOTDIR in
+every shell, so nothing starts (verify pass, by execution); and a well-formed
 but WRONG value (`/tpm` for `/tmp`, a rule on the wrong tool) is indistinguishable from intent
 and is recorded as residual R-19.
 
@@ -263,8 +273,9 @@ and is recorded as residual R-19.
   project has met; an assignment-prefix invocation (`FOO=bar cmd`) is refused by design, since the
   gate cannot see the program behind the prefix.
 - A settings file that exists but cannot be read (EACCES, ENOTDIR on an ancestor) now exits 2 with
-  `refusing settings: cannot read <path> (<code>)` where it used to crash uncaught with the raw fs
-  error; a DANGLING symlink at a settings path, which used to read as ENOENT and an empty layer,
+  a `refusing settings:` line that names the failed operation (`cannot stat file` for the lstat,
+  `cannot read` for the open or the read), the path and the code, where it used to crash uncaught
+  with the raw fs error; a DANGLING symlink at a settings path, which used to read as ENOENT and an empty layer,
   is now refused as a symlink. Both are tightenings, recorded because they change what an operator
   sees.
 
