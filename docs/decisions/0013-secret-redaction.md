@@ -115,11 +115,14 @@ before they get there.
   did an unterminated block past the bound; the regression test reached 9,600
   and never the boundary. The body is now unbounded (`*?`); tests bind 16,384
   as the control, then 16,385, 100,000, and an unterminated 40,000-character
-  body, each to the exact redacted string. Reach: a bare BEGIN header with
-  no END fence redacts to end-of-input, as it always did below the bound;
-  above the bound the old form did not match at all and emitted the header
-  and everything after it raw, so the change is leak to redact and adds no
-  over-redaction at any length.*
+  body, each to the exact redacted string. Reach: below the bound the two
+  forms are byte-identical (the lazy body reaches an END fence or `$` inside
+  the bound); above it the old form did not match at all and emitted the
+  header and everything after it raw. The change is leak to redact. Its one
+  cost is that a lone BEGIN header now redacts to the next END fence or to
+  end-of-input where the old form left that span raw, so a header written in
+  prose can swallow the rest of a reply up to `MAX_INPUT`; that is the
+  fail-closed side and the accepted trade.*
 - **MEDIUM — memory session-summary now redacted.** `prompt` and `resultText`
   are redacted before the memory write (redact-then-truncate), closing the
   second retained-sink path (the model can echo a tool-read secret into its
