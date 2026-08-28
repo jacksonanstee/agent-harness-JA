@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
@@ -400,7 +400,6 @@ export async function main(argv: string[]): Promise<number> {
   let security: SecurityComposition;
   try {
     security = composeSecurity({
-      readFile: (p) => readFileSync(p, 'utf8'),
       userDir: homedir(),
       projectDir: process.cwd(),
     });

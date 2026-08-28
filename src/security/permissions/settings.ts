@@ -1,4 +1,4 @@
-import { loadJsonSettings } from '../../internal/settings.js';
+import { loadJsonSettings, unknownKeyMessage, unknownKeys } from '../../internal/settings.js';
 import type {
   EvaluatorOptions,
   LayeredRule,
@@ -22,6 +22,28 @@ export class PermissionSettingsError extends Error {
 const DECISIONS: readonly PermissionDecision[] = ['allow', 'ask', 'deny'];
 
 /**
+ * The known keys at each object level inside `permissions`. An unknown key at
+ * either level is an error (ADR-0034 decision 1): a typo of `defaultDecision`
+ * left the default at allow, and a typo of `match` turned a scoped allow rule
+ * into a blanket one, each with no signal (issue #85). Root-level siblings of
+ * `permissions` stay ignored; that is the forward-compatibility ADR-0014 §5
+ * meant, and the only level it applies to.
+ */
+const PERMISSIONS_KEYS: readonly string[] = ['defaultDecision', 'rules'];
+const RULE_KEYS: readonly string[] = ['tool', 'match', 'decision'];
+
+function rejectUnknownKeys(
+  record: Record<string, unknown>,
+  known: readonly string[],
+  where: string,
+): void {
+  const [first] = unknownKeys(record, known);
+  if (first !== undefined) {
+    throw new PermissionSettingsError(unknownKeyMessage(where, first, known));
+  }
+}
+
+/**
  * Upper bound per settings file. Project settings are attacker-influenced
  * input (a cloned repo ships its own .harness/settings.json); the cap keeps
  * per-call evaluation cost bounded. Far above any plausible hand-written
@@ -37,6 +59,7 @@ function parseRule(value: unknown, index: number): PermissionRule {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new PermissionSettingsError(`permissions.rules[${index}] must be an object`);
   }
+  rejectUnknownKeys(value as Record<string, unknown>, RULE_KEYS, `permissions.rules[${index}]`);
   const { tool, match, decision } = value as Record<string, unknown>;
   if (typeof tool !== 'string' || tool === '') {
     throw new PermissionSettingsError(`permissions.rules[${index}].tool must be a non-empty string`);
@@ -54,9 +77,10 @@ function parseRule(value: unknown, index: number): PermissionRule {
 
 /**
  * Validates one settings document (hand-rolled: no schema deps, matching the
- * S-1/S-2 style). Absent `permissions` key → empty layer. Unknown sibling
- * keys are ignored (the file is shared with future settings); malformed
- * entries under `permissions` are errors, never skipped.
+ * S-1/S-2 style). Absent `permissions` key → empty layer. Unknown ROOT-level
+ * siblings are ignored (the file is shared with future settings); inside
+ * `permissions`, at every level, an unknown key is an error like any other
+ * malformed entry, never skipped (ADR-0014 §6, ADR-0034 decision 1).
  */
 export function parsePermissionSettings(doc: unknown): PermissionSettings {
   if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) {
@@ -69,6 +93,7 @@ export function parsePermissionSettings(doc: unknown): PermissionSettings {
   if (typeof permissions !== 'object' || permissions === null || Array.isArray(permissions)) {
     throw new PermissionSettingsError('permissions must be an object');
   }
+  rejectUnknownKeys(permissions as Record<string, unknown>, PERMISSIONS_KEYS, 'permissions');
   const { defaultDecision, rules } = permissions as Record<string, unknown>;
   if (defaultDecision !== undefined && !isDecision(defaultDecision)) {
     throw new PermissionSettingsError(

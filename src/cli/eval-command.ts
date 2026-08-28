@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { createGoldenRunner, createVerifier, EvalUsageError, toMarkdown } from '../eval/index.js';
@@ -115,7 +114,6 @@ export async function runEval(args: EvalArgs): Promise<number> {
   let security: SecurityComposition;
   try {
     security = composeSecurity({
-      readFile: (p) => readFileSync(p, 'utf8'),
       userDir: homedir(),
       projectDir: process.cwd(),
     });

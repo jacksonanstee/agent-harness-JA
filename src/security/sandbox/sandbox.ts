@@ -25,13 +25,30 @@ export class SandboxViolation extends Error {
  * sandboxed command means we can no longer claim to know which program
  * starts, so the command is denied outright (ADR-0015 §3). `\` (escape /
  * line continuation) and `!` (history expansion) are included since the
- * review round; `*`/`~` are deliberately NOT — glob/tilde expansion happens
- * inside the allowed program's argument list and does not change which
- * program starts (documented non-goal).
+ * review round. Glob characters and `~` are deliberately NOT in this list:
+ * in the ARGUMENTS, expansion happens inside the allowed program's argv and
+ * does not change which program starts (documented non-goal). In argv[0] a
+ * glob DOES change which program starts, which is `hasGlobCharacter`'s job
+ * below (ADR-0034 decision 2, amending ADR-0015 §3).
  */
 const SHELL_METACHARACTERS = [
   ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', '\\', '!',
 ];
+
+/**
+ * Glob metacharacters the executing shell expands in a word: `*`, `?` and a
+ * `[` character class. In argv[0] they name one program and start another
+ * (`/bin/s?` is not a shell to the blocklist and IS `/bin/sh` to bash and
+ * zsh; issue #93). One predicate for the parser's entry refusal and the
+ * gate's argv[0] refusal, the `isBlockedFirstToken` pattern, so they cannot
+ * drift. `~` is excluded: tilde expansion changes the prefix, never the
+ * basename the blocklist keys on.
+ */
+const GLOB_CHARACTERS: readonly string[] = ['*', '?', '['];
+
+export function hasGlobCharacter(word: string): boolean {
+  return GLOB_CHARACTERS.some((ch) => word.includes(ch));
+}
 
 /**
  * Binaries that defeat first-token enforcement by construction: allowing a
@@ -128,6 +145,10 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
       const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
+      // A glob in argv[0] means the string names one program and the shell
+      // starts another; refused before the allowlist is consulted, so an
+      // entry that matches it exactly cannot rescue it (ADR-0034 decision 2).
+      if (hasGlobCharacter(argv0)) return false;
       // Static blocklist beats the allowlist: shells and run-anything
       // wrappers defeat first-token analysis no matter what settings say.
       // Case-folded on case-insensitive platforms — `SH -c` resolves the same

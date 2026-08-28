@@ -40,6 +40,41 @@ describe('parseSandboxSettings', () => {
     expect(() => parseSandboxSettings(doc)).toThrowError(SandboxSettingsError);
   });
 
+  it.each([
+    ['unknown key inside sandbox (a typo of paths turns the dimension off)', { sandbox: { path: { allow: ['/safe'] } } }, /sandbox.*unknown key 'path'/, /paths, commands/],
+    ['unknown key beside allow', { sandbox: { paths: { allow: ['/safe'], alow: ['/etc'] } } }, /sandbox\.paths.*unknown key 'alow'/, /allow/],
+  ])('rejects an %s, naming the key and the known set (ADR-0034)', (_name, doc, keyPattern, knownPattern) => {
+    expect(() => parseSandboxSettings(doc)).toThrowError(SandboxSettingsError);
+    expect(() => parseSandboxSettings(doc)).toThrow(keyPattern);
+    expect(() => parseSandboxSettings(doc)).toThrow(knownPattern);
+  });
+
+  it.each(['/bin/s?', '/bin/*', '/usr/local/bin/*', '[s]h', 's?'])(
+    'refuses the glob-shaped command entry %s: the shell would expand it to a different program',
+    (entry) => {
+      const doc = { sandbox: { commands: { allow: [entry] } } };
+      expect(() => parseSandboxSettings(doc)).toThrowError(SandboxSettingsError);
+      let message = '';
+      try {
+        parseSandboxSettings(doc);
+      } catch (error: unknown) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toMatch(/sandbox\.commands\.allow\[0\]/);
+      expect(message).toMatch(/glob/);
+      expect(message).toContain(entry);
+    },
+  );
+
+  it('still accepts the same strings as PATH entries (prefix semantics; a glob there is inert, not open)', () => {
+    // Pins the scope of ADR-0034 decision 2 so a later warning or rejection on
+    // the path dimension is a visible change, not a drift.
+    const parsed = parseSandboxSettings({
+      sandbox: { paths: { allow: ['/usr/local/bin/*', '/bin/s?'] } },
+    });
+    expect(parsed.paths?.allow).toEqual(['/usr/local/bin/*', '/bin/s?']);
+  });
+
   it('enforces the entry cap', () => {
     const allow = Array.from({ length: MAX_ALLOW_ENTRIES + 1 }, (_, i) => `/p${i}`);
     expect(() => parseSandboxSettings({ sandbox: { paths: { allow } } })).toThrowError(

@@ -1,7 +1,11 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
-import { dirname, isAbsolute, sep } from 'node:path';
 
+import {
+  GuardedReadError,
+  readFileGuarded,
+  refuseAncestorSymlinks as guardedRefuseAncestorSymlinks,
+  refuseSymlink as guardedRefuseSymlink,
+} from '../../internal/guarded-read.js';
 import { diffRows, toCanonicalJson } from '../scorecard/index.js';
 import type { ScorecardEnvelope } from '../scorecard/index.js';
 import { REDTEAM_FAILURE_KINDS } from './runner.js';
@@ -141,112 +145,74 @@ const validateBaseline = ajv.compile(baselineSchema);
  * Exported for reuse by `src/cli/redteam-command.ts`'s `--update-baseline`
  * write path (E-3 Task 8 deviation from the design's "implement a small
  * local check" suggestion): the write path needs the identical file+parent
- * symlink guard `loadBaseline` already enforces on read, and duplicating the
- * ENOENT-tolerant lstat logic would be the second implementation of the same
- * check with no independent value (unlike the deliberate totals-backstop
- * duplication, DEC-0016).
+ * symlink guard `loadBaseline` already enforces on read.
  *
- * DELIBERATE second implementation alongside `src/cli/shared.ts`'s
- * `refuseSymlinkedDir` (different layer, different error type, different
- * ENOENT semantics) — extract to `src/internal/` only on a third consumer,
- * per the sanitize.ts precedent (ADR-0008 Revisit-if fired at the 4th copy).
+ * The lstat mechanics moved to `src/internal/guarded-read.ts` when the
+ * settings loader became their third consumer (ADR-0034 decision 4; the
+ * scorecard-directory refusal in `src/cli/shared.ts` was the second). These
+ * wrappers keep the baseline's error type and message shapes, so every
+ * existing test passes unmodified: the behavioural proof of the hoist.
  */
 export function refuseSymlink(path: string, label: string): void {
-  let isLink: boolean;
   try {
-    isLink = lstatSync(path).isSymbolicLink();
+    guardedRefuseSymlink(path, label);
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw new BaselineError(`cannot stat ${label} ${path}: ${String(error)}`);
+    throw error instanceof GuardedReadError ? toBaselineError(error) : error;
   }
-  if (isLink) throw new BaselineError(`refusing baseline: ${label} ${path} is a symlink`);
 }
 
 /**
  * Ancestor-chain guard (Week-4 hardening; closes the review3 leaf+parent-only
- * gap). A RELATIVE baseline path is repo-internal — every component is
- * attacker-committable data under the malicious-cloned-repo threat model, so
- * each accumulating directory is lstat-checked (a committed symlink at `eval`
- * redirects `eval/redteam/baseline.json` wholesale; the leaf and parent checks
- * never see it). An ABSOLUTE path is operator-supplied and may legitimately
- * traverse OS-owned symlinks (macOS `/tmp`, `/var`), so it keeps the parent
- * check only — the operator owns that path, the repo does not.
- *
- * The relative walk operates on the RAW components, never `normalize(path)`
- * first: lexical normalization cancels `symlinkdir/..` textually, dropping an
- * intermediate symlink from the walk while the real `open()` still follows it
- * (a security review found this — a `symlinkdir/../real/baseline.json` shape
- * evaded the whole check). Splitting the raw path and lstat-checking every
- * accumulating prefix catches a symlink at ANY component: for a symlink at
- * position k, the prefix ending exactly at k has it as its final component,
- * which lstat reports without following. `.`/empty segments are resolution
- * no-ops (dropped); `..` is retained — `lstat` on a `..`-terminated prefix is
- * always safe, and the symlink one component earlier is already caught.
+ * gap). Relative paths walk every raw component, absolute paths check the
+ * parent only; the rationale, including the `symlinkdir/..` shape a security
+ * review found evading a normalised walk, lives with the implementation in
+ * `src/internal/guarded-read.ts`.
  */
 export function refuseAncestorSymlinks(path: string): void {
-  if (isAbsolute(path)) {
-    refuseSymlink(dirname(path), 'directory');
-    return;
-  }
-  const parts = path.split(sep).filter((p) => p !== '' && p !== '.');
-  let acc = '';
-  for (const part of parts.slice(0, -1)) {
-    acc = acc === '' ? part : acc + sep + part;
-    refuseSymlink(acc, 'directory');
+  try {
+    guardedRefuseAncestorSymlinks(path);
+  } catch (error: unknown) {
+    throw error instanceof GuardedReadError ? toBaselineError(error) : error;
   }
 }
 
-// O_NOFOLLOW is a POSIX belt-and-braces backstop for the lstat checks above
-// (an fd opened with it can never traverse a leaf symlink, even one raced in
-// after the lstat). Absent on platforms without it — the lstat checks remain
-// the primary, message-bearing guard everywhere.
-const O_NOFOLLOW: number = fsConstants.O_NOFOLLOW ?? 0;
+/** Maps each envelope refusal onto the baseline's own message shapes. */
+function toBaselineError(error: GuardedReadError): BaselineError {
+  switch (error.refusal) {
+    case 'symlink':
+    case 'ancestor-symlink':
+      return new BaselineError(`refusing baseline: ${error.message}`);
+    case 'directory':
+      return new BaselineError(`cannot read baseline ${error.path} (EISDIR)`);
+    case 'oversize':
+      return new BaselineError(`baseline ${error.message}`);
+    case 'unreadable':
+      return new BaselineError(
+        `cannot read baseline ${error.path} (${error.code ?? 'read error'})`,
+      );
+  }
+}
 
 /**
  * Hostile-input load (design §Baseline load): the baseline is repo-controlled
- * data under the malicious-cloned-repo threat model. Size-capped before read,
- * symlink-refused, ajv-validated against an exact allowlist whose id pattern
- * is the same charset runRedteam enforces on the fresh side (design CG1).
+ * data under the malicious-cloned-repo threat model. Symlink-refused (leaf
+ * and ancestors), size-capped on the same descriptor the read uses, opened
+ * with O_NOFOLLOW as a backstop (all in `readFileGuarded`), then
+ * ajv-validated against an exact allowlist whose id pattern is the same
+ * charset runRedteam enforces on the fresh side (design CG1).
  */
 export function loadBaseline(path: string): { raw: string; parsed: BaselineScorecard } {
-  refuseSymlink(path, 'file');
-  refuseAncestorSymlinks(path);
-  // Single-fd read (Week-4 hardening): open → fstat → read on ONE descriptor
-  // collapses the former lstat→stat→read window — the size cap and the read
-  // are now guaranteed to see the same file, and O_NOFOLLOW refuses a leaf
-  // symlink at the syscall even if one races in after the lstat above.
-  let fd: number;
+  let raw: string;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+    raw = readFileGuarded(path, MAX_BASELINE_BYTES);
   } catch (error: unknown) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
+    if (error instanceof GuardedReadError) throw toBaselineError(error);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new BaselineError(
         `no baseline found at ${path}; in the agent-harness-JA repo, run --update-baseline and commit the result; outside it, pass --baseline <path>`,
       );
     }
-    if (code === 'ELOOP') {
-      throw new BaselineError(`refusing baseline: file ${path} is a symlink`);
-    }
-    throw new BaselineError(`cannot read baseline ${path} (${code ?? 'open error'})`);
-  }
-  let raw: string;
-  try {
-    const stat = fstatSync(fd);
-    if (stat.isDirectory()) {
-      throw new BaselineError(`cannot read baseline ${path} (EISDIR)`);
-    }
-    if (stat.size > MAX_BASELINE_BYTES) {
-      throw new BaselineError(`baseline ${path} exceeds ${MAX_BASELINE_BYTES} bytes (${stat.size})`);
-    }
-    raw = readFileSync(fd, 'utf8');
-  } catch (error: unknown) {
-    if (error instanceof BaselineError) throw error;
-    throw new BaselineError(
-      `cannot read baseline ${path} (${(error as NodeJS.ErrnoException).code ?? 'read error'})`,
-    );
-  } finally {
-    closeSync(fd);
+    throw error;
   }
   let parsed: unknown;
   try {

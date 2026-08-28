@@ -87,7 +87,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 - **Owns:** path and command allowlists for every path/command-taking SDK tool (derived from the SDK's declarations via `internal/tool-targets`, ADR-0033: Bash, Read/Write/Edit, Glob/Grep, NotebookEdit, Artifact, Workflow, Monitor, EnterWorktree, Projects), enforced as a pre-tool gate (deny before the SDK executes — a policy boundary, not OS isolation).
 - **Public API:** `createSandbox(config): Sandbox` with `allowPath(path): boolean` / `allowCommand(cmd): boolean`; `sandboxHook(sandbox)` (pre-tool handler throwing `SandboxViolation`); `mergeSandboxLayers` / `parseSandboxSettings`.
-- **Depends on:** `internal/settings` (shared loader mechanics) and `internal/tool-targets` (the shared tool table, also consumed by the permissions gate); otherwise pure functions over config.
+- **Depends on:** `internal/settings` (shared loader mechanics, which reads through `internal/guarded-read`, the hostile-file envelope hoisted from the red-team baseline loader in ADR-0034) and `internal/tool-targets` (the shared tool table, also consumed by the permissions gate); otherwise pure functions over config.
 - **Design notes:** Dimensions enabled by key presence in `.harness/settings.json`; layers merge by **intersection** (project can only tighten). Paths: lexical `resolve` both sides + boundary-safe prefix; missing target field on a gated tool → deny (fail closed). Commands: shell metacharacters deny outright, else exact argv[0] match; bounds *which program starts*, not what it does — non-goals documented. Shipped ([ADR-0015](./decisions/0015-sandbox-pre-tool-gate.md)).
 
 ### Harness layer
@@ -155,7 +155,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 - **Owns:** the ≥50-case adversarial corpus and per-case pass/fail evaluation.
 - **Public API:** `runRedteam(corpus: readonly CorpusCase[], scan, opts): RedteamScorecard` — the corpus is compiled-in TS literals (no directory scan), and the scanner is injected as a function.
-- **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison.
+- **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison; `internal/guarded-read` for the baseline file's symlink refusal, `O_NOFOLLOW` read and byte cap (one implementation shared with the settings loader and the scorecard-directory refusal since ADR-0034).
 - **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil, and benign (the benign slice drives the absolute `falseBlockCount === 0` gate). Each case includes a `source` field citing the public research it draws from.
 
 #### `eval/verifier`

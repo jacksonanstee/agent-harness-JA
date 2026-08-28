@@ -61,3 +61,102 @@ describe('loadJsonSettings', () => {
     expect(loadJsonSettings('/x.json', () => '{"n": 21}', parse, 0, wrap)).toBe(42);
   });
 });
+
+// ---- ADR-0034: the hostile-file envelope and unknown-key mechanics ----
+
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach } from 'vitest';
+import { GuardedReadError } from './guarded-read.js';
+import { MAX_SETTINGS_BYTES, readSettingsFile, unknownKeys } from './settings.js';
+
+const tmpDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function freshDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'settings-envelope-'));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+describe('loadJsonSettings hostile-file envelope (ADR-0034)', () => {
+  it('the invalid-JSON message names the path and nothing from the body', () => {
+    // A settings path can point at any file an attacker plants; V8's
+    // SyntaxError message quotes a snippet of the input around an unexpected
+    // TOKEN (an unexpected END carries no snippet, so the body must start
+    // with one), and that message used to reach stderr. The marker must not
+    // survive into the error.
+    const body = 'BODY_MARKER_9f3c{';
+    expect(() => loadJsonSettings('/x.json', () => body, parseEcho, null, wrap)).toThrow(
+      /\/x\.json/,
+    );
+    let message = '';
+    try {
+      loadJsonSettings('/x.json', () => body, parseEcho, null, wrap);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toContain('BODY_MARKER');
+  });
+
+  it("a GuardedReadError from the reader becomes the caller's error class, path-prefixed", () => {
+    const refuse = (): string => {
+      throw new GuardedReadError('symlink', '/x.json', 'file /x.json is a symlink');
+    };
+    expect(() => loadJsonSettings('/x.json', refuse, parseEcho, null, wrap)).toThrowError(
+      FakeSettingsError,
+    );
+    expect(() => loadJsonSettings('/x.json', refuse, parseEcho, null, wrap)).toThrow(
+      /\/x\.json.*symlink/,
+    );
+  });
+});
+
+describe('readSettingsFile (the production reader)', () => {
+  it('round-trips a regular file', () => {
+    const path = join(freshDir(), 'settings.json');
+    writeFileSync(path, '{"permissions":{"rules":[]}}');
+    expect(readSettingsFile(path)).toBe('{"permissions":{"rules":[]}}');
+  });
+
+  it('refuses a symlinked settings file', () => {
+    const dir = freshDir();
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const link = join(dir, 'settings.json');
+    symlinkSync(real, link);
+    expect(() => readSettingsFile(link)).toThrowError(GuardedReadError);
+    expect(() => readSettingsFile(link)).toThrow(/symlink/);
+  });
+
+  it('refuses a file over MAX_SETTINGS_BYTES', () => {
+    const path = join(freshDir(), 'settings.json');
+    writeFileSync(path, 'x'.repeat(MAX_SETTINGS_BYTES + 1));
+    expect(() => readSettingsFile(path)).toThrow(/exceeds/);
+  });
+
+  it('propagates ENOENT with its code so a missing file is still an empty layer', () => {
+    expect(() =>
+      loadJsonSettings(join(freshDir(), 'nope.json'), readSettingsFile, parseEcho, 'EMPTY', wrap),
+    ).not.toThrow();
+  });
+});
+
+describe('unknownKeys', () => {
+  it('returns the keys outside the known set, in document order', () => {
+    const doc = JSON.parse('{"rules":[],"zeta":1,"alpha":2}') as Record<string, unknown>;
+    expect(unknownKeys(doc, ['defaultDecision', 'rules'])).toEqual(['zeta', 'alpha']);
+  });
+
+  it('returns [] for a record with only known keys, or no keys', () => {
+    expect(unknownKeys({ rules: [] }, ['defaultDecision', 'rules'])).toEqual([]);
+    expect(unknownKeys({}, ['rules'])).toEqual([]);
+  });
+
+  it('reports an own __proto__ key from JSON.parse as unknown rather than swallowing it', () => {
+    const doc = JSON.parse('{"__proto__":{"rules":[]}}') as Record<string, unknown>;
+    expect(unknownKeys(doc, ['rules'])).toEqual(['__proto__']);
+  });
+});

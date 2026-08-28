@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSandbox,
+  hasGlobCharacter,
   isBlockedFirstToken,
   mergeSandboxLayers,
   sandboxHook,
@@ -388,5 +389,36 @@ describe('path gate folds Unicode form (V11, gate level)', () => {
     const sandbox = createSandbox({ paths: { allow: [nfc] } });
     expect(sandbox.allowPath(`${nfd}/secret.txt`)).toBe(true);
     expect(sandbox.allowPath('/data/Other/secret.txt')).toBe(false);
+  });
+});
+
+describe('allowCommand refuses glob characters in argv[0] (ADR-0034, issue #93)', () => {
+  // A programmatic createSandbox() caller never goes through the settings
+  // parser, so the gate carries the same rule: an argv[0] the executing shell
+  // would expand names a different program from the one the string says.
+  const sandbox = createSandbox({ commands: { allow: ['/bin/s?', '/bin/*', '[s]h', 's?', 'git'] } });
+
+  it.each(['/bin/s? -c id', '/bin/s?', '[s]h', 's?', '/bin/* -c id'])(
+    'denies %s even though the entry matches it exactly',
+    (cmd) => {
+      expect(sandbox.allowCommand(cmd)).toBe(false);
+    },
+  );
+
+  it.each(['git add *', 'git log -- [a]*', 'git show HEAD?'])(
+    'still allows glob characters in ARGUMENTS (%s): expansion there stays inside the allowed program',
+    (cmd) => {
+      expect(sandbox.allowCommand(cmd)).toBe(true);
+    },
+  );
+});
+
+describe('hasGlobCharacter (the shared brain of the parser rejection AND the gate)', () => {
+  it.each(['*', '?', '[', '/bin/s?', '/usr/local/bin/*', '[s]h'])('%s -> true', (token) => {
+    expect(hasGlobCharacter(token)).toBe(true);
+  });
+
+  it.each(['git', '/bin/git', 'sh', ']', '~/bin/git', ''])('%s -> false', (token) => {
+    expect(hasGlobCharacter(token)).toBe(false);
   });
 });

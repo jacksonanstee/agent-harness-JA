@@ -17,7 +17,10 @@ export interface PermissionRule {
 /**
  * Which settings layer a rule came from. Layer is load-bearing, not
  * cosmetic: winners are resolved per layer and combined by max severity, so
- * a project layer can tighten but never loosen user policy (ADR-0014 §5).
+ * a project layer can tighten but never loosen user policy through RULES
+ * (ADR-0014 §5). The scalar `defaultDecision` is the exemption: it composes
+ * by override, project over user, which is the widening channel recorded as
+ * security-model R-8, not a tighten-only value.
  */
 export type SettingsLayer = 'user' | 'project';
 
