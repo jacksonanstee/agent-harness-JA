@@ -184,7 +184,11 @@ export interface SessionConfig {
   skillsDir: string | null;
   descriptor?: TaskDescriptor;
   maxTurns?: number;
-  /** Streams assistant text as it arrives. */
+  /**
+   * Streams assistant text as it arrives, after secret redaction (S-2) when
+   * `redactSecrets` is injected: fail-closed to `[REDACTION FAILED]` on a
+   * redactor throw or non-string, never the raw text (issue #91).
+   */
   onText?: (text: string) => void;
   /** Non-fatal problems: skill load errors, memory write failure, hook errors. */
   onWarning?: (message: string) => void;

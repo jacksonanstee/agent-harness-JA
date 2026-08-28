@@ -104,11 +104,28 @@ before they get there.
   matched). Merged the block + fence rules into one `private-key-block` whose
   bounded lazy body runs to the END fence *or* end-of-input, so terminated,
   unterminated, and oversized blocks are always fully redacted (regression
-  tests cover >8192 and unterminated).
+  tests cover >8192 and unterminated). *Amended 2026-08-28 (issue #90):
+  "always fully redacted" was false above the bound. The bounded lazy body
+  made the match FAIL one character past 16,384 between-fence characters, so
+  an oversized block, fences included, passed through byte-identical, and so
+  did an unterminated block past the bound; the regression test reached 9,600
+  and never the boundary. The body is now unbounded (`*?`); tests bind 16,384
+  as the control, then 16,385, 100,000, and an unterminated 40,000-character
+  body, each to the exact redacted string. Residual: a bare BEGIN header with
+  no END fence now redacts to end-of-input (up to `MAX_INPUT`) rather than to
+  16 KiB, which is the fail-closed side of the trade.*
 - **MEDIUM — memory session-summary now redacted.** `prompt` and `resultText`
   are redacted before the memory write (redact-then-truncate), closing the
   second retained-sink path (the model can echo a tool-read secret into its
-  answer; the user can paste one into the prompt).
+  answer; the user can paste one into the prompt). *Amended 2026-08-28 (issue
+  #91): a third sink was never listed because it is not retained. Assistant
+  text streamed to `onText`, which the CLI writes to stdout and a CI build log
+  captures, reached the terminal raw while the memory copy of the same reply
+  was redacted. Each text block is now redacted at the session's emission
+  point before `onText` sees it, fail-closed to the same sentinel on a throw
+  or a non-string, with a warning per redacted block. Absent an injected
+  redactor the text passes raw, as for memory; the composition root always
+  injects one.*
 - **MEDIUM — raw hook `result`/`scan` documented** as a deliberate exception
   (above + type-level warning on `PostToolPayload`).
 - **MEDIUM (differential review) — ReDoS/DoS on oversized input fixed.** The
@@ -118,6 +135,14 @@ before they get there.
   128 KiB (`MAX_INPUT`), dropping the tail behind an `[REDACTED:oversized-input]`
   marker (never emitted raw), and the private-key body bound is 16 KiB (≫ any
   real PEM key). A >cap many-header ReDoS test now documents the real bound.
+  *Amended 2026-08-28 (issue #90): the 16 KiB body bound was both the leak
+  above and the slower path. With the `|$` alternative a match cannot fail
+  once a header is found, so an unbounded body consumes to the next END fence
+  or to end-of-input and many-header input is linear. On this bullet's own
+  worst case sliced to `MAX_INPUT`: bounded 94 ms against unbounded 0.10 ms
+  (5-run best, Node 22, 2026-08-28 workstation; the external verifier measured
+  118 ms against 0.2 ms). `MAX_INPUT` is now the only bound, and the
+  many-header test still holds under it.*
 - **Code review — double-stringify fixed** (`runSecretRedaction` takes `unknown`
   and stringifies once internally, symmetry with `runInjectionScan`); rule
   ≤1-capture-group invariant now asserted by a test.

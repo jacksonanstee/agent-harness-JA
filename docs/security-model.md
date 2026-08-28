@@ -325,8 +325,12 @@ access to the machine.
 
 ### Information disclosure — secrets leaving through the harness
 
-The secret redactor (S-2, ADR-0013) runs on tool output with 25 rules drawn
-from the gitleaks/trufflehog lineage. Two properties matter more than rule
+The secret redactor (S-2, ADR-0013) runs on tool output, on the memory
+summary, and on each assistant text block before it reaches `onText`, which
+is the CLI's stdout and so any CI log that captures it (issue #91; the stdout
+copy used to go out raw while the memory copy was redacted). It carries 25
+rules drawn from the gitleaks/trufflehog lineage. Two properties matter more
+than rule
 count: findings carry `rule_id` + offsets + length and **never the secret
 bytes** (the audit trail cannot become the leak), and the pipeline **fails
 closed** — inside the redactor a malformed rule is skipped per-rule, and at

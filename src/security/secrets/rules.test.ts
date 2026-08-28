@@ -162,6 +162,33 @@ describe('DEFAULT_SECRET_RULES — per-rule positives/negatives', () => {
     expect(result.redacted).toBe('[REDACTED:private-key-block]');
   });
 
+  // Issue #90: the `{0,16384}?` body bound was the leak. One character above
+  // it the WHOLE block, fences included, passed through byte-identical, and so
+  // did an unterminated block past it (executed at main 84c4ae0). The 16,384
+  // case is the control that pins where the old boundary sat; the others were
+  // raw before the fix. All sit under redact()'s 131,072-byte input cap, so
+  // the rule, not the cap, is what these bind.
+  const fence = (kind: 'BEGIN' | 'END'): string => `-----${kind} RSA PRIVATE${''} KEY-----`;
+  const wrappedBlock = (betweenFences: number): string =>
+    `${fence('BEGIN')}\n${'A'.repeat(betweenFences - 2)}\n${fence('END')}`;
+
+  it.each([
+    ['at the old 16,384 between-fence boundary (control)', 16_384],
+    ['one character above the old boundary', 16_385],
+    ['at 100,000 between-fence characters, under the input cap', 100_000],
+  ])('redacts a terminated private-key block %s in full', (_label, betweenFences) => {
+    const result = createSecretRedactor().redact(`prefix ${wrappedBlock(betweenFences)} suffix`);
+    expect(result.findings.map((f) => f.rule_id)).toContain('private-key-block');
+    expect(result.redacted).toBe('prefix [REDACTED:private-key-block] suffix');
+  });
+
+  it('redacts an unterminated private-key block past the old boundary to end-of-input', () => {
+    const key = `${fence('BEGIN')}\n${'A'.repeat(40_000)}`;
+    const result = createSecretRedactor().redact(`prefix ${key}`);
+    expect(result.findings.map((f) => f.rule_id)).toContain('private-key-block');
+    expect(result.redacted).toBe('prefix [REDACTED:private-key-block]');
+  });
+
   it('every rule has at most one capture group (gatedToken invariant)', () => {
     for (const rule of DEFAULT_SECRET_RULES) {
       const groups = new RegExp(`${rule.pattern.source}|`).exec('')!.length - 1;

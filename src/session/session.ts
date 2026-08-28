@@ -917,6 +917,32 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
+    // Redacts one assistant text block before it is handed to `onText`
+    // (issue #91). This was the one sink the redactor never saw: the memory
+    // copy of the same reply was redacted while the CLI wrote the raw text to
+    // stdout, and a CI build log captured it. Fail-closed like the persistence
+    // path (the sentinel on a throw or a non-string, never the raw text), and
+    // warned like the tool-output path, since an operator is watching this
+    // channel. Absent redactor → raw text (nothing configured); the
+    // composition root always injects one.
+    function redactForEmission(text: string): string {
+      if (deps.redactSecrets === undefined) return text;
+      try {
+        const { redacted, findings } = deps.redactSecrets(text);
+        if (typeof redacted !== 'string') {
+          warn('secret redaction failed for assistant text: redactor returned a non-string');
+          return REDACTION_FAILED;
+        }
+        if (findings.length > 0) {
+          warn(`secrets redacted in assistant text (${findings.length} finding(s))`);
+        }
+        return redacted;
+      } catch (error: unknown) {
+        warn(`secret redaction failed for assistant text: ${describeError(error)}`);
+        return REDACTION_FAILED;
+      }
+    }
+
     // Scans the full tool output; returns the ScanResult (structural — the
     // hook payload types it `unknown` to avoid a hooks→security import) or
     // null when no scanner is injected. Never throws into the hot path.
@@ -1129,8 +1155,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
                 `model ${refusal.fallbackModel}, which is NOT the routed model ${modelChoice.model}`,
           );
         } else if (isAssistant(message)) {
-          for (const text of assistantText(message)) {
-            config.onText?.(text);
+          if (config.onText !== undefined) {
+            for (const text of assistantText(message)) {
+              config.onText(redactForEmission(text));
+            }
           }
         } else if (isResult(message)) {
           if (message.session_id) sdkSessionId = message.session_id;
