@@ -18,7 +18,7 @@ import {
   SKILL_DROP_RULE_IDS_MAX,
 } from '../telemetry/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
-import { scan } from '../security/index.js';
+import { redact, scan } from '../security/index.js';
 import type { RedactResult, ScanResult } from '../security/index.js';
 import {
   createPermissionEvaluator,
@@ -821,6 +821,34 @@ describe('createSession', () => {
     expect(warnings.some((w) => w.includes('secret redaction failed'))).toBe(true);
   });
 
+  // The architecture lens of the #90/#91 review found runSecretRedaction
+  // trusting `.redacted` the way redactForPersistence once did: a non-string
+  // result fell through `?? stringifyForScan(toolResponse)` and the tool-trace
+  // row stored the RAW tool output. Same posture as the other sinks now.
+  it('fail-closes telemetry to the sentinel when the redactor returns a non-string, never the raw output', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: secret }]);
+    const events: TelemetryEventInput[] = [];
+    const telemetry = {
+      record: (e: TelemetryEventInput) => {
+        events.push(e);
+        return { ok: true as const, value: { ...e, id: 'x', ts: 1 } as TelemetryEvent };
+      },
+    };
+    const warnings: string[] = [];
+    const redactSecrets = (): RedactResult => ({ redacted: undefined as unknown as string, findings: [] });
+    const session = createSession(makeDeps(fake, { telemetry, redactSecrets }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    await session.run('hi');
+    const trace = events.find((e) => e.type === 'tool-trace');
+    if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
+    expect(trace.payload.resultSummary).toBe('[REDACTION FAILED]');
+    expect(trace.payload.resultSummary).not.toContain(secret);
+    expect(warnings).toContain('secret redaction failed: redactor returned a non-string');
+  });
+
   it('records raw output in telemetry when no redactor is injected (unchanged behavior)', async () => {
     const fake = fakeQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output: 'plain output' }]);
     const events: TelemetryEventInput[] = [];
@@ -1144,6 +1172,63 @@ describe('createSession', () => {
     });
     await session.run('hi');
     expect(chunks).toEqual(['hello from claude']);
+  });
+
+  // Issue #91: stdout was the one sink the redactor never saw. The memory copy
+  // of the same reply was redacted while `onText` (the CLI's stdout, and a CI
+  // build log capturing it) received the raw text. Redaction now happens at
+  // the emission point, fail-closed like the persistence path.
+  describe('assistant text is redacted before it reaches onText (issue #91)', () => {
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const leaky: SdkMessage = {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `the key is ${secret}` }] },
+    };
+
+    it('emits the redacted text with the real redactor and warns once', async () => {
+      const fake = fakeQuery([INIT, leaky, RESULT]);
+      const chunks: string[] = [];
+      const warnings: string[] = [];
+      const session = createSession(makeDeps(fake, { redactSecrets: redact }), {
+        skillsDir: '/nowhere',
+        onText: (t) => chunks.push(t),
+        onWarning: (w) => warnings.push(w),
+      });
+      await session.run('hi');
+      expect(chunks).toEqual(['the key is [REDACTED:aws-access-key-id]']);
+      expect(warnings.filter((w) => w === 'secrets redacted in assistant text (1 finding(s))')).toHaveLength(1);
+    });
+
+    it('fails closed to the sentinel when the redactor throws, and the run still completes', async () => {
+      const fake = fakeQuery([INIT, leaky, RESULT]);
+      const chunks: string[] = [];
+      const warnings: string[] = [];
+      const redactSecrets = (): RedactResult => {
+        throw new Error('boom');
+      };
+      const session = createSession(makeDeps(fake, { redactSecrets }), {
+        skillsDir: '/nowhere',
+        onText: (t) => chunks.push(t),
+        onWarning: (w) => warnings.push(w),
+      });
+      const result = await session.run('hi');
+      expect(chunks).toEqual(['[REDACTION FAILED]']);
+      expect(warnings).toContain('secret redaction failed for assistant text: boom');
+      expect(result.resultText).toBe('hello from claude');
+    });
+
+    it('fails closed to the sentinel when the redactor returns a non-string', async () => {
+      const fake = fakeQuery([INIT, leaky, RESULT]);
+      const chunks: string[] = [];
+      const redactSecrets = (): RedactResult => ({ redacted: undefined as unknown as string, findings: [] });
+      const session = createSession(makeDeps(fake, { redactSecrets }), {
+        skillsDir: '/nowhere',
+        onText: (t) => chunks.push(t),
+        onWarning: () => {},
+      });
+      await session.run('hi');
+      expect(chunks).toEqual(['[REDACTION FAILED]']);
+    });
   });
 
   describe('skill content entering the system prompt is untrusted (currency review, ASI06 channel)', () => {

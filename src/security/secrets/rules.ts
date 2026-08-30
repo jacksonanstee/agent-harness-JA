@@ -160,15 +160,18 @@ export const DEFAULT_SECRET_RULES = [
   {
     id: 'private-key-block',
     precision: 'high',
-    // One rule for terminated AND unterminated/oversized blocks: a bounded
+    // One rule for terminated AND unterminated/oversized blocks: an unbounded
     // lazy body runs to the END fence OR to end-of-input. Splitting this into
     // a separate BEGIN-only "fence" rule leaked the key body when the body
     // exceeded the lazy cap (only the header matched) — see ADR-0013. The
-    // {0,16384} bound (16 KiB ≫ any real PEM key: RSA-8192 ≈ 6.4 KiB) keeps
-    // per-match work small; redact()'s MAX_INPUT cap bounds the many-header
-    // worst case (differential-review DoS finding).
+    // body carries NO upper bound (issue #90): a `{0,16384}?` bound made the
+    // match FAIL one character past it, so an oversized block, fences and
+    // all, passed through raw. Unbounded, the `|$` alternative means a match
+    // can never fail once a header is found, so many-header input is linear
+    // (each match consumes to the next fence or to end-of-input) and
+    // redact()'s MAX_INPUT cap is the total bound.
     pattern:
-      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----[\s\S]{0,16384}?(?:-----END [A-Z ]{0,40}-----|$)/,
+      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]{0,40}-----|$)/,
     description: 'PEM private-key block (terminated, unterminated, or oversized)',
   },
   {

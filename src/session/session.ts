@@ -878,7 +878,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Stringifies internally (symmetry with runInjectionScan) so callers never
     // double-stringify. Returns null when no redactor is injected (nothing to
     // do → caller uses the raw text); `{redacted: REDACTION_FAILED,
-    // findings: null}` when the redactor throws — distinct states that
+    // findings: null}` when the redactor throws or returns a non-string —
+    // distinct states that
     // deliberately both surface as `redactions: null` on the hook payload
     // (which is typed `unknown`, so richer signalling isn't available there).
     function runSecretRedaction(
@@ -888,6 +889,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       if (deps.redactSecrets === undefined) return null;
       try {
         const result = deps.redactSecrets(stringifyForScan(output));
+        if (typeof result.redacted !== 'string') {
+          // A non-string `redacted` used to fall through the caller's
+          // `?? stringifyForScan(...)` and store the RAW output (#90/#91
+          // review). Same posture as the other sinks: the sentinel.
+          warn('secret redaction failed: redactor returned a non-string');
+          return { redacted: REDACTION_FAILED, findings: null };
+        }
         if (result.findings.length > 0) {
           warn(`secrets redacted in ${tool} (${result.findings.length} finding(s))`);
         }
@@ -913,6 +921,32 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const { redacted } = deps.redactSecrets(value);
         return typeof redacted === 'string' ? redacted : REDACTION_FAILED;
       } catch {
+        return REDACTION_FAILED;
+      }
+    }
+
+    // Redacts one assistant text block before it is handed to `onText`
+    // (issue #91). This was the one sink the redactor never saw: the memory
+    // copy of the same reply was redacted while the CLI wrote the raw text to
+    // stdout, and a CI build log captured it. Fail-closed like the persistence
+    // path (the sentinel on a throw or a non-string, never the raw text), and
+    // warned like the tool-output path, since an operator is watching this
+    // channel. Absent redactor → raw text (nothing configured); the
+    // composition root always injects one.
+    function redactForEmission(text: string): string {
+      if (deps.redactSecrets === undefined) return text;
+      try {
+        const { redacted, findings } = deps.redactSecrets(text);
+        if (typeof redacted !== 'string') {
+          warn('secret redaction failed for assistant text: redactor returned a non-string');
+          return REDACTION_FAILED;
+        }
+        if (findings.length > 0) {
+          warn(`secrets redacted in assistant text (${findings.length} finding(s))`);
+        }
+        return redacted;
+      } catch (error: unknown) {
+        warn(`secret redaction failed for assistant text: ${describeError(error)}`);
         return REDACTION_FAILED;
       }
     }
@@ -1129,8 +1163,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
                 `model ${refusal.fallbackModel}, which is NOT the routed model ${modelChoice.model}`,
           );
         } else if (isAssistant(message)) {
-          for (const text of assistantText(message)) {
-            config.onText?.(text);
+          if (config.onText !== undefined) {
+            for (const text of assistantText(message)) {
+              config.onText(redactForEmission(text));
+            }
           }
         } else if (isResult(message)) {
           if (message.session_id) sdkSessionId = message.session_id;

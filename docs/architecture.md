@@ -71,7 +71,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 #### `security/secrets-scanner`
 
-- **Owns:** redaction of secrets in tool inputs and outputs.
+- **Owns:** redaction of secrets in tool inputs and outputs, in the memory summary, and in each assistant text block before the session emits it through `onText` (issue #91).
 - **Public API:** `redact(text: string): { redacted: string, findings: SecretFinding[] }`.
 - **Depends on:** built-in pattern registry; optional user-supplied patterns via config.
 - **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)); **observe-only** — redacts everything the harness persists/emits, but the model still sees the raw result (adopting the SDK's `updatedToolOutput` rewrite channel is deferred, ADR-0032/issue #84), same limit as S-1.
@@ -133,7 +133,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
 - **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`.
 - **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
-- **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)).
+- **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)). Each assistant text block passes the injected redactor before `onText` (fail-closed to the sentinel, issue #91); `resultText` on the returned result is raw and is redacted only at the memory write.
 
 ### Eval layer
 

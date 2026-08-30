@@ -63,7 +63,11 @@ before they get there.
    `SdkHookOutput` allows only a PreToolUse `deny`; PostToolUse returns `{}` —
    neither hook was thought to expose a rewrite channel — corrected 2026-08-25 (ADR-0032): the SDK's `updatedInput` (PreToolUse) and `updatedToolOutput` (PostToolUse) do exist, and adopting them is issue #84. So in v1 S-2 redacts
    everything the **harness** persists or emits (telemetry, warnings, hook
-   `redactions` payload) — satisfying "redacted with a logged event" for the
+   `redactions` payload; *amended 2026-08-28, issue #91: this list omitted the
+   memory summary, redacted since the 2026-07-06 review below, and assistant
+   text streamed to `onText`, the CLI's stdout, which went out raw until this
+   date and is now redacted at the session's emission point, fail-closed to
+   the sentinel; see the memory bullet under the review amendments*) — satisfying "redacted with a logged event" for the
    harness data plane — but the **model still sees the raw** tool result and the
    tool still receives the raw input. Adopting the SDK's rewrite channels
    (`updatedToolOutput`, `updatedInput`) for that is the same deferred decision
@@ -104,11 +108,36 @@ before they get there.
   matched). Merged the block + fence rules into one `private-key-block` whose
   bounded lazy body runs to the END fence *or* end-of-input, so terminated,
   unterminated, and oversized blocks are always fully redacted (regression
-  tests cover >8192 and unterminated).
+  tests cover >8192 and unterminated). *Amended 2026-08-28 (issue #90):
+  "always fully redacted" was false above the bound. The bounded lazy body
+  made the match FAIL one character past 16,384 between-fence characters, so
+  an oversized block, fences included, passed through byte-identical, and so
+  did an unterminated block past the bound; the regression test reached 9,600
+  and never the boundary. The body is now unbounded (`*?`); tests bind 16,384
+  as the control, then 16,385, 100,000, and an unterminated 40,000-character
+  body, each to the exact redacted string. Reach: below the bound the two
+  forms are byte-identical (the lazy body reaches an END fence or `$` inside
+  the bound); above it the old form did not match at all and emitted the
+  header and everything after it raw. The change is leak to redact. Its one
+  cost is that a lone BEGIN header now redacts to the next END fence or to
+  end-of-input where the old form left that span raw, so a header written in
+  prose can swallow the rest of a reply up to `MAX_INPUT`; that is the
+  fail-closed side and the accepted trade.*
 - **MEDIUM — memory session-summary now redacted.** `prompt` and `resultText`
   are redacted before the memory write (redact-then-truncate), closing the
   second retained-sink path (the model can echo a tool-read secret into its
-  answer; the user can paste one into the prompt).
+  answer; the user can paste one into the prompt). *Amended 2026-08-28 (issue
+  #91): a third sink was never listed because it is not retained. Assistant
+  text streamed to `onText`, which the CLI writes to stdout and a CI build log
+  captures, reached the terminal raw while the memory copy of the same reply
+  was redacted. Each text block is now redacted at the session's emission
+  point before `onText` sees it, fail-closed to the same sentinel on a throw
+  or a non-string, with a warning per redacted block. Redaction sits in the
+  session rather than in the CLI's `onText` handler (the issue's other
+  option) so every `onText` consumer, library callers included, receives
+  redacted text, and the CLI's `sanitizeForTerminal` stays a terminal-safety
+  pass applied after it. Absent an injected redactor the text passes raw, as
+  for memory; both composition roots inject one.*
 - **MEDIUM — raw hook `result`/`scan` documented** as a deliberate exception
   (above + type-level warning on `PostToolPayload`).
 - **MEDIUM (differential review) — ReDoS/DoS on oversized input fixed.** The
@@ -118,6 +147,14 @@ before they get there.
   128 KiB (`MAX_INPUT`), dropping the tail behind an `[REDACTED:oversized-input]`
   marker (never emitted raw), and the private-key body bound is 16 KiB (≫ any
   real PEM key). A >cap many-header ReDoS test now documents the real bound.
+  *Amended 2026-08-28 (issue #90): the 16 KiB body bound was both the leak
+  above and the slower path. With the `|$` alternative a match cannot fail
+  once a header is found, so an unbounded body consumes to the next END fence
+  or to end-of-input and many-header input is linear. On this bullet's own
+  worst case sliced to `MAX_INPUT`: bounded 94 ms against unbounded 0.10 ms
+  (5-run best, Node 22, 2026-08-28 workstation; the external verifier measured
+  118 ms against 0.2 ms). `MAX_INPUT` is now the only bound, and the
+  many-header test still holds under it.*
 - **Code review — double-stringify fixed** (`runSecretRedaction` takes `unknown`
   and stringifies once internally, symmetry with `runInjectionScan`); rule
   ≤1-capture-group invariant now asserted by a test.
