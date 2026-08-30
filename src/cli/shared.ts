@@ -1,8 +1,9 @@
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
+import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { loadJsonSettings } from '../internal/settings.js';
 import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
@@ -55,21 +56,21 @@ export function scorecardFilename(nowMs: number): string {
  * A malicious repo must not redirect the scorecard write (spec decision #21):
  * refuse a symlink at the output-dir path. Missing is fine (we mkdir it).
  *
- * DELIBERATE second implementation alongside `src/eval/redteam/baseline.ts`'s
- * `refuseSymlink` (different layer, different error type, different ENOENT
- * semantics) — extract to `src/internal/` only on a third consumer, per the
- * sanitize.ts precedent (ADR-0008 Revisit-if fired at the 4th copy).
+ * The lstat primitive lives in `src/internal/guarded-read.ts` since the
+ * settings loader became its third consumer (ADR-0034 decision 4); this
+ * keeps the eval layer's error type and message. A stat failure other than
+ * ENOENT now surfaces as a message-bearing `GuardedReadError` rather than the
+ * raw fs error; both call sites (writeScorecard, the eval pre-flight) map
+ * both errors this can raise to a message and an exit 2.
  */
 export function refuseSymlinkedDir(path: string): void {
-  let isSymlink: boolean;
   try {
-    isSymlink = lstatSync(path).isSymbolicLink();
+    refuseSymlink(path, 'directory');
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (error instanceof GuardedReadError && error.refusal === 'symlink') {
+      throw new EvalUsageError(`refusing to write scorecards: ${path} is a symlink`);
+    }
     throw error;
-  }
-  if (isSymlink) {
-    throw new EvalUsageError(`refusing to write scorecards: ${path} is a symlink`);
   }
 }
 
@@ -130,7 +131,13 @@ export interface SecurityComposition {
 }
 
 export interface ComposeSecurityDeps {
-  readFile: (path: string) => string;
+  /**
+   * Test seam only, passed through to the shared loader. Omitted, every
+   * loader reads through `readSettingsFile`, the guarded reader (symlink
+   * refusal, byte cap, O_NOFOLLOW, regular-file check; ADR-0034 decision 5),
+   * which is pinned at the `main()` entrypoint for both `run` and `eval`.
+   */
+  readFile?: (path: string) => string;
   userDir: string;
   projectDir: string;
 }
@@ -150,7 +157,6 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   ].map((path) =>
     loadJsonSettings(
       path,
-      deps.readFile,
       (doc) => {
         try {
           return {
@@ -169,6 +175,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       },
       { permissions: { rules: [] }, sandbox: {} },
       SettingsLoadError,
+      deps.readFile,
     ),
   );
   const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];

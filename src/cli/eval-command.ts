@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { createGoldenRunner, createVerifier, EvalUsageError, toMarkdown } from '../eval/index.js';
 import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
+import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { createSession } from '../session/index.js';
@@ -115,7 +115,6 @@ export async function runEval(args: EvalArgs): Promise<number> {
   let security: SecurityComposition;
   try {
     security = composeSecurity({
-      readFile: (p) => readFileSync(p, 'utf8'),
       userDir: homedir(),
       projectDir: process.cwd(),
     });
@@ -130,12 +129,15 @@ export async function runEval(args: EvalArgs): Promise<number> {
     process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
   }
 
-  // Pre-flight, before any spend: the write path must be trustworthy.
+  // Pre-flight, before any spend: the write path must be trustworthy. A
+  // symlink is an EvalUsageError; a directory that cannot be stat'ed at all
+  // (EACCES, ENOTDIR) is a GuardedReadError since ADR-0034 and is mapped to
+  // the same exit 2 with its message, where it used to crash uncaught.
   try {
     refuseSymlinkedDir('.harness');
     refuseSymlinkedDir(EVAL_OUT_DIR);
   } catch (error: unknown) {
-    if (error instanceof EvalUsageError) {
+    if (error instanceof EvalUsageError || error instanceof GuardedReadError) {
       process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
       return 2;
     }

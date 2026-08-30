@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { MESSAGE_ECHO_MAX } from '../../internal/settings.js';
 import { createPermissionEvaluator } from './evaluate.js';
 import {
   loadSettingsFile,
@@ -29,11 +35,36 @@ describe('parsePermissionSettings', () => {
     expect(parsePermissionSettings({ otherKey: 1 })).toEqual({ rules: [] });
   });
 
-  it('ignores unknown keys inside permissions', () => {
-    const parsed = parsePermissionSettings({
-      permissions: { rules: [], futureKnob: true },
-    });
-    expect(parsed.rules).toEqual([]);
+  it('rejects an unknown key inside permissions, naming the key and the known set (ADR-0034)', () => {
+    // Was pinned as "ignored" until issue #85: a typo of a hardening key
+    // (defaultDecison) produced the open posture with no signal. Root-level
+    // siblings stay ignored (the test above); INSIDE the dimension is policy.
+    const doc = { permissions: { rules: [], futureKnob: true } };
+    expect(() => parsePermissionSettings(doc)).toThrowError(PermissionSettingsError);
+    expect(() => parsePermissionSettings(doc)).toThrow(/permissions.*unknown key 'futureKnob'/);
+    expect(() => parsePermissionSettings(doc)).toThrow(/defaultDecision, rules/);
+  });
+
+  it('rejects an unknown key inside a rule entry: a typo of match would widen an allow rule', () => {
+    // { tool: 'Bash', decision: 'allow', matchh: 'git *' } used to parse as a
+    // blanket Bash allow, the exact widening the parser exists to refuse.
+    const doc = { permissions: { rules: [{ tool: 'Bash', decision: 'allow', matchh: 'git *' }] } };
+    expect(() => parsePermissionSettings(doc)).toThrowError(PermissionSettingsError);
+    expect(() => parsePermissionSettings(doc)).toThrow(/rules\[0\].*unknown key 'matchh'/);
+    expect(() => parsePermissionSettings(doc)).toThrow(/tool, match, decision/);
+  });
+
+  it('bounds the echoed key name: the key is attacker-authored bytes bound for stderr', () => {
+    const longKey = 'k'.repeat(500);
+    let message = '';
+    try {
+      parsePermissionSettings({ permissions: { rules: [], [longKey]: 1 } });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/unknown key/);
+    expect(message).not.toContain(longKey);
+    expect(message).toContain(`'${'k'.repeat(MESSAGE_ECHO_MAX)}…'`);
   });
 
   it.each([
@@ -66,6 +97,25 @@ describe('parsePermissionSettings rule cap', () => {
 });
 
 describe('loadSettingsFile', () => {
+  const tmp: string[] = [];
+  afterEach(() => {
+    for (const dir of tmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads through the guarded reader when no readFile is given: a symlinked file is refused', () => {
+    // The public loader carries the envelope itself (ADR-0034 decision 5);
+    // a library caller cannot end up with a plain read by omission.
+    const dir = mkdtempSync(join(tmpdir(), 'perm-settings-'));
+    tmp.push(dir);
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const link = join(dir, 'settings.json');
+    symlinkSync(real, link);
+    expect(() => loadSettingsFile(link)).toThrowError(PermissionSettingsError);
+    expect(() => loadSettingsFile(link)).toThrow(/symlink/);
+    expect(loadSettingsFile(join(dir, 'missing.json'))).toEqual({ rules: [] });
+  });
+
   it('returns an empty layer when the file is missing', () => {
     const missing = (): string => {
       const err = new Error('ENOENT') as NodeJS.ErrnoException;

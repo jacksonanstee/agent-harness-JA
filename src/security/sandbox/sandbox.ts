@@ -25,13 +25,39 @@ export class SandboxViolation extends Error {
  * sandboxed command means we can no longer claim to know which program
  * starts, so the command is denied outright (ADR-0015 §3). `\` (escape /
  * line continuation) and `!` (history expansion) are included since the
- * review round; `*`/`~` are deliberately NOT — glob/tilde expansion happens
- * inside the allowed program's argument list and does not change which
- * program starts (documented non-goal).
+ * review round. Glob characters and `~` are deliberately NOT in this list:
+ * in the ARGUMENTS, expansion happens inside the allowed program's argv and
+ * does not change which program starts (documented non-goal). In argv[0] a
+ * glob, a quote or an `=` DOES change which program starts, which is
+ * `hasShellRewriteCharacter`'s job below (ADR-0034 decision 2, amending
+ * ADR-0015 §3).
  */
 const SHELL_METACHARACTERS = [
   ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', '\\', '!',
 ];
+
+/**
+ * Characters the executing shell rewrites in a word before exec, or that
+ * make the word not a program name at all. In argv[0] any of them means the
+ * string names one program and another starts: glob (`*`, `?`, `[`; bash
+ * and zsh), the zsh extendedglob operators `^` and `#` (under `setopt
+ * extendedglob`), quote removal (`"`, `'`: `/bin/s"h"` IS `/bin/sh` to bash
+ * and zsh), equals expansion (`=sh` is `/bin/sh` to zsh) and assignment
+ * prefixes (`FOO=bar sh` runs sh behind an argv[0] the gate compared), and
+ * NUL (bash drops the byte from a command read on stdin; zsh cuts the word
+ * there; either way a different program starts). One predicate for the parser's entry refusal and the gate's argv[0]
+ * refusal, the `isBlockedFirstToken` pattern, so they cannot drift (issue
+ * #93; ADR-0034 decision 2, widened from three glob characters by the
+ * security review of that change, which produced the quote and equals
+ * counterexamples by execution). `~` is excluded: tilde expansion rewrites a
+ * prefix, never the basename the blocklist keys on. Arguments are untouched:
+ * `git commit -m "x"` and `git add *` expand inside the allowed program.
+ */
+const SHELL_REWRITE_CHARACTERS: readonly string[] = ['*', '?', '[', '^', '#', '"', "'", '=', '\0'];
+
+export function hasShellRewriteCharacter(word: string): boolean {
+  return SHELL_REWRITE_CHARACTERS.some((ch) => word.includes(ch));
+}
 
 /**
  * Binaries that defeat first-token enforcement by construction: allowing a
@@ -128,6 +154,11 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
       const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
+      // A rewrite character in argv[0] means the string names one program
+      // and the shell starts another; refused before the allowlist is
+      // consulted, so an entry that matches it exactly cannot rescue it
+      // (ADR-0034 decision 2).
+      if (hasShellRewriteCharacter(argv0)) return false;
       // Static blocklist beats the allowlist: shells and run-anything
       // wrappers defeat first-token analysis no matter what settings say.
       // Case-folded on case-insensitive platforms — `SH -c` resolves the same

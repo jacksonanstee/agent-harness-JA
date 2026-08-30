@@ -1,7 +1,7 @@
 # agent-harness-JA
 
 > Most repos show the artefact; this one shows the thinking.
-> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 33 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
+> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 34 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -71,7 +71,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)**: Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)**: Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)**: Thirty-three ADRs (0001–0033) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, block-on-flag enforcement for the skill channel, cleartext paths in retained sinks, the nonce-authenticated skill-section delimiter, why the documentation gate checks structure rather than claims, the scorecard task directory that suppresses an escaping path rather than leaking it, and the deny reason that names a rule without quoting the operator's glob, and the post-tool hook field-name fix that made the output scan and redactor actually run (the SDK sends `tool_response`, not the `tool_output` the harness read), and the tool table derived from the SDK's own declarations in both directions after five declared path/command tools were found to have never been in it.
+3. **[docs/decisions/](./docs/decisions/)**: Thirty-four ADRs (0001–0034) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, block-on-flag enforcement for the skill channel, cleartext paths in retained sinks, the nonce-authenticated skill-section delimiter, why the documentation gate checks structure rather than claims, the scorecard task directory that suppresses an escaping path rather than leaking it, and the deny reason that names a rule without quoting the operator's glob, and the post-tool hook field-name fix that made the output scan and redactor actually run (the SDK sends `tool_response`, not the `tool_output` the harness read), and the tool table derived from the SDK's own declarations in both directions after five declared path/command tools were found to have never been in it, and the settings file treated as hostile input at every level (unknown keys and command entries the shell would rewrite fail loud, and the loader refuses symlinks and non-files and caps the file, the envelope the red-team baseline already had).
 4. **[docs/architecture.md](./docs/architecture.md)**: System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)**: Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)**: How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
@@ -117,8 +117,8 @@ As of 2026-08-08:
 | Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
-| ADRs | 0001–0033 |
-| Tests | 1280 at the 2026-08-27 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| ADRs | 0001–0034 |
+| Tests | 1371 at the 2026-08-28 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 

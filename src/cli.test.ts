@@ -11,6 +11,7 @@ import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { redact, scan } from './security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
+import { MAX_SETTINGS_BYTES } from './internal/settings.js';
 import type { TelemetryEvent } from './telemetry/index.js';
 
 describe('parseRunArgs', () => {
@@ -1324,5 +1325,174 @@ describe('refuseSymlinkedDir', () => {
     mkdirSync(join(dir, 'real'));
     symlinkSync(join(dir, 'real'), join(dir, 'link'));
     expect(() => refuseSymlinkedDir(join(dir, 'link'))).toThrow(EvalUsageError);
+  });
+});
+
+describe('composeSecurity with the default reader: the hostile-file envelope (ADR-0034, issue #94)', () => {
+  // No `readFile` injected: this is the reader production runs with. Every
+  // case here is a real file on disk, because the fake-fs seam above cannot
+  // exercise lstat, O_NOFOLLOW or a byte cap.
+  const tmp: string[] = [];
+  afterEach(() => {
+    for (const dir of tmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  function layerDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'compose-envelope-'));
+    tmp.push(dir);
+    mkdirSync(join(dir, '.harness'));
+    return dir;
+  }
+  const settingsPath = (dir: string): string => join(dir, '.harness', 'settings.json');
+  function messageOf(fn: () => unknown): string {
+    try {
+      fn();
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    return '';
+  }
+
+  it('composes two regular files', () => {
+    const user = layerDir();
+    const project = layerDir();
+    writeFileSync(settingsPath(user), JSON.stringify({ permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] } }));
+    writeFileSync(settingsPath(project), JSON.stringify({ sandbox: { paths: { allow: ['/safe'] } } }));
+    const result = composeSecurity({ userDir: user, projectDir: project });
+    expect(result.permissions.rules).toHaveLength(1);
+    expect(result.sandbox.paths?.allow).toEqual(['/safe']);
+  });
+
+  it('a missing file on either layer is still an empty layer', () => {
+    const result = composeSecurity({ userDir: layerDir(), projectDir: layerDir() });
+    expect(result.permissions.rules).toEqual([]);
+    expect(result.sandbox).toEqual({});
+  });
+
+  it('refuses a symlinked project settings file, naming the path and the reason', () => {
+    const user = layerDir();
+    const project = layerDir();
+    const real = join(project, 'real.json');
+    writeFileSync(real, '{}');
+    symlinkSync(real, settingsPath(project));
+    expect(() => composeSecurity({ userDir: user, projectDir: project })).toThrowError(SettingsLoadError);
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toContain(settingsPath(project));
+    expect(message).toMatch(/symlink/);
+  });
+
+  it('refuses a symlinked USER settings file too: the envelope is uniform across layers', () => {
+    // Ratified 2026-08-28 (ADR-0034 decision 3): one rule on both layers, so
+    // a stow-style ~/.harness symlink is an exit-2 line, not a silent read.
+    const user = layerDir();
+    const project = layerDir();
+    const real = join(user, 'real.json');
+    writeFileSync(real, JSON.stringify({ permissions: { defaultDecision: 'deny', rules: [] } }));
+    symlinkSync(real, settingsPath(user));
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toContain(settingsPath(user));
+    expect(message).toMatch(/symlink/);
+  });
+
+  it('refuses a symlinked .harness directory (a committed link redirects the whole layer)', () => {
+    const user = layerDir();
+    const project = mkdtempSync(join(tmpdir(), 'compose-envelope-'));
+    tmp.push(project);
+    const realDir = join(project, 'elsewhere');
+    mkdirSync(realDir);
+    writeFileSync(join(realDir, 'settings.json'), '{}');
+    symlinkSync(realDir, join(project, '.harness'));
+    expect(messageOf(() => composeSecurity({ userDir: user, projectDir: project }))).toMatch(/symlink/);
+  });
+
+  it('refuses a settings file over MAX_SETTINGS_BYTES before parsing it', () => {
+    const user = layerDir();
+    const project = layerDir();
+    writeFileSync(settingsPath(project), '{"permissions":{"rules":[]}}' + ' '.repeat(MAX_SETTINGS_BYTES));
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toMatch(/exceeds/);
+    expect(message).toContain(settingsPath(project));
+  });
+
+  it('an invalid-JSON settings file names the path and leaks nothing from inside it', () => {
+    const user = layerDir();
+    const project = layerDir();
+    writeFileSync(settingsPath(project), 'BODY_MARKER_9f3c{');
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toContain(settingsPath(project));
+    expect(message).not.toContain('BODY_MARKER');
+  });
+
+  it('an unknown key fails loud, path-prefixed, naming the key (issue #85)', () => {
+    const user = layerDir();
+    const project = layerDir();
+    writeFileSync(settingsPath(project), JSON.stringify({ sandbox: { path: { allow: ['/safe'] } } }));
+    expect(() => composeSecurity({ userDir: user, projectDir: project })).toThrowError(SettingsLoadError);
+    const message = messageOf(() => composeSecurity({ userDir: user, projectDir: project }));
+    expect(message).toContain(settingsPath(project));
+    expect(message).toMatch(/unknown key 'path'/);
+  });
+});
+
+describe('main() runs the guarded settings reader (the wiring pin, ADR-0034 decision 5)', () => {
+  // Both production callers (run, eval) omit `readFile`, so this is the reader
+  // they actually run with. The PROJECT layer is the attacker-influenced one
+  // and is derived from process.cwd(), which a spy can redirect (chdir throws
+  // under vitest's threads pool, and process.env.HOME never reaches libuv's
+  // getenv there, so the user layer cannot be redirected from a test). Both
+  // commands compose security after the API-key check and before the SDK is
+  // USED, so a refused file exits 2 with no SDK call; if the guard ever
+  // regresses, the run reaches the SDK with the dummy key and fails there,
+  // loudly, without spend. What this pins is the reader wiring; importing
+  // the SDK is side-effect-free, so the position of the import relative to
+  // composeSecurity is a reading of cli.ts, not an assertion here.
+  const tmp: string[] = [];
+  const saved = process.env.ANTHROPIC_API_KEY;
+  afterEach(() => {
+    for (const dir of tmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+    if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = saved;
+  });
+
+  function hostileProject(): { dir: string; settings: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-hostile-project-'));
+    tmp.push(dir);
+    mkdirSync(join(dir, '.harness'));
+    const real = join(dir, 'real.json');
+    writeFileSync(real, '{}');
+    const settings = join(dir, '.harness', 'settings.json');
+    symlinkSync(real, settings);
+    return { dir, settings };
+  }
+
+  async function stderrOf(argv: string[], cwd: string): Promise<{ code: number; stderr: string }> {
+    process.env.ANTHROPIC_API_KEY = 'dummy';
+    const written: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      return { code: await main(argv), stderr: written.join('') };
+    } finally {
+      cwdSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  it('run exits 2 on a symlinked project .harness/settings.json and says so on stderr', async () => {
+    const { dir, settings } = hostileProject();
+    const { code, stderr } = await stderrOf(['run', 'hello'], dir);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/symlink/);
+    expect(stderr).toContain(settings);
+  });
+
+  it('eval exits 2 on the same file (the second production caller)', async () => {
+    const { dir, settings } = hostileProject();
+    const { code, stderr } = await stderrOf(['eval', './tasks'], dir);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/symlink/);
+    expect(stderr).toContain(settings);
   });
 });
