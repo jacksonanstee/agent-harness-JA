@@ -75,17 +75,38 @@ export interface MemoryFilter {
 export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'>;
 ```
 
-*Amended 2026-08-30 (issue #87): `MemoryFilter` is the **read** filter. Three of
-its fields shape a result set rather than select rows (`limit`, `order`) or
-narrow it on a clock (`includeStale`), and `delete` has never applied any of
-them, so passing one deleted rows the same filter would not have returned:
-`{ type, limit: 0 }` read nothing and deleted every row of that type. `delete`
-now takes `MemoryDeleteFilter`, the three fields it genuinely matches on, and
-the store refuses any other key at runtime because a type alone does not stop a
-JavaScript caller or an `as` cast. The narrowing is source-breaking for a
-TypeScript caller passing a `MemoryFilter`, which is why it lands before the
-v0.1.0 publish freezes the surface (ADR-0022, ADR-0023); after that tag it
-would be a semver-major change.*
+*Amended 2026-08-30 (issue #87): `MemoryFilter` is the **read** filter. `read`
+applies all six fields; `delete` applied three (`type`, `key`, and `tag` via the
+week-5 read-reuse) and silently ignored the other three. `limit` and `order`
+shape a result set rather than select rows; `includeStale` does select rows, but
+against a clock, so a preview and a delete can disagree across two `Date.now()`
+calls even if both honoured it. Ignoring a narrowing field can only widen the
+row set, so wherever the disagreement changed which rows were removed it removed
+more than the caller asked for: `{ type, limit: 0 }` read nothing and deleted
+every row of that type. (`order` alone never changed membership, only sequence.)
+`delete` now takes `MemoryDeleteFilter`.*
+
+*Two layers, and the division of labour is not the obvious one. The three
+refused fields are typed `never` rather than omitted, because a plain
+`Pick` of all-optional fields leaves `MemoryFilter` structurally assignable:
+excess-property checking fires only on a fresh object literal at the call site,
+so `const f: MemoryFilter = { type, limit: 0 }; store.delete(f)` would have
+compiled clean, and that is precisely the preview-then-delete caller this
+correction exists for. `never` makes it a compile error. The runtime guard then
+catches what no type can: JavaScript callers, `as` casts, and fields arriving
+on the prototype chain, defined non-enumerable, or hidden behind a Proxy
+`ownKeys` trap. `Object.keys` cannot see those, `read` would still apply them by
+property access, and all three shapes were executed against the store and shown
+to delete every matching row before the guard was extended to check the refused
+fields by property access as well. `Object.create(defaults)` and class accessors
+produce exactly that shape, so this is not a hypothetical caller. Residual: an
+unknown key (a typo, not one of the three refused fields) smuggled on a
+prototype is still not reported, which is inert because neither `read` nor
+`delete` acts on unknown keys.*
+
+*The narrowing is source-breaking, so it lands before the v0.1.0 release tag
+freezes the surface (ADR-0022, ADR-0023). After that tag it would be a breaking
+change requiring 0.2.0 under the 0.x convention, not literally a major.*
 
 **Decay/staleness (minimal but real):** one field, `staleAfter` (epoch ms). Derived staleness is `staleAfter !== null && Date.now() > staleAfter`. A half-life/decay-score model is deferred (Revisit if) — `staleAfter` covers retrieval-time filtering, which is what H-5 needs.
 
@@ -95,7 +116,7 @@ would be a semver-major change.*
 
 - **`write` is an upsert keyed on `id`** — create *and* update through the one locked method. No `id` (or an unseen `id`) ⇒ INSERT with a generated id; a known `id` ⇒ UPDATE. Satisfies C and U. **Update has full-replace (PUT), not partial-merge, semantics:** every field is taken from the input; omitting `key`/`tags`/`staleAfter` resets them to their defaults rather than preserving the prior row. Only `createdAt` survives an update (`updatedAt` is bumped). Full-replace is chosen over partial-merge because it is predictable (the written entry *is* the stored entry) and because merge makes clearing a field impossible without a sentinel. Callers editing one field read-then-write the whole entry.
 - **`read` is the query** (R).
-- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe. *Amended 2026-08-30 (issue #87): it is bounded in a second way too, by accepting only `MemoryDeleteFilter`. `read` and `delete` had disagreed on five of the six filter fields, always in the direction of deleting more than the caller asked for.*
+- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe. *Amended 2026-08-30 (issue #87): it is bounded in a second way too, by accepting only `MemoryDeleteFilter`. `read` and `delete` had disagreed on three of the six filter fields (`limit`, `order`, `includeStale`), and wherever that disagreement changed the row set it enlarged it. See section 2 for the correction and section 9 for the echo discipline the refusal message now carries.*
 
 ### 4. Return shapes: `write`/`delete` tagged, `read` bare
 
@@ -155,6 +176,8 @@ All SQL uses **bound parameters — never string interpolation of entry content*
 
 ### 9. CONTROL_CHARS: memory is NOT the fourth consumer
 
+*Amended 2026-08-30 (issue #87): the Revisit-if tripwire at the end of this section has now been tripped, in a narrower form than it anticipated. `delete`'s refusal message echoes the offending FILTER KEY NAMES, which the caller chooses, so memory does write a caller-influenced string to a log-adjacent surface on that one path. The extraction this section deferred has since happened anyway (`src/internal/sanitize.ts`, ADR-0034's `boundEcho`), so memory imports `boundEcho` rather than growing its own copy: every echoed key is control-char sanitised, bidi- and invisible-stripped and truncated to 64 characters, and the list is capped at five keys with an elision count, so 20,000 hostile keys render 254 characters instead of 529,076. Entry `content` is still never echoed, which is what the paragraph below is really about.*
+
 Memory uses parameterized SQL (no content interpolated into SQL) and **does not echo untrusted entry content into error/log messages** — `MemoryError.message` is either a static/templated string or a library-generated `better-sqlite3` error message (which names the constraint/column, not arbitrary row content). Because memory neither interpolates content into SQL nor writes attacker-influenced strings to a log-adjacent surface, it is not the fourth `CONTROL_CHARS` consumer, and the ADR-0008 extraction to `src/internal/` stays deferred (tightest scope). If a future change embeds a failing `key`/`content` into `MemoryError.message`, memory becomes the fourth consumer and triggers the extraction (Revisit if).
 
 ### 10. Factory-only; no module-level default instance
@@ -187,6 +210,7 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 6. **A full migration runner now.** Rejected for Week 1 — idempotent `CREATE TABLE IF NOT EXISTS` is sufficient; telemetry brings the runner and adopts this DDL.
 7. **`node:sqlite` (built-in) instead of `better-sqlite3`.** Held as a fallback in case the native binary failed on Node 25; the prebuilt binary loaded cleanly, so we stay on ADR-0004's `better-sqlite3` substrate. Revisit only if the native dep becomes an install burden.
 
+8. **Make `delete` HONOUR `limit`/`order`/`includeStale` instead of refusing them** *(added 2026-08-30, issue #87)*. This is a real capability, not a straw man: `{ type, limit: 3, order: 'asc' }` would delete the three oldest entries of a type, and the tag path's id-list transaction already shows how to implement it. Rejected for now on three grounds. **Reversibility:** refusing now and honouring later is additive, whereas shipping the semantics now fixes them before the surface freeze; refusal is the option that keeps the other one open. **`includeStale` is clock-raced:** it selects rows against `Date.now()`, so a preview and a delete can disagree across two calls even when both honour it, and a destructive method should not have a filter whose meaning moves. **The right primitive is delete-by-id, which does not exist:** `key` is explicitly non-unique (section 2), so a caller still cannot preview and then delete exactly the rows they saw, even though the tag path deletes by id internally. That gap is genuine and additive, so it is filed rather than fixed here (Revisit if).
 ## Revisit if
 
 - Telemetry's numbered-migration runner lands — migrate memory's DDL into it and drop construction-time `ensureSchema` (or make it a registered migration).
@@ -195,4 +219,5 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 - Store size makes tag/text search slow — add FTS5 or a `tags` join table / JSON1 index.
 - A `MemoryError.message` starts embedding untrusted `key`/`content` — memory becomes the 4th `CONTROL_CHARS` consumer; extract to `src/internal/`.
 - Concurrent multi-process writers appear — inherits ADR-0004's single-writer `SQLITE_BUSY` caveat.
+- A caller needs to delete exactly the rows a preview returned: `delete` has no `id` filter and `key` is non-unique, so that is not expressible today (issue filed 2026-08-30 alongside #87). Additive whenever it is wanted.
 - Upsert-by-`key` (not just `id`) is requested — add a unique index and a keyed conflict target.

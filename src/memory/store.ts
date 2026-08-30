@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { boundEcho } from '../internal/settings.js';
 import type {
   DeleteResult,
   MemoryDeleteFilter,
@@ -160,6 +161,16 @@ function assertValidInput(entry: MemoryInput): void {
 const DELETE_FILTER_KEYS = ['type', 'key', 'tag'] as const;
 const DELETE_FILTER_KEY_SET: ReadonlySet<string> = new Set(DELETE_FILTER_KEYS);
 
+/** `read` applies these; `delete` does not, so `delete` refuses them (#87). */
+const REFUSED_READ_FIELDS = ['includeStale', 'limit', 'order'] as const;
+
+/**
+ * How many offending key names the refusal message spells out. Key names are
+ * chosen by the caller, so the echo is bounded in count here and in width by
+ * boundEcho, the same discipline the settings parser applies to unknown keys.
+ */
+const REFUSAL_ECHO_MAX_KEYS = 5;
+
 function assertFilterObject(filter: unknown): void {
   if (typeof filter !== 'object' || filter === null) {
     throw new TypeError(`filter must be an object, got ${String(filter)}`);
@@ -187,9 +198,13 @@ function assertValidFilter(filter: MemoryFilter): void {
 
 /**
  * `delete` accepts a strict subset of `MemoryFilter` (#87). `read` applies
- * `limit`, `order` and `includeStale`; `delete` never has, so a filter
- * carrying one of them deleted rows that same filter would not have returned.
- * `MemoryDeleteFilter` stops a TypeScript caller; this stops a JavaScript one.
+ * `limit`, `order` and `includeStale`; `delete` does not, so accepting one
+ * deleted rows the same filter's `read` would not have returned.
+ *
+ * `MemoryDeleteFilter` types the three refused fields `never`, which stops a
+ * TypeScript caller even when they hold a `MemoryFilter`-typed value. This
+ * catches what no type can see: JavaScript callers, `as` casts, and a field
+ * reaching the object by a route `Object.keys` does not report.
  */
 function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
   assertFilterObject(filter);
@@ -198,12 +213,26 @@ function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
   // caller actually made rather than a downstream symptom of it. An unknown
   // key is refused on the same footing, because on the destructive path a
   // silently ignored field reads as a cap that was applied.
-  const unhonoured = Object.keys(filter).filter((k) => !DELETE_FILTER_KEY_SET.has(k));
-  if (unhonoured.length > 0) {
+  const named = Object.keys(filter).filter((k) => !DELETE_FILTER_KEY_SET.has(k));
+  // Object.keys reports own enumerable string keys, so it catches a typo but
+  // misses a field that arrives on the prototype chain, is defined
+  // non-enumerable, or is hidden by a Proxy ownKeys trap. `read` would still
+  // apply such a field, because it reads by property access, so the fields
+  // delete refuses are checked that way too. Without this the whole #87
+  // disagreement reopens behind a slightly unusual filter object, which is not
+  // hypothetical: Object.create(defaults) and class accessors both produce one.
+  const view = filter as unknown as Readonly<Record<string, unknown>>;
+  const smuggled = REFUSED_READ_FIELDS.filter((f) => !named.includes(f) && view[f] !== undefined);
+  const offending = [...named, ...smuggled];
+  if (offending.length > 0) {
+    const shown = offending.slice(0, REFUSAL_ECHO_MAX_KEYS).map(boundEcho).join(', ');
+    const elided = offending.length - REFUSAL_ECHO_MAX_KEYS;
     throw new TypeError(
       `delete matches rows on ${DELETE_FILTER_KEYS.join(', ')} only; ` +
-        `refusing filter field(s) it does not honour: ${unhonoured.join(', ')}. ` +
-        `read applies the rest, delete never has, so honouring them would delete rows read did not return.`,
+        `refusing filter field(s) it does not honour: ${shown}` +
+        `${elided > 0 ? ` (+${String(elided)} more)` : ''}. ` +
+        `read applies the rest, delete does not, so accepting them would delete ` +
+        `rows the same filter's read would not return.`,
     );
   }
   assertValidFilter(filter);

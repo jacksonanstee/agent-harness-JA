@@ -379,8 +379,10 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
   // `read` applies limit/order/includeStale; `delete` never did, so accepting
   // them removed rows the same filter would not have returned: a caller who
   // previewed with `read` then deleted with the same object deleted rows they
-  // never saw. `MemoryDeleteFilter` stops a TypeScript caller at compile time;
-  // these pin the runtime guard that a JavaScript caller or an `as` cast hits.
+  // never saw. `MemoryDeleteFilter` refuses that assignment at compile time
+  // (pinned below by a @ts-expect-error); these pin the runtime guard, which
+  // catches JavaScript callers, `as` casts, and the smuggled-field shapes no
+  // type can see.
   function deleteUnchecked(store: MemoryStore, filter: Record<string, unknown>): unknown {
     return (store.delete as unknown as (f: Record<string, unknown>) => unknown)(filter);
   }
@@ -475,6 +477,107 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
     if (!result.ok) throw new Error('unreachable');
     expect(result.value.deleted).toBe(1);
     expect(store.read().map((e) => e.content)).toEqual(['b']);
+  });
+
+  // Object.keys sees own enumerable string keys only. Each shape below hides a
+  // refused field from it while leaving the field readable by property access,
+  // which is how read would have seen it. Before the review fold all three
+  // deleted every matching row, which is #87 itself, reopened.
+  it('refuses a refused field arriving on the prototype chain', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = Object.assign(Object.create({ limit: 0 }), { type: 'user' }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('refuses a refused field defined non-enumerable', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = Object.defineProperty({ type: 'user' }, 'limit', {
+      value: 0,
+      enumerable: false,
+    }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('refuses a refused field hidden behind a lying Proxy ownKeys trap', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = new Proxy({ type: 'user', limit: 0 }, {
+      ownKeys: () => ['type'],
+      getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: 'user' }),
+    }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('deletes nothing when reading a refused field throws', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const hostile = { type: 'user' } as Record<string, unknown>;
+    Object.defineProperty(hostile, 'limit', {
+      get() {
+        throw new Error('getter blew up');
+      },
+      enumerable: false,
+    });
+    // Fail-closed is the requirement, not the error's identity.
+    expect(() => deleteUnchecked(store, hostile)).toThrow();
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('sanitises key names before echoing them, since a caller chooses them', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    // ANSI escape, newline and a Trojan-Source bidi override, all caller-chosen.
+    const hostileKey = '\u001b[2J\u001b[1;31mPWNED\n\u202Egnp.exe';
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', [hostileKey]: 1 });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toContain('\u202E');
+    expect(message).not.toContain('\n');
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('bounds the echo so a filter of many keys cannot produce a vast message', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const many: Record<string, unknown> = { type: 'user' };
+    for (let i = 0; i < 20_000; i += 1) many[`junk${String(i)}`] = i;
+    let message = '';
+    try {
+      deleteUnchecked(store, many);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // Unbounded, this rendered 529,076 characters.
+    expect(message.length).toBeLessThan(1000);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('rejects a MemoryFilter-typed value at compile time, not just an inline literal', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const previewFilter: MemoryFilter = { type: 'user', limit: 0 };
+    // The preview-then-delete caller of #87 holds a MemoryFilter-typed VALUE,
+    // and excess-property checking does not fire on one. This @ts-expect-error
+    // is the pin: if MemoryDeleteFilter ever stops refusing the assignment,
+    // the directive goes unused and `npm run typecheck` fails.
+    // @ts-expect-error MemoryFilter is not assignable to MemoryDeleteFilter.
+    expect(() => store.delete(previewFilter)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
   });
 
   it('leaves read free to apply the fields delete refuses', () => {

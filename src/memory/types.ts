@@ -47,17 +47,31 @@ export interface MemoryFilter {
 }
 
 /**
- * What `delete` accepts: exactly the fields it matches rows on.
+ * What `delete` accepts: the three fields it matches rows on, and an explicit
+ * refusal of the three it does not.
  *
- * `read`'s remaining fields shape a result set rather than select rows
- * (`limit`, `order`) or narrow it on a clock (`includeStale`), and `delete`
- * has never applied any of them. Accepting them meant deleting rows the very
- * same filter would not have returned: `{ type, limit: 0 }` read nothing and
- * deleted everything of that type. They are refused now: at compile time by
- * this type, and at runtime by the store, since a JavaScript caller or an
- * `as` cast gets past a type alone.
+ * `read` applies `limit`, `order` and `includeStale`; `delete` never has, so
+ * accepting one meant deleting rows the same filter's `read` would not have
+ * returned: `{ type, limit: 0 }` read nothing and deleted every row of that
+ * type.
+ *
+ * The three refusals are typed `never` rather than simply omitted, because
+ * omitting them does not stop the caller this exists for. Every field here is
+ * optional, so a plain `Pick` leaves `MemoryFilter` structurally assignable:
+ * excess-property checking fires on a fresh object literal at the call site
+ * and nowhere else, so `const f: MemoryFilter = { type, limit: 0 };
+ * store.delete(f)` would compile clean. That is exactly the preview-then-delete
+ * caller. `never` makes the assignment a compile error instead.
+ *
+ * The runtime guard in the store is still load-bearing, and not only for
+ * JavaScript callers and `as` casts: a type cannot see a field that arrives on
+ * the prototype chain or behind a Proxy.
  */
-export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'>;
+export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'> & {
+  includeStale?: never;
+  limit?: never;
+  order?: never;
+};
 
 export type MemoryErrorKind = 'constraint' | 'db';
 

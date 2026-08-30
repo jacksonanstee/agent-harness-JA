@@ -39,7 +39,9 @@ the external review of 2026-08-25 caught it. Reusing `read()` did not give the
 two one definition of which rows match, because the reuse call passed only
 `type`, `key` and `tag` onward and dropped the rest: `read` applied `limit`,
 `order` and `includeStale`, `delete` ignored all three, and the fail-loud net
-never fired because those filters still produced a WHERE clause. `{ type,
+never fired: on the SQL path those filters still produced a WHERE clause, and
+on the tag path the net was simply unreachable, because that branch returns
+before the clause count is ever consulted. `{ type,
 limit: 0 }` read zero rows and deleted every row of that type. The class was
 closed on 2026-08-30 by narrowing `delete` to a `MemoryDeleteFilter` of exactly
 the three fields it matches on and refusing every other key at runtime. Worth
