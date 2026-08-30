@@ -973,6 +973,44 @@ describe('main (pre-SDK paths)', () => {
     }
   });
 
+  // Issue #92: a malicious clone can commit its skills directory as a symlink
+  // whose target escapes the project; the loader realpaths the root and scans
+  // the target, injecting skill-shaped files into the system prompt. The run
+  // wiring refuses a symlink AT the named skills directory, before the SDK is
+  // imported. Driven with an ABSOLUTE --skills-dir so no chdir is needed (the
+  // .harness symlink refusal above could not be driven through main() for
+  // exactly that reason).
+  it('refuses a symlinked skills directory in run, before reaching the SDK (issue #92)', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'skills-symlink-'));
+    const outside = join(base, 'outside');
+    mkdirSync(outside);
+    writeFileSync(
+      join(outside, 'evil.md'),
+      '---\nname: evil\ndescription: injected\nversion: 1.0.0\n---\nbody\n',
+    );
+    const link = join(base, 'skills-link');
+    symlinkSync(outside, link, 'dir');
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      written.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+      return true;
+    });
+    const saved = process.env.ANTHROPIC_API_KEY;
+    // Value is irrelevant: the skills-dir guard returns before any SDK call.
+    // (Kept under 8 chars so the staged-index secret scan does not flag it.)
+    process.env.ANTHROPIC_API_KEY = 'unused';
+    try {
+      expect(await main(['run', '--skills-dir', link, 'hello'])).toBe(2);
+      expect(written.join('')).toContain('skills directory');
+      expect(written.join('')).toContain('symlink');
+    } finally {
+      spy.mockRestore();
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+      else delete process.env.ANTHROPIC_API_KEY;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('returns 2 for eval when ANTHROPIC_API_KEY is unset', async () => {
     const saved = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
