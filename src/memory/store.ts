@@ -5,6 +5,7 @@ import { boundEcho } from '../internal/settings.js';
 import type {
   DeleteResult,
   MemoryDeleteFilter,
+  MemoryDeleteMatchField,
   MemoryEntry,
   MemoryError,
   MemoryFilter,
@@ -158,11 +159,25 @@ function assertValidInput(entry: MemoryInput): void {
 }
 
 /** The only fields `delete` matches rows on; every other key is refused (#87). */
-const DELETE_FILTER_KEYS = ['type', 'key', 'tag'] as const;
+const DELETE_FILTER_KEYS = ['type', 'key', 'tag'] as const satisfies readonly MemoryDeleteMatchField[];
 const DELETE_FILTER_KEY_SET: ReadonlySet<string> = new Set(DELETE_FILTER_KEYS);
 
 /** `read` applies these; `delete` does not, so `delete` refuses them (#87). */
-const REFUSED_READ_FIELDS = ['includeStale', 'limit', 'order'] as const;
+const REFUSED_READ_FIELDS = ['includeStale', 'limit', 'order'] as const satisfies readonly (keyof MemoryFilter)[];
+
+// Drift pin: every MemoryFilter field is either matched on or refused. A field
+// added to MemoryFilter and listed in neither would be invisible to the
+// property-access check in assertValidDeleteFilter, which is exactly how #87
+// reopens (executed in review: `foo?: number` on MemoryFilter, `foo` smuggled on
+// a prototype, 3/3 rows deleted). Same idiom as the red-team baseline's ROW_FIELDS.
+type UnlistedFilterField = Exclude<
+  keyof MemoryFilter,
+  (typeof DELETE_FILTER_KEYS)[number] | (typeof REFUSED_READ_FIELDS)[number]
+>;
+const _filterExhaustive: UnlistedFilterField extends never
+  ? true
+  : ['MemoryFilter field in neither DELETE_FILTER_KEYS nor REFUSED_READ_FIELDS', UnlistedFilterField] = true;
+void _filterExhaustive;
 
 /**
  * How many offending key names the refusal message spells out. Key names are
@@ -221,17 +236,24 @@ function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
   // delete refuses are checked that way too. Without this the whole #87
   // disagreement reopens behind a slightly unusual filter object, which is not
   // hypothetical: Object.create(defaults) and class accessors both produce one.
+  // Any defined value is refused, `includeStale: true` included, which read
+  // would have ignored: stricter than read, in the safe direction.
   const view = filter as unknown as Readonly<Record<string, unknown>>;
   const smuggled = REFUSED_READ_FIELDS.filter((f) => !named.includes(f) && view[f] !== undefined);
   const offending = [...named, ...smuggled];
   if (offending.length > 0) {
-    const shown = offending.slice(0, REFUSAL_ECHO_MAX_KEYS).map(boundEcho).join(', ');
+    // Quoted, as the settings parser quotes its unknown keys: a key that
+    // sanitises to nothing still renders as '' rather than vanishing.
+    const shown = offending
+      .slice(0, REFUSAL_ECHO_MAX_KEYS)
+      .map((k) => `'${boundEcho(k)}'`)
+      .join(', ');
     const elided = offending.length - REFUSAL_ECHO_MAX_KEYS;
     throw new TypeError(
       `delete matches rows on ${DELETE_FILTER_KEYS.join(', ')} only; ` +
         `refusing filter field(s) it does not honour: ${shown}` +
         `${elided > 0 ? ` (+${String(elided)} more)` : ''}. ` +
-        `read applies the rest, delete does not, so accepting them would delete ` +
+        `read applies the rest, delete does not, so accepting them could delete ` +
         `rows the same filter's read would not return.`,
     );
   }

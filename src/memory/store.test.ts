@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryStore, openMemoryDatabase } from './index.js';
-import type { MemoryFilter, MemoryInput, MemoryStore, MemoryType } from './index.js';
+import type { MemoryDeleteFilter, MemoryFilter, MemoryInput, MemoryStore, MemoryType } from './index.js';
 
 let openDbs: BetterSqlite3.Database[] = [];
 
@@ -436,8 +436,8 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
   it('refuses an unknown field so a typo cannot fail open', () => {
     const { store } = freshStore();
     writeOk(store, { type: 'user', content: 'a' });
-    // `limitt` is ignored by both read and delete today; on the destructive
-    // path an ignored field reads as "the cap I asked for was applied".
+    // `limitt` is ignored by read, and before #87 delete ignored it too; on the
+    // destructive path an ignored field reads as "the cap I asked for was applied".
     expect(() => deleteUnchecked(store, { type: 'user', limitt: 1 })).toThrow(TypeError);
     expect(store.read({ type: 'user' })).toHaveLength(1);
   });
@@ -545,9 +545,26 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
     } catch (error: unknown) {
       message = error instanceof Error ? error.message : String(error);
     }
+    expect(message).toContain('refusing');
     expect(message).not.toContain('\u001b');
     expect(message).not.toContain('\u202E');
     expect(message).not.toContain('\n');
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('quotes echoed keys, so a key that sanitises to nothing still shows as empty quotes', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    // Every character of this key is stripped outright by boundEcho (a control
+    // character would be replaced with a space instead, so use an invisible).
+    const vanishing = String.fromCharCode(0x200b) + String.fromCharCode(0x200b);
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', [vanishing]: 1 });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("honour: ''.");
     expect(store.read({ type: 'user' })).toHaveLength(1);
   });
 
@@ -562,8 +579,12 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
     } catch (error: unknown) {
       message = error instanceof Error ? error.message : String(error);
     }
-    // Unbounded, this rendered 529,076 characters.
-    expect(message.length).toBeLessThan(1000);
+    // Unbounded, the message grew linearly with the key count (the review's
+    // proof of concept rendered 529,076 characters from 20,000 keys of 25 to 29
+    // characters). The bound is the invariant ADR-0009 section 9 states: fixed
+    // prose plus five keys of at most 65 code units plus the elision digits.
+    expect(message).toContain('refusing');
+    expect(message.length).toBeLessThan(560);
     expect(store.read({ type: 'user' })).toHaveLength(1);
   });
 
@@ -575,8 +596,12 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
     // and excess-property checking does not fire on one. This @ts-expect-error
     // is the pin: if MemoryDeleteFilter ever stops refusing the assignment,
     // the directive goes unused and `npm run typecheck` fails.
+    // The directive is line-scoped, so the assignment sits alone on its line:
+    // any other expression there could raise an unrelated error that consumes
+    // the directive and silently un-pins the assignability check.
     // @ts-expect-error MemoryFilter is not assignable to MemoryDeleteFilter.
-    expect(() => store.delete(previewFilter)).toThrow(TypeError);
+    const narrowed: MemoryDeleteFilter = previewFilter;
+    expect(() => store.delete(narrowed)).toThrow(TypeError);
     expect(store.read({ type: 'user' })).toHaveLength(1);
   });
 

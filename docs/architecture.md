@@ -126,7 +126,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** typed memory entries (user / feedback / project / reference) with persistence and retrieval.
 - **Public API:** `write(entry: MemoryEntry)`, `read(filter: MemoryFilter): MemoryEntry[]`.
 - **Depends on:** `harness/telemetry`'s SQLite connection (shared DB, separate tables).
-- **Design notes:** Type-tagged for retrieval-by-type. Optional decay/staleness fields.
+- **Design notes:** Type-tagged for retrieval-by-type. Optional decay/staleness fields. Also a bounded `delete(filter: MemoryDeleteFilter)` beyond the locked two-method headline; see [ADR-0009](./decisions/0009-memory-store-injected-sqlite.md) sections 3 and 9.
 
 #### `harness/session`
 

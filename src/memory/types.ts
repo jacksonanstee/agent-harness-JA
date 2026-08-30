@@ -63,14 +63,19 @@ export interface MemoryFilter {
  * store.delete(f)` would compile clean. That is exactly the preview-then-delete
  * caller. `never` makes the assignment a compile error instead.
  *
+ * The refusals are derived from `MemoryFilter` by a mapped type rather than
+ * listed, so a field added to `MemoryFilter` later is refused here without
+ * anyone remembering to add it. The store's runtime list is pinned to
+ * `keyof MemoryFilter` the same way.
+ *
  * The runtime guard in the store is still load-bearing, and not only for
  * JavaScript callers and `as` casts: a type cannot see a field that arrives on
  * the prototype chain or behind a Proxy.
  */
-export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'> & {
-  includeStale?: never;
-  limit?: never;
-  order?: never;
+export type MemoryDeleteMatchField = 'type' | 'key' | 'tag';
+
+export type MemoryDeleteFilter = Pick<MemoryFilter, MemoryDeleteMatchField> & {
+  [K in Exclude<keyof MemoryFilter, MemoryDeleteMatchField>]?: never;
 };
 
 export type MemoryErrorKind = 'constraint' | 'db';
