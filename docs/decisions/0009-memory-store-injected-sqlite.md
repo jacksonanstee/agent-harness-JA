@@ -70,7 +70,22 @@ export interface MemoryFilter {
   limit?: number;            // non-negative integer
   order?: 'asc' | 'desc';    // by createdAt; default 'desc'
 }
+
+// Amended 2026-08-30 (issue #87). delete takes a strict subset:
+export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'>;
 ```
+
+*Amended 2026-08-30 (issue #87): `MemoryFilter` is the **read** filter. Three of
+its fields shape a result set rather than select rows (`limit`, `order`) or
+narrow it on a clock (`includeStale`), and `delete` has never applied any of
+them, so passing one deleted rows the same filter would not have returned:
+`{ type, limit: 0 }` read nothing and deleted every row of that type. `delete`
+now takes `MemoryDeleteFilter`, the three fields it genuinely matches on, and
+the store refuses any other key at runtime because a type alone does not stop a
+JavaScript caller or an `as` cast. The narrowing is source-breaking for a
+TypeScript caller passing a `MemoryFilter`, which is why it lands before the
+v0.1.0 publish freezes the surface (ADR-0022, ADR-0023); after that tag it
+would be a semver-major change.*
 
 **Decay/staleness (minimal but real):** one field, `staleAfter` (epoch ms). Derived staleness is `staleAfter !== null && Date.now() > staleAfter`. A half-life/decay-score model is deferred (Revisit if) — `staleAfter` covers retrieval-time filtering, which is what H-5 needs.
 
@@ -80,7 +95,7 @@ export interface MemoryFilter {
 
 - **`write` is an upsert keyed on `id`** — create *and* update through the one locked method. No `id` (or an unseen `id`) ⇒ INSERT with a generated id; a known `id` ⇒ UPDATE. Satisfies C and U. **Update has full-replace (PUT), not partial-merge, semantics:** every field is taken from the input; omitting `key`/`tags`/`staleAfter` resets them to their defaults rather than preserving the prior row. Only `createdAt` survives an update (`updatedAt` is bumped). Full-replace is chosen over partial-merge because it is predictable (the written entry *is* the stored entry) and because merge makes clearing a field impossible without a sentinel. Callers editing one field read-then-write the whole entry.
 - **`read` is the query** (R).
-- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe.
+- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe. *Amended 2026-08-30 (issue #87): it is bounded in a second way too, by accepting only `MemoryDeleteFilter`. `read` and `delete` had disagreed on five of the six filter fields, always in the direction of deleting more than the caller asked for.*
 
 ### 4. Return shapes: `write`/`delete` tagged, `read` bare
 
@@ -94,7 +109,7 @@ export type DeleteResult = { ok: true; value: { deleted: number } } | { ok: fals
 export interface MemoryStore {
   write(entry: MemoryInput): WriteResult;
   read(filter?: MemoryFilter): MemoryEntry[];   // bare — see below
-  delete(filter: MemoryFilter): DeleteResult;
+  delete(filter: MemoryDeleteFilter): DeleteResult;  // narrowed 2026-08-30, issue #87
 }
 ```
 
@@ -102,7 +117,7 @@ export interface MemoryStore {
 
 `read` stays **bare `MemoryEntry[]`**, as architecture.md locked it. A query over our own table with a validated filter and an open connection is effectively total: the only failures are programmer errors (bad filter shape/type ⇒ throw `TypeError`, router `assertValid` precedent) or a catastrophic IO/closed-connection fault, which is a genuinely exceptional condition, not a domain outcome the caller branches on. Forcing every reader to unwrap `{ok}` for a query that never fails domain-wise is worse ergonomics and contradicts the locked signature. So `read` throws on the rare exceptional fault and never returns a tagged error. This is the deliberate asymmetry the cross-cutting rule anticipates: writes carry recoverable error state, pure queries do not.
 
-Programmer errors that throw `TypeError`: non-object entry/filter, `content` not a string, `type` not one of the four, `tags` not `string[]`, `staleAfter`/`limit` non-finite or negative, empty-filter `delete`.
+Programmer errors that throw `TypeError`: non-object entry/filter, `content` not a string, `type` not one of the four, `tags` not `string[]`, `staleAfter`/`limit` non-finite or negative, empty-filter `delete`, and *(added 2026-08-30, issue #87)* a `delete` filter carrying any key outside `type`/`key`/`tag`, unknown keys included, so a typo on the destructive path cannot be read as a cap that was applied.
 
 ### 5. Schema ownership: idempotent DDL on construction; `openMemoryDatabase` helper
 

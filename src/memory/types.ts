@@ -46,6 +46,19 @@ export interface MemoryFilter {
   order?: 'asc' | 'desc';
 }
 
+/**
+ * What `delete` accepts: exactly the fields it matches rows on.
+ *
+ * `read`'s remaining fields shape a result set rather than select rows
+ * (`limit`, `order`) or narrow it on a clock (`includeStale`), and `delete`
+ * has never applied any of them. Accepting them meant deleting rows the very
+ * same filter would not have returned: `{ type, limit: 0 }` read nothing and
+ * deleted everything of that type. They are refused now: at compile time by
+ * this type, and at runtime by the store, since a JavaScript caller or an
+ * `as` cast gets past a type alone.
+ */
+export type MemoryDeleteFilter = Pick<MemoryFilter, 'type' | 'key' | 'tag'>;
+
 export type MemoryErrorKind = 'constraint' | 'db';
 
 export interface MemoryError {
@@ -64,5 +77,5 @@ export type DeleteResult =
 export interface MemoryStore {
   write(entry: MemoryInput): WriteResult;
   read(filter?: MemoryFilter): MemoryEntry[];
-  delete(filter: MemoryFilter): DeleteResult;
+  delete(filter: MemoryDeleteFilter): DeleteResult;
 }

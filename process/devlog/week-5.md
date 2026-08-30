@@ -34,6 +34,18 @@ future filter field which produces no WHERE clause. The first change
 fixes the bug; the second closes the class, which is what the architecture
 review asked for.
 
+**Correction, 2026-08-30 (issue #87).** The second claim above was wrong, and
+the external review of 2026-08-25 caught it. Reusing `read()` did not give the
+two one definition of which rows match, because the reuse call passed only
+`type`, `key` and `tag` onward and dropped the rest: `read` applied `limit`,
+`order` and `includeStale`, `delete` ignored all three, and the fail-loud net
+never fired because those filters still produced a WHERE clause. `{ type,
+limit: 0 }` read zero rows and deleted every row of that type. The class was
+closed on 2026-08-30 by narrowing `delete` to a `MemoryDeleteFilter` of exactly
+the three fields it matches on and refusing every other key at runtime. Worth
+recording as written: the sentence claiming a class was closed was published in
+the same entry that fixed only an instance of it.
+
 A continuation run put twenty-six adversarial verifiers over the
 recovered findings: twelve confirmed, thirteen partial, one refuted. Both
 of the original HIGH gradings came down, because the harness is
