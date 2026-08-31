@@ -45,21 +45,35 @@
 // rejected: a wrapped qualifier lands on the next line, and a LIVE claim on a
 // line that happens to mention Week 3 would be skipped silently.
 //
+// BEFORE MATCHING, each line is normalised: link TARGETS and bare URLs are
+// removed (an address is not prose, and `.../51-case-study` is not a claim),
+// link TEXT is kept (it is prose a reader believes, and the security-model
+// ADR-index row that shipped stale was exactly that), and digit-group commas
+// are removed so "1,000 cases" reads as 1000 rather than as its last group.
+//
 // RECOGNISED CLAIM SHAPES (on fence-stripped, marker-stripped lines):
-//   N-case, N cases                        == corpus size
-//   >=N cases, >=N-case, at least N cases (and the U+2265 form)   size >= N
-//   D/M malicious                          D == detected and M == malicious
+//   N-case, N cases            == corpus size   } only on a line that also
+//   >=N cases, >=N-case, at least N cases,      } says "corpus" (the U+2265
+//     size >= N                                 } form counts)
+//   D/M malicious (spaces around the slash allowed)
+//                              D == detected and M == malicious
 //   N malicious, N detected, N benign      == the named figure
 //   N (or one..twelve) [current] [known-]miss/misses/missed   == missed
-//   NN.N% and NN.NN% on a line containing "detect"            == rate
-//   ~NN% on a line containing "detect"                        == round(rate)
+//   NN.N% and NN.NN% on a line containing "detect"   == rate (a space before
+//   ~NN% on a line containing "detect"    == round(rate)   the sign is fine)
+// The rate is rounded HALF-UP from the exact integer ratio, never through a
+// float: see deriveCorpus.
+//
 // NOT recognised, deliberately, and the limits are where a future drift will
-// hide: a bare integer percentage (the blog uses "92% to 94%" and ">= 90%" as
-// hypotheticals and those must stay legal); the blocked/flagged/asked split
-// (no live doc restates it; add a recogniser when one does); a spelled-out
-// size ("fifty-three cases"); a rate whose word "detect" wraps to the next
-// line; a count whose noun wraps ("Three cases are *known" / "misses*" is the
-// exact shape that shipped stale, and why the blog now says it on one line).
+// hide: a size claim on a line that never says "corpus" (ordinary prose says
+// "in 3 cases the model refused", and without that gate the sentence is a
+// build failure); a bare integer percentage (the blog uses "92% to 94%" and
+// ">= 90%" as hypotheticals and those must stay legal); the
+// blocked/flagged/asked split (no live doc restates it; add a recogniser when
+// one does); a spelled-out size ("fifty-three cases"); a rate whose word
+// "detect" wraps to the next line; a count whose noun wraps ("Three cases are
+// *known" / "misses*" is the exact shape that shipped stale, and why the blog
+// now says it on one line).
 //
 // LOG HYGIENE. Doc content and filenames are attacker-influenced under the
 // cloned-repo threat model (security-model section 2) and reach CI logs.
@@ -90,6 +104,17 @@ const NUMBER_WORDS = {
 
 /** A did-not-complete condition with a curated message. Exit 2. */
 class Incomplete extends Error {}
+
+/**
+ * Half-up rounding of an exact integer ratio. Integer arithmetic throughout:
+ * `Math.round(a / b)` and `toFixed` both round a float that may already sit
+ * on the wrong side of a half.
+ */
+const roundHalfUp = (numerator, denominator) => {
+  const quotient = Math.floor(numerator / denominator);
+  const remainder = numerator - quotient * denominator;
+  return 2 * remainder >= denominator ? quotient + 1 : quotient;
+};
 
 /**
  * C0, DEL, C1, the bidi overrides (U+202A..U+202E) and isolates
@@ -154,7 +179,6 @@ function deriveCorpus(root) {
   }
   const missed = malicious - detected;
   const benign = size - malicious;
-  const rate = (detected / malicious) * 100;
 
   const totals = doc.totals ?? {};
   const meta = doc.meta ?? {};
@@ -173,15 +197,24 @@ function deriveCorpus(root) {
       `${BASELINE} is internally inconsistent (${problems.join('; ')}) - the redteam gate owns that; the docs were not checked`,
     );
   }
+  // The rate is rounded from the EXACT ratio, never through a float. At
+  // 23/80 the true value is exactly 28.75%, but `(23 / 80 * 100).toFixed(1)`
+  // is "28.7": the product lands at 28.749999999999996, so the gate would
+  // reject the correct figure and accept the wrong one. Twenty-six such
+  // (detected, malicious) pairs exist below 500 malicious cases; 41 is not
+  // one of them today, which is exactly why this had to be found by
+  // execution rather than by reading (code lens, 2026-08-31).
+  const tenths = roundHalfUp(detected * 1000, malicious);
+  const hundredths = roundHalfUp(detected * 10000, malicious);
   return {
     size,
     malicious,
     detected,
     missed,
     benign,
-    rate1: rate.toFixed(1),
-    rate2: rate.toFixed(2),
-    rateRound: Math.round(rate),
+    rate1: `${Math.floor(tenths / 10)}.${tenths % 10}`,
+    rate2: `${Math.floor(hundredths / 100)}.${String(hundredths % 100).padStart(2, '0')}`,
+    rateRound: roundHalfUp(detected * 100, malicious),
   };
 }
 
@@ -189,11 +222,24 @@ function liveDocs(root) {
   const docs = [];
   if (isFile(join(root, 'README.md'))) docs.push('README.md');
   for (const dir of DOC_DIRS) {
+    const full = join(root, dir);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch (error) {
+      // Absent is fine (a tree may carry no docs/ at all); anything else means
+      // the scan did not happen, which is the didn't-run state, not a clean one.
+      if (error?.code === 'ENOENT') continue;
+      throw new Incomplete(`could not stat ${dir}, so ${dir}/*.md was not scanned`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Incomplete(`${dir} exists but is not a directory, so ${dir}/*.md was not scanned`);
+    }
     let names;
     try {
-      names = readdirSync(join(root, dir));
+      names = readdirSync(full);
     } catch {
-      continue;
+      throw new Incomplete(`could not enumerate ${dir}, so ${dir}/*.md was not scanned`);
     }
     for (const name of names.sort()) {
       if (name.endsWith('.md') && isFile(join(root, dir, name))) docs.push(`${dir}/${name}`);
@@ -206,27 +252,45 @@ function liveDocs(root) {
 function checkLine(name, lineNo, line, d, findings) {
   let claims = 0;
   const note = (claim, derived) => findings.push(`${name}:${lineNo}: claims ${claim} but the baseline derives ${derived}`);
-  let work = line;
+  // A link TARGET and a bare URL are addresses, not prose: `.../51-case-study`
+  // is not a claim about the corpus, and a reader never sees it as one. Link
+  // TEXT is deliberately kept, because that is prose a reader believes, and
+  // the security-model ADR-index row that shipped stale was exactly that.
+  let work = line.replace(/\]\([^)]*\)/g, '] ').replace(/\bhttps?:\/\/\S+/gi, ' ');
+  // Digit-group commas are removed so "1,000 cases" is read as 1000 rather
+  // than as its last group: `\b` fires immediately after the comma, and the
+  // first cut reported "claims 000 cases".
+  work = work.replace(/(\d),(?=\d{3}\b)/g, '$1');
 
-  // Lower bounds first, and removed from the working copy so the exact form
-  // below does not read ">=50 cases" as a claim of exactly 50.
-  work = work.replace(/(?:≥|>=|at least )\s?(\d+)(?:-case| cases?)\b/g, (_m, num) => {
-    claims += 1;
-    if (d.size < Number(num)) note(`at least ${num} cases`, `${d.size} cases`);
-    return ' ';
-  });
-  for (const match of work.matchAll(/\b(\d+)-cases?\b/g)) {
-    claims += 1;
-    if (Number(match[1]) !== d.size) note(`a ${match[1]}-case corpus`, `${d.size} cases`);
-  }
-  for (const match of work.matchAll(/\b(\d+) cases?\b/g)) {
-    claims += 1;
-    if (Number(match[1]) !== d.size) note(`${match[1]} cases`, `${d.size}`);
+  // SIZE claims require the word "corpus" on the line, the way a rate claim
+  // requires "detect". Ordinary prose says "in 3 cases the model refused",
+  // and without this gate that sentence is a build failure. Stated cost: a
+  // size claim on a line that never says "corpus" is not checked. Every one
+  // of the five live sites carries the word.
+  const aboutCorpus = /corpus/i.test(line);
+  if (aboutCorpus) {
+    // Lower bounds first, and removed from the working copy so the exact form
+    // below does not read ">=50 cases" as a claim of exactly 50.
+    work = work.replace(/(?:≥|>=|at least )\s?(\d+)(?:-case| cases?)\b/g, (_m, num) => {
+      claims += 1;
+      if (d.size < Number(num)) note(`at least ${num} cases`, `${d.size} cases`);
+      return ' ';
+    });
+    for (const match of work.matchAll(/\b(\d+)-cases?\b/g)) {
+      claims += 1;
+      if (Number(match[1]) !== d.size) note(`a ${match[1]}-case corpus`, `${d.size} cases`);
+    }
+    for (const match of work.matchAll(/\b(\d+) cases?\b/g)) {
+      claims += 1;
+      if (Number(match[1]) !== d.size) note(`${match[1]} cases`, `${d.size}`);
+    }
   }
 
   // The fraction first, removed, so "37/41 malicious" is not also read as a
-  // bare "41 malicious".
-  work = work.replace(/\b(\d+)\/(\d+) malicious\b/g, (_m, top, bottom) => {
+  // bare "41 malicious". Spaces around the slash are accepted: without them
+  // "30 / 41 malicious" fell through to the bare form, which checks only the
+  // DENOMINATOR and passed a wrong detected count (code lens, 2026-08-31).
+  work = work.replace(/\b(\d+)\s*\/\s*(\d+) malicious\b/g, (_m, top, bottom) => {
     claims += 1;
     if (Number(top) !== d.detected || Number(bottom) !== d.malicious) {
       note(`${top}/${bottom} malicious`, `${d.detected}/${d.malicious} malicious`);
@@ -254,15 +318,17 @@ function checkLine(name, lineNo, line, d, findings) {
   }
 
   if (/detect/i.test(line)) {
-    for (const match of work.matchAll(/(\d+\.\d\d)%/g)) {
+    // `\s?%` because a typographic space before the sign is ordinary in prose
+    // and the first cut could not see "99.9 %" as a claim at all.
+    for (const match of work.matchAll(/(\d+\.\d\d)\s?%/g)) {
       claims += 1;
       if (match[1] !== d.rate2) note(`${match[1]}% detection`, `${d.rate2}%`);
     }
-    for (const match of work.matchAll(/(\d+\.\d)%/g)) {
+    for (const match of work.matchAll(/(\d+\.\d)\s?%/g)) {
       claims += 1;
       if (match[1] !== d.rate1) note(`${match[1]}% detection`, `${d.rate1}%`);
     }
-    for (const match of work.matchAll(/~(\d+)%/g)) {
+    for (const match of work.matchAll(/~\s?(\d+)\s?%/g)) {
       claims += 1;
       if (Number(match[1]) !== d.rateRound) note(`~${match[1]}% detection`, `~${d.rateRound}%`);
     }
@@ -278,7 +344,9 @@ function checkLine(name, lineNo, line, d, findings) {
  */
 function checkFile(root, rel, d, findings) {
   const name = sanitise(rel);
-  const lines = readFileSync(join(root, rel), 'utf8').split('\n');
+  // All three line endings, so a lone-CR file does not collapse into one
+  // logical line and report every finding against line 1.
+  const lines = readFileSync(join(root, rel), 'utf8').split(/\r\n|\r|\n/);
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
@@ -287,7 +355,7 @@ function checkFile(root, rel, d, findings) {
   let claims = 0;
   lines.forEach((raw, index) => {
     const lineNo = index + 1;
-    const line = raw.replace(/\r$/, '');
+    const line = raw;
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
       const run = fence[1];

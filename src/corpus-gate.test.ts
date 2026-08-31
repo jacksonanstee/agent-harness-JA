@@ -182,6 +182,14 @@ describe('check-corpus-numbers.mjs: exit-code contract', () => {
     expectIncomplete(root, 'internally inconsistent');
   });
 
+  it('exits 2 when docs/ exists but is not a directory, rather than silently dropping scope (finding 7)', () => {
+    // The first cut wrapped readdirSync in `catch { continue }`, so a docs
+    // path that is a plain file dropped docs/*.md and docs/blog/*.md from the
+    // scan and still exited 0 off the README alone.
+    const root = fixture({ [BASELINE_PATH]: baseline(), 'README.md': GOOD_README, docs: 'not a directory\n' });
+    expectIncomplete(root, 'docs', 'not a directory');
+  });
+
   it('exits 2 on a skip marker that is never resumed', () => {
     const root = fixture(tree({ 'docs/a.md': '<!-- corpus-gate: skip -->\nold 51-case corpus\n' }));
     expectIncomplete(root, 'docs/a.md', 'never resumed');
@@ -272,6 +280,33 @@ describe('check-corpus-numbers.mjs: clean trees', () => {
     expectClean(root);
   });
 
+  it('does not read a corpus-shaped substring inside a URL or a link target (finding 5)', () => {
+    const root = fixture(
+      tree({
+        'docs/a.md':
+          'the corpus: see https://example.com/blog/51-case-study\nand [the corpus](https://example.com/x/51-case)\n',
+      }),
+    );
+    expectClean(root);
+  });
+
+  it('DOES read visible link text, which is prose a reader believes', () => {
+    const root = fixture(tree({ 'docs/a.md': '[the 51-case corpus](https://example.com/x)\n' }));
+    expectFinding(root, 'docs/a.md:1', '51-case', '53');
+  });
+
+  it('does not read "N cases" on a line that is not about the corpus (stated limit, finding 6)', () => {
+    // Ordinary prose says "in 3 cases the model refused". The size recogniser
+    // requires the word "corpus" on the line, the way the rate recogniser
+    // requires "detect". Paired with a real claim so this cannot pass by
+    // recognising nothing at all.
+    const root = fixture(
+      tree({ 'docs/a.md': 'in 3 cases the model refused outright\nthe 53-case corpus is public\n' }),
+    );
+    const run = expectClean(root);
+    expect(run.stdout).toMatch(/2 claims checked/);
+  });
+
   it('reads a CRLF file no differently', () => {
     const root = fixture(tree({ 'docs/a.md': 'the 53-case corpus\r\n37 detected\r\n' }));
     expectClean(root);
@@ -295,7 +330,7 @@ describe('check-corpus-numbers.mjs: findings', () => {
   });
 
   it('accepts a lower bound the corpus meets exactly', () => {
-    const root = fixture(tree({ 'docs/a.md': 'at least 53 cases\n' }));
+    const root = fixture(tree({ 'docs/a.md': 'the corpus carries at least 53 cases\n' }));
     expectClean(root);
   });
 
@@ -331,6 +366,11 @@ describe('check-corpus-numbers.mjs: findings', () => {
     expectFinding(root, 'docs/a.md:1', '3 missed', '4');
   });
 
+  it('numbers lines correctly in a lone-CR file (finding 8)', () => {
+    const root = fixture(tree({ 'docs/a.md': 'a heading\rthe 51-case corpus\r' }));
+    expectFinding(root, 'docs/a.md:2', '51-case');
+  });
+
   it('REJECTS a stale spelled-out known-misses count', () => {
     const root = fixture(tree({ 'docs/a.md': 'the three current known-misses all carry block\n' }));
     expectFinding(root, 'docs/a.md:1', 'three current known-misses', '4');
@@ -349,6 +389,36 @@ describe('check-corpus-numbers.mjs: findings', () => {
   it('REJECTS a stale approximate rate on a detection line', () => {
     const root = fixture(tree({ 'docs/a.md': 'detection is ~92%\n' }));
     expectFinding(root, 'docs/a.md:1', '~92%', '~90%');
+  });
+
+  it('rounds the rate half-up from the exact ratio, not through a float (finding 1)', () => {
+    // 23/80 is exactly 28.75%. `(23 / 80 * 100).toFixed(1)` is "28.7" because
+    // the product lands at 28.749999999999996, so a doc stating the correct
+    // 28.8% would be reported stale and the WRONG 28.7% would pass.
+    const base = baseline({ size: 100, malicious: 80, detected: 23 });
+    const right = fixture(tree({ 'docs/a.md': 'detection rate 28.8%\n' }, base));
+    expectClean(right);
+    const wrong = fixture(tree({ 'docs/a.md': 'detection rate 28.7%\n' }, base));
+    expectFinding(wrong, 'docs/a.md:1', '28.7%', '28.8%');
+  });
+
+  it('reads a spaced fraction, which otherwise degrades to checking only the denominator (finding 2)', () => {
+    const root = fixture(tree({ 'docs/a.md': '30 / 41 malicious\n' }));
+    expectFinding(root, 'docs/a.md:1', '30/41 malicious', '37/41 malicious');
+  });
+
+  it('reads a rate with a space before the percent sign (finding 3)', () => {
+    const root = fixture(tree({ 'docs/a.md': 'detection rate is 99.9 % today\n' }));
+    expectFinding(root, 'docs/a.md:1', '99.9%', '90.2%');
+  });
+
+  it('reads a comma-grouped number whole, not from the last group (finding 4)', () => {
+    const root = fixture(tree({ 'docs/a.md': 'the corpus ran 1,000 cases\n' }));
+    // The pre-fix message was "claims 000 cases": `\b` fires straight after the
+    // comma. Pinned as the exact prefix, because "1000 cases but" CONTAINS
+    // "000 cases but" and the obvious negative assertion passes either way.
+    const run = expectFinding(root, 'docs/a.md:1', 'claims 1000 cases', '53');
+    expect(run.stderr).not.toContain('claims 000 cases');
   });
 
   it('reports every finding, not just the first', () => {

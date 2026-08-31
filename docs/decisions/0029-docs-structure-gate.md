@@ -263,14 +263,22 @@ Decisions, in the shape of the two above:
    that happens to mention Week 3 would be skipped silently, the proxy-check
    pattern DEC-0016 bans.
 4. **The recognisers are enumerated and their limits stated** in the script
-   header: size (`N-case`, `N cases`), lower bounds (`≥N cases`, `≥N-case`,
-   `>=N`, `at least N`), `D/M malicious`, bare malicious, detected and benign
-   counts, the missed count as a numeral or as one..twelve with an optional
-   `current` and `known-`, and rates on a line containing "detect" in the
-   `NN.N%`, `NN.NN%` and `~NN%` forms. A bare integer percentage is
+   header: size (`N-case`, `N cases`) and lower bounds (`≥N cases`, `≥N-case`,
+   `>=N`, `at least N`) on a line that also says "corpus"; `D/M malicious`
+   with or without spaces around the slash; bare malicious, detected and
+   benign counts; the missed count as a numeral or as one..twelve with an
+   optional `current` and `known-`; and rates on a line containing "detect"
+   in the `NN.N%`, `NN.NN%` and `~NN%` forms, a space before the sign
+   allowed. Link targets and bare URLs are stripped before matching and link
+   text is not, because the row that shipped stale was link text. The rate is
+   rounded half-up from the exact integer ratio: `(23 / 80 * 100).toFixed(1)`
+   is "28.7" where the true value is exactly 28.75%, which would reject the
+   correct figure and accept the wrong one. A bare integer percentage is
    deliberately unrecognised so the blog's hypotheticals ("92% to 94%",
-   "≥ 90%") stay legal. Zero recognised claims across the whole scope is a
-   finding, for the reason the ADR-count backstop exists.
+   "≥ 90%") stay legal, and so is a size claim on a line that never says
+   "corpus", because ordinary prose says "in 3 cases the model refused".
+   Zero recognised claims across the whole scope is a finding, for the reason
+   the ADR-count backstop exists.
 5. **A separate file, in node.** The recognisers need word boundaries and
    global matching, which POSIX awk lacks and bash-plus-grep would spend a
    process per line on; node is on the runner image and the gate needs no
@@ -280,7 +288,21 @@ Decisions, in the shape of the two above:
 What it does not do, so the claim stays no wider than the check: it does not
 judge prose (this ADR's central decision stands); it does not see a count
 whose noun wraps to the next line, which is why the blog now states its
-misses on one line; and it does not restate the blocked/flagged split,
-because no live document does. The dated figures remain where they were:
-ADR-0018 keeps 51 and 92.5% as the E-2 record, and the blog carries a note
-saying its figures are live.
+misses on one line; it does not see a size claim on a line that never says
+"corpus"; and it does not restate the blocked/flagged split, because no live
+document does. The dated figures remain where they were: ADR-0018 keeps 51
+and 92.5% as the E-2 record, and the blog carries a note saying its figures
+are live.
+
+Eight defects in the first cut were found by executing the gate rather than
+reading it, and they are recorded because they say what this class of gate
+gets wrong: a float rate that rejects the correct figure at an exact half; a
+spaced fraction that silently degraded to checking only the denominator; a
+rate with a space before the sign that was not a claim at all; a
+comma-grouped number read from its last group; a corpus-shaped substring
+inside a URL read as prose; an unqualified "N cases" that made ordinary
+sentences a build failure; a `docs/` path that was not a directory dropping
+most of the scope while still exiting 0; and lone-CR files reporting every
+finding against line 1. Seven are recogniser precision, one (the silent
+scope drop) is the proxy-check pattern DEC-0016 bans, appearing inside the
+gate written to enforce it.
