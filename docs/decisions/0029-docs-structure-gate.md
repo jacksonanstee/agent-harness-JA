@@ -223,3 +223,64 @@ on `main`, verified against the API) but it is not what this decision avoided.
    whole repo today. That is a property of the checks being structural; a claim
    gate would have needed an exemption list on day one, which was itself a
    signal.
+
+## Amendment (2026-08-31): a third derived constant, the red-team corpus figures (issue #89)
+
+The extension point the script header names ("another hand-copied derived
+constant") was exercised. The external review of 2026-08-25 found the corpus
+figures asserted in the present tense two corpus revisions stale: 51 cases and
+92.5% in `docs/eval-methodology.md`, `docs/security-model.md` and
+`docs/blog/adversarial-evaluation.md`, against a shipped 53 cases, 41
+malicious, 37 detected (90.2%) since `db164e6` (2026-07-28). Building the gate
+found more than the review had: two stale claims were spelled out rather than
+numeric ("the three current known-misses"; "Three cases are *known /
+misses*", wrapped across two lines, which is the shape a line-scoped grep
+cannot see), and `docs/architecture.md`'s "≥50-case" was a TRUE lower bound
+the first cut of the recogniser misread, so the gate's own first run on the
+tree corrected the gate before it corrected a document. Nothing re-derived
+any of these.
+
+Decisions, in the shape of the two above:
+
+1. **Re-derived from the baseline's rows, not its totals.**
+   `scripts/check-corpus-numbers.mjs` counts category and verdict per row of
+   `eval/redteam/baseline.json`. `totals` and `meta.corpusSize` are compared
+   with the row-derived figures, and a disagreement is exit 2 rather than a
+   finding: that is a data defect the redteam gate's `totalsMismatchDetail`
+   owns, and a doc finding would send the fix to the wrong file. The read
+   carries the redteam gate's envelope (symlink refused, `MAX_BASELINE_BYTES`
+   cap).
+2. **Scope is live docs by construction:** README.md, docs/*.md and
+   docs/blog/*.md. ADRs and process/ are dated records and stay out. The
+   stated cost: a new ADR carrying a stale number is reviewed, not gated.
+3. **The exemption is an explicit marker pair**, `<!-- corpus-gate: skip -->`
+   and `<!-- corpus-gate: resume -->`, balanced or exit 2, used once:
+   security-model section 7's frozen Week-2 snapshot. This is the explicit
+   ignore list the script header prefers over weakening a check, placed in
+   the document so the exemption is visible beside the text it exempts.
+   Same-line history qualifiers ("at E-2", "Week 3", a date) were rejected:
+   a wrapped qualifier lands on the next line, and a live claim on a line
+   that happens to mention Week 3 would be skipped silently, the proxy-check
+   pattern DEC-0016 bans.
+4. **The recognisers are enumerated and their limits stated** in the script
+   header: size (`N-case`, `N cases`), lower bounds (`≥N cases`, `≥N-case`,
+   `>=N`, `at least N`), `D/M malicious`, bare malicious, detected and benign
+   counts, the missed count as a numeral or as one..twelve with an optional
+   `current` and `known-`, and rates on a line containing "detect" in the
+   `NN.N%`, `NN.NN%` and `~NN%` forms. A bare integer percentage is
+   deliberately unrecognised so the blog's hypotheticals ("92% to 94%",
+   "≥ 90%") stay legal. Zero recognised claims across the whole scope is a
+   finding, for the reason the ADR-count backstop exists.
+5. **A separate file, in node.** The recognisers need word boundaries and
+   global matching, which POSIX awk lacks and bash-plus-grep would spend a
+   process per line on; node is on the runner image and the gate needs no
+   install, so it runs in the same job as check-docs, after it.
+   `src/ci-drift.test.ts` pins both the job and the order.
+
+What it does not do, so the claim stays no wider than the check: it does not
+judge prose (this ADR's central decision stands); it does not see a count
+whose noun wraps to the next line, which is why the blog now states its
+misses on one line; and it does not restate the blocked/flagged split,
+because no live document does. The dated figures remain where they were:
+ADR-0018 keeps 51 and 92.5% as the E-2 record, and the blog carries a note
+saying its figures are live.

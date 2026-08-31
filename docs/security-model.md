@@ -438,6 +438,7 @@ path-based sandbox table excludes them).
 
 ## 7. Verification posture
 
+<!-- corpus-gate: skip -->
 Numbers in this section are a frozen snapshot at Week-2 close (2026-07-08),
 not live values:
 
@@ -458,6 +459,7 @@ not live values:
   guaranteed 0%) is a **reported** metric feeding the ADR-0016 §6 S-5
   decision. That reported on/off split is the test that the layer does
   real work rather than decorating the repo.
+<!-- corpus-gate: resume -->
 
 ## 8. ADR index
 
@@ -470,7 +472,7 @@ not live values:
 | [0015](./decisions/0015-sandbox-pre-tool-gate.md) | Sandbox as pre-tool gate, intersection merge |
 | [0016](./decisions/0016-llm-judge-design-deferred.md) | Judge design locked (tighten-only), implementation deferred |
 | [0017](./decisions/0017-golden-runner.md) | Golden runner; oracles are ungated in-scope code with runtime warning (R-10) |
-| [0018](./decisions/0018-redteam-corpus.md) | 51-case red-team corpus; gate-vs-measurement split |
+| [0018](./decisions/0018-redteam-corpus.md) | Red-team corpus (≥50 cases); gate-vs-measurement split |
 | [0019](./decisions/0019-regression-gate.md) | Red-team regression gate; committed baseline loaded as hostile input |
 | [0020](./decisions/0020-adversarial-verifier.md) | Two-pass adversarial verifier: offline, report-only, enum-confined; adversary is injectable but zero-authority |
 | [0022](./decisions/0022-npm-publish.md) | Publish via OIDC trusted publishing with provenance; pack allowlist audited; `id-token: write` confined to a job that runs no dependency code (2026-07-24 amendment); gate sequence shared via one `workflow_call` workflow so the deploy path cannot drift weaker than CI (2026-07-28 amendment, R6) |

@@ -60,7 +60,7 @@ that proves the rule).
 
 ## Red-team arm (`cli redteam`) — security scoring
 
-Deterministic and keyless: the 51-case corpus is scanned by the security
+Deterministic and keyless: the 53-case corpus is scanned by the security
 layer's injection scanner, no model call involved, so it runs on every PR.
 
 - **Scoring:** each case's observed verdict (`pass` / `ask` / `block`) is
@@ -70,10 +70,12 @@ layer's injection scanner, no model call involved, so it runs on every PR.
 - **The absolute gate:** `falseBlockCount === 0` — no benign case may ever
   be blocked. This reads only the fresh run, never the baseline, so
   nothing committed to the repo can suppress it.
-- **Reported measurements:** detection rate (37/40 malicious, 92.5% at
-  E-2 calibration) with its blocked/flagged strength split, plus the
-  off-arm null-scanner control (0/40 by construction — a guaranteed-zero
-  control, not a measured differential).
+- **Reported measurements:** detection rate (37/41 malicious, 90.2%)
+  with its blocked/flagged strength split, plus the off-arm null-scanner
+  control (zero detections by construction: a guaranteed-zero control,
+  not a measured differential). The corpus figures in this document are
+  re-derived from the committed baseline's rows by `npm run check:corpus`
+  on every PR, so a stale one fails the build rather than ageing in place.
 
 ## What counts as a regression (the E-3 gate)
 
@@ -202,7 +204,7 @@ to `starter-corpus (S-1)`). Rules that keep the corpus honest:
    over the new case and see what it actually does. For a detected case,
    `expected` records the live verdict (the `ask`-vs-`block` strength is
    calibrated, not assumed). For a realistic attack the scanner misses,
-   record the verdict it *should* produce (the three current known-misses
+   record the verdict it *should* produce (the four current known-misses
    all carry `expected: 'block'` against a live `pass`) and commit it
    anyway — it renders as a `MISSED` detection and honestly lowers the
    reported rate, because the detection rate exists to be read, not to
@@ -224,7 +226,7 @@ to `starter-corpus (S-1)`). Rules that keep the corpus honest:
 
 *Added 2026-07-13.*
 
-The 51-case corpus is public (committed to this repo) and its cases derive
+The 53-case corpus is public (committed to this repo) and its cases derive
 from the most-cited public sources in the field (Greshake et al., Willison,
 OWASP). For the **current gate this is irrelevant**: the red-team arm is
 deterministic regex scanning with no model in the loop, so a model's

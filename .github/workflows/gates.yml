@@ -63,6 +63,13 @@ jobs:
       - name: Docs structure gate
         run: bash scripts/check-docs.sh
 
+      # Derived corpus constants (issue #89): every corpus figure a live doc
+      # states is re-derived from eval/redteam/baseline.json's rows. Same job
+      # as the structure gate for the same reason: no install, and the node
+      # on the runner image is enough. Workflow-only, like check-docs.
+      - name: Docs corpus-number gate
+        run: node scripts/check-corpus-numbers.mjs
+
   build-test:
     runs-on: ubuntu-latest
     strategy:

@@ -1,5 +1,12 @@
 # Adversarial evaluation for LLM agents: golden + red-team + two-pass
 
+*The corpus figures in this post (case count, known misses, detection rate)
+are live rather than the ones it was first published with: on every PR,
+`npm run check:corpus` re-derives them from the committed baseline and fails
+the build on a stale one (issue #89, 2026-08-31). The figures as they stood at
+each decision are in the dated ADRs, starting with
+[ADR-0018](../decisions/0018-redteam-corpus.md).*
+
 The eval layer of [agent-harness-JA](../../README.md) has three parts: a
 golden-task runner with executable oracles
 ([ADR-0017](../decisions/0017-golden-runner.md)), a red-team corpus with a
@@ -13,7 +20,7 @@ interview, and one incident from this week that tested the whole apparatus.
 
 ## Gates and measurements are different machines
 
-The scanner's detection rate across the 51-case red-team corpus is ~92%.
+The scanner's detection rate across the 53-case red-team corpus is 90.2%.
 That number appears on every scorecard and **gates nothing**. What fails CI
 is different: any *false block* (benign input blocked; `falseBlockCount`
 must be exactly zero), and any *drift* from a committed baseline, including
@@ -31,13 +38,13 @@ trust: the corpus is built into the package, the scanner behaves
 identically on every run, and the whole gate runs keyless in seconds on
 every PR.
 
-The same boundary explains what the corpus records. Three cases are *known
-misses* (jailbreak-03 gets through the heuristics today) and they are
-carried with `expected: 'block'` against a live `pass`. The corpus states
-what *should* happen; the scorecard states what *does*; the gate pins the
-gap so it can only move by deliberate decision. Deleting or "expecting" a
-known miss to make the numbers tidy would be the eval equivalent of fixing
-the test instead of the bug.
+The same boundary explains what the corpus records: four known misses
+(jailbreak-03 gets through the heuristics today, for one), each carried
+with `expected: 'block'` against a live `pass`. The corpus states what
+*should* happen; the scorecard states what *does*; the gate pins the gap
+so it can only move by deliberate decision. Deleting or "expecting" a
+known miss to make the numbers tidy would be the eval equivalent of
+fixing the test instead of the bug.
 
 Why is golden eval not in CI at all? Because its oracles are arbitrary
 in-process code from the repo under evaluation (R-10 in the
