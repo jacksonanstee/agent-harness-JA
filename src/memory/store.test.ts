@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryStore, openMemoryDatabase } from './index.js';
-import type { MemoryFilter, MemoryInput, MemoryStore, MemoryType } from './index.js';
+import type { MemoryDeleteFilter, MemoryFilter, MemoryInput, MemoryStore, MemoryType } from './index.js';
 
 let openDbs: BetterSqlite3.Database[] = [];
 
@@ -372,5 +372,246 @@ describe('memory: robustness', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('memory: delete refuses the filter fields it does not honour (#87)', () => {
+  // `read` applies limit/order/includeStale; `delete` never did, so accepting
+  // them removed rows the same filter would not have returned: a caller who
+  // previewed with `read` then deleted with the same object deleted rows they
+  // never saw. `MemoryDeleteFilter` refuses that assignment at compile time
+  // (pinned below by a @ts-expect-error); these pin the runtime guard, which
+  // catches JavaScript callers, `as` casts, and the smuggled-field shapes no
+  // type can see.
+  function deleteUnchecked(store: MemoryStore, filter: Record<string, unknown>): unknown {
+    return (store.delete as unknown as (f: Record<string, unknown>) => unknown)(filter);
+  }
+
+  it('refuses limit: 0 instead of reading nothing and deleting everything', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    writeOk(store, { type: 'user', content: 'c' });
+    // The exact disagreement from #87: read returns 0 rows for this filter.
+    expect(store.read({ type: 'user', limit: 0 })).toEqual([]);
+    expect(() => deleteUnchecked(store, { type: 'user', limit: 0 })).toThrow(TypeError);
+    // Refusal must also be safe: nothing was removed on the way out.
+    expect(store.read({ type: 'user' })).toHaveLength(3);
+  });
+
+  it('refuses a non-zero limit rather than silently widening it', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    writeOk(store, { type: 'user', content: 'c' });
+    expect(store.read({ type: 'user', limit: 1 })).toHaveLength(1);
+    expect(() => deleteUnchecked(store, { type: 'user', limit: 1 })).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(3);
+  });
+
+  it('refuses order, which delete cannot honour without a limit to pair it with', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    expect(() => deleteUnchecked(store, { type: 'user', order: 'asc' })).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('refuses includeStale rather than deleting fresh rows a stale-only read excluded', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'fresh', staleAfter: Date.now() + 60_000 });
+    writeOk(store, { type: 'user', content: 'stale', staleAfter: Date.now() - 60_000 });
+    expect(store.read({ type: 'user', includeStale: false })).toHaveLength(1);
+    expect(() => deleteUnchecked(store, { type: 'user', includeStale: false })).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('refuses an unhonoured field on the tag path too, not just the SQL path', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a', tags: ['alpha'] });
+    writeOk(store, { type: 'user', content: 'b', tags: ['alpha'] });
+    expect(() => deleteUnchecked(store, { tag: 'alpha', limit: 1 })).toThrow(TypeError);
+    expect(store.read()).toHaveLength(2);
+  });
+
+  it('refuses an unknown field so a typo cannot fail open', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    // `limitt` is ignored by read, and before #87 delete ignored it too; on the
+    // destructive path an ignored field reads as "the cap I asked for was applied".
+    expect(() => deleteUnchecked(store, { type: 'user', limitt: 1 })).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('names every offending field in the message, not just the first', () => {
+    const { store } = freshStore();
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', limit: 0, order: 'asc', nonsense: true });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('limit');
+    expect(message).toContain('order');
+    expect(message).toContain('nonsense');
+  });
+
+  it('reports the unhonoured field ahead of the table-wipe guard, as the more specific fault', () => {
+    const { store } = freshStore();
+    // Neither guard would let this through; the message should say which
+    // mistake the caller actually made.
+    let message = '';
+    try {
+      deleteUnchecked(store, { limit: 0 });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('limit');
+  });
+
+  it('still deletes when every field is one delete honours', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a', key: 'k1', tags: ['alpha'] });
+    writeOk(store, { type: 'user', content: 'b', key: 'k1', tags: ['beta'] });
+    const result = store.delete({ type: 'user', key: 'k1', tag: 'alpha' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value.deleted).toBe(1);
+    expect(store.read().map((e) => e.content)).toEqual(['b']);
+  });
+
+  // Object.keys sees own enumerable string keys only. Each shape below hides a
+  // refused field from it while leaving the field readable by property access,
+  // which is how read would have seen it. Before the review fold all three
+  // deleted every matching row, which is #87 itself, reopened.
+  it('refuses a refused field arriving on the prototype chain', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = Object.assign(Object.create({ limit: 0 }), { type: 'user' }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('refuses a refused field defined non-enumerable', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = Object.defineProperty({ type: 'user' }, 'limit', {
+      value: 0,
+      enumerable: false,
+    }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('refuses a refused field hidden behind a lying Proxy ownKeys trap', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    const smuggled = new Proxy({ type: 'user', limit: 0 }, {
+      ownKeys: () => ['type'],
+      getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: 'user' }),
+    }) as Record<string, unknown>;
+    expect(Object.keys(smuggled)).toEqual(['type']);
+    expect(() => deleteUnchecked(store, smuggled)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(2);
+  });
+
+  it('deletes nothing when reading a refused field throws', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const hostile = { type: 'user' } as Record<string, unknown>;
+    Object.defineProperty(hostile, 'limit', {
+      get() {
+        throw new Error('getter blew up');
+      },
+      enumerable: false,
+    });
+    // Fail-closed is the requirement, not the error's identity.
+    expect(() => deleteUnchecked(store, hostile)).toThrow();
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('sanitises key names before echoing them, since a caller chooses them', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    // ANSI escape, newline and a Trojan-Source bidi override, all caller-chosen.
+    const hostileKey = '\u001b[2J\u001b[1;31mPWNED\n\u202Egnp.exe';
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', [hostileKey]: 1 });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('refusing');
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toContain('\u202E');
+    expect(message).not.toContain('\n');
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('quotes echoed keys, so a key that sanitises to nothing still shows as empty quotes', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    // Every character of this key is stripped outright by boundEcho (a control
+    // character would be replaced with a space instead, so use an invisible).
+    const vanishing = String.fromCharCode(0x200b) + String.fromCharCode(0x200b);
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', [vanishing]: 1 });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("honour: ''.");
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('bounds the echo so a filter of many keys cannot produce a vast message', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const many: Record<string, unknown> = { type: 'user' };
+    for (let i = 0; i < 20_000; i += 1) many[`junk${String(i)}`] = i;
+    let message = '';
+    try {
+      deleteUnchecked(store, many);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // Unbounded, the message grew linearly with the key count (the review's
+    // proof of concept rendered 529,076 characters from 20,000 keys of 25 to 29
+    // characters). The bound is the invariant ADR-0009 section 9 states: fixed
+    // prose plus five keys of at most 65 code units plus the elision digits.
+    expect(message).toContain('refusing');
+    expect(message.length).toBeLessThan(560);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('rejects a MemoryFilter-typed value at compile time, not just an inline literal', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    const previewFilter: MemoryFilter = { type: 'user', limit: 0 };
+    // The preview-then-delete caller of #87 holds a MemoryFilter-typed VALUE,
+    // and excess-property checking does not fire on one. This @ts-expect-error
+    // is the pin: if MemoryDeleteFilter ever stops refusing the assignment,
+    // the directive goes unused and `npm run typecheck` fails.
+    // The directive is line-scoped, so the assignment sits alone on its line:
+    // any other expression there could raise an unrelated error that consumes
+    // the directive and silently un-pins the assignability check.
+    // @ts-expect-error MemoryFilter is not assignable to MemoryDeleteFilter.
+    const narrowed: MemoryDeleteFilter = previewFilter;
+    expect(() => store.delete(narrowed)).toThrow(TypeError);
+    expect(store.read({ type: 'user' })).toHaveLength(1);
+  });
+
+  it('leaves read free to apply the fields delete refuses', () => {
+    const { store } = freshStore();
+    writeOk(store, { type: 'user', content: 'a' });
+    writeOk(store, { type: 'user', content: 'b' });
+    // The fix must narrow delete, not break read's filter.
+    expect(store.read({ type: 'user', limit: 1 })).toHaveLength(1);
+    expect(store.read({ type: 'user', limit: 0 })).toEqual([]);
+    expect(store.read({ type: 'user', order: 'asc' }).map((e) => e.content)).toEqual(['a', 'b']);
   });
 });

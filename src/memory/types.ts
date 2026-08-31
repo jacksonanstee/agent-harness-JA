@@ -46,6 +46,38 @@ export interface MemoryFilter {
   order?: 'asc' | 'desc';
 }
 
+/**
+ * What `delete` accepts: the three fields it matches rows on, and an explicit
+ * refusal of the three it does not.
+ *
+ * `read` applies `limit`, `order` and `includeStale`; `delete` never has, so
+ * accepting one meant deleting rows the same filter's `read` would not have
+ * returned: `{ type, limit: 0 }` read nothing and deleted every row of that
+ * type.
+ *
+ * The three refusals are typed `never` rather than simply omitted, because
+ * omitting them does not stop the caller this exists for. Every field here is
+ * optional, so a plain `Pick` leaves `MemoryFilter` structurally assignable:
+ * excess-property checking fires on a fresh object literal at the call site
+ * and nowhere else, so `const f: MemoryFilter = { type, limit: 0 };
+ * store.delete(f)` would compile clean. That is exactly the preview-then-delete
+ * caller. `never` makes the assignment a compile error instead.
+ *
+ * The refusals are derived from `MemoryFilter` by a mapped type rather than
+ * listed, so a field added to `MemoryFilter` later is refused here without
+ * anyone remembering to add it. The store's runtime list is pinned to
+ * `keyof MemoryFilter` the same way.
+ *
+ * The runtime guard in the store is still load-bearing, and not only for
+ * JavaScript callers and `as` casts: a type cannot see a field that arrives on
+ * the prototype chain or behind a Proxy.
+ */
+export type MemoryDeleteMatchField = 'type' | 'key' | 'tag';
+
+export type MemoryDeleteFilter = Pick<MemoryFilter, MemoryDeleteMatchField> & {
+  [K in Exclude<keyof MemoryFilter, MemoryDeleteMatchField>]?: never;
+};
+
 export type MemoryErrorKind = 'constraint' | 'db';
 
 export interface MemoryError {
@@ -64,5 +96,5 @@ export type DeleteResult =
 export interface MemoryStore {
   write(entry: MemoryInput): WriteResult;
   read(filter?: MemoryFilter): MemoryEntry[];
-  delete(filter: MemoryFilter): DeleteResult;
+  delete(filter: MemoryDeleteFilter): DeleteResult;
 }

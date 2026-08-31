@@ -70,7 +70,55 @@ export interface MemoryFilter {
   limit?: number;            // non-negative integer
   order?: 'asc' | 'desc';    // by createdAt; default 'desc'
 }
+
+// Amended 2026-08-30 (issue #87). delete takes a strict subset; every other
+// MemoryFilter field is typed `never`, derived rather than listed (see below):
+export type MemoryDeleteMatchField = 'type' | 'key' | 'tag';
+export type MemoryDeleteFilter = Pick<MemoryFilter, MemoryDeleteMatchField> & {
+  [K in Exclude<keyof MemoryFilter, MemoryDeleteMatchField>]?: never;
+};
 ```
+
+*Amended 2026-08-30 (issue #87): `MemoryFilter` is the **read** filter. `read`
+applies all six fields; `delete` applied three (`type`, `key`, and `tag` via the
+week-5 read-reuse) and silently ignored the other three. `limit` and `order`
+shape a result set rather than select rows; `includeStale` does select rows, but
+against a clock, so a preview and a delete can disagree across two `Date.now()`
+calls even if both honoured it. Ignoring a narrowing field can only widen the
+row set, so wherever the disagreement changed which rows were removed it removed
+more than the caller asked for: `{ type, limit: 0 }` read nothing and deleted
+every row of that type. (`order` alone never changed membership, only sequence.)
+`delete` now takes `MemoryDeleteFilter`.*
+
+*Two layers, and the division of labour is not the obvious one. The three
+refused fields are typed `never` rather than omitted, because a plain
+`Pick` of all-optional fields leaves `MemoryFilter` structurally assignable:
+excess-property checking fires only on a fresh object literal at the call site,
+so `const f: MemoryFilter = { type, limit: 0 }; store.delete(f)` would have
+compiled clean, and that is precisely the preview-then-delete caller this
+correction exists for. `never` makes it a compile error, and because the refusals are a mapped type
+over `keyof MemoryFilter` rather than a list, a field added to `MemoryFilter`
+later is refused on `delete` without anyone editing this type. The runtime guard then
+catches what no type can: JavaScript callers, `as` casts, and fields arriving
+on the prototype chain, defined non-enumerable, or hidden behind a Proxy
+`ownKeys` trap. `Object.keys` cannot see those, `read` would still apply them by
+property access, and all three shapes were executed against the store and shown
+to delete every matching row before the guard was extended to check the refused
+fields by property access as well. `Object.create(defaults)` and class accessors
+produce exactly that shape, so this is not a hypothetical caller. The store's
+runtime list of refused fields is pinned to `keyof MemoryFilter` by the same
+exhaustiveness idiom the red-team baseline uses, so the review's executed
+reopening (a seventh `MemoryFilter` field, smuggled on a prototype, deleting
+every row) now fails typecheck instead. Residual: an unknown key (a typo, not
+a `MemoryFilter` field) smuggled on a prototype is still not reported, which
+is inert because neither `read` nor `delete` acts on unknown keys. One deliberate asymmetry the other way: `read`
+treats `includeStale` as active only when it is `false`, while `delete` refuses
+it at any defined value, `true` included. Stricter than `read`, in the safe
+direction.*
+
+*The narrowing is source-breaking, so it lands before the v0.1.0 release tag
+freezes the surface (ADR-0022, ADR-0023). After that tag it would be a breaking
+change requiring 0.2.0 under the 0.x convention, not literally a major.*
 
 **Decay/staleness (minimal but real):** one field, `staleAfter` (epoch ms). Derived staleness is `staleAfter !== null && Date.now() > staleAfter`. A half-life/decay-score model is deferred (Revisit if) — `staleAfter` covers retrieval-time filtering, which is what H-5 needs.
 
@@ -80,7 +128,7 @@ export interface MemoryFilter {
 
 - **`write` is an upsert keyed on `id`** — create *and* update through the one locked method. No `id` (or an unseen `id`) ⇒ INSERT with a generated id; a known `id` ⇒ UPDATE. Satisfies C and U. **Update has full-replace (PUT), not partial-merge, semantics:** every field is taken from the input; omitting `key`/`tags`/`staleAfter` resets them to their defaults rather than preserving the prior row. Only `createdAt` survives an update (`updatedAt` is bumped). Full-replace is chosen over partial-merge because it is predictable (the written entry *is* the stored entry) and because merge makes clearing a field impossible without a sentinel. Callers editing one field read-then-write the whole entry.
 - **`read` is the query** (R).
-- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe.
+- **`delete(filter): DeleteResult` is added as an explicit superset** for D, mirroring the router's `Unsubscribe` return and hooks' `FireResult` extras — additions beyond the architecture's headline, justified by the acceptance criterion literally naming "CRUD". A tombstone-via-write alternative was rejected: it pollutes every `read` with filtering and complicates the mapper. `delete` is bounded — an empty filter throws `TypeError` to prevent an accidental table wipe. *Amended 2026-08-30 (issue #87): it is bounded in a second way too, by accepting only `MemoryDeleteFilter`. `read` and `delete` had disagreed on three of the six filter fields (`limit`, `order`, `includeStale`), and wherever that disagreement changed the row set it enlarged it. See section 2 for the correction and section 9 for the echo discipline the refusal message now carries.*
 
 ### 4. Return shapes: `write`/`delete` tagged, `read` bare
 
@@ -94,7 +142,7 @@ export type DeleteResult = { ok: true; value: { deleted: number } } | { ok: fals
 export interface MemoryStore {
   write(entry: MemoryInput): WriteResult;
   read(filter?: MemoryFilter): MemoryEntry[];   // bare — see below
-  delete(filter: MemoryFilter): DeleteResult;
+  delete(filter: MemoryDeleteFilter): DeleteResult;  // narrowed 2026-08-30, issue #87
 }
 ```
 
@@ -102,7 +150,7 @@ export interface MemoryStore {
 
 `read` stays **bare `MemoryEntry[]`**, as architecture.md locked it. A query over our own table with a validated filter and an open connection is effectively total: the only failures are programmer errors (bad filter shape/type ⇒ throw `TypeError`, router `assertValid` precedent) or a catastrophic IO/closed-connection fault, which is a genuinely exceptional condition, not a domain outcome the caller branches on. Forcing every reader to unwrap `{ok}` for a query that never fails domain-wise is worse ergonomics and contradicts the locked signature. So `read` throws on the rare exceptional fault and never returns a tagged error. This is the deliberate asymmetry the cross-cutting rule anticipates: writes carry recoverable error state, pure queries do not.
 
-Programmer errors that throw `TypeError`: non-object entry/filter, `content` not a string, `type` not one of the four, `tags` not `string[]`, `staleAfter`/`limit` non-finite or negative, empty-filter `delete`.
+Programmer errors that throw `TypeError`: non-object entry/filter, `content` not a string, `type` not one of the four, `tags` not `string[]`, `staleAfter`/`limit` non-finite or negative, empty-filter `delete`, and *(added 2026-08-30, issue #87)* a `delete` filter carrying any key outside `type`/`key`/`tag`, unknown keys included, so a typo on the destructive path cannot be read as a cap that was applied.
 
 ### 5. Schema ownership: idempotent DDL on construction; `openMemoryDatabase` helper
 
@@ -140,6 +188,8 @@ All SQL uses **bound parameters — never string interpolation of entry content*
 
 ### 9. CONTROL_CHARS: memory is NOT the fourth consumer
 
+*Amended 2026-08-30 (issue #87): the Revisit-if tripwire at the end of this section has now been tripped, in a form it did not anticipate. `delete`'s refusal message echoes the offending FILTER KEY NAMES, which the caller chooses, so memory does write a caller-influenced string to a log-adjacent surface on that one path. The extraction this section deferred has since happened anyway (`src/internal/sanitize.ts`; ADR-0034's `boundEcho` in `src/internal/settings.ts` composes it), so memory imports `boundEcho` rather than growing its own copy: every echoed key is control-char sanitised, bidi- and invisible-stripped and truncated to 64 characters plus an ellipsis, and the list is capped at five keys with an elision count. The message is therefore bounded for any input: 207 characters of fixed prose, at most five keys of at most 65 code units with four separators (333), and the elision suffix (9 plus the decimal width of the count), so 549 characters plus the digits of the elision count, where before it grew linearly with the key count (the review's proof of concept rendered 529,076 characters from 20,000 keys of 25 to 29 characters each). The test pins the bound, not the measurement. Entry `content` is still never echoed, which is what the paragraph below is really about.*
+
 Memory uses parameterized SQL (no content interpolated into SQL) and **does not echo untrusted entry content into error/log messages** — `MemoryError.message` is either a static/templated string or a library-generated `better-sqlite3` error message (which names the constraint/column, not arbitrary row content). Because memory neither interpolates content into SQL nor writes attacker-influenced strings to a log-adjacent surface, it is not the fourth `CONTROL_CHARS` consumer, and the ADR-0008 extraction to `src/internal/` stays deferred (tightest scope). If a future change embeds a failing `key`/`content` into `MemoryError.message`, memory becomes the fourth consumer and triggers the extraction (Revisit if).
 
 ### 10. Factory-only; no module-level default instance
@@ -171,6 +221,7 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 5. **Module-level default store (router/hooks style).** Rejected — would open a DB file at import time; no sensible process-global DB exists pre-H-1. Factory-only.
 6. **A full migration runner now.** Rejected for Week 1 — idempotent `CREATE TABLE IF NOT EXISTS` is sufficient; telemetry brings the runner and adopts this DDL.
 7. **`node:sqlite` (built-in) instead of `better-sqlite3`.** Held as a fallback in case the native binary failed on Node 25; the prebuilt binary loaded cleanly, so we stay on ADR-0004's `better-sqlite3` substrate. Revisit only if the native dep becomes an install burden.
+8. **Make `delete` HONOUR `limit`/`order`/`includeStale` instead of refusing them** *(added 2026-08-30, issue #87)*. This is a real capability, not a straw man: `{ type, limit: 3, order: 'asc' }` would delete the three oldest entries of a type, and the tag path's id-list transaction already shows how to implement it. Rejected for now on three grounds. **Reversibility:** refusing now and honouring later is additive, whereas shipping the semantics now fixes them before the surface freeze; refusal is the option that keeps the other one open. **`includeStale` is clock-raced:** it selects rows against `Date.now()`, so a preview and a delete can disagree across two calls even when both honour it, and a destructive method should not have a filter whose meaning moves. **The right primitive is delete-by-id, which does not exist:** `key` is explicitly non-unique (section 2), so a caller still cannot preview and then delete exactly the rows they saw, even though the tag path deletes by id internally. That gap is genuine and additive, so it is filed as #116 rather than fixed here (Revisit if).
 
 ## Revisit if
 
@@ -179,5 +230,7 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 - A real decay/eviction policy is needed (half-life scoring, TTL sweeps) beyond retrieval-time `staleAfter` filtering.
 - Store size makes tag/text search slow — add FTS5 or a `tags` join table / JSON1 index.
 - A `MemoryError.message` starts embedding untrusted `key`/`content` — memory becomes the 4th `CONTROL_CHARS` consumer; extract to `src/internal/`.
+  - **Status 2026-08-30 (issue #87):** tripped, in a form this bullet did not anticipate: `delete`'s refusal message (a thrown `TypeError`, not `MemoryError`) echoes caller-chosen filter KEY NAMES, not entry content. The extraction had already happened; memory imports `boundEcho` from `src/internal/settings.ts`. See section 9.
 - Concurrent multi-process writers appear — inherits ADR-0004's single-writer `SQLITE_BUSY` caveat.
+- A caller needs to delete exactly the rows a preview returned: `delete` has no `id` filter and `key` is non-unique, so that is not expressible today (#116, filed 2026-08-30 alongside #87). Additive whenever it is wanted.
 - Upsert-by-`key` (not just `id`) is requested — add a unique index and a keyed conflict target.

@@ -1,8 +1,11 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { boundEcho } from '../internal/settings.js';
 import type {
   DeleteResult,
+  MemoryDeleteFilter,
+  MemoryDeleteMatchField,
   MemoryEntry,
   MemoryError,
   MemoryFilter,
@@ -155,10 +158,42 @@ function assertValidInput(entry: MemoryInput): void {
   }
 }
 
-function assertValidFilter(filter: MemoryFilter, requireNonEmpty: boolean): void {
+/** The only fields `delete` matches rows on; every other key is refused (#87). */
+const DELETE_FILTER_KEYS = ['type', 'key', 'tag'] as const satisfies readonly MemoryDeleteMatchField[];
+const DELETE_FILTER_KEY_SET: ReadonlySet<string> = new Set(DELETE_FILTER_KEYS);
+
+/** `read` applies these; `delete` does not, so `delete` refuses them (#87). */
+const REFUSED_READ_FIELDS = ['includeStale', 'limit', 'order'] as const satisfies readonly (keyof MemoryFilter)[];
+
+// Drift pin: every MemoryFilter field is either matched on or refused. A field
+// added to MemoryFilter and listed in neither would be invisible to the
+// property-access check in assertValidDeleteFilter, which is exactly how #87
+// reopens (executed in review: `foo?: number` on MemoryFilter, `foo` smuggled on
+// a prototype, 3/3 rows deleted). Same idiom as the red-team baseline's ROW_FIELDS.
+type UnlistedFilterField = Exclude<
+  keyof MemoryFilter,
+  (typeof DELETE_FILTER_KEYS)[number] | (typeof REFUSED_READ_FIELDS)[number]
+>;
+const _filterExhaustive: UnlistedFilterField extends never
+  ? true
+  : ['MemoryFilter field in neither DELETE_FILTER_KEYS nor REFUSED_READ_FIELDS', UnlistedFilterField] = true;
+void _filterExhaustive;
+
+/**
+ * How many offending key names the refusal message spells out. Key names are
+ * chosen by the caller, so the echo is bounded in count here and in width by
+ * boundEcho, the same discipline the settings parser applies to unknown keys.
+ */
+const REFUSAL_ECHO_MAX_KEYS = 5;
+
+function assertFilterObject(filter: unknown): void {
   if (typeof filter !== 'object' || filter === null) {
     throw new TypeError(`filter must be an object, got ${String(filter)}`);
   }
+}
+
+function assertValidFilter(filter: MemoryFilter): void {
+  assertFilterObject(filter);
   if (filter.type !== undefined && !MEMORY_TYPE_SET.has(filter.type)) {
     throw new TypeError(`filter.type must be one of ${MEMORY_TYPES.join('|')}, got ${String(filter.type)}`);
   }
@@ -174,7 +209,56 @@ function assertValidFilter(filter: MemoryFilter, requireNonEmpty: boolean): void
   if (filter.order !== undefined && filter.order !== 'asc' && filter.order !== 'desc') {
     throw new TypeError(`filter.order must be 'asc' or 'desc', got ${String(filter.order)}`);
   }
-  if (requireNonEmpty && filter.type === undefined && filter.key === undefined && filter.tag === undefined) {
+}
+
+/**
+ * `delete` accepts a strict subset of `MemoryFilter` (#87). `read` applies
+ * `limit`, `order` and `includeStale`; `delete` does not, so accepting one
+ * deleted rows the same filter's `read` would not have returned.
+ *
+ * `MemoryDeleteFilter` types the three refused fields `never`, which stops a
+ * TypeScript caller even when they hold a `MemoryFilter`-typed value. This
+ * catches what no type can see: JavaScript callers, `as` casts, and a field
+ * reaching the object by a route `Object.keys` does not report.
+ */
+function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
+  assertFilterObject(filter);
+  // Runs before the field validators and the non-empty guard: an unhonoured
+  // field is the more specific fault, so reporting it names the mistake the
+  // caller actually made rather than a downstream symptom of it. An unknown
+  // key is refused on the same footing, because on the destructive path a
+  // silently ignored field reads as a cap that was applied.
+  const named = Object.keys(filter).filter((k) => !DELETE_FILTER_KEY_SET.has(k));
+  // Object.keys reports own enumerable string keys, so it catches a typo but
+  // misses a field that arrives on the prototype chain, is defined
+  // non-enumerable, or is hidden by a Proxy ownKeys trap. `read` would still
+  // apply such a field, because it reads by property access, so the fields
+  // delete refuses are checked that way too. Without this the whole #87
+  // disagreement reopens behind a slightly unusual filter object, which is not
+  // hypothetical: Object.create(defaults) and class accessors both produce one.
+  // Any defined value is refused, `includeStale: true` included, which read
+  // would have ignored: stricter than read, in the safe direction.
+  const view = filter as unknown as Readonly<Record<string, unknown>>;
+  const smuggled = REFUSED_READ_FIELDS.filter((f) => !named.includes(f) && view[f] !== undefined);
+  const offending = [...named, ...smuggled];
+  if (offending.length > 0) {
+    // Quoted, as the settings parser quotes its unknown keys: a key that
+    // sanitises to nothing still renders as '' rather than vanishing.
+    const shown = offending
+      .slice(0, REFUSAL_ECHO_MAX_KEYS)
+      .map((k) => `'${boundEcho(k)}'`)
+      .join(', ');
+    const elided = offending.length - REFUSAL_ECHO_MAX_KEYS;
+    throw new TypeError(
+      `delete matches rows on ${DELETE_FILTER_KEYS.join(', ')} only; ` +
+        `refusing filter field(s) it does not honour: ${shown}` +
+        `${elided > 0 ? ` (+${String(elided)} more)` : ''}. ` +
+        `read applies the rest, delete does not, so accepting them could delete ` +
+        `rows the same filter's read would not return.`,
+    );
+  }
+  assertValidFilter(filter);
+  if (filter.type === undefined && filter.key === undefined && filter.tag === undefined) {
     throw new TypeError('delete requires a non-empty filter (type, key, or tag) to avoid wiping the table');
   }
 }
@@ -259,7 +343,7 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
   }
 
   function read(filter: MemoryFilter = {}): MemoryEntry[] {
-    assertValidFilter(filter, false);
+    assertValidFilter(filter);
     const query = buildReadQuery(filter);
     const rows = db.prepare(query.sql).all(query.params);
     let entries = rows.map(rowToEntry);
@@ -273,8 +357,8 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
     return entries;
   }
 
-  function del(filter: MemoryFilter): DeleteResult {
-    assertValidFilter(filter, true);
+  function del(filter: MemoryDeleteFilter): DeleteResult {
+    assertValidDeleteFilter(filter);
     const clauses: string[] = ['1 = 1'];
     const params: Record<string, unknown> = {};
     if (filter.type !== undefined) {
@@ -289,8 +373,12 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
       if (filter.tag !== undefined) {
         // Tags live in a JSON text column, so tag matching cannot happen in
         // SQL. Reuse read() as the single definition of "which rows match this
-        // filter" — delete can then never disagree with read — and remove the
-        // matched ids in one transaction so a partial failure rolls back.
+        // filter", and remove the matched ids in one transaction so a partial
+        // failure rolls back. This reuse alone did NOT make the two agree: the
+        // call below drops any field read applies and delete does not, which is
+        // exactly how { tag, limit } over-deleted (#87). What makes them agree
+        // is the narrowed filter, which carries only the three fields read
+        // matches on identically and refuses the rest before this point.
         const deleteMatching = db.transaction((): number => {
           const ids = read({ type: filter.type, key: filter.key, tag: filter.tag }).map((e) => e.id);
           const stmt = db.prepare(`DELETE FROM memory_entries WHERE id = @id;`);
