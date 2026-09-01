@@ -143,9 +143,10 @@ describe('check-corpus-numbers.mjs: exit-code contract', () => {
     expect(run.stderr).toContain('did not complete');
   });
 
-  it('exits 2 when the baseline is missing', () => {
+  it('exits 2 when the baseline is missing, without echoing the runner path', () => {
     const root = fixture({ 'README.md': GOOD_README });
-    expectIncomplete(root, 'no eval/redteam/baseline.json');
+    const run = expectIncomplete(root, 'no eval/redteam/baseline.json');
+    expect(run.stderr).not.toContain(root);
   });
 
   it('exits 2 when the baseline is not JSON', () => {
@@ -692,5 +693,60 @@ describe('check-corpus-numbers.mjs: envelope parity with src/internal/guarded-re
     } finally {
       writer.kill();
     }
+  });
+});
+
+describe('check-corpus-numbers.mjs: adversarial verify fold (2026-09-01)', () => {
+  // The verifier attacked the folded gate and refuted the width of one claim
+  // (the fold set was narrower than "default-ignorable": eight other such
+  // code points, the C0/C1 controls and a plain TAB still hid a claim) and
+  // executed four observations: NFKC is quadratic in a run of combining marks
+  // with mixed canonical classes; findings were unbounded per file; a README
+  // that is a FIFO was skipped where a docs FIFO is refused; the line cap's
+  // unit is UTF-16 code units.
+
+  it('folds every default-ignorable code point, the controls and a plain TAB, not only the six the security fold named (R2)', () => {
+    const c = (n: number) => String.fromCodePoint(n);
+    const doc = [
+      `the 51${c(0x2066)} cases corpus`, // left-to-right isolate
+      `the cor${c(0x202e)}pus has 51 cases`, // right-to-left override
+      `the 51${c(0x09)}cases corpus`, // a plain tab
+      `the 51${c(0x07)} cases corpus`, // BEL
+      `the cor${c(0x85)}pus has 51 cases`, // NEL
+      `the cor${c(0xfe0f)}pus has 51 cases`, // variation selector 16
+      `the 51${c(0x1680)}cases corpus`, // Ogham space mark
+      '',
+    ].join('\n');
+    const root = fixture(tree({ 'docs/a.md': doc }));
+    expectFinding(
+      root,
+      'docs/a.md:1:',
+      'docs/a.md:2:',
+      'docs/a.md:3:',
+      'docs/a.md:4:',
+      'docs/a.md:5:',
+      'docs/a.md:6:',
+      'docs/a.md:7:',
+    );
+  });
+
+  it('exits 2 on a run of more than 30 combining marks, which makes NFKC quadratic, and accepts 30 (O1)', () => {
+    const mark = String.fromCodePoint(0x0301);
+    const thirty = fixture(tree({ 'docs/a.md': `e${mark.repeat(30)} fine\n` }));
+    expectClean(thirty);
+    const thirtyOne = fixture(tree({ 'docs/a.md': `ok\ne${mark.repeat(31)}\n` }));
+    expectIncomplete(thirtyOne, 'docs/a.md:2', 'combining marks');
+  });
+
+  it('caps the findings shown per file and reports the count not shown, so one doc cannot flood the log (O2)', () => {
+    const root = fixture(tree({ 'docs/a.md': 'detection 1.1%\n'.repeat(250) }));
+    const run = expectFinding(root, 'docs/a.md:200:', '50 more', 'FAILED (250 problem(s)');
+    expect(run.stderr).not.toContain('docs/a.md:201:');
+  });
+
+  it.skipIf(process.platform === 'win32')('exits 2 when README.md is not a regular file, as a docs entry would (O3)', () => {
+    const root = fixture({ [BASELINE_PATH]: baseline(), 'docs/a.md': 'the 53-case corpus\n' });
+    execFileSync('mkfifo', [join(root, 'README.md')]);
+    expectIncomplete(root, 'README.md', 'not a regular file');
   });
 });

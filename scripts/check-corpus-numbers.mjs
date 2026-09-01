@@ -49,12 +49,15 @@
 // line that happens to mention Week 3 would be skipped silently.
 //
 // BEFORE MATCHING, each line is normalised. Look-alikes first: NFKC folds
-// fullwidth digits, the Unicode spaces become a space, the dash family
-// becomes "-", and the default-ignorable characters (soft hyphen, zero-width
-// space, the bidi marks, BOM) are deleted, because "53 cases" with a no-break
-// space, "53-case" with a non-breaking hyphen and "corpus" with a soft hyphen
-// inside it all render exactly like the ASCII claim and hid it from every
-// recogniser (security lens, 2026-09-01). Then link TARGETS (`[text](target)`,
+// fullwidth digits; TAB, VT, FF, the Unicode spaces and line separators
+// become a space; the dash family becomes "-"; and every
+// Default_Ignorable_Code_Point plus the non-whitespace C0 controls, DEL and
+// C1 are deleted, because "53 cases" with a no-break space or a tab,
+// "53-case" with a non-breaking hyphen and "corpus" with a soft hyphen, a
+// bidi override or a NEL inside it all render exactly like the ASCII claim
+// and hid it from every recogniser (security lens and verifier, 2026-09-01).
+// A homoglyph (a Cyrillic o inside "corpus") is outside every folded class
+// and still hides a claim; that is a stated limit. Then link TARGETS (`[text](target)`,
 // the target free of parentheses and whitespace) and bare URLs are removed
 // (an address is not prose, and `.../51-case-study` is not a claim), link
 // TEXT is kept (it is prose a reader believes, and the security-model
@@ -62,10 +65,14 @@
 // are removed so "1,000 cases" reads as 1000 rather than as its last group.
 // The stripper and every recogniser are linear in the line (a failed attempt
 // stops at the next bracket, parenthesis or word boundary rather than
-// scanning to the end from every position), and a line over MAX_LINE_CHARS
-// or a doc over MAX_DOC_BYTES is exit 2 naming the file, so no doc can hold
-// the job: the first cut's rate recognisers took 2.5 s on 50k digits and
-// 40 s on 200k on one machine, on a workflow that fork PRs reach.
+// scanning to the end from every position); a line over MAX_LINE_CHARS, a
+// run of more than MAX_COMBINING_MARKS combining marks (NFKC's canonical
+// reordering is quadratic in one, and the check runs before NFKC does) or a
+// doc over MAX_DOC_BYTES is exit 2 naming the file; and findings are capped
+// at MAX_FINDINGS_PER_FILE per file with the rest counted. So no doc can
+// hold the job or flood its log: the first cut's rate recognisers took 2.5 s
+// on 50k digits and 40 s on 200k on one machine, on a workflow that fork PRs
+// reach, and one 1 MB doc of stale rates produced 224,901 findings.
 //
 // RECOGNISED CLAIM SHAPES (on fence-stripped, marker-stripped lines):
 //   N-case, N cases            == corpus size   } only on a line that also
@@ -94,6 +101,8 @@
 // fence grammar is check-docs.sh's, so it shares that gate's limit: a
 // backtick opener whose info string contains a backtick is a fence to both
 // gates and not to a CommonMark renderer (issue #119, both gates together).
+// A reference-style link label (`[text][label]`) is read as prose although a
+// reader never sees the label.
 //
 // LOG HYGIENE. Doc content and filenames are attacker-influenced under the
 // cloned-repo threat model (security-model section 2) and reach CI logs.
@@ -106,7 +115,8 @@
 // regex-constrained match (digits, a fixed word list, `/`, `~`, `%` and the
 // whitespace between them) and the derived figure, never the rest of the
 // line. A read that fails names the relative file and the error code, never
-// the runner's absolute path.
+// the runner's absolute path (a root that cannot be entered echoes the
+// operator's own argument, the one path the operator typed).
 //
 // READ ENVELOPE. The baseline and every doc are read through the redteam
 // gate's envelope (src/internal/guarded-read.ts, ADR-0034), restated here
@@ -134,8 +144,21 @@ const BASELINE = 'eval/redteam/baseline.json';
 const MAX_BASELINE_BYTES = 1_000_000;
 /** Same cap for a doc; the largest live one is 66 KB. */
 const MAX_DOC_BYTES = 1_000_000;
-/** Per line; the longest live line is 9,596 characters (a security-model table row). */
+/**
+ * Per line, in UTF-16 code units (what `.length` counts, so an astral
+ * character counts twice and the cap is conservative); the longest live line
+ * is 9,584 (a security-model table row).
+ */
 const MAX_LINE_CHARS = 20_000;
+/**
+ * NFKC's canonical reordering is quadratic in a run of combining marks with
+ * mixed canonical classes (the verifier timed x4 per doubling). UAX #15's
+ * stream-safe limit is 30; no live line carries a run of two.
+ */
+const MAX_COMBINING_MARKS = 30;
+const COMBINING_RUN = new RegExp(`\\p{M}{${MAX_COMBINING_MARKS + 1}}`, 'u');
+/** Findings shown per file; the rest are counted, so one doc cannot flood the log. */
+const MAX_FINDINGS_PER_FILE = 200;
 const DOC_DIRS = ['docs', 'docs/blog'];
 // Absent on platforms without them; the lstat checks stay the primary guard.
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -176,14 +199,23 @@ const sanitise = (text) => String(text).replace(UNSAFE, '');
 const emit = (text) => console.error(`${PREFIX} ${sanitise(text)}`);
 
 /**
- * Look-alikes, folded before matching: NFKC (fullwidth digits, fullwidth
- * tilde), the Unicode spaces to a space, the dash family to "-", and the
- * default-ignorable characters (soft hyphen, zero-width space and joiners,
- * the bidi marks, BOM) deleted. Each renders exactly like the ASCII claim.
+ * Look-alikes, folded before matching. NFKC first (fullwidth digits and
+ * tilde, the compatibility forms); then TAB, VT, FF, the Unicode spaces and
+ * the line and paragraph separators become a space; the dash family becomes
+ * "-"; and every Default_Ignorable_Code_Point (soft hyphen, the zero-width
+ * characters, the bidi marks, isolates and overrides, variation selectors,
+ * BOM and the rest of that Unicode property) plus the C0 controls that are
+ * not whitespace, DEL and C1 are deleted, because each renders as nothing.
+ * The first fold set named six characters, and the verifier showed eight
+ * other default-ignorables, the controls and a plain TAB still hid a claim;
+ * naming the property instead of a list is what closes the class.
  */
-const LOOKALIKE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
+const LOOKALIKE_SPACES = /[\t\v\f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/g;
 const LOOKALIKE_DASHES = /[\u2010-\u2015\u2212]/g;
-const IGNORABLE = /[\u00ad\u200b-\u200f\u2060\ufeff]/g;
+const IGNORABLE = new RegExp(
+  `[\\p{Default_Ignorable_Code_Point}${span(0x00, 0x08)}${span(0x0e, 0x1f)}${cp(0x7f)}${span(0x80, 0x9f)}]`,
+  'gu',
+);
 const normalise = (line) =>
   line.normalize('NFKC').replace(LOOKALIKE_SPACES, ' ').replace(LOOKALIKE_DASHES, '-').replace(IGNORABLE, '');
 
@@ -250,7 +282,7 @@ function deriveCorpus(root) {
     text = readGuarded(root, BASELINE, MAX_BASELINE_BYTES);
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Incomplete(`no ${BASELINE} in '${root}' - nothing to re-derive from`);
+      throw new Incomplete(`no ${BASELINE} under the root - nothing to re-derive from`);
     }
     throw error;
   }
@@ -323,7 +355,8 @@ function deriveCorpus(root) {
 function liveDocs(root) {
   const docs = [];
   const readme = lstatRefusingSymlink(root, 'README.md', 'file');
-  if (readme?.isFile()) docs.push('README.md');
+  if (readme !== null && !readme.isFile()) throw new Incomplete('README.md is not a regular file');
+  if (readme !== null) docs.push('README.md');
   for (const dir of DOC_DIRS) {
     // Absent is fine (a tree may carry no docs/ at all); a symlink is refused
     // and anything else that is not a directory means the scan did not
@@ -460,6 +493,7 @@ function checkLine(name, lineNo, line, d, findings) {
  */
 function checkFile(root, rel, d, findings) {
   const name = sanitise(rel);
+  const local = [];
   // All three line endings, so a lone-CR file does not collapse into one
   // logical line and report every finding against line 1.
   let body;
@@ -480,6 +514,11 @@ function checkFile(root, rel, d, findings) {
     const lineNo = index + 1;
     if (raw.length > MAX_LINE_CHARS) {
       throw new Incomplete(`${name}:${lineNo} is ${raw.length} chars, over the ${MAX_LINE_CHARS}-char cap; not checked`);
+    }
+    if (COMBINING_RUN.test(raw)) {
+      throw new Incomplete(
+        `${name}:${lineNo} carries a run of more than ${MAX_COMBINING_MARKS} combining marks; not checked`,
+      );
     }
     const line = raw;
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -509,7 +548,7 @@ function checkFile(root, rel, d, findings) {
       return;
     }
     if (skipOpenedAt !== 0) return;
-    claims += checkLine(name, lineNo, line, d, findings);
+    claims += checkLine(name, lineNo, line, d, local);
   });
   if (inFence) {
     throw new Incomplete(
@@ -519,7 +558,13 @@ function checkFile(root, rel, d, findings) {
   if (skipOpenedAt !== 0) {
     throw new Incomplete(`${name}: corpus-gate skip opened at line ${skipOpenedAt} and never resumed`);
   }
-  return claims;
+  const shown = local.slice(0, MAX_FINDINGS_PER_FILE);
+  findings.push(...shown);
+  const suppressed = local.length - shown.length;
+  if (suppressed > 0) {
+    findings.push(`${name}: ${suppressed} more finding(s) not shown (${MAX_FINDINGS_PER_FILE} shown per file)`);
+  }
+  return { claims, problems: local.length, suppressed };
 }
 
 const rootOf = (argv) => resolve(argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -541,16 +586,24 @@ function main(argv) {
   const derived = deriveCorpus(root);
   const findings = [];
   let claims = 0;
-  for (const rel of liveDocs(root)) claims += checkFile(root, rel, derived, findings);
+  let problems = 0;
+  let suppressed = 0;
+  for (const rel of liveDocs(root)) {
+    const result = checkFile(root, rel, derived, findings);
+    claims += result.claims;
+    problems += result.problems;
+    suppressed += result.suppressed;
+  }
 
   if (claims === 0) {
     findings.push(
       'no corpus claim recognised in any live doc (README.md, docs/*.md, docs/blog/*.md) - either the docs stopped stating corpus numbers (then remove this gate in the same commit) or they were reworded past the recognisers',
     );
+    problems += 1;
   }
   if (findings.length > 0) {
     for (const finding of findings) emit(finding);
-    emit(`FAILED (${findings.length} problem(s))`);
+    emit(`FAILED (${problems} problem(s)${suppressed > 0 ? `, ${suppressed} not shown` : ''})`);
     return 1;
   }
   const summary = `${derived.size} cases, ${derived.malicious} malicious, ${derived.detected} detected, ${derived.missed} missed, ${derived.rate1}%`;

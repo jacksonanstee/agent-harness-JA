@@ -291,15 +291,19 @@ Decisions, in the shape of the two above:
    benign counts; the missed count as a numeral or as one..twelve with an
    optional `current` and `known-`; and rates on a line containing "detect"
    in the `NN.N%`, `NN.NN%` and `~NN%` forms, a space before the sign
-   allowed. Look-alikes are folded before any recogniser runs (NFKC, the Unicode
-   spaces to a space, the dash family to a hyphen, the default-ignorable
-   characters deleted), because a no-break space in "53 cases" or a soft
-   hyphen inside "corpus" renders as the ASCII claim and hid it from every
-   recogniser. Link targets and bare URLs are stripped before matching and
+   allowed. Look-alikes are folded before any recogniser runs (NFKC; TAB, VT,
+   FF, the Unicode spaces and line separators to a space; the dash family to
+   a hyphen; every `Default_Ignorable_Code_Point` and the non-whitespace C0
+   controls, DEL and C1 deleted), because a no-break space or a tab in
+   "53 cases", or a soft hyphen or a bidi override inside "corpus", renders as
+   the ASCII claim and hid it from every recogniser. A homoglyph inside a
+   scoping word is outside every folded class and is a stated limit. Link targets and bare URLs are stripped before matching and
    link text is not, because the row that shipped stale was link text. The
-   stripper and every recogniser are linear in the line, and a line over
-   20,000 characters or a doc over 1 MB is exit 2 naming the file, so no doc
-   can hold the job. The rate is
+   stripper and every recogniser are linear in the line; a line over 20,000
+   UTF-16 code units, a run of more than 30 combining marks (NFKC's canonical
+   reordering is quadratic in one) or a doc over 1 MB is exit 2 naming the
+   file; and findings are capped at 200 per file with the rest counted, so
+   no doc can hold the job or flood its log. The rate is
    rounded half-up from the exact integer ratio: `(23 / 80 * 100).toFixed(1)`
    is "28.7" where the true value is exactly 28.75%, which would reject the
    correct figure and accept the wrong one. A bare integer percentage is
@@ -384,3 +388,24 @@ ADR-0018, and adds the parity group and the header pointer named in decision
 security-model skip region's figures do not, which is what the markers are
 for. A job timeout for `build-test`, which the docs-links rationale also
 reaches, is #121.
+
+The adversarial verifier (2026-09-01) then attacked seventeen claims across
+the three folds. Fourteen held by execution; one (the byte cap taken by
+`fstat` on the descriptor that is read) cannot be staged and is recorded as
+unchecked; three fell. The PR narrative's "twelve findings on main's docs" is
+eleven under every committed version of the script, because the twelfth was
+the recogniser defect corrected inside the first commit before it was
+committed. The fold set was narrower than "default-ignorable": eight other
+such code points, the C0 and C1 controls and a plain tab still hid a claim,
+which the fold closes by naming the Unicode property rather than a list. And
+a missing baseline printed the runner's absolute path where the header said
+"never". Four executed observations were folded as well: NFKC's canonical
+reordering is quadratic in a run of combining marks with mixed classes, so a
+run of more than 30 (the UAX #15 stream-safe limit; no live line has a run
+of two) is exit 2 before NFKC runs; findings were unbounded per file (one
+1 MB doc produced 224,901 findings and 18 MB of log), so 200 per file are
+shown and the rest counted; a README that is a FIFO was skipped where a docs
+FIFO is refused; and the line cap counts UTF-16 code units, which the
+wording now says (the longest live line is 9,584 of them). Two further
+silences are stated as limits rather than fixed: a homoglyph inside a
+scoping word, and a reference-style link label a reader never sees.
