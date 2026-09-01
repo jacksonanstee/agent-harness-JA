@@ -21,6 +21,11 @@
  *
  * Messages carry the path and a reason and never a byte of the file's
  * content; consumers map `refusal` to their own error class and prefix.
+ *
+ * Restated, not imported, in scripts/check-corpus-numbers.mjs (the docs-links
+ * job installs nothing, so it cannot load this module). A change here needs
+ * the same change there; src/corpus-gate.test.ts runs this module's refusal
+ * cases through both (ADR-0034, 2026-09-01 amendment).
  */
 
 import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';

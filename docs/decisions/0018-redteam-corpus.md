@@ -298,3 +298,16 @@ read.
 - A recalibration edit is ever made without an accompanying rule-confidence
   change slipping past the maintainer — that would be the signal to make
   decision 8's policy mechanically enforced rather than convention-backed.
+
+## Amendment (2026-09-01): the corpus moved on; this ADR's figures did not
+
+The 51-case / 37-of-40 / 92.5% figures above are the E-2 record and are left
+intact as the record of what was decided then. The corpus has been 53 cases
+(41 malicious, 37 detected, 4 known misses, 90.2%) since `db164e6`
+(2026-07-28, PR #47), a growth this ADR was not updated for. The live figures
+are stated in `docs/eval-methodology.md` and checked on every PR against a
+re-derivation from `eval/redteam/baseline.json`'s rows by `npm run
+check:corpus` ([ADR-0029](./0029-docs-structure-gate.md), 2026-08-31
+amendment). ADRs are outside that gate's scope by design, so the figures in
+this note are reviewed, not gated: if the corpus moves again the live document
+fails the build and this note does not.

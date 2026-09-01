@@ -295,3 +295,18 @@ and is recorded as residual R-19.
   the harness's own, and the known sets ARE the schema.
 - The SDK or the harness gains an executor with its own working directory: the absolute-path
   parent-only rule assumes `process.cwd()` is the operator's (ADR-0015 §2 parity note).
+
+## Amendment (2026-09-01): a fourth consumer restates the guard rather than importing it
+
+`scripts/check-corpus-numbers.mjs` ([ADR-0029](./0029-docs-structure-gate.md),
+2026-08-31 amendment) reads `eval/redteam/baseline.json` and the live docs
+from a CI job that installs nothing, so it cannot import this module; it
+restates the envelope in place (leaf and ancestor `lstat` refusal, an
+`O_NOFOLLOW` and `O_NONBLOCK` open, `fstat` on the descriptor that is read,
+the byte cap). "One implementation of the symlink guard, with three
+consumers" above is therefore one implementation with three importing
+consumers and one restatement. The restatement's first cut was narrower than
+this module (it checked the leaf and read by path) and the security lens
+found that by execution, which is why `src/corpus-gate.test.ts` now runs this
+module's refusal cases through both and this module's header points at the
+script.

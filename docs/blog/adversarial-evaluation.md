@@ -1,11 +1,13 @@
 # Adversarial evaluation for LLM agents: golden + red-team + two-pass
 
 *The corpus figures in this post (case count, known misses, detection rate)
-are live rather than the ones it was first published with: on every PR,
-`npm run check:corpus` re-derives them from the committed baseline and fails
-the build on a stale one (issue #89, 2026-08-31). The figures as they stood at
-each decision are in the dated ADRs, starting with
-[ADR-0018](../decisions/0018-redteam-corpus.md).*
+are live rather than the ones it was first published with: on every PR they
+are checked against figures `npm run check:corpus` re-derives from the
+committed baseline's rows, and a stale one fails the build (issue #89,
+2026-08-31). The figures the corpus was designed with are in
+[ADR-0018](../decisions/0018-redteam-corpus.md), which now carries a dated
+pointer to the live ones; the one growth since (`db164e6`, 2026-07-28) had no
+ADR restating them.*
 
 The eval layer of [agent-harness-JA](../../README.md) has three parts: a
 golden-task runner with executable oracles

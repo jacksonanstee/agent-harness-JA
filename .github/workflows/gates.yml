@@ -47,6 +47,7 @@ jobs:
     # included). Each recogniser is linear and every line is capped, but a
     # gate that is somehow slow must fail this job, not hold the runner for
     # the 360-minute default and every PR queued behind it (issue #89).
+    # build-test, which runs the PR's own code, has no timeout yet: #121.
     timeout-minutes: 10
     steps:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag

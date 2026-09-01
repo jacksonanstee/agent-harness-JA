@@ -1,8 +1,9 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { GuardedReadError, readFileGuarded } from './internal/guarded-read.js';
 
 /**
  * Tests for `scripts/check-corpus-numbers.mjs` (issue #89).
@@ -615,5 +616,81 @@ describe('check-corpus-numbers.mjs: security lens fold (2026-09-01)', () => {
   it('does not treat a stray "](" as a link target, so a claim after it is still read (F7)', () => {
     const root = fixture(tree({ 'docs/a.md': 'Our corpus ](51-case, 37/40 malicious, 92.5% detection) today.\n' }));
     expectFinding(root, '51-case', '37/40 malicious', '92.5%');
+  });
+});
+
+describe('check-corpus-numbers.mjs: envelope parity with src/internal/guarded-read.ts (ADR-0034)', () => {
+  // The script restates the envelope instead of importing it, because the
+  // docs-links job installs nothing, so nothing structural binds the two
+  // spellings, and the first restatement was narrower than the original
+  // (security lens, 2026-09-01). This group binds them behaviourally: each
+  // refusal case that module owns is staged once, RELATIVE to the working
+  // directory the way the redteam gate passes its path (guarded-read's
+  // ancestor walk is per component only for a relative path), and both the
+  // module and the script must refuse it.
+  function relativeFixture(files: Record<string, string>): string {
+    mkdirSync('.harness', { recursive: true });
+    const root = mkdtempSync('.harness/corpus-gate-parity-');
+    roots.push(root);
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(root, rel, '..'), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    return root;
+  }
+
+  function bothRefuse(root: string, refusal: string, ...scriptText: string[]): void {
+    let caught: unknown;
+    try {
+      readFileGuarded(join(root, BASELINE_PATH), 1_000_000);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught, 'guarded-read must refuse').toBeInstanceOf(GuardedReadError);
+    expect((caught as GuardedReadError).refusal).toBe(refusal);
+    expectIncomplete(root, ...scriptText);
+  }
+
+  it('both refuse a leaf symlink', () => {
+    const root = relativeFixture({ 'README.md': GOOD_README, 'elsewhere.json': baseline() });
+    mkdirSync(join(root, 'eval', 'redteam'), { recursive: true });
+    symlinkSync(resolve(root, 'elsewhere.json'), join(root, BASELINE_PATH));
+    bothRefuse(root, 'symlink', 'symlink');
+  });
+
+  it('both refuse an ancestor symlink', () => {
+    const root = relativeFixture({ 'README.md': GOOD_README, 'elsewhere/baseline.json': baseline() });
+    mkdirSync(join(root, 'eval'));
+    symlinkSync(resolve(root, 'elsewhere'), join(root, 'eval', 'redteam'));
+    bothRefuse(root, 'ancestor-symlink', 'eval/redteam', 'symlink');
+  });
+
+  it('both refuse a directory in place of the file', () => {
+    const root = relativeFixture({ 'README.md': GOOD_README });
+    mkdirSync(join(root, BASELINE_PATH), { recursive: true });
+    bothRefuse(root, 'directory', 'not a regular file');
+  });
+
+  it('both refuse a file over the byte cap', () => {
+    const padded = baseline().replace('"schemaVersion"', `"pad": "${'x'.repeat(1_000_001)}", "schemaVersion"`);
+    const root = relativeFixture({ 'README.md': GOOD_README, [BASELINE_PATH]: padded });
+    bothRefuse(root, 'oversize', 'over the');
+  });
+
+  it.skipIf(process.platform === 'win32')('both refuse a FIFO at once, without waiting for a writer', () => {
+    const root = relativeFixture({ 'README.md': GOOD_README });
+    mkdirSync(join(root, 'eval', 'redteam'), { recursive: true });
+    const fifo = join(root, BASELINE_PATH);
+    execFileSync('mkfifo', [fifo]);
+    // A blocking open would wait for this writer; both must return well
+    // before it arrives, which is what O_NONBLOCK is for.
+    const writer = spawn('sh', ['-c', `sleep 3; cat /dev/null > "${fifo}"`], { stdio: 'ignore' });
+    try {
+      const started = Date.now();
+      bothRefuse(root, 'not-a-file', 'not a regular file');
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      writer.kill();
+    }
   });
 });

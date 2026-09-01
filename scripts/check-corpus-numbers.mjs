@@ -4,12 +4,12 @@
 // README, docs/*.md and docs/blog/*.md state how big the corpus is, how many
 // cases are malicious, how many the scanner detects, how many it misses and
 // the detection rate. Every one of those is a hand-copied derived constant,
-// and on 2026-08-25 an external review found the prose two corpus revisions
-// stale (51 cases and 92.5% asserted in the present tense, against a shipped
-// 53 and 90.2%) with nothing re-deriving them. check-docs.sh's header lists
-// "another hand-copied derived constant" as its extension point; this is that
-// extension, in its own file because it needs a JSON parser and check-docs
-// deliberately stays awk-only.
+// and on 2026-08-25 an external review found the prose stale since the one
+// count change after ADR-0018 (51 cases and 92.5% asserted in the present
+// tense, against a shipped 53 and 90.2%) with nothing re-deriving them.
+// check-docs.sh's header lists "another hand-copied derived constant" as its
+// extension point; this is that extension, in its own file because it needs
+// a JSON parser and check-docs is bash and awk with none.
 //
 // EXIT CODES ARE THE CONTRACT, same three states as the sibling gates:
 //   0  every recognised claim matches the figures re-derived from the rows
@@ -32,7 +32,10 @@
 // docs/blog/*.md. docs/decisions/ is out (every ADR carries a Date and records
 // its own moment) and so is process/ (devlogs and review notes are dated
 // records). Stated consequence: a NEW ADR written with a stale number is not
-// caught here; ADR prose is reviewed, not gated, same as before.
+// caught here; ADR prose is reviewed, not gated, same as before. The
+// directories are a fixed list (DOC_DIRS): a new docs/<other>/*.md is out of
+// scope until it is added there, so adding a docs directory is a change to
+// this gate.
 //
 // EXEMPTION is an explicit, balanced marker pair placed in the document:
 //   <!-- corpus-gate: skip -->   ...   <!-- corpus-gate: resume -->
@@ -62,7 +65,7 @@
 // scanning to the end from every position), and a line over MAX_LINE_CHARS
 // or a doc over MAX_DOC_BYTES is exit 2 naming the file, so no doc can hold
 // the job: the first cut's rate recognisers took 2.5 s on 50k digits and
-// 40 s on 200k, on a workflow that fork PRs reach.
+// 40 s on 200k on one machine, on a workflow that fork PRs reach.
 //
 // RECOGNISED CLAIM SHAPES (on fence-stripped, marker-stripped lines):
 //   N-case, N cases            == corpus size   } only on a line that also
@@ -377,7 +380,9 @@ function checkLine(name, lineNo, line, d, findings) {
   // requires "detect". Ordinary prose says "in 3 cases the model refused",
   // and without this gate that sentence is a build failure. Stated cost: a
   // size claim on a line that never says "corpus" is not checked. Every one
-  // of the five live sites carries the word.
+  // of the six live sites carries the word (README, architecture,
+  // eval-methodology twice, security-model, the blog; re-derived by running
+  // the gate against a shrunk baseline, which reports every size site).
   const aboutCorpus = /corpus/i.test(text);
   if (aboutCorpus) {
     // Lower bounds first, and removed from the working copy so the exact form

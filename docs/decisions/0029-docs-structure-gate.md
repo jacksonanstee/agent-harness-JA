@@ -228,10 +228,11 @@ on `main`, verified against the API) but it is not what this decision avoided.
 
 The extension point the script header names ("another hand-copied derived
 constant") was exercised. The external review of 2026-08-25 found the corpus
-figures asserted in the present tense two corpus revisions stale: 51 cases and
-92.5% in `docs/eval-methodology.md`, `docs/security-model.md` and
+figures asserted in the present tense stale since `db164e6` (2026-07-28), the
+one count change since ADR-0018: 51 cases and 92.5% in
+`docs/eval-methodology.md`, `docs/security-model.md` and
 `docs/blog/adversarial-evaluation.md`, against a shipped 53 cases, 41
-malicious, 37 detected (90.2%) since `db164e6` (2026-07-28). Building the gate
+malicious, 37 detected (90.2%). Building the gate
 found more than the review had: two stale claims were spelled out rather than
 numeric ("the three current known-misses"; "Three cases are *known /
 misses*", wrapped across two lines, which is the shape a line-scoped grep
@@ -254,7 +255,19 @@ Decisions, in the shape of the two above:
    open carries `O_NOFOLLOW` and `O_NONBLOCK`, and the type and the
    `MAX_BASELINE_BYTES` cap are taken by `fstat` on the descriptor that is
    read. Every doc is read through the same envelope with a 1 MB cap of its
-   own.
+   own. The alternative, running the gate in `build-test` after `npm run
+   build` and importing `dist/internal/guarded-read.js`, was rejected because
+   it moves a seconds-long report behind a full install, the trade
+   check-test-count.sh accepts for a constant that needs the suite and this
+   one does not. The cost is a second spelling of an envelope ADR-0034 hoisted
+   so that consumers would share one, and the first restatement was narrower
+   than the original and found by execution, so the risk is not hypothetical.
+   The mitigation is a parity group in `src/corpus-gate.test.ts` that stages
+   guarded-read's own refusal cases (leaf symlink, ancestor symlink,
+   directory, FIFO, oversize) relative to the working directory and requires
+   `readFileGuarded` to refuse and the script to exit 2 on each, plus a
+   pointer in guarded-read.ts's header so a change to one names the other
+   (ADR-0034 carries a dated amendment recording the fourth consumer).
 2. **Scope is live docs by construction:** README.md, docs/*.md and
    docs/blog/*.md. ADRs and process/ are dated records and stay out. The
    stated cost: a new ADR carrying a stale number is reviewed, not gated.
@@ -266,15 +279,19 @@ Decisions, in the shape of the two above:
    Same-line history qualifiers ("at E-2", "Week 3", a date) were rejected:
    a wrapped qualifier lands on the next line, and a live claim on a line
    that happens to mention Week 3 would be skipped silently, the proxy-check
-   pattern DEC-0016 bans.
+   pattern DEC-0016 bans. The region form carries its own stated cost: a live
+   figure later written inside a skipped region is unchecked, and the markers
+   beside the text are the mitigation. Of the issue's two security-model
+   sites, the ADR-index row was reworded to a bound and the line inside
+   section 7 was exempted by the markers, not reworded.
 4. **The recognisers are enumerated and their limits stated** in the script
    header: size (`N-case`, `N cases`) and lower bounds (`≥N cases`, `≥N-case`,
-   `>=N`, `at least N`) on a line that also says "corpus"; `D/M malicious`
+   `>=N cases`, `at least N cases`) on a line that also says "corpus"; `D/M malicious`
    with or without spaces around the slash; bare malicious, detected and
    benign counts; the missed count as a numeral or as one..twelve with an
    optional `current` and `known-`; and rates on a line containing "detect"
    in the `NN.N%`, `NN.NN%` and `~NN%` forms, a space before the sign
-   allowed. Look-alikes are folded before anything else (NFKC, the Unicode
+   allowed. Look-alikes are folded before any recogniser runs (NFKC, the Unicode
    spaces to a space, the dash family to a hyphen, the default-ignorable
    characters deleted), because a no-break space in "53 cases" or a soft
    hyphen inside "corpus" renders as the ASCII claim and hid it from every
@@ -290,7 +307,9 @@ Decisions, in the shape of the two above:
    "≥ 90%") stay legal, and so is a size claim on a line that never says
    "corpus", because ordinary prose says "in 3 cases the model refused".
    Zero recognised claims across the whole scope is a finding, for the reason
-   the ADR-count backstop exists.
+   the ADR-count backstop exists. The script header is the authoritative
+   enumeration and the test file binds it; this decision records the class
+   and its limits.
 5. **A separate file, in node.** The recognisers need word boundaries and
    global matching, which POSIX awk lacks and bash-plus-grep would spend a
    process per line on; node is on the runner image and the gate needs no
@@ -305,6 +324,9 @@ misses on one line; it does not see a size claim on a line that never says
 document does; it does not strip a link that carries a title, so that link's
 target is read as prose; and it shares check-docs's fence grammar and so its
 limit, a backtick opener whose info string contains a backtick (issue #119).
+The grammar cannot be one definition across awk and node; the mitigation is
+one fixture set run by both docs-gate.test.ts and corpus-gate.test.ts, which
+#119 asks its fix to add.
 The dated figures remain where they were: ADR-0018 keeps 51
 and 92.5% as the E-2 record, and the blog carries a note saying its figures
 are live.
@@ -318,9 +340,10 @@ comma-grouped number read from its last group; a corpus-shaped substring
 inside a URL read as prose; an unqualified "N cases" that made ordinary
 sentences a build failure; a `docs/` path that was not a directory dropping
 most of the scope while still exiting 0; and lone-CR files reporting every
-finding against line 1. Seven are recogniser precision, one (the silent
-scope drop) is the proxy-check pattern DEC-0016 bans, appearing inside the
-gate written to enforce it.
+finding against line 1. Six are recogniser precision, one (the lone-CR line
+numbering) is location reporting, and one (the silent scope drop) is the
+proxy-check pattern DEC-0016 bans, appearing inside the gate written to
+enforce it.
 
 The security lens (2026-09-01) then ran the folded gate against hostile trees
 and refuted two of its claims. The baseline read did not carry the redteam
@@ -333,8 +356,9 @@ text was sanitised for the filename only, so a vertical tab inside a matched
 had no envelope at all (a symlinked doc or a symlinked `docs/blog` was read
 out of the tree, with no byte cap); two recognisers quadratic in the line, on
 a job fork PRs reach and with no timeout (50k digits on a detection line took
-2.5 s, 200k took 40 s); a crash message that echoed the runner's absolute
-path; and the Unicode look-alikes above. The fold restates the whole envelope
+2.5 s and 200k took 40 s on one machine, and the ratio is the point); a crash
+message that echoed the runner's absolute path; and the Unicode look-alikes
+above. The fold restates the whole envelope
 and applies it to every read, sanitises at the one place that writes, makes
 the recognisers linear and caps the line and the file, names the relative
 file and the error code on a read failure, and gives the docs-links job a
@@ -344,3 +368,19 @@ Two shared limits were filed rather than fixed here, because each lives in
 check-docs.sh too and the two grammars must move together: the fence
 info-string grammar (#119) and check-docs's own handling of a line feed in a
 filename (#120, a reading-only observation to verify).
+
+The architecture lens (2026-09-01) found no defect in the code or the CI
+wiring and four in the prose. This amendment listed two lower-bound shapes
+the code does not have (`>=N` and `at least N` bare; the regex requires
+`cases` or `-case`); the blog note said the dated ADRs carry the figures as
+they stood at each decision, when the one count change since ADR-0018
+(`db164e6`) has no ADR figure at all; ADR-0018 states 51 cases in the present
+tense with nothing pointing forward; and the restated envelope was a second
+implementation of ADR-0034's guard with nothing binding the two. The fold
+corrects the shapes, rewords the note, adds an ADR-0007-style dated pointer to
+ADR-0018, and adds the parity group and the header pointer named in decision
+1. The lens also executed decision 2's coverage: every corpus figure in
+`docs/eval-methodology.md` and the blog fails the gate when altered, and the
+security-model skip region's figures do not, which is what the markers are
+for. A job timeout for `build-test`, which the docs-links rationale also
+reaches, is #121.

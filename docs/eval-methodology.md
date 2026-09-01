@@ -74,8 +74,9 @@ layer's injection scanner, no model call involved, so it runs on every PR.
   with its blocked/flagged strength split, plus the off-arm null-scanner
   control (zero detections by construction: a guaranteed-zero control,
   not a measured differential). The corpus figures in this document are
-  re-derived from the committed baseline's rows by `npm run check:corpus`
-  on every PR, so a stale one fails the build rather than ageing in place.
+  checked on every PR against figures `npm run check:corpus` re-derives from
+  the committed baseline's rows, so a stale one fails the build rather than
+  ageing in place.
 
 ## What counts as a regression (the E-3 gate)
 
