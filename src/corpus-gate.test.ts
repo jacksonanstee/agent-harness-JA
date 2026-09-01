@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -501,5 +501,119 @@ describe('check-corpus-numbers.mjs: regression, the shapes that shipped stale', 
       }),
     );
     expectFinding(root, 'docs/security-model.md:3', '51-case');
+  });
+});
+
+describe('check-corpus-numbers.mjs: security lens fold (2026-09-01)', () => {
+  // The security lens ran the shipped gate against hostile trees and refuted
+  // two claims: the baseline read did NOT carry the redteam gate's envelope
+  // (a committed `eval/redteam` or `eval` directory symlink was followed where
+  // loadBaseline refuses it), and finding text was not sanitised. It also
+  // found the docs read path had no envelope at all, two quadratic
+  // recognisers on attacker-controlled lines, and Unicode look-alikes that
+  // hide a claim a reader sees as plain text. Each test here runs the shipped
+  // script on a fixture, the way the rest of this file does.
+
+  it('exits 2 when eval/redteam is a symlinked directory: an ancestor symlink is refused, as the redteam gate refuses it (F1)', () => {
+    const root = fixture({ 'README.md': GOOD_README, 'elsewhere/baseline.json': baseline() });
+    mkdirSync(join(root, 'eval'));
+    symlinkSync(join(root, 'elsewhere'), join(root, 'eval', 'redteam'));
+    const run = expectIncomplete(root, 'eval/redteam', 'symlink');
+    expect(run.stdout).toBe('');
+  });
+
+  it('exits 2 when eval itself is a symlinked directory (F1)', () => {
+    const root = fixture({ 'README.md': GOOD_README, 'elsewhere/redteam/baseline.json': baseline() });
+    symlinkSync(join(root, 'elsewhere'), join(root, 'eval'));
+    expectIncomplete(root, 'eval', 'symlink');
+  });
+
+  it('exits 2 when a doc is a symlink, rather than reading digits out of a file outside the tree (F3)', () => {
+    const root = fixture(tree({ 'docs/real.md': 'nothing here\n', 'secret.md': 'a 7-case corpus, 3 malicious\n' }));
+    symlinkSync(join(root, 'secret.md'), join(root, 'docs', 'leaf.md'));
+    const run = expectIncomplete(root, 'docs/leaf.md', 'symlink');
+    expect(run.stderr).not.toContain('7-case');
+  });
+
+  it('exits 2 when docs/blog is a symlinked directory (F3)', () => {
+    const root = fixture(tree({ 'docs/real.md': 'nothing here\n', 'elsewhere/z.md': 'a 8-case corpus\n' }));
+    symlinkSync(join(root, 'elsewhere'), join(root, 'docs', 'blog'));
+    const run = expectIncomplete(root, 'docs/blog', 'symlink');
+    expect(run.stderr).not.toContain('8-case');
+  });
+
+  it('exits 2 when README.md is a symlink (F3)', () => {
+    const root = fixture({ [BASELINE_PATH]: baseline(), 'elsewhere.md': GOOD_README });
+    symlinkSync(join(root, 'elsewhere.md'), join(root, 'README.md'));
+    expectIncomplete(root, 'README.md', 'symlink');
+  });
+
+  it('exits 2 when a doc is over the byte cap, the way the baseline is (F3)', () => {
+    const root = fixture(tree({ 'docs/big.md': `${'x'.repeat(100)}\n`.repeat(10_000) }));
+    expectIncomplete(root, 'docs/big.md', 'over the 1000000-byte cap');
+  });
+
+  it('exits 2 on a line over the length cap, naming the file and line (F2)', () => {
+    const root = fixture(tree({ 'docs/a.md': `ok\n${'a'.repeat(20_001)}\n` }));
+    expectIncomplete(root, 'docs/a.md:2', 'over the 20000-char cap');
+  });
+
+  it('checks fifty maximal digit runs on detection lines in linear time; the rate recognisers were quadratic (F2)', () => {
+    // 19,000 digits sits under the line cap. Before the fix each digit was a
+    // start position that scanned to the end of the run looking for a dot:
+    // 50k digits took 2.5 s, 200k took 40 s, and no CI job had a timeout.
+    const line = `detection ${'1'.repeat(19_000)}\n`;
+    const root = fixture(tree({ 'docs/a.md': line.repeat(50) }));
+    const started = Date.now();
+    expectClean(root);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 60_000);
+
+  it('strips fifty lines of unclosed link openers in linear time (F2)', () => {
+    // The shipped stripper scanned to the end of the line from every "](":
+    // 2.8 s for these fifty lines at the 20,000-character cap (measured before
+    // the fix). Linear is well under a second.
+    const line = `${']('.repeat(9_500)}\n`;
+    const root = fixture(tree({ 'docs/a.md': line.repeat(50) }));
+    const started = Date.now();
+    expectClean(root);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  }, 60_000);
+
+  it('sanitises the finding text, not only the filename, so a control byte inside a matched claim never reaches the log (F4)', () => {
+    // `\s+` inside the missed-count recogniser admits VT, FF, TAB and the
+    // Unicode line separators, and match[0] is what the finding quotes.
+    const vt = String.fromCharCode(0x0b);
+    const root = fixture(tree({ 'docs/a.md': `there are 5${vt}known-misses today\n` }));
+    const run = expectFinding(root, 'docs/a.md:1', 'claims 5');
+    expect(run.stderr).not.toContain(vt);
+  });
+
+  it('names the file and the error code, not the runner path, when a doc cannot be read (F5)', () => {
+    const root = fixture(tree({ 'docs/x.md': 'unreadable\n' }));
+    chmodSync(join(root, 'docs', 'x.md'), 0o000);
+    const run = expectIncomplete(root, 'docs/x.md', 'EACCES');
+    expect(run.stderr).not.toContain(root);
+  });
+
+  it('normalises Unicode spaces, hyphens, invisible characters and fullwidth digits before matching, so a look-alike claim is still a claim (F7)', () => {
+    // Each line renders identically to its ASCII form. NBSP is the realistic
+    // one: editors insert it in "53 cases" without anyone intending evasion.
+    const doc = [
+      'the 51 cases corpus', // no-break space
+      'a 51‑case corpus', // non-breaking hyphen
+      'the cor­pus has 51 cases', // soft hyphen inside the scoping word
+      'de​tection rate 92.5%', // zero-width space inside the scoping word
+      'the ５１-case corpus', // fullwidth digits
+      '37/40 malicious', // figure space
+      '',
+    ].join('\n');
+    const root = fixture(tree({ 'docs/a.md': doc }));
+    expectFinding(root, 'docs/a.md:1:', 'docs/a.md:2:', 'docs/a.md:3:', 'docs/a.md:4:', 'docs/a.md:5:', 'docs/a.md:6:');
+  });
+
+  it('does not treat a stray "](" as a link target, so a claim after it is still read (F7)', () => {
+    const root = fixture(tree({ 'docs/a.md': 'Our corpus ](51-case, 37/40 malicious, 92.5% detection) today.\n' }));
+    expectFinding(root, '51-case', '37/40 malicious', '92.5%');
   });
 });

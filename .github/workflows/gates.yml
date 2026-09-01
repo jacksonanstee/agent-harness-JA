@@ -43,6 +43,11 @@ jobs:
   # broken doc link is reported in seconds rather than behind a full install.
   docs-links:
     runs-on: ubuntu-latest
+    # The docs gates scan attacker-influenced text from a cloned PR (fork PRs
+    # included). Each recogniser is linear and every line is capped, but a
+    # gate that is somehow slow must fail this job, not hold the runner for
+    # the 360-minute default and every PR queued behind it (issue #89).
+    timeout-minutes: 10
     steps:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
       # cannot silently swap the action out from under a run. This file is on

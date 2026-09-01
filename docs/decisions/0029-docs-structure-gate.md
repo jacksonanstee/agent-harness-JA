@@ -248,8 +248,13 @@ Decisions, in the shape of the two above:
    with the row-derived figures, and a disagreement is exit 2 rather than a
    finding: that is a data defect the redteam gate's `totalsMismatchDetail`
    owns, and a doc finding would send the fix to the wrong file. The read
-   carries the redteam gate's envelope (symlink refused, `MAX_BASELINE_BYTES`
-   cap).
+   carries the redteam gate's envelope (`src/internal/guarded-read.ts`,
+   ADR-0034), restated in the script because the job installs nothing: the
+   leaf and every ancestor directory are refused by `lstat` if symlinks, the
+   open carries `O_NOFOLLOW` and `O_NONBLOCK`, and the type and the
+   `MAX_BASELINE_BYTES` cap are taken by `fstat` on the descriptor that is
+   read. Every doc is read through the same envelope with a 1 MB cap of its
+   own.
 2. **Scope is live docs by construction:** README.md, docs/*.md and
    docs/blog/*.md. ADRs and process/ are dated records and stay out. The
    stated cost: a new ADR carrying a stale number is reviewed, not gated.
@@ -269,8 +274,15 @@ Decisions, in the shape of the two above:
    benign counts; the missed count as a numeral or as one..twelve with an
    optional `current` and `known-`; and rates on a line containing "detect"
    in the `NN.N%`, `NN.NN%` and `~NN%` forms, a space before the sign
-   allowed. Link targets and bare URLs are stripped before matching and link
-   text is not, because the row that shipped stale was link text. The rate is
+   allowed. Look-alikes are folded before anything else (NFKC, the Unicode
+   spaces to a space, the dash family to a hyphen, the default-ignorable
+   characters deleted), because a no-break space in "53 cases" or a soft
+   hyphen inside "corpus" renders as the ASCII claim and hid it from every
+   recogniser. Link targets and bare URLs are stripped before matching and
+   link text is not, because the row that shipped stale was link text. The
+   stripper and every recogniser are linear in the line, and a line over
+   20,000 characters or a doc over 1 MB is exit 2 naming the file, so no doc
+   can hold the job. The rate is
    rounded half-up from the exact integer ratio: `(23 / 80 * 100).toFixed(1)`
    is "28.7" where the true value is exactly 28.75%, which would reject the
    correct figure and accept the wrong one. A bare integer percentage is
@@ -289,8 +301,11 @@ What it does not do, so the claim stays no wider than the check: it does not
 judge prose (this ADR's central decision stands); it does not see a count
 whose noun wraps to the next line, which is why the blog now states its
 misses on one line; it does not see a size claim on a line that never says
-"corpus"; and it does not restate the blocked/flagged split, because no live
-document does. The dated figures remain where they were: ADR-0018 keeps 51
+"corpus"; it does not restate the blocked/flagged split, because no live
+document does; it does not strip a link that carries a title, so that link's
+target is read as prose; and it shares check-docs's fence grammar and so its
+limit, a backtick opener whose info string contains a backtick (issue #119).
+The dated figures remain where they were: ADR-0018 keeps 51
 and 92.5% as the E-2 record, and the blog carries a note saying its figures
 are live.
 
@@ -306,3 +321,26 @@ most of the scope while still exiting 0; and lone-CR files reporting every
 finding against line 1. Seven are recogniser precision, one (the silent
 scope drop) is the proxy-check pattern DEC-0016 bans, appearing inside the
 gate written to enforce it.
+
+The security lens (2026-09-01) then ran the folded gate against hostile trees
+and refuted two of its claims. The baseline read did not carry the redteam
+gate's envelope: the first cut checked the leaf with `lstat` and read by path,
+so a committed `eval/redteam` or `eval` directory symlink was followed where
+`loadBaseline` refuses it, and the phrase stood in this amendment, in the
+refusal message and in a test name wider than the code behind it. Finding
+text was sanitised for the filename only, so a vertical tab inside a matched
+"5 known-misses" reached the log raw. The lens also found the docs read path
+had no envelope at all (a symlinked doc or a symlinked `docs/blog` was read
+out of the tree, with no byte cap); two recognisers quadratic in the line, on
+a job fork PRs reach and with no timeout (50k digits on a detection line took
+2.5 s, 200k took 40 s); a crash message that echoed the runner's absolute
+path; and the Unicode look-alikes above. The fold restates the whole envelope
+and applies it to every read, sanitises at the one place that writes, makes
+the recognisers linear and caps the line and the file, names the relative
+file and the error code on a read failure, and gives the docs-links job a
+ten-minute timeout. Thirteen tests, each running the shipped script on a
+hostile fixture, are red against the first fold and green against this one.
+Two shared limits were filed rather than fixed here, because each lives in
+check-docs.sh too and the two grammars must move together: the fence
+info-string grammar (#119) and check-docs's own handling of a line feed in a
+filename (#120, a reading-only observation to verify).

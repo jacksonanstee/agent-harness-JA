@@ -45,11 +45,24 @@
 // rejected: a wrapped qualifier lands on the next line, and a LIVE claim on a
 // line that happens to mention Week 3 would be skipped silently.
 //
-// BEFORE MATCHING, each line is normalised: link TARGETS and bare URLs are
-// removed (an address is not prose, and `.../51-case-study` is not a claim),
-// link TEXT is kept (it is prose a reader believes, and the security-model
+// BEFORE MATCHING, each line is normalised. Look-alikes first: NFKC folds
+// fullwidth digits, the Unicode spaces become a space, the dash family
+// becomes "-", and the default-ignorable characters (soft hyphen, zero-width
+// space, the bidi marks, BOM) are deleted, because "53 cases" with a no-break
+// space, "53-case" with a non-breaking hyphen and "corpus" with a soft hyphen
+// inside it all render exactly like the ASCII claim and hid it from every
+// recogniser (security lens, 2026-09-01). Then link TARGETS (`[text](target)`,
+// the target free of parentheses and whitespace) and bare URLs are removed
+// (an address is not prose, and `.../51-case-study` is not a claim), link
+// TEXT is kept (it is prose a reader believes, and the security-model
 // ADR-index row that shipped stale was exactly that), and digit-group commas
 // are removed so "1,000 cases" reads as 1000 rather than as its last group.
+// The stripper and every recogniser are linear in the line (a failed attempt
+// stops at the next bracket, parenthesis or word boundary rather than
+// scanning to the end from every position), and a line over MAX_LINE_CHARS
+// or a doc over MAX_DOC_BYTES is exit 2 naming the file, so no doc can hold
+// the job: the first cut's rate recognisers took 2.5 s on 50k digits and
+// 40 s on 200k, on a workflow that fork PRs reach.
 //
 // RECOGNISED CLAIM SHAPES (on fence-stripped, marker-stripped lines):
 //   N-case, N cases            == corpus size   } only on a line that also
@@ -73,20 +86,41 @@
 // one does); a spelled-out size ("fifty-three cases"); a rate whose word
 // "detect" wraps to the next line; a count whose noun wraps ("Three cases are
 // *known" / "misses*" is the exact shape that shipped stale, and why the blog
-// now says it on one line).
+// now says it on one line). A link that carries a title (`[t](x.md "...")`)
+// is not stripped, so its target is read as prose along with the title. The
+// fence grammar is check-docs.sh's, so it shares that gate's limit: a
+// backtick opener whose info string contains a backtick is a fence to both
+// gates and not to a CommonMark renderer (issue #119, both gates together).
 //
 // LOG HYGIENE. Doc content and filenames are attacker-influenced under the
 // cloned-repo threat model (security-model section 2) and reach CI logs.
 // Every emitted line starts with the fixed PREFIX so a filename such as
-// `::error title=X::y.md` cannot become a GitHub workflow command, and
-// filenames are stripped of C0/C1/DEL and the bidi overrides and isolates.
-// Findings quote only the regex-constrained match (digits, a fixed word list,
-// `/`, `~`, `%`) and the derived figure, never the rest of the line.
+// `::error title=X::y.md` cannot become a GitHub workflow command, and every
+// emitted line, filename and finding text alike, is stripped of C0/C1/DEL and
+// the bidi overrides and isolates at the one place that writes (the first
+// cut sanitised the filename only, and a vertical tab inside a matched
+// "5<VT>known-misses" reached the log raw). Findings quote only the
+// regex-constrained match (digits, a fixed word list, `/`, `~`, `%` and the
+// whitespace between them) and the derived figure, never the rest of the
+// line. A read that fails names the relative file and the error code, never
+// the runner's absolute path.
+//
+// READ ENVELOPE. The baseline and every doc are read through the redteam
+// gate's envelope (src/internal/guarded-read.ts, ADR-0034), restated here
+// rather than imported because this job installs nothing: the leaf and every
+// ancestor directory under ROOT are lstat-refused if symlinks, the open
+// carries O_NOFOLLOW and O_NONBLOCK, and the type and the byte cap come from
+// fstat on the descriptor that is read. The first cut lstat-checked the leaf
+// only and read by path, so a committed `eval/redteam` directory symlink was
+// followed where loadBaseline refuses it, and the docs were read with no
+// envelope at all (security lens, 2026-09-01). Caps, each exit 2 naming the
+// file: MAX_BASELINE_BYTES and MAX_DOC_BYTES per file, MAX_LINE_CHARS per
+// line.
 //
 // Usage: node scripts/check-corpus-numbers.mjs [ROOT]   (ROOT exists so the
 // test suite can point it at fixture trees; it defaults to the repo root.)
 
-import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -95,7 +129,14 @@ const PREFIX = 'check-corpus:';
 const BASELINE = 'eval/redteam/baseline.json';
 /** Mirrors MAX_BASELINE_BYTES in src/eval/redteam/baseline.ts. */
 const MAX_BASELINE_BYTES = 1_000_000;
+/** Same cap for a doc; the largest live one is 66 KB. */
+const MAX_DOC_BYTES = 1_000_000;
+/** Per line; the longest live line is 9,596 characters (a security-model table row). */
+const MAX_LINE_CHARS = 20_000;
 const DOC_DIRS = ['docs', 'docs/blog'];
+// Absent on platforms without them; the lstat checks stay the primary guard.
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
@@ -128,33 +169,91 @@ const UNSAFE = new RegExp(
   'g',
 );
 const sanitise = (text) => String(text).replace(UNSAFE, '');
+/** The one place that writes: every line is prefixed AND sanitised here. */
+const emit = (text) => console.error(`${PREFIX} ${sanitise(text)}`);
 
-const isFile = (path) => {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
+/**
+ * Look-alikes, folded before matching: NFKC (fullwidth digits, fullwidth
+ * tilde), the Unicode spaces to a space, the dash family to "-", and the
+ * default-ignorable characters (soft hyphen, zero-width space and joiners,
+ * the bidi marks, BOM) deleted. Each renders exactly like the ASCII claim.
+ */
+const LOOKALIKE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
+const LOOKALIKE_DASHES = /[\u2010-\u2015\u2212]/g;
+const IGNORABLE = /[\u00ad\u200b-\u200f\u2060\ufeff]/g;
+const normalise = (line) =>
+  line.normalize('NFKC').replace(LOOKALIKE_SPACES, ' ').replace(LOOKALIKE_DASHES, '-').replace(IGNORABLE, '');
 
-function deriveCorpus(root) {
-  const path = join(root, BASELINE);
+const ENVELOPE = 'refusing to follow it (same envelope as the redteam gate)';
+
+/**
+ * lstat without following. Returns null for ENOENT (the caller decides what
+ * absence means); a symlink or any other stat failure is Incomplete.
+ */
+function lstatRefusingSymlink(root, rel, label) {
   let stat;
   try {
-    stat = lstatSync(path);
-  } catch {
-    throw new Incomplete(`no ${BASELINE} in '${sanitise(root)}' - nothing to re-derive from`);
+    stat = lstatSync(join(root, rel));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new Incomplete(`could not stat ${label} ${rel} (${error?.code ?? 'stat error'}); not checked`);
   }
-  if (stat.isSymbolicLink()) {
-    throw new Incomplete(`${BASELINE} is a symlink; refusing to follow it (same envelope as the redteam gate)`);
+  if (stat.isSymbolicLink()) throw new Incomplete(`${label} ${rel} is a symlink; ${ENVELOPE}`);
+  return stat;
+}
+
+/**
+ * The redteam gate's read envelope (src/internal/guarded-read.ts, ADR-0034),
+ * restated rather than imported because this job installs nothing. The leaf
+ * and every ancestor directory under ROOT are lstat-refused if symlinks; the
+ * open carries O_NOFOLLOW (a leaf symlink raced in after the lstat cannot be
+ * traversed) and O_NONBLOCK (a FIFO cannot hang the gate); the type and the
+ * byte cap come from fstat on the SAME descriptor the read uses. ENOENT is
+ * rethrown untouched so each caller names what absence means. Messages carry
+ * the relative name and an error code, never the runner's absolute path.
+ */
+function readGuarded(root, rel, maxBytes) {
+  const parts = rel.split('/');
+  for (let depth = 1; depth < parts.length; depth += 1) {
+    lstatRefusingSymlink(root, parts.slice(0, depth).join('/'), 'directory');
   }
-  if (!stat.isFile()) throw new Incomplete(`${BASELINE} is not a regular file`);
-  if (stat.size > MAX_BASELINE_BYTES) {
-    throw new Incomplete(`${BASELINE} is ${stat.size} bytes, over the ${MAX_BASELINE_BYTES}-byte cap`);
+  lstatRefusingSymlink(root, rel, 'file');
+  let fd;
+  try {
+    fd = openSync(join(root, rel), fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw error;
+    if (error?.code === 'ELOOP') throw new Incomplete(`file ${rel} is a symlink; ${ENVELOPE}`);
+    throw new Incomplete(`could not read ${rel} (${error?.code ?? 'open error'}); not checked`);
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Incomplete(`${rel} is not a regular file`);
+    if (stat.size > maxBytes) {
+      throw new Incomplete(`${rel} is ${stat.size} bytes, over the ${maxBytes}-byte cap; not checked`);
+    }
+    return readFileSync(fd, 'utf8');
+  } catch (error) {
+    if (error instanceof Incomplete) throw error;
+    throw new Incomplete(`could not read ${rel} (${error?.code ?? 'read error'}); not checked`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function deriveCorpus(root) {
+  let text;
+  try {
+    text = readGuarded(root, BASELINE, MAX_BASELINE_BYTES);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new Incomplete(`no ${BASELINE} in '${root}' - nothing to re-derive from`);
+    }
+    throw error;
   }
   let doc;
   try {
-    doc = JSON.parse(readFileSync(path, 'utf8'));
+    doc = JSON.parse(text);
   } catch {
     // The parser's message can quote the file body; it is not echoed.
     throw new Incomplete(`could not derive corpus figures from ${BASELINE}: not JSON`);
@@ -220,29 +319,33 @@ function deriveCorpus(root) {
 
 function liveDocs(root) {
   const docs = [];
-  if (isFile(join(root, 'README.md'))) docs.push('README.md');
+  const readme = lstatRefusingSymlink(root, 'README.md', 'file');
+  if (readme?.isFile()) docs.push('README.md');
   for (const dir of DOC_DIRS) {
-    const full = join(root, dir);
-    let stat;
-    try {
-      stat = statSync(full);
-    } catch (error) {
-      // Absent is fine (a tree may carry no docs/ at all); anything else means
-      // the scan did not happen, which is the didn't-run state, not a clean one.
-      if (error?.code === 'ENOENT') continue;
-      throw new Incomplete(`could not stat ${dir}, so ${dir}/*.md was not scanned`);
-    }
+    // Absent is fine (a tree may carry no docs/ at all); a symlink is refused
+    // and anything else that is not a directory means the scan did not
+    // happen, which is the didn't-run state, not a clean one.
+    const stat = lstatRefusingSymlink(root, dir, 'directory');
+    if (stat === null) continue;
     if (!stat.isDirectory()) {
       throw new Incomplete(`${dir} exists but is not a directory, so ${dir}/*.md was not scanned`);
     }
     let names;
     try {
-      names = readdirSync(full);
+      names = readdirSync(join(root, dir));
     } catch {
       throw new Incomplete(`could not enumerate ${dir}, so ${dir}/*.md was not scanned`);
     }
     for (const name of names.sort()) {
-      if (name.endsWith('.md') && isFile(join(root, dir, name))) docs.push(`${dir}/${name}`);
+      if (!name.endsWith('.md')) continue;
+      const rel = `${dir}/${name}`;
+      const entry = lstatRefusingSymlink(root, rel, 'file');
+      // A directory that happens to end in .md is not a doc; a FIFO, socket or
+      // device is refused rather than skipped, because skipping it silently
+      // would be a scan that did not happen.
+      if (entry === null || entry.isDirectory()) continue;
+      if (!entry.isFile()) throw new Incomplete(`${rel} is not a regular file`);
+      docs.push(rel);
     }
   }
   return docs;
@@ -256,7 +359,15 @@ function checkLine(name, lineNo, line, d, findings) {
   // is not a claim about the corpus, and a reader never sees it as one. Link
   // TEXT is deliberately kept, because that is prose a reader believes, and
   // the security-model ADR-index row that shipped stale was exactly that.
-  let work = line.replace(/\]\([^)]*\)/g, '] ').replace(/\bhttps?:\/\/\S+/gi, ' ');
+  //
+  // Both the stripper and every recogniser below are linear in the line: link
+  // text may not contain a bracket and a target may not contain a parenthesis
+  // or whitespace, so a failed attempt stops at the next such character
+  // instead of scanning to the end of the line from every "](" (security
+  // lens, 2026-09-01: 50 lines of openers took 2.8 s; the rate recognisers
+  // without a word boundary took 2.5 s on 50k digits and 40 s on 200k).
+  const text = normalise(line);
+  let work = text.replace(/\[([^[\]]*)\]\([^()\s]*\)/g, '[$1] ').replace(/\bhttps?:\/\/\S+/gi, ' ');
   // Digit-group commas are removed so "1,000 cases" is read as 1000 rather
   // than as its last group: `\b` fires immediately after the comma, and the
   // first cut reported "claims 000 cases".
@@ -267,7 +378,7 @@ function checkLine(name, lineNo, line, d, findings) {
   // and without this gate that sentence is a build failure. Stated cost: a
   // size claim on a line that never says "corpus" is not checked. Every one
   // of the five live sites carries the word.
-  const aboutCorpus = /corpus/i.test(line);
+  const aboutCorpus = /corpus/i.test(text);
   if (aboutCorpus) {
     // Lower bounds first, and removed from the working copy so the exact form
     // below does not read ">=50 cases" as a claim of exactly 50.
@@ -317,14 +428,14 @@ function checkLine(name, lineNo, line, d, findings) {
     if (value !== d.missed) note(`${match[0]} (${value})`, `${d.missed} missed`);
   }
 
-  if (/detect/i.test(line)) {
+  if (/detect/i.test(text)) {
     // `\s?%` because a typographic space before the sign is ordinary in prose
     // and the first cut could not see "99.9 %" as a claim at all.
-    for (const match of work.matchAll(/(\d+\.\d\d)\s?%/g)) {
+    for (const match of work.matchAll(/\b(\d+\.\d\d)\s?%/g)) {
       claims += 1;
       if (match[1] !== d.rate2) note(`${match[1]}% detection`, `${d.rate2}%`);
     }
-    for (const match of work.matchAll(/(\d+\.\d)\s?%/g)) {
+    for (const match of work.matchAll(/\b(\d+\.\d)\s?%/g)) {
       claims += 1;
       if (match[1] !== d.rate1) note(`${match[1]}% detection`, `${d.rate1}%`);
     }
@@ -346,7 +457,14 @@ function checkFile(root, rel, d, findings) {
   const name = sanitise(rel);
   // All three line endings, so a lone-CR file does not collapse into one
   // logical line and report every finding against line 1.
-  const lines = readFileSync(join(root, rel), 'utf8').split(/\r\n|\r|\n/);
+  let body;
+  try {
+    body = readGuarded(root, rel, MAX_DOC_BYTES);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Incomplete(`could not read ${rel} (ENOENT); not checked`);
+    throw error;
+  }
+  const lines = body.split(/\r\n|\r|\n/);
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
@@ -355,6 +473,9 @@ function checkFile(root, rel, d, findings) {
   let claims = 0;
   lines.forEach((raw, index) => {
     const lineNo = index + 1;
+    if (raw.length > MAX_LINE_CHARS) {
+      throw new Incomplete(`${name}:${lineNo} is ${raw.length} chars, over the ${MAX_LINE_CHARS}-char cap; not checked`);
+    }
     const line = raw;
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
@@ -396,19 +517,21 @@ function checkFile(root, rel, d, findings) {
   return claims;
 }
 
+const rootOf = (argv) => resolve(argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+
 function main(argv) {
   // Fault injection, not dependency injection (check-docs.sh's note applies):
   // a crash has to be REACHABLE for the catch-all below to be bound by a test.
   if (process.env.CHECK_CORPUS_SELFTEST_CRASH) throw new Error('self-test crash requested');
 
-  const root = resolve(argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+  const root = rootOf(argv);
   let rootStat;
   try {
     rootStat = statSync(root);
   } catch {
-    throw new Incomplete(`cannot enter '${sanitise(root)}'`);
+    throw new Incomplete(`cannot enter '${root}'`);
   }
-  if (!rootStat.isDirectory()) throw new Incomplete(`cannot enter '${sanitise(root)}': not a directory`);
+  if (!rootStat.isDirectory()) throw new Incomplete(`cannot enter '${root}': not a directory`);
 
   const derived = deriveCorpus(root);
   const findings = [];
@@ -421,8 +544,8 @@ function main(argv) {
     );
   }
   if (findings.length > 0) {
-    for (const finding of findings) console.error(`${PREFIX} ${finding}`);
-    console.error(`${PREFIX} FAILED (${findings.length} problem(s))`);
+    for (const finding of findings) emit(finding);
+    emit(`FAILED (${findings.length} problem(s))`);
     return 1;
   }
   const summary = `${derived.size} cases, ${derived.malicious} malicious, ${derived.detected} detected, ${derived.missed} missed, ${derived.rate1}%`;
@@ -434,9 +557,11 @@ try {
   process.exitCode = main(process.argv);
 } catch (error) {
   if (error instanceof Incomplete) {
-    console.error(`${PREFIX} ${error.message}`);
+    emit(error.message);
   } else {
-    console.error(`${PREFIX} did not complete (${sanitise(error?.message ?? error)})`);
+    // A genuine bug's message may carry an absolute path; the runner's
+    // workspace is one more attacker-adjacent string the log does not need.
+    emit(`did not complete (${String(error?.message ?? error).split(rootOf(process.argv)).join('<root>')})`);
   }
   process.exitCode = 2;
 }
