@@ -34,6 +34,7 @@ const CANONICAL: ReadonlyArray<readonly [RegExp, string]> = [
   [/^(?:npm run check:links|bash scripts\/check-links\.sh)$/, 'check-links'],
   [/^(?:npm run check:docs|bash scripts\/check-docs\.sh)$/, 'check-docs'],
   [/^(?:npm run check:testcount|bash scripts\/check-test-count\.sh)$/, 'check-testcount'],
+  [/^(?:npm run check:corpus|node scripts\/check-corpus-numbers\.mjs)$/, 'check-corpus'],
 ];
 
 const canonicalise = (command: string): string | null =>
@@ -222,6 +223,14 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     // moving it into build-test — which would delay a broken-table report
     // behind a full install — fails here rather than passing silently.
     expect(extractRunCommands(gatesYaml, 'docs-links').map(canonicalise)).toContain('check-docs');
+  });
+
+  it('runs the corpus-number gate in the install-free job, after the structure gate', () => {
+    // Issue #89. Same job as check-docs for the same reason (no install), and
+    // after it so a broken table is reported before a stale number in one.
+    const docsJob = extractRunCommands(gatesYaml, 'docs-links').map(canonicalise);
+    expect(docsJob).toContain('check-corpus');
+    expect(docsJob.indexOf('check-docs')).toBeLessThan(docsJob.indexOf('check-corpus'));
   });
 
   it('runs the derived test-count gate after the suite, so a red suite is reported first', () => {

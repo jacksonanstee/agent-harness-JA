@@ -43,6 +43,12 @@ jobs:
   # broken doc link is reported in seconds rather than behind a full install.
   docs-links:
     runs-on: ubuntu-latest
+    # The docs gates scan attacker-influenced text from a cloned PR (fork PRs
+    # included). Each recogniser is linear and every line is capped, but a
+    # gate that is somehow slow must fail this job, not hold the runner for
+    # the 360-minute default and every PR queued behind it (issue #89).
+    # build-test, which runs the PR's own code, has no timeout yet: #121.
+    timeout-minutes: 10
     steps:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
       # cannot silently swap the action out from under a run. This file is on
@@ -62,6 +68,14 @@ jobs:
       # which check-links already did before this gate existed.
       - name: Docs structure gate
         run: bash scripts/check-docs.sh
+
+      # Derived corpus constants (issue #89): every recognised corpus figure a
+      # live doc states (shapes and limits: the script header) is re-derived
+      # from eval/redteam/baseline.json's rows. Same job
+      # as the structure gate for the same reason: no install, and the node
+      # on the runner image is enough. Workflow-only, like check-docs.
+      - name: Docs corpus-number gate
+        run: node scripts/check-corpus-numbers.mjs
 
   build-test:
     runs-on: ubuntu-latest
