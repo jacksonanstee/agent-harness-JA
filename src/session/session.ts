@@ -154,7 +154,9 @@ function defangFenceOpener(label: string): string {
  * this fallback share the one object, so an unprotected in-process mutation
  * would silently re-route every later flagless run, proven by execution. The
  * type stops a TS consumer at compile time; the freeze stops a JS one at
- * runtime, matching the readonly arrays the router exports.
+ * runtime. The router's exported arrays carry only the type-level guard;
+ * freezing them for parity is issue #123, deliberately not folded into
+ * this diff.
  */
 export const DEFAULT_DESCRIPTOR: Readonly<TaskDescriptor> = Object.freeze({
   shape: 'build',
