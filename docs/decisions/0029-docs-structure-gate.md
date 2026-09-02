@@ -298,7 +298,9 @@ Decisions, in the shape of the two above:
    "53 cases", or a soft hyphen or a bidi override inside "corpus", renders as
    the ASCII claim and hid it from every recogniser. A homoglyph inside a
    scoping word is outside every folded class and is a stated limit. Link targets and bare URLs are stripped before matching and
-   link text is not, because the row that shipped stale was link text. The
+   link text is not, because link text is prose a reader believes; the
+   ADR-index row that shipped stale sat beside a link in the same table cell,
+   and no live corpus figure has yet appeared inside link text. The
    stripper and every recogniser are linear in the line; a line over 20,000
    UTF-16 code units, a run of more than 30 combining marks (NFKC's canonical
    reordering is quadratic in one) or a doc over 1 MB is exit 2 naming the
@@ -409,3 +411,24 @@ FIFO is refused; and the line cap counts UTF-16 code units, which the
 wording now says (the longest live line is 9,584 of them). Two further
 silences are stated as limits rather than fixed: a homoglyph inside a
 scoping word, and a reference-style link label a reader never sees.
+
+The docs-parity lens (2026-09-02; its first run died on a session limit with
+only an evidence log written) re-derived every figure in the changed prose
+and the PR draft across all five commits with its own runner: every suite
+count, every mutation count, every timing ratio and the eleven-finding block
+reproduced exactly. Five sentences fell, corrected here or in the PR draft.
+The PR draft's gate tally was a stale copy-forward (68/68 for what is 90/90
+at this tip). The claim that the stale ADR-index row "was link text" was
+wrong in this amendment and in two script comments: the row was plain cell
+prose beside the link, and no live corpus figure has yet appeared inside
+link text, so keeping link text stands on its stated reason alone. The
+script header listed `size >= N` as a recognised bound shape the code does
+not have, the same defect class the architecture lens removed from this
+amendment; deleted from the header rather than implemented, since no live
+doc uses the form. And the previous fold set was eight code points, not the
+six the fold commit said. One overclaim: the gates.yml comment now says
+"every recognised corpus figure" and points at the header for the limits.
+The flood-doc figure is attributed to the verifier's fixture, which is not
+in the repo. The immutable commit-body figures the lens flagged (9,596;
+"five live sites"; "six named ones"; abedd46's pre-rebase pair) are each
+dated by a later commit or by the PR body.

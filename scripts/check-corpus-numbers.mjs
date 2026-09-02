@@ -60,8 +60,9 @@
 // and still hides a claim; that is a stated limit. Then link TARGETS (`[text](target)`,
 // the target free of parentheses and whitespace) and bare URLs are removed
 // (an address is not prose, and `.../51-case-study` is not a claim), link
-// TEXT is kept (it is prose a reader believes, and the security-model
-// ADR-index row that shipped stale was exactly that), and digit-group commas
+// TEXT is kept (it is prose a reader believes; the ADR-index row that
+// shipped stale sat beside a link in the same table cell, and no live corpus
+// figure has yet appeared inside link text), and digit-group commas
 // are removed so "1,000 cases" reads as 1000 rather than as its last group.
 // The stripper and every recogniser are linear in the line (a failed attempt
 // stops at the next bracket, parenthesis or word boundary rather than
@@ -72,12 +73,13 @@
 // at MAX_FINDINGS_PER_FILE per file with the rest counted. So no doc can
 // hold the job or flood its log: the first cut's rate recognisers took 2.5 s
 // on 50k digits and 40 s on 200k on one machine, on a workflow that fork PRs
-// reach, and one 1 MB doc of stale rates produced 224,901 findings.
+// reach, and one 1 MB doc of stale rates produced 224,901 findings (the
+// verifier's 2026-09-01 fixture; the ratio, not the pair, reproduces).
 //
 // RECOGNISED CLAIM SHAPES (on fence-stripped, marker-stripped lines):
 //   N-case, N cases            == corpus size   } only on a line that also
-//   >=N cases, >=N-case, at least N cases,      } says "corpus" (the U+2265
-//     size >= N                                 } form counts)
+//   >=N cases, >=N-case,       == a lower bound } says "corpus" (the U+2265
+//     at least N cases                          } form counts)
 //   D/M malicious (spaces around the slash allowed)
 //                              D == detected and M == malicious
 //   N malicious, N detected, N benign      == the named figure
@@ -206,8 +208,9 @@ const emit = (text) => console.error(`${PREFIX} ${sanitise(text)}`);
  * characters, the bidi marks, isolates and overrides, variation selectors,
  * BOM and the rest of that Unicode property) plus the C0 controls that are
  * not whitespace, DEL and C1 are deleted, because each renders as nothing.
- * The first fold set named six characters, and the verifier showed eight
- * other default-ignorables, the controls and a plain TAB still hid a claim;
+ * The first fold set was a hand-picked list of eight code points, and the
+ * verifier showed eight other default-ignorables, the controls and a plain
+ * TAB still hid a claim;
  * naming the property instead of a list is what closes the class.
  */
 const LOOKALIKE_SPACES = /[\t\v\f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/g;
@@ -393,8 +396,9 @@ function checkLine(name, lineNo, line, d, findings) {
   const note = (claim, derived) => findings.push(`${name}:${lineNo}: claims ${claim} but the baseline derives ${derived}`);
   // A link TARGET and a bare URL are addresses, not prose: `.../51-case-study`
   // is not a claim about the corpus, and a reader never sees it as one. Link
-  // TEXT is deliberately kept, because that is prose a reader believes, and
-  // the security-model ADR-index row that shipped stale was exactly that.
+  // TEXT is deliberately kept, because that is prose a reader believes (the
+  // ADR-index row that shipped stale sat beside a link in the same cell; no
+  // live corpus figure has yet appeared inside link text).
   //
   // Both the stripper and every recogniser below are linear in the line: link
   // text may not contain a bracket and a target may not contain a parenthesis
