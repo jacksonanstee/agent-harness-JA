@@ -199,8 +199,11 @@ export function parseRunArgs(argv: string[]): ParseResult {
       if (arg === '--skills-dir') skillsDir = value;
       if (arg === '--db') dbPath = value;
       if (arg === '--max-turns') {
+        // isSafeInteger, not isInteger: above 2^53 parseInt silently rewrites
+        // the digits (code lens on 472b1eb), and a bound the operator never
+        // typed is worse than a rejection.
         const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-        if (!Number.isInteger(parsed) || parsed < 1) {
+        if (!Number.isSafeInteger(parsed) || parsed < 1) {
           return { ok: false, error: `--max-turns must be a positive integer. ${USAGE}` };
         }
         maxTurns = parsed;
@@ -225,7 +228,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
         // golden-task schema says minimum 0. This bound matches the layer the
         // value feeds, deliberately unlike --max-turns's >= 1.
         const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-        if (!Number.isInteger(parsed) || parsed < 0) {
+        if (!Number.isSafeInteger(parsed) || parsed < 0) {
           return { ok: false, error: `--expected-tokens must be a non-negative integer. ${USAGE}` };
         }
         expectedTokens = parsed;

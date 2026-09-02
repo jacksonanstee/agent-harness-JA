@@ -36,7 +36,7 @@ import {
   stripBidi,
   stripInvisibles,
 } from '../internal/sanitize.js';
-import { createSession, FENCE_OPENER_RE, SKILL_DROP_CHANNELS } from './session.js';
+import { createSession, DEFAULT_DESCRIPTOR, FENCE_OPENER_RE, SKILL_DROP_CHANNELS } from './session.js';
 import type {
   QueryFn,
   QueryOptions,
@@ -3249,5 +3249,21 @@ describe('correlation id validation (issue #51)', () => {
     await session.run('hello');
     expect(recorded.length).toBeGreaterThan(0);
     for (const id of recorded) expect(id).toBe('sess_01HXT4AB1C6R5IT7OFANFQRW');
+  });
+});
+
+describe('DEFAULT_DESCRIPTOR', () => {
+  it('is frozen, so a consumer mutation cannot re-route every later flagless run (code lens on 472b1eb)', () => {
+    expect(Object.isFrozen(DEFAULT_DESCRIPTOR)).toBe(true);
+    // The parse-time flag defaults (cli.ts) and the session fallback share
+    // this one object; without the freeze an in-process mutation silently
+    // changed both, proven by execution in the review. ESM test files run in
+    // strict mode, so the write must THROW, and the value is then proven
+    // unchanged rather than assumed.
+    expect(() => {
+      // @ts-expect-error DEFAULT_DESCRIPTOR is Readonly on purpose; this directive also pins the compile-time guard
+      DEFAULT_DESCRIPTOR.sensitivity = 'high';
+    }).toThrow(TypeError);
+    expect(DEFAULT_DESCRIPTOR.sensitivity).toBe('low');
   });
 });

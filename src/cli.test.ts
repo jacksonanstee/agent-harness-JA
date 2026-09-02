@@ -78,6 +78,10 @@ describe('parseRunArgs', () => {
     expect(parseRunArgs(['run', 'hi', '--max-turns', '0']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', 'abc']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', '5abc']).ok).toBe(false);
+    // Above 2^53 parseInt silently rewrites the digits (code lens on 472b1eb);
+    // a rewritten bound is worse than a rejected one. Same family as the
+    // --expected-tokens case below.
+    expect(parseRunArgs(['run', 'hi', '--max-turns', '99999999999999999999']).ok).toBe(false);
   });
 
   it('overrides only the flagged descriptor field, keeping the other defaults (issue #88)', () => {
@@ -167,11 +171,22 @@ describe('parseRunArgs', () => {
     if (!parsed.ok) expect(parsed.error).toContain('--sensitivity must be one of low|medium|high');
   });
 
-  it('rejects a malformed --expected-tokens (negative, float, suffixed, non-numeric)', () => {
-    for (const bad of ['-1', '4.5', '5abc', 'abc']) {
+  it('rejects a malformed --expected-tokens (negative, float, suffixed, non-numeric, above 2^53)', () => {
+    // '99999999999999999999' passes a bare digits gate but parseInt rewrites it
+    // to 1e20 (code lens on 472b1eb, LOW-1): reject rather than silently store
+    // a number the operator never typed.
+    for (const bad of ['-1', '4.5', '5abc', 'abc', '99999999999999999999']) {
       const parsed = parseRunArgs(['run', 'hi', '--expected-tokens', bad]);
       expect(parsed.ok).toBe(false);
       if (!parsed.ok) expect(parsed.error).toContain('--expected-tokens must be a non-negative integer');
+    }
+  });
+
+  it('accepts --expected-tokens at exactly Number.MAX_SAFE_INTEGER (the boundary the oversize test rejects beyond)', () => {
+    const parsed = parseRunArgs(['run', 'hi', '--expected-tokens', '9007199254740991']);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok && parsed.value.command === 'run') {
+      expect(parsed.value.descriptor.expected_tokens).toBe(9007199254740991);
     }
   });
 });
