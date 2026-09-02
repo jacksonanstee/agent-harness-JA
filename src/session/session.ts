@@ -146,7 +146,12 @@ function defangFenceOpener(label: string): string {
   );
 }
 
-const DEFAULT_DESCRIPTOR: TaskDescriptor = {
+/**
+ * The descriptor a session resolves when its caller supplies none. Public API
+ * (issue #88): the CLI's `run` flag defaults derive from here rather than
+ * hand-copying the values, so the flagless route cannot drift.
+ */
+export const DEFAULT_DESCRIPTOR: TaskDescriptor = {
   shape: 'build',
   sensitivity: 'low',
   expected_tokens: 4000,

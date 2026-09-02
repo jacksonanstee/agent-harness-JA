@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
 import { readPackageVersion, USAGE } from './shared.js';
@@ -31,6 +32,20 @@ describe('USAGE', () => {
     const telemetryLine = USAGE.split('\n').find((line) => line.includes('telemetry export'));
     expect(telemetryLine).toBeDefined();
     expect(telemetryLine).toContain(`--type <${TELEMETRY_EVENT_TYPES.join('|')}>`);
+  });
+
+  /**
+   * Same pattern and same rationale as the --type pin above, anchored to the
+   * `run` line: the rendered join catches an empty, partial, or reordered
+   * enumeration, and anchoring to the one line that takes the flags keeps a
+   * cross-line interpolation from passing (issue #88).
+   */
+  it('enumerates every valid --shape and --sensitivity value on the run line, from the arrays route() enforces', () => {
+    const runLine = USAGE.split('\n').find((line) => line.includes(' run '));
+    expect(runLine).toBeDefined();
+    expect(runLine).toContain(`--shape <${TASK_SHAPES.join('|')}>`);
+    expect(runLine).toContain(`--sensitivity <${TASK_SENSITIVITIES.join('|')}>`);
+    expect(runLine).toContain('--expected-tokens <n>');
   });
 });
 

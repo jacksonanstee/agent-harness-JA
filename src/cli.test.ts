@@ -25,6 +25,10 @@ describe('parseRunArgs', () => {
         skillsDir: './skills',
         dbPath: DEFAULT_DB_PATH,
         maxTurns: 10,
+        // Pinned by LITERALS, deliberately not by importing DEFAULT_DESCRIPTOR:
+        // a silent change to the session's default must go red here and be
+        // made visible (issue #88; the widening-a-bound lesson).
+        descriptor: { shape: 'build', sensitivity: 'low', expected_tokens: 4000 },
       },
     });
   });
@@ -74,6 +78,101 @@ describe('parseRunArgs', () => {
     expect(parseRunArgs(['run', 'hi', '--max-turns', '0']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', 'abc']).ok).toBe(false);
     expect(parseRunArgs(['run', 'hi', '--max-turns', '5abc']).ok).toBe(false);
+  });
+
+  it('overrides only the flagged descriptor field, keeping the other defaults (issue #88)', () => {
+    const shapeOnly = parseRunArgs(['run', 'hi', '--shape', 'review']);
+    expect(shapeOnly.ok).toBe(true);
+    if (shapeOnly.ok && shapeOnly.value.command === 'run') {
+      expect(shapeOnly.value.descriptor).toEqual({
+        shape: 'review',
+        sensitivity: 'low',
+        expected_tokens: 4000,
+      });
+    }
+    const sensitivityOnly = parseRunArgs(['run', 'hi', '--sensitivity', 'high']);
+    expect(sensitivityOnly.ok).toBe(true);
+    if (sensitivityOnly.ok && sensitivityOnly.value.command === 'run') {
+      expect(sensitivityOnly.value.descriptor).toEqual({
+        shape: 'build',
+        sensitivity: 'high',
+        expected_tokens: 4000,
+      });
+    }
+    const tokensOnly = parseRunArgs(['run', 'hi', '--expected-tokens', '30000']);
+    expect(tokensOnly.ok).toBe(true);
+    if (tokensOnly.ok && tokensOnly.value.command === 'run') {
+      expect(tokensOnly.value.descriptor).toEqual({
+        shape: 'build',
+        sensitivity: 'low',
+        expected_tokens: 30000,
+      });
+    }
+  });
+
+  it('parses the descriptor flags alongside the existing flags, and --expected-tokens accepts 0', () => {
+    // 0 is valid on purpose: route() accepts any non-negative finite number
+    // and the golden-task schema says minimum 0; the CLI bound matches the
+    // layer it feeds, not the neighbouring --max-turns.
+    const parsed = parseRunArgs([
+      'run',
+      'hi',
+      '--skills-dir',
+      '/tmp/skills',
+      '--db',
+      '/tmp/mem.db',
+      '--max-turns',
+      '3',
+      '--shape',
+      'lookup',
+      '--sensitivity',
+      'medium',
+      '--expected-tokens',
+      '0',
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok && parsed.value.command === 'run') {
+      expect(parsed.value.skillsDir).toBe('/tmp/skills');
+      expect(parsed.value.dbPath).toBe('/tmp/mem.db');
+      expect(parsed.value.maxTurns).toBe(3);
+      expect(parsed.value.descriptor).toEqual({
+        shape: 'lookup',
+        sensitivity: 'medium',
+        expected_tokens: 0,
+      });
+    }
+  });
+
+  it('rejects a descriptor flag with no value', () => {
+    // Literal 3-element list, not derived from production arrays, so the
+    // loop cannot go vacuous.
+    for (const flag of ['--shape', '--sensitivity', '--expected-tokens']) {
+      const parsed = parseRunArgs(['run', 'hi', flag]);
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toContain(`Missing value for ${flag}`);
+    }
+  });
+
+  it('rejects an invalid --shape, naming every valid value', () => {
+    const parsed = parseRunArgs(['run', 'hi', '--shape', 'poem']);
+    expect(parsed.ok).toBe(false);
+    // The rendered join pinned by literal: enum drift in TASK_SHAPES goes
+    // red here and must be made visible.
+    if (!parsed.ok) expect(parsed.error).toContain('--shape must be one of review|build|research|lookup');
+  });
+
+  it('rejects an invalid --sensitivity, naming every valid value', () => {
+    const parsed = parseRunArgs(['run', 'hi', '--sensitivity', 'extreme']);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error).toContain('--sensitivity must be one of low|medium|high');
+  });
+
+  it('rejects a malformed --expected-tokens (negative, float, suffixed, non-numeric)', () => {
+    for (const bad of ['-1', '4.5', '5abc', 'abc']) {
+      const parsed = parseRunArgs(['run', 'hi', '--expected-tokens', bad]);
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toContain('--expected-tokens must be a non-negative integer');
+    }
   });
 });
 

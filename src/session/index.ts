@@ -1,4 +1,4 @@
-export { createSession } from './session.js';
+export { createSession, DEFAULT_DESCRIPTOR } from './session.js';
 export type {
   DeniedToolCall,
   DroppedSkill,
