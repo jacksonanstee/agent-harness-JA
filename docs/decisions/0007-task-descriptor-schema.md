@@ -96,7 +96,9 @@ What this ADR still owns is unchanged: the `TaskDescriptor` shape, the `ModelCho
 
 `run` gained `--shape`, `--sensitivity` and `--expected-tokens`, validated against the same
 `TASK_SHAPES` / `TASK_SENSITIVITIES` arrays `route()` enforces, and rendered into the usage text from
-those arrays, so the validator and the usage line cannot disagree about what is valid. Before this,
+those arrays, so the validator and the usage line draw their notion of what is valid from one
+source and cannot drift apart the way two hand-copied lists would (an in-process mutation of the
+shared array remains the residual, filed as issue #123). Before this,
 every `run` resolved the session's fixed fallback descriptor and the default table sent it to
 `claude-sonnet-5` via `shape-build-small`; the router was exercised per task only by the eval path
 (ADR-0017) and by scaffolded projects' own code. The gap was recorded in the Week 6 devlog and filed

@@ -32,7 +32,9 @@ export const EVAL_OUT_DIR = join('.harness', 'eval');
 // cannot disagree about what is valid.
 // The run line's --shape/--sensitivity lists derive from TASK_SHAPES /
 // TASK_SENSITIVITIES the same way (issue #88): the router's validator and
-// the usage text cannot disagree about what is valid.
+// the usage text share one source for what is valid, so they cannot drift
+// apart the way two hand-copied lists would (the in-process-mutation
+// residual is issue #123).
 export const USAGE =
   `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>]\n` +
   '       agent-harness-ja eval [taskDir] [--challenge]\n' +
