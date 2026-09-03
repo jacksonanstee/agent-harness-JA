@@ -189,6 +189,31 @@ describe('parseRunArgs', () => {
       expect(parsed.value.descriptor.expected_tokens).toBe(9007199254740991);
     }
   });
+
+  it('takes the last value when a descriptor flag repeats, matching every other run flag (adversarial verify on c5feda0)', () => {
+    // Uniform last-wins: the parse loop overwrites, exactly as --db,
+    // --max-turns and --skills-dir already do. Pinned so a change to that
+    // behaviour (rejecting duplicates, or first-wins) goes red here rather
+    // than silently downgrading a descriptor field. Duplicate valid values,
+    // so nothing is rejected on validity.
+    const parsed = parseRunArgs([
+      'run',
+      'hi',
+      '--sensitivity',
+      'high',
+      '--sensitivity',
+      'low',
+      '--shape',
+      'review',
+      '--shape',
+      'lookup',
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok && parsed.value.command === 'run') {
+      expect(parsed.value.descriptor.sensitivity).toBe('low');
+      expect(parsed.value.descriptor.shape).toBe('lookup');
+    }
+  });
 });
 
 describe('sanitizeForTerminal', () => {
