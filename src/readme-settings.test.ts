@@ -94,7 +94,7 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(compose(userDoc, projectDoc).warnings).toEqual([]);
   });
 
-  it('a project deny rule tightens: WebFetch is denied by the project layer, with or without a user file', () => {
+  it('a project deny rule tightens: WebFetch is denied by the project layer alone, and stays denied under the user example', () => {
     const { userDoc, projectDoc } = loaded();
     const alone = createPermissionEvaluator(compose(undefined, projectDoc).permissions).evaluate;
     const result = alone('WebFetch', { url: 'https://example.invalid' });

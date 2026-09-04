@@ -25,10 +25,15 @@ import type { TelemetryEventInput } from '../telemetry/index.js';
 export const EVAL_OUT_DIR = join('.harness', 'eval');
 
 /**
- * Prefix of every warning line `run` and `eval` write to stderr. README's
+ * Prefix of the warning lines `run` and `eval` compose in the two command
+ * files: the settings warnings, the telemetry-record failure, the session
+ * onWarning relay, eval's oracle notice and its taskDir suppression. README's
  * Settings section quotes it; src/readme-settings.test.ts pins the quote to
- * this constant and asserts neither command spells its own prefix, so every
- * writer goes through here (issue #100).
+ * this constant and asserts neither command file spells its own prefix. One
+ * warning is composed elsewhere: the golden runner's `--challenge` notice
+ * (src/eval/golden/runner.ts) carries its own literal and reaches stderr
+ * through onProgress, because the runner sits below the CLI in the enforced
+ * dependency direction (issue #100).
  */
 export const WARNING_PREFIX = 'warning: ';
 
