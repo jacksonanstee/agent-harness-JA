@@ -458,7 +458,8 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       // the default; `??` would also have mapped a JS caller's null to the
       // default silently (code lens on 11ab959), so null falls through to the
       // integer check and is rejected like any other non-integer.
-      const maxTasks = opts.maxTasks === undefined ? DEFAULT_MAX_TASKS : opts.maxTasks;
+      const requested = opts.maxTasks; // read once: validator and comparison see one value
+      const maxTasks = requested === undefined ? DEFAULT_MAX_TASKS : requested;
       if (!Number.isSafeInteger(maxTasks) || maxTasks < 1) {
         throw new EvalUsageError('maxTasks must be a positive integer');
       }

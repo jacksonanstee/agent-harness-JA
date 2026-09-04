@@ -324,8 +324,10 @@ carry a dated correction in place.
 
 What this does not do. There is still no spend budget (dollars, not tasks)
 and no per-task wall-clock timeout; both stay in Revisit if. The two bounds
-compose only as a ceiling of `maxTasks` times 100 turns, which is a count,
-not a price. Neither bound is a security boundary: R-10 already accepts
+compose as a ceiling of `maxTasks` times 100 primary turns, plus under
+`--challenge` up to one single-turn adversary call per passed task (the
+verifier's own `maxTurns: 1` query, ADR-0020), which is a count, not a
+price. Neither bound is a security boundary: R-10 already accepts
 arbitrary in-process oracle code from the same pack, so a hostile pack can do
 worse than run long. The bound is cost and wall-clock hygiene against
 mistakes and low-effort abuse.
