@@ -131,7 +131,7 @@ describe('README `## Settings`: the examples load through the real composition',
 
   it('the two caps the section states are the parsers\' own constants', () => {
     const { section } = loaded();
-    expect(section).toContain(`more than ${MAX_RULES} rules or ${MAX_ALLOW_ENTRIES} allowlist entries`);
+    expect(section).toContain(`more than ${MAX_RULES} rules, or more than ${MAX_ALLOW_ENTRIES} entries in one allowlist`);
   });
 
   it('a tool the allows do not name is denied by the user wildcard deny RULE, which sticky deny protects', () => {
@@ -235,15 +235,29 @@ describe('README `## Settings`: the examples load through the real composition',
     expect((thrown as Error).message.endsWith(suffix)).toBe(true);
     expect(section).toContain(suffix);
   });
-  it('the `warning: ` prefix the section quotes is the constant both commands write to stderr', () => {
+  it('the `warning: ` prefix the section quotes is the constant, and neither command spells its own prefix', () => {
     const { section } = loaded();
     expect(section).toContain(`prefixed \`${WARNING_PREFIX}\``);
+    // Every stderr warning in the two commands goes through WARNING_PREFIX; a
+    // literal spelling of the prefix in either file would be a second source.
+    for (const file of ['cli.ts', 'cli/eval-command.ts']) {
+      const source = readFileSync(resolve(here, file), 'utf8');
+      expect(source, file).not.toMatch(/['"`]warn(ing)?: /);
+    }
   });
 
   it('every metacharacter the section lists denies a command outright; `[`, `*`, `~` and trimmed ends do not', () => {
     const { section, userDoc, projectDoc } = loaded();
     const sandbox = createSandbox(compose(userDoc, projectDoc).sandbox);
-    const listed = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '!', '\n', '\r'];
+    // Parsed from the section, not hand-copied: the twelve characters in
+    // backticks plus the three named in prose (a backtick, a newline, a
+    // carriage return). The length check guards the parser; the array the
+    // code holds is not exported, so completeness stays reviewed.
+    const sentence = /shell metacharacter \((.*?)\) anywhere inside it/.exec(section);
+    expect(sentence).not.toBeNull();
+    const listed = [...(sentence?.[1] ?? '').matchAll(/`(.)`/g)].map((m) => m[1] ?? '');
+    listed.push('`', '\n', '\r');
+    expect(listed).toHaveLength(15);
     for (const ch of listed) {
       expect(sandbox.allowCommand(`git status ${ch} x`), JSON.stringify(ch)).toBe(false);
     }
@@ -253,9 +267,11 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(sandbox.allowCommand('  git status\n')).toBe(true);
     expect(section).toContain('a newline or a carriage return');
     expect(section).toContain('after leading and trailing whitespace is trimmed');
+    // The residual the section must state: builtins are not on the blocklist.
+    expect(section).toContain('are not on that blocklist');
   });
 
-  it('a `match` pattern and its target are canonicalised on both sides (ADR-0014 §1)', () => {
+  it('a `match` pattern and its target are canonicalised on both sides (ADR-0014 §1), the pattern side too', () => {
     const { section, userDoc, projectDoc } = loaded();
     const user = JSON.stringify({
       permissions: { rules: [{ tool: 'Read', match: '/etc/*', decision: 'deny' }] },
@@ -265,6 +281,22 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(denyEtc('Read', { file_path: '/tmp/etc/passwd' }).decision).toBe('allow');
     const example = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
     expect(example('Bash', { command: '  git   status' }).decision).toBe('allow');
+    // Pattern side: patterns that need canonicalising still match (verify lens N2/N3).
+    const rawPatterns = JSON.stringify({
+      permissions: {
+        rules: [
+          { tool: 'Bash', match: '  git  *', decision: 'deny' },
+          { tool: 'Read', match: '/tmp/../etc/*', decision: 'deny' },
+          { tool: 'Read', decision: 'allow' },
+        ],
+      },
+    });
+    const raw = createPermissionEvaluator(compose(rawPatterns, undefined).permissions).evaluate;
+    // Deny shapes: a pattern left raw fails open to the default allow, so the pin goes red.
+    expect(raw('Bash', { command: 'git status' }).decision).toBe('deny');
+    expect(raw('Bash', { command: 'ls' }).decision).toBe('allow');
+    expect(raw('Read', { file_path: '/etc/passwd' }).decision).toBe('deny');
+    expect(raw('Read', { file_path: '/repo/x' }).decision).toBe('allow');
     expect(section).toContain('canonicalised on both sides');
   });
 });

@@ -519,7 +519,7 @@ export async function main(argv: string[]): Promise<number> {
       );
       if (!result.ok) {
         process.stderr.write(
-          `warning: telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+          `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
         );
       }
     },
@@ -548,7 +548,7 @@ export async function main(argv: string[]): Promise<number> {
       generateId: () => harnessSessionId,
       turnId,
       onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),
-      onWarning: (message) => process.stderr.write(`warning: ${sanitizeForTerminal(message)}\n`),
+      onWarning: (message) => process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
     },
   );
 

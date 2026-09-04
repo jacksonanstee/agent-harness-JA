@@ -25,9 +25,10 @@ import type { TelemetryEventInput } from '../telemetry/index.js';
 export const EVAL_OUT_DIR = join('.harness', 'eval');
 
 /**
- * Prefix of every startup warning line `run` and `eval` write to stderr.
- * README's Settings section quotes it and src/readme-settings.test.ts pins
- * the quote to this constant, so both loops must write it (issue #100).
+ * Prefix of every warning line `run` and `eval` write to stderr. README's
+ * Settings section quotes it; src/readme-settings.test.ts pins the quote to
+ * this constant and asserts neither command spells its own prefix, so every
+ * writer goes through here (issue #100).
  */
 export const WARNING_PREFIX = 'warning: ';
 
