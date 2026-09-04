@@ -5,6 +5,7 @@
 // compile error and this file the single audited public surface of the layer.
 export {
   createGoldenRunner,
+  DEFAULT_MAX_TASKS,
   DEFAULT_MAX_TURNS,
   EvalUsageError,
   GOLDEN_FAILURE_KINDS,

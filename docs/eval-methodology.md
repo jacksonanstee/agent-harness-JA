@@ -47,7 +47,10 @@ that proves the rule).
   procedural).
 - **Exit codes:** `0` all tasks passed, `1` any row failed
   (`totals.failed > 0` — the single derivation), `2` no scorecard was
-  produced (including any scorecard-write failure).
+  produced (including any scorecard-write failure). A pack with more task
+  files than the limit (default 100; raise it with `--max-tasks <n>`) is
+  refused at pre-flight with exit `2`, before any task is parsed or any
+  session runs (ADR-0017 amendment, issue #95).
 - **Cost:** `totals.totalCostUsd` never understates — rows whose cost is
   unknown are counted in `totals.unpricedTasks` and the rendered cost line
   becomes a `≥` bound.
@@ -182,7 +185,8 @@ A task is a sibling file pair in the task directory (`eval/golden/`):
 - `<name>.task.md` — YAML frontmatter (`id` — lowercase alphanumeric plus
   hyphens, unique across the directory; `descriptor` with `shape`,
   `sensitivity`, `expected_tokens` for the router, plus optional `hint`;
-  `maxTurns`; optional `skillsDir`) and the prompt as the body.
+  `maxTurns`, 1 to 100 with a default of 10; optional `skillsDir`) and the
+  prompt as the body.
 - `<name>.oracle.mjs` — exports `oracle` (JSDoc-typed via the package's
   `OracleFn`), judging the `SessionResult` self-report and returning a
   strict `{pass: boolean, reason?: string}`. Keep oracles deterministic

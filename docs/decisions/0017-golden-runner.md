@@ -109,6 +109,12 @@ it around a session-shaped runner.
    `maxTurns` cap — bounds blast radius without a `--max-tasks`/budget flag in
    v1 (listed below as a revisit-if).
 
+   **Corrected 2026-09-04 (issue #95):** the default was never a cap.
+   `DEFAULT_MAX_TURNS` applies only when the frontmatter omits `maxTurns`; a
+   task could set any value and the runner passed it to the SDK unclamped,
+   and the pre-flight count was reported, never enforced. Both are bounded
+   now; see the amendment at the end of this ADR.
+
 6. **Security stance.** Oracle execution is arbitrary in-process code from
    the (in-scope, potentially malicious) cloned repository — it bypasses
    every SDK-hook gate the harness otherwise relies on. This is recorded in
@@ -149,6 +155,9 @@ it around a session-shaped runner.
   hang a timeout off. The default `maxTurns: 10` (mirroring `session.run`) is
   the only bound in v1 — a pathological task can still run long, but it
   cannot run forever without also exhausting its turn budget.
+  **Corrected 2026-09-04 (issue #95):** the default is a fallback, not a
+  bound; the per-task bound is the schema's `maximum` of 100 turns, added by
+  the amendment at the end of this ADR. The wall-clock limitation stands.
 - **Process-hostile oracles are uncontainable in-process.** An oracle that
   calls `process.exit()` or spins an infinite loop cannot be stopped by
   anything running in the same process. This is exactly why oracle execution
@@ -248,9 +257,14 @@ as specified except for four points that surfaced during implementation:
 - A settings fingerprint is needed in `meta` once scorecards must be compared
   across differing security postures (v1 documents the variance but does not
   encode it).
-- A `--max-tasks` or spend-budget flag is needed once golden suites grow
+- ~~A `--max-tasks` or spend-budget flag is needed once golden suites grow
   large enough that sequential execution plus pre-flight count is
-  insufficient mitigation.
+  insufficient mitigation.~~ **FIRED 2026-09-04, issue #95: `--max-tasks`
+  shipped with a default of 100 (amendment at the end of this ADR). The
+  spend-budget half stays open, re-listed as its own bullet below.**
+- A spend-budget flag (dollars, not tasks) is needed once a pack inside the
+  task limit can still cost more than an operator would accept; `--max-tasks`
+  bounds count, not price.
 - The SDK grows an abort channel on `QueryFn` — implement per-task
   wall-clock timeout support then.
 - Partial-scorecard-on-SIGINT semantics become worth building, in step with
@@ -276,3 +290,45 @@ as specified except for four points that surfaced during implementation:
   `no-restricted-imports` blocks override rather than merge across config
   objects, which is pre-existing behavior worth documenting explicitly at
   that point (deferred from the E-1 review, finding M4).
+
+## Amendment (2026-09-04, issue #95): golden packs are bounded, and the "default cap" wording was wrong
+
+Two bounds landed, one per layer the 2026-08-25 external review named (triage
+row 7f, `process/reviews/external-review-2026-08-25-triage.md`):
+
+- `src/eval/golden/schema.json` now gives `maxTurns` a `maximum` of 100 beside
+  its `minimum` of 1. A task above it is a per-task `task-parse` row naming
+  the field (decision 4's dividing line: a single-file problem is a row, not a
+  run-level error) and the rest of the pack runs. The value is ten times the
+  default and well above every shipped example (the fixtures use 1 to 3, the
+  init template 5, the adversary 1). It is a sanity bound on a
+  repository-controlled file, to be raised here by amendment if a real pack
+  ever needs it, not routing policy. `run --max-turns` is typed by the
+  operator per invocation and stays unbounded.
+- `run()` takes `maxTasks` (default `DEFAULT_MAX_TASKS`, 100) and refuses a
+  pack with more task files than that as a run-level usage error: exit 2, no
+  scorecard, after discovery and before any file is parsed or any session
+  exists. The runner owns the default so a library caller is bounded too; the
+  CLI's `--max-tasks <n>` only parses an override, with the rule `run`'s
+  integer flags share restated here in full: digits only, `parseInt`,
+  `Number.isSafeInteger` (above 2^53 `parseInt` rewrites the digits), plain
+  reassignment so the last value wins, and `--max-turns`'s floor of 1
+  (`--expected-tokens` floors at 0). An explicit larger value is the operator
+  saying so, which is the design.
+
+What this corrects. Decision 5 and the wall-clock limitation both called
+`DEFAULT_MAX_TURNS` a cap. It was a fallback applied only when the
+frontmatter omitted the field; a task could set `maxTurns: 100000` and
+`createSession` passed it to the SDK unclamped, and the pre-flight task count
+was written to stderr and never enforced. Both sentences keep their text and
+carry a dated correction in place.
+
+What this does not do. There is still no spend budget (dollars, not tasks)
+and no per-task wall-clock timeout; both stay in Revisit if. The two bounds
+compose as a ceiling of `maxTasks` times 100 primary turns, plus under
+`--challenge` up to one single-turn adversary call per passed task (the
+verifier's own `maxTurns: 1` query, ADR-0020), which is a count, not a
+price. Neither bound is a security boundary: R-10 already accepts
+arbitrary in-process oracle code from the same pack, so a hostile pack can do
+worse than run long. The bound is cost and wall-clock hygiene against
+mistakes and low-effort abuse.

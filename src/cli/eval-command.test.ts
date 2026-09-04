@@ -36,7 +36,7 @@ describe('parseEvalArgs', () => {
     const result = parseEvalArgs([]);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'eval', taskDir: './eval/golden', challenge: false },
+      value: { command: 'eval', taskDir: './eval/golden', challenge: false, maxTasks: 100 },
     });
   });
 
@@ -44,7 +44,7 @@ describe('parseEvalArgs', () => {
     const result = parseEvalArgs(['./my-tasks']);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'eval', taskDir: './my-tasks', challenge: false },
+      value: { command: 'eval', taskDir: './my-tasks', challenge: false, maxTasks: 100 },
     });
   });
 
@@ -52,7 +52,7 @@ describe('parseEvalArgs', () => {
     const result = parseEvalArgs(['--challenge']);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'eval', taskDir: './eval/golden', challenge: true },
+      value: { command: 'eval', taskDir: './eval/golden', challenge: true, maxTasks: 100 },
     });
   });
 
@@ -60,7 +60,7 @@ describe('parseEvalArgs', () => {
     const result = parseEvalArgs(['--challenge', './my-tasks']);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'eval', taskDir: './my-tasks', challenge: true },
+      value: { command: 'eval', taskDir: './my-tasks', challenge: true, maxTasks: 100 },
     });
   });
 
@@ -68,18 +68,57 @@ describe('parseEvalArgs', () => {
     const result = parseEvalArgs(['./my-tasks', '--challenge']);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'eval', taskDir: './my-tasks', challenge: true },
+      value: { command: 'eval', taskDir: './my-tasks', challenge: true, maxTasks: 100 },
     });
   });
 
-  it('rejects unknown flags (no --max-tasks in v1)', () => {
-    const result = parseEvalArgs(['--max-tasks', '5']);
+  it('rejects unknown flags', () => {
+    const result = parseEvalArgs(['--nope', '5']);
     expect(result.ok).toBe(false);
   });
 
   it('rejects extra positional arguments', () => {
     const result = parseEvalArgs(['a', 'b']);
     expect(result.ok).toBe(false);
+  });
+
+  // --max-tasks (issue #95). The default is pinned by LITERAL above (100), not
+  // by importing DEFAULT_MAX_TASKS, so a silent change of the default goes red
+  // here and has to be made visible in the diff (the #88 idiom).
+  it('parses --max-tasks before and after the positional taskDir, and beside --challenge', () => {
+    expect(parseEvalArgs(['--max-tasks', '5', './my-tasks'])).toEqual({
+      ok: true,
+      value: { command: 'eval', taskDir: './my-tasks', challenge: false, maxTasks: 5 },
+    });
+    expect(parseEvalArgs(['./my-tasks', '--challenge', '--max-tasks', '250'])).toEqual({
+      ok: true,
+      value: { command: 'eval', taskDir: './my-tasks', challenge: true, maxTasks: 250 },
+    });
+  });
+
+  it('rejects --max-tasks without a value', () => {
+    const result = parseEvalArgs(['--max-tasks']);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/Missing value for --max-tasks/);
+  });
+
+  it('rejects a non-positive, non-integer or unsafe --max-tasks', () => {
+    // Above 2^53 parseInt silently rewrites the digits (code lens on 472b1eb);
+    // a limit the operator never typed is worse than a rejection.
+    for (const value of ['0', '-1', 'abc', '4.5', '5abc', '99999999999999999999']) {
+      const result = parseEvalArgs(['--max-tasks', value]);
+      expect(result.ok, value).toBe(false);
+      if (result.ok) continue;
+      expect(result.error, value).toMatch(/--max-tasks must be a positive integer/);
+    }
+  });
+
+  it('takes the last --max-tasks when the flag repeats (last-wins, as every run flag does)', () => {
+    const result = parseEvalArgs(['--max-tasks', '5', '--max-tasks', '7']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.maxTasks).toBe(7);
   });
 });
 

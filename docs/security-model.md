@@ -369,6 +369,12 @@ by a ReDoS guard test at ~120 KB pathological input under 100 ms, and
 capped (§3.1) because a hostile project file is attacker-influenced input, and
 since ADR-0034 so is the settings file's SIZE (1,000,000 bytes, checked on the
 opened descriptor before the read; a 50 MB file had loaded).
+A golden task pack, also repository-controlled, is bounded on both axes
+since issue #95: `maxTurns` has a schema maximum of 100 per task and the
+runner refuses a pack over its task limit (default 100, `--max-tasks`)
+before any file is parsed or any session exists (ADR-0017 amendment). Cost
+hygiene, not a security boundary: R-10 already accepts arbitrary in-process
+oracle code from the same pack.
 Judge cost — the economic DoS — is handled by keeping the judge off by
 default, haiku-class, single-call, no-retry (ADR-0016 §5).
 

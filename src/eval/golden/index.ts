@@ -2,6 +2,7 @@ export { loadOracle, validateVerdict } from './oracle.js';
 export type { LoadOracleFn, OracleFn, OracleVerdict } from './oracle.js';
 export {
   createGoldenRunner,
+  DEFAULT_MAX_TASKS,
   EvalUsageError,
 } from './runner.js';
 export type {

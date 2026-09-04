@@ -47,6 +47,14 @@ describe('USAGE', () => {
     expect(runLine).toContain(`--sensitivity <${TASK_SENSITIVITIES.join('|')}>`);
     expect(runLine).toContain('--expected-tokens <n>');
   });
+
+  // The eval line is a hand-written literal (no array to derive from), so this
+  // is a literal-substring pin and nothing more (issue #95).
+  it('names --max-tasks on the eval line (literal pin; the eval line is not derived)', () => {
+    const evalLine = USAGE.split('\n').find((line) => line.includes(' eval '));
+    expect(evalLine).toBeDefined();
+    expect(evalLine).toContain('[--max-tasks <n>]');
+  });
 });
 
 describe('readPackageVersion', () => {

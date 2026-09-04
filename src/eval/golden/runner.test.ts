@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
-import { createGoldenRunner, EvalUsageError, portableTaskDir } from './runner.js';
+import { createGoldenRunner, DEFAULT_MAX_TASKS, EvalUsageError, portableTaskDir } from './runner.js';
 import type { GoldenRunnerDeps, TaskSessionConfig } from './runner.js';
 import type { LoadOracleFn } from './oracle.js';
+import { parseTaskFile } from './task.js';
 import type {
   ChallengeCategory,
   ChallengeErrorKind,
@@ -140,6 +141,85 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
     });
     await expect(runner.run(fixtures('dup'))).rejects.toThrow(/duplicate task id/);
     expect(calls).toHaveLength(0); // no spend before the dup check
+  });
+
+  // Pack-size bound (issue #95): run-level, exit-2 class, enforced by the
+  // runner rather than the CLI so a library caller is bounded too.
+  // Parse is observable through the injectable parseTask dep (the loadOracle
+  // idiom), so the order the prose states, refuse before any parse, is a
+  // pinned property, not code order (verify stage on d42bad0). The positive
+  // twin in the next test proves the seam is wired.
+  it('refuses a pack larger than maxTasks with no parse, session or progress line', async () => {
+    const calls: TaskSessionConfig[] = [];
+    const lines: string[] = [];
+    let parses = 0;
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      parseTask: (path) => {
+        parses += 1;
+        return parseTaskFile(path);
+      },
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    // fixtures('run') holds three task files.
+    await expect(
+      runner.run(fixtures('run'), { maxTasks: 2, onProgress: (l) => lines.push(l) }),
+    ).rejects.toThrow(EvalUsageError);
+    await expect(runner.run(fixtures('run'), { maxTasks: 2 })).rejects.toThrow(
+      /found 3 tasks in .* more than the 2-task limit; pass --max-tasks 3/,
+    );
+    expect(calls).toHaveLength(0);
+    expect(lines).toEqual([]);
+    expect(parses).toBe(0);
+  });
+
+  it('runs a pack exactly at maxTasks (the bound is "more than", not "at least")', async () => {
+    let parses = 0;
+    const runner = createGoldenRunner({
+      ...deps,
+      parseTask: (path) => {
+        parses += 1;
+        return parseTaskFile(path);
+      },
+    });
+    const scorecard = await runner.run(fixtures('run'), { maxTasks: 3 });
+    expect(scorecard.rows).toHaveLength(3);
+    expect(parses).toBe(3); // the injected parser is the one the runner uses
+  });
+
+  it('applies DEFAULT_MAX_TASKS when maxTasks is omitted, and an explicit value lifts it', async () => {
+    expect(DEFAULT_MAX_TASKS).toBe(100); // literal pin: a change must be visible here
+    const dir = mkdtempSync(join(tmpdir(), 'golden-max-tasks-'));
+    const ids = Array.from(
+      { length: DEFAULT_MAX_TASKS + 1 },
+      (_, i) => `t${String(i).padStart(3, '0')}`,
+    );
+    writeTasks(dir, ids);
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      loadOracle: oracleFor(new Set(ids)),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    await expect(runner.run(dir)).rejects.toThrow(/more than the 100-task limit/);
+    const scorecard = await runner.run(dir, { maxTasks: DEFAULT_MAX_TASKS + 1 });
+    expect(scorecard.rows).toHaveLength(DEFAULT_MAX_TASKS + 1);
+  });
+
+  it('rejects an invalid maxTasks option as a usage error before discovery', async () => {
+    const runner = createGoldenRunner(deps);
+    // null is a JS caller's value, not TypeScript's: `??` would have turned it
+    // into the default silently (code lens on 11ab959), so it is rejected like
+    // every other non-integer. Only an absent (undefined) option means default.
+    const invalid = [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2, null as unknown as number];
+    for (const maxTasks of invalid) {
+      // fixtures('nope') does not exist: the maxTasks error must win, which
+      // proves the check runs before the directory is touched.
+      await expect(runner.run(fixtures('nope'), { maxTasks }), String(maxTasks)).rejects.toThrow(
+        /maxTasks must be a positive integer/,
+      );
+    }
   });
 });
 
