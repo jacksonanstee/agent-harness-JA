@@ -310,10 +310,11 @@ row 7f, `process/reviews/external-review-2026-08-25-triage.md`):
   scorecard, after discovery and before any file is parsed or any session
   exists. The runner owns the default so a library caller is bounded too; the
   CLI's `--max-tasks <n>` only parses an override, with the rule `run`'s
-  integer flags use restated here in full: digits only, `parseInt`,
-  `Number.isSafeInteger` (above 2^53 `parseInt` rewrites the digits), a floor
-  of 1, and plain reassignment so the last value wins. An explicit larger
-  value is the operator saying so, which is the design.
+  integer flags share restated here in full: digits only, `parseInt`,
+  `Number.isSafeInteger` (above 2^53 `parseInt` rewrites the digits), plain
+  reassignment so the last value wins, and `--max-turns`'s floor of 1
+  (`--expected-tokens` floors at 0). An explicit larger value is the operator
+  saying so, which is the design.
 
 What this corrects. Decision 5 and the wall-clock limitation both called
 `DEFAULT_MAX_TURNS` a cap. It was a fallback applied only when the

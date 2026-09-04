@@ -224,8 +224,8 @@ describe('maxTurns schema bound (issue #95)', () => {
   });
 
   // The default is applied AFTER validation (task.ts), so the schema bound
-  // never sees it; this is the only thing keeping a defaulted task inside
-  // the bound the ADR describes (architecture lens on 944b0d4).
+  // never sees it. The runner tests pin the default's VALUE; nothing else
+  // relates it to the bound the ADR describes (architecture lens on 944b0d4).
   it('keeps DEFAULT_MAX_TURNS inside the schema bound, since the default bypasses validation', () => {
     expect(DEFAULT_MAX_TURNS).toBeGreaterThanOrEqual(taskSchema.properties.maxTurns.minimum);
     expect(DEFAULT_MAX_TURNS).toBeLessThanOrEqual(taskSchema.properties.maxTurns.maximum);
