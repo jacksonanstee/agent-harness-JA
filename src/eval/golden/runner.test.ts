@@ -144,7 +144,10 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
 
   // Pack-size bound (issue #95): run-level, exit-2 class, enforced by the
   // runner rather than the CLI so a library caller is bounded too.
-  it('refuses a pack larger than maxTasks before any parse, session or progress line', async () => {
+  // The count check sits before the parse map by code order, but parse is
+  // unobservable from here (it never throws and the progress line comes
+  // after it), so this pins what it can see: no session, no progress line.
+  it('refuses a pack larger than maxTasks with no session and no progress line', async () => {
     const calls: TaskSessionConfig[] = [];
     const lines: string[] = [];
     const runner = createGoldenRunner({
@@ -190,7 +193,11 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
 
   it('rejects an invalid maxTasks option as a usage error before discovery', async () => {
     const runner = createGoldenRunner(deps);
-    for (const maxTasks of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+    // null is a JS caller's value, not TypeScript's: `??` would have turned it
+    // into the default silently (code lens on 11ab959), so it is rejected like
+    // every other non-integer. Only an absent (undefined) option means default.
+    const invalid = [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2, null as unknown as number];
+    for (const maxTasks of invalid) {
       // fixtures('nope') does not exist: the maxTasks error must win, which
       // proves the check runs before the directory is touched.
       await expect(runner.run(fixtures('nope'), { maxTasks }), String(maxTasks)).rejects.toThrow(

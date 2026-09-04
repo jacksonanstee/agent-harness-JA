@@ -54,7 +54,7 @@ export interface GoldenRunnerDeps {
  * before any session exists. The runner owns the default, not the CLI, so a
  * library caller of `run()` is bounded too: the CLI's `--max-tasks` only
  * parses an override. Far above the shipped packs (two tasks each) and the
- * largest fixture (three), this is a sanity bound on a repo-controlled input,
+ * largest pack fixture (three), this is a sanity bound on a repo-controlled input,
  * not a security boundary (R-10 already accepts arbitrary in-process oracle
  * code from the same pack).
  */
@@ -454,8 +454,11 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         throw new EvalUsageError('taskDir must be a non-empty string');
       }
       // Validated here, before the directory is touched: an unusable limit is
-      // a caller error, not a property of the pack.
-      const maxTasks = opts.maxTasks ?? DEFAULT_MAX_TASKS;
+      // a caller error, not a property of the pack. Only an ABSENT option means
+      // the default; `??` would also have mapped a JS caller's null to the
+      // default silently (code lens on 11ab959), so null falls through to the
+      // integer check and is rejected like any other non-integer.
+      const maxTasks = opts.maxTasks === undefined ? DEFAULT_MAX_TASKS : opts.maxTasks;
       if (!Number.isSafeInteger(maxTasks) || maxTasks < 1) {
         throw new EvalUsageError('maxTasks must be a positive integer');
       }
