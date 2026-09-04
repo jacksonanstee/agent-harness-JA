@@ -41,6 +41,9 @@ export interface GoldenRunnerDeps {
   redactSecrets: (text: string) => RedactResult;
   /** Injectable for error-path tests; defaults to the real dynamic import. */
   loadOracle?: LoadOracleFn;
+  /** Injectable so a test can observe that a refused pack is never parsed
+   *  (verify stage on d42bad0); defaults to parseTaskFile. */
+  parseTask?: (path: string) => TaskParseResult;
   /** Injected clock (epoch ms) for deterministic tests. */
   now?: () => number;
   harnessVersion?: string;
@@ -342,6 +345,7 @@ async function runChallengePhase(
 
 export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   const loadOracle = deps.loadOracle ?? defaultLoadOracle;
+  const parseTask = deps.parseTask ?? parseTaskFile;
   const now = deps.now ?? Date.now;
   const harnessVersion = deps.harnessVersion ?? '0.0.0-unknown';
   const clean = (text: string): string => cleanForScorecard(text, deps.redactSecrets);
@@ -485,7 +489,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
             `pass --max-tasks ${files.length} or higher to run them all`,
         );
       }
-      const parses = files.map(parseTaskFile);
+      const parses = files.map(parseTask);
       assertUniqueIds(parses);
       opts.onProgress?.(
         `discovered ${parses.length} task${parses.length === 1 ? '' : 's'} in ${root}`,

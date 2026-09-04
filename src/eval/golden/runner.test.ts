@@ -8,6 +8,7 @@ import type { Session, SessionResult } from '../../session/index.js';
 import { createGoldenRunner, DEFAULT_MAX_TASKS, EvalUsageError, portableTaskDir } from './runner.js';
 import type { GoldenRunnerDeps, TaskSessionConfig } from './runner.js';
 import type { LoadOracleFn } from './oracle.js';
+import { parseTaskFile } from './task.js';
 import type {
   ChallengeCategory,
   ChallengeErrorKind,
@@ -144,14 +145,20 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
 
   // Pack-size bound (issue #95): run-level, exit-2 class, enforced by the
   // runner rather than the CLI so a library caller is bounded too.
-  // The count check sits before the parse map by code order, but parse is
-  // unobservable from here (it never throws and the progress line comes
-  // after it), so this pins what it can see: no session, no progress line.
-  it('refuses a pack larger than maxTasks with no session and no progress line', async () => {
+  // Parse is observable through the injectable parseTask dep (the loadOracle
+  // idiom), so the order the prose states, refuse before any parse, is a
+  // pinned property, not code order (verify stage on d42bad0). The positive
+  // twin in the next test proves the seam is wired.
+  it('refuses a pack larger than maxTasks with no parse, session or progress line', async () => {
     const calls: TaskSessionConfig[] = [];
     const lines: string[] = [];
+    let parses = 0;
     const runner = createGoldenRunner({
       createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      parseTask: (path) => {
+        parses += 1;
+        return parseTaskFile(path);
+      },
       redactSecrets: (t: string) => identityRedact(t),
       now: fakeNow(),
     });
@@ -164,12 +171,21 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
     );
     expect(calls).toHaveLength(0);
     expect(lines).toEqual([]);
+    expect(parses).toBe(0);
   });
 
   it('runs a pack exactly at maxTasks (the bound is "more than", not "at least")', async () => {
-    const runner = createGoldenRunner(deps);
+    let parses = 0;
+    const runner = createGoldenRunner({
+      ...deps,
+      parseTask: (path) => {
+        parses += 1;
+        return parseTaskFile(path);
+      },
+    });
     const scorecard = await runner.run(fixtures('run'), { maxTasks: 3 });
     expect(scorecard.rows).toHaveLength(3);
+    expect(parses).toBe(3); // the injected parser is the one the runner uses
   });
 
   it('applies DEFAULT_MAX_TASKS when maxTasks is omitted, and an explicit value lifts it', async () => {
