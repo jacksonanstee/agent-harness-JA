@@ -15,7 +15,7 @@ import {
 } from '../security/index.js';
 import type { SessionResult } from '../session/index.js';
 import { validate } from '../skills/index.js';
-import { INIT_FILES, INIT_README, INIT_SETTINGS_JSON } from './init-templates.js';
+import { INIT_FILES, INIT_README, INIT_SETTINGS_JSON, INIT_SKILL } from './init-templates.js';
 import { runInit } from './init-command.js';
 
 // Fully-typed SessionResult so a rename of any field the scaffolded oracle
@@ -156,6 +156,14 @@ describe('scaffolded README', () => {
     // Keyless-CI invariant carried through.
     expect(INIT_README).toContain('redteam');
     expect(INIT_README.toLowerCase()).toContain('never');
+    // Sticky deny protects a user deny RULE, not a deny default (issue #100).
+    expect(INIT_README).toContain('cannot loosen a user deny rule');
+    expect(INIT_README).not.toContain('never loosen');
+  });
+
+  it('the scaffolded skill teaches the same posture: a deny rule sticks, a deny default does not', () => {
+    expect(INIT_SKILL).toContain('cannot loosen a user deny rule');
+    expect(INIT_SKILL).not.toContain('never loosen');
   });
 
   it('no template contains an em-dash (voice rule)', () => {
