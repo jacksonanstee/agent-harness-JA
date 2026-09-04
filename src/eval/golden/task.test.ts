@@ -206,3 +206,35 @@ describe('schema/router lockstep', () => {
     expect(descriptor.properties.sensitivity.enum).toEqual([...TASK_SENSITIVITIES]);
   });
 });
+
+describe('maxTurns schema bound (issue #95)', () => {
+  // A default is not a cap: DEFAULT_MAX_TURNS applies only when the field is
+  // absent, so before this bound a repo-controlled task could set any value
+  // and the runner passed it to the SDK unclamped (ADR-0017 amendment).
+  function taskWithMaxTurns(value: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'task-max-turns-'));
+    const path = join(dir, 'bounded.task.md');
+    writeFileSync(path, `---\nid: bounded\nmaxTurns: ${value}\n---\nprompt body\n`);
+    return path;
+  }
+
+  it('pins the bound by literal so a change here is visible in the diff', () => {
+    expect(taskSchema.properties.maxTurns.minimum).toBe(1);
+    expect(taskSchema.properties.maxTurns.maximum).toBe(100);
+  });
+
+  it('rejects maxTurns above the maximum as a task-parse failure naming the field', () => {
+    const result = parseTaskFile(taskWithMaxTurns(101));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.rowId).toBe('bounded');
+    expect(result.message).toMatch(/maxTurns/);
+  });
+
+  it('accepts maxTurns exactly at the maximum', () => {
+    const result = parseTaskFile(taskWithMaxTurns(100));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.maxTurns).toBe(100);
+  });
+});

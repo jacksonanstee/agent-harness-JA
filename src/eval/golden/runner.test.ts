@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
-import { createGoldenRunner, EvalUsageError, portableTaskDir } from './runner.js';
+import { createGoldenRunner, DEFAULT_MAX_TASKS, EvalUsageError, portableTaskDir } from './runner.js';
 import type { GoldenRunnerDeps, TaskSessionConfig } from './runner.js';
 import type { LoadOracleFn } from './oracle.js';
 import type {
@@ -140,6 +140,63 @@ describe('createGoldenRunner run-level errors (exit-2 class)', () => {
     });
     await expect(runner.run(fixtures('dup'))).rejects.toThrow(/duplicate task id/);
     expect(calls).toHaveLength(0); // no spend before the dup check
+  });
+
+  // Pack-size bound (issue #95): run-level, exit-2 class, enforced by the
+  // runner rather than the CLI so a library caller is bounded too.
+  it('refuses a pack larger than maxTasks before any parse, session or progress line', async () => {
+    const calls: TaskSessionConfig[] = [];
+    const lines: string[] = [];
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult(), calls),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    // fixtures('run') holds three task files.
+    await expect(
+      runner.run(fixtures('run'), { maxTasks: 2, onProgress: (l) => lines.push(l) }),
+    ).rejects.toThrow(EvalUsageError);
+    await expect(runner.run(fixtures('run'), { maxTasks: 2 })).rejects.toThrow(
+      /found 3 tasks in .* more than the 2-task limit; pass --max-tasks 3/,
+    );
+    expect(calls).toHaveLength(0);
+    expect(lines).toEqual([]);
+  });
+
+  it('runs a pack exactly at maxTasks (the bound is "more than", not "at least")', async () => {
+    const runner = createGoldenRunner(deps);
+    const scorecard = await runner.run(fixtures('run'), { maxTasks: 3 });
+    expect(scorecard.rows).toHaveLength(3);
+  });
+
+  it('applies DEFAULT_MAX_TASKS when maxTasks is omitted, and an explicit value lifts it', async () => {
+    expect(DEFAULT_MAX_TASKS).toBe(100); // literal pin: a change must be visible here
+    const dir = mkdtempSync(join(tmpdir(), 'golden-max-tasks-'));
+    const ids = Array.from(
+      { length: DEFAULT_MAX_TASKS + 1 },
+      (_, i) => `t${String(i).padStart(3, '0')}`,
+    );
+    writeTasks(dir, ids);
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult()),
+      loadOracle: oracleFor(new Set(ids)),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    await expect(runner.run(dir)).rejects.toThrow(/more than the 100-task limit/);
+    const scorecard = await runner.run(dir, { maxTasks: DEFAULT_MAX_TASKS + 1 });
+    expect(scorecard.rows).toHaveLength(DEFAULT_MAX_TASKS + 1);
+  });
+
+  it('rejects an invalid maxTasks option as a usage error before discovery', async () => {
+    const runner = createGoldenRunner(deps);
+    for (const maxTasks of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      // fixtures('nope') does not exist: the maxTasks error must win, which
+      // proves the check runs before the directory is touched.
+      await expect(runner.run(fixtures('nope'), { maxTasks }), String(maxTasks)).rejects.toThrow(
+        /maxTasks must be a positive integer/,
+      );
+    }
   });
 });
 

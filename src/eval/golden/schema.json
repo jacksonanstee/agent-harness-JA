@@ -21,7 +21,7 @@
         "hint": { "type": "string", "minLength": 1 }
       }
     },
-    "maxTurns": { "type": "integer", "minimum": 1 },
+    "maxTurns": { "type": "integer", "minimum": 1, "maximum": 100 },
     "skillsDir": { "type": "string", "minLength": 1 }
   }
 }

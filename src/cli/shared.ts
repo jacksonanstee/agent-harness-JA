@@ -37,7 +37,7 @@ export const EVAL_OUT_DIR = join('.harness', 'eval');
 // residual is issue #123).
 export const USAGE =
   `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>]\n` +
-  '       agent-harness-ja eval [taskDir] [--challenge]\n' +
+  '       agent-harness-ja eval [taskDir] [--challenge] [--max-tasks <n>]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
   '       agent-harness-ja init [dir]';

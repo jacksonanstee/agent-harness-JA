@@ -182,7 +182,8 @@ A task is a sibling file pair in the task directory (`eval/golden/`):
 - `<name>.task.md` — YAML frontmatter (`id` — lowercase alphanumeric plus
   hyphens, unique across the directory; `descriptor` with `shape`,
   `sensitivity`, `expected_tokens` for the router, plus optional `hint`;
-  `maxTurns`; optional `skillsDir`) and the prompt as the body.
+  `maxTurns`, 1 to 100 with a default of 10; optional `skillsDir`) and the
+  prompt as the body.
 - `<name>.oracle.mjs` — exports `oracle` (JSDoc-typed via the package's
   `OracleFn`), judging the `SessionResult` self-report and returning a
   strict `{pass: boolean, reason?: string}`. Keep oracles deterministic

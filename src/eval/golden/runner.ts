@@ -48,9 +48,23 @@ export interface GoldenRunnerDeps {
   verifier?: Verifier;
 }
 
+/**
+ * Pre-flight pack-size limit (issue #95). A pack with more task files than
+ * this is refused as a run-level usage error before any file is parsed and
+ * before any session exists. The runner owns the default, not the CLI, so a
+ * library caller of `run()` is bounded too: the CLI's `--max-tasks` only
+ * parses an override. Far above the shipped packs (two tasks each) and the
+ * largest fixture (three), this is a sanity bound on a repo-controlled input,
+ * not a security boundary (R-10 already accepts arbitrary in-process oracle
+ * code from the same pack).
+ */
+export const DEFAULT_MAX_TASKS = 100;
+
 export interface RunOptions {
   /** Per-task progress hook (the CLI writes these to stderr). */
   onProgress?: (line: string) => void;
+  /** Refuse packs with more task files than this (default DEFAULT_MAX_TASKS). */
+  maxTasks?: number;
 }
 
 export interface GoldenRunner {
@@ -439,6 +453,12 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       if (typeof taskDir !== 'string' || taskDir.length === 0) {
         throw new EvalUsageError('taskDir must be a non-empty string');
       }
+      // Validated here, before the directory is touched: an unusable limit is
+      // a caller error, not a property of the pack.
+      const maxTasks = opts.maxTasks ?? DEFAULT_MAX_TASKS;
+      if (!Number.isSafeInteger(maxTasks) || maxTasks < 1) {
+        throw new EvalUsageError('maxTasks must be a positive integer');
+      }
       // Captured ONCE, here, and used for both the resolve below and the
       // `meta.taskDir` write at the end of the run. Reading `process.cwd()`
       // again at write time would let the two operands disagree: oracles are
@@ -452,6 +472,15 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       const invocationCwd = process.cwd();
       const root = resolve(invocationCwd, taskDir);
       const files = discoverTaskFiles(root);
+      // Before the parse map: a refused pack costs no parse work, no session
+      // and no progress line. `root` is already disclosed by the zero-files
+      // message and the discovery line below.
+      if (files.length > maxTasks) {
+        throw new EvalUsageError(
+          `found ${files.length} tasks in ${root}, more than the ${maxTasks}-task limit; ` +
+            `pass --max-tasks ${files.length} or higher to run them all`,
+        );
+      }
       const parses = files.map(parseTaskFile);
       assertUniqueIds(parses);
       opts.onProgress?.(

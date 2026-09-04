@@ -55,6 +55,7 @@ node dist/cli.js run "your prompt"
 node dist/cli.js run "review this diff" --shape review --sensitivity high   # route per task (see docs/decisions/0007)
 node dist/cli.js eval                  # golden eval suite
 node dist/cli.js eval --challenge      # report-only second-pass adversarial challenge
+node dist/cli.js eval --max-tasks 250  # lift the pre-flight pack-size limit (see docs/decisions/0017)
 npm run redteam                        # keyless drift gate (see docs/decisions/0019)
 node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --scrub-prefix to share
 node dist/cli.js init my-agent         # scaffold a starter project
@@ -119,7 +120,7 @@ As of 2026-08-08:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0034 |
-| Tests | 1483 at the 2026-09-03 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 1495 at the 2026-09-04 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 

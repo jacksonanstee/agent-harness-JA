@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
-import { createGoldenRunner, createVerifier, EvalUsageError, toMarkdown } from '../eval/index.js';
+import {
+  createGoldenRunner,
+  createVerifier,
+  DEFAULT_MAX_TASKS,
+  EvalUsageError,
+  toMarkdown,
+} from '../eval/index.js';
 import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
 import { GuardedReadError } from '../internal/guarded-read.js';
@@ -36,6 +42,8 @@ export interface EvalArgs {
   command: 'eval';
   taskDir: string;
   challenge: boolean;
+  /** Pre-flight pack-size limit; the runner's default unless --max-tasks is passed. */
+  maxTasks: number;
 }
 
 /**
@@ -51,9 +59,32 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
   let taskDir = './eval/golden';
   let positionalSeen = false;
   let challenge = false;
-  for (const arg of argv) {
+  // The default is the runner's own constant, imported rather than hand-copied,
+  // so the flagless limit cannot drift from what run() enforces (issue #95).
+  let maxTasks: number = DEFAULT_MAX_TASKS;
+  // Indexed, not for...of: --max-tasks takes a value from argv[i + 1]. A
+  // repeated flag reassigns, so the last value wins, as every run flag does.
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === undefined) break;
     if (arg === '--challenge') {
       challenge = true;
+      continue;
+    }
+    if (arg === '--max-tasks') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return { ok: false, error: `Missing value for ${arg}. ${USAGE}` };
+      }
+      // Digits only, then isSafeInteger rather than isInteger: above 2^53
+      // parseInt silently rewrites the digits, and a limit the operator never
+      // typed is worse than a rejection. Floor 1: zero tasks is not a run.
+      const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
+      if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        return { ok: false, error: `--max-tasks must be a positive integer. ${USAGE}` };
+      }
+      maxTasks = parsed;
+      i += 1;
       continue;
     }
     if (arg.startsWith('--')) {
@@ -65,7 +96,7 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
     taskDir = arg;
     positionalSeen = true;
   }
-  return { ok: true, value: { command: 'eval', taskDir, challenge } };
+  return { ok: true, value: { command: 'eval', taskDir, challenge, maxTasks } };
 }
 
 // E-4: the adversary is a de-fanged single completion — maxTurns 1 bounds the
@@ -230,6 +261,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
     let scorecard;
     try {
       scorecard = await runner.run(args.taskDir, {
+        maxTasks: args.maxTasks,
         onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(line)}\n`),
       });
     } catch (error: unknown) {
