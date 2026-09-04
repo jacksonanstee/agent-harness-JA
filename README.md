@@ -67,6 +67,52 @@ Once the v0.1.0 release is published, the same commands run without a clone: `np
 
 ---
 
+## Settings
+
+The security layer reads two JSON files and composes them: `~/.harness/settings.json` (yours, trusted) and `<cwd>/.harness/settings.json` (the project's, treated as attacker-influenced input, because a cloned repository ships its own). Both `run` and `eval` load them at startup. A missing file is an empty layer. A file that exists but is malformed fails loud before any tool runs and the CLI exits 2: an unknown key inside `permissions` or `sandbox` at any level, a decision outside `allow`, `ask` and `deny`, more than 1000 rules or 1000 allowlist entries in one file, or a file that is a symlink, is not a regular file or is over the size cap. Keys at the root other than those two are ignored, so the file can grow.
+
+A hardened user file:
+
+```json
+{
+  "permissions": {
+    "defaultDecision": "deny",
+    "rules": [
+      { "tool": "Read", "decision": "allow" },
+      { "tool": "Glob", "decision": "allow" },
+      { "tool": "Grep", "decision": "allow" },
+      { "tool": "Bash", "match": "git *", "decision": "allow" }
+    ]
+  },
+  "sandbox": {
+    "commands": { "allow": ["git"] }
+  }
+}
+```
+
+A project file, the one `init` scaffolds:
+
+```json
+{
+  "permissions": {
+    "rules": [
+      { "tool": "WebFetch", "decision": "deny" },
+      { "tool": "WebSearch", "decision": "deny" }
+    ]
+  }
+}
+```
+
+**Permissions.** A rule is `{ "tool", "match"?, "decision" }`. `tool` is an exact name or a trailing-`*` glob (`mcp__*`, `*`). `match` is a prefix-glob over the command for Bash, the file path for Read, Write and Edit, and the JSON of the arguments for anything else, so `"git *"` allows `git status` and not `gitk`. Within one file the more specific rule wins and ties fail closed (`deny` over `ask` over `allow`). Across the two files each picks its own winner and the more severe one stands, so a project file can tighten your policy through rules but never loosen it: a user deny survives a project allow of the same tool. Tools no rule names get `defaultDecision`, which defaults to `allow`; the hardened posture is `"defaultDecision": "deny"` in your user file plus explicit allows, as above. The one channel that widens is `defaultDecision` itself. It is a scalar and project overrides user, so a cloned repository can flip a hardened `deny` default back to `allow` for everything outside your explicit rules. That is residual R-8 in [docs/security-model.md](./docs/security-model.md), chosen deliberately in [ADR-0014](./docs/decisions/0014-declarative-permission-model.md), and the reason project files should omit `defaultDecision`, as both examples do.
+
+**`ask`.** No prompter is wired in v0.1 (an interactive mode is ADR-0014's own revisit-if), so `ask` fails closed and denies. A settings file that uses it anywhere gets one line on stderr at startup, `settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)`, and every denial it causes ends its reason with `'ask' with no prompter configured`. That reason is the model's denial message; the telemetry row and the memory summary keep the same reason, secret-redacted and length-bounded. It is never a silent deny.
+
+**Sandbox.** Two dimensions, each switched on by the presence of its key. `paths.allow` lists directories, checked with a boundary-safe prefix so `/allowed` covers `/allowed/x` and never `/allowed-extra`. `commands.allow` lists programs, matched on the first token of a Bash command as a bare name (`git`) or an exact path. A dimension whose key is absent allows everything, so the user file above gates commands and leaves paths to the permission rules; a present dimension with an empty list denies everything in it. Shell metacharacters deny outright. Shells and exec wrappers (`sh`, `bash`, `zsh`, `env`, `xargs`, `sudo`, `timeout` and their kin) are denied even when listed, with a startup warning, because allowing one makes the first-token check meaningless; a command entry containing a glob, quote, equals or NUL character is rejected when the file loads. The two files merge by intersection: where only one defines a dimension it applies alone, and where both do an entry must appear in both. Details in [ADR-0015](./docs/decisions/0015-sandbox-pre-tool-gate.md), and the hostile-file envelope in [ADR-0034](./docs/decisions/0034-settings-hostile-input-at-every-level.md).
+
+Module summaries are in [docs/architecture.md](./docs/architecture.md); a second worked policy with its rationale is [examples/repo-qa/README.md](./examples/repo-qa/README.md). The two examples above are loaded through the real composition by `src/readme-settings.test.ts`, which also pins the quoted strings to the code that emits them, so this section cannot drift from the behaviour it describes without a red test.
+
+---
+
 ## How to read this repo (for evaluators)
 
 If you are evaluating this repo as a portfolio piece or code sample, the recommended reading order is:
@@ -120,7 +166,7 @@ As of 2026-08-08:
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0034 |
-| Tests | 1496 at the 2026-09-04 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 1507 at the 2026-09-04 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
