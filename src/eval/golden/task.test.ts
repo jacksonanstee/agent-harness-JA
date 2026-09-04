@@ -223,6 +223,14 @@ describe('maxTurns schema bound (issue #95)', () => {
     expect(taskSchema.properties.maxTurns.maximum).toBe(100);
   });
 
+  // The default is applied AFTER validation (task.ts), so the schema bound
+  // never sees it; this is the only thing keeping a defaulted task inside
+  // the bound the ADR describes (architecture lens on 944b0d4).
+  it('keeps DEFAULT_MAX_TURNS inside the schema bound, since the default bypasses validation', () => {
+    expect(DEFAULT_MAX_TURNS).toBeGreaterThanOrEqual(taskSchema.properties.maxTurns.minimum);
+    expect(DEFAULT_MAX_TURNS).toBeLessThanOrEqual(taskSchema.properties.maxTurns.maximum);
+  });
+
   it('rejects maxTurns above the maximum as a task-parse failure naming the field', () => {
     const result = parseTaskFile(taskWithMaxTurns(101));
     expect(result.ok).toBe(false);
