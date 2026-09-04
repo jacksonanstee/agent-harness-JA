@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { composeSecurity } from './cli/shared.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
@@ -13,6 +13,8 @@ import {
   PermissionDenied,
   permissionHook,
 } from './security/index.js';
+import { MAX_RULES } from './security/permissions/settings.js';
+import { MAX_ALLOW_ENTRIES } from './security/sandbox/index.js';
 
 // README's `## Settings` section is operator-facing prose about the security
 // settings files. Prose has no tests of its own, so this file loads the
@@ -37,8 +39,14 @@ function fencedJson(section: string): string[] {
 }
 
 /** Writes `doc` as `<dir>/.harness/settings.json` in a fresh temp dir and returns the dir. */
+const created: string[] = [];
+afterAll(() => {
+  for (const dir of created) rmSync(dir, { recursive: true, force: true });
+});
+
 function layerDir(label: string, doc: string | undefined): string {
   const dir = mkdtempSync(join(tmpdir(), `readme-settings-${label}-`));
+  created.push(dir);
   if (doc !== undefined) {
     mkdirSync(join(dir, '.harness'));
     writeFileSync(join(dir, '.harness', 'settings.json'), doc);
@@ -101,6 +109,27 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(evaluate('Bash', { command: 'git status' }).decision).toBe('allow');
     expect(evaluate('Bash', { command: 'gitk' }).decision).toBe('deny');
     expect(evaluate('Bash', { command: 'rm -rf /' }).decision).toBe('deny');
+    expect(evaluate('Glob', { pattern: '*.ts', path: '/repo' }).decision).toBe('allow');
+    expect(evaluate('Grep', { pattern: 'TODO', path: '/repo' }).decision).toBe('allow');
+  });
+
+  it('`match` on a path-taking tool targets its path, not the JSON of its arguments (code lens M-1)', () => {
+    const { section } = loaded();
+    const user = JSON.stringify({
+      permissions: {
+        defaultDecision: 'deny',
+        rules: [{ tool: 'Glob', match: '/repo/*', decision: 'allow' }],
+      },
+    });
+    const evaluate = createPermissionEvaluator(compose(user, undefined).permissions).evaluate;
+    expect(evaluate('Glob', { pattern: '*.ts', path: '/repo/src' }).decision).toBe('allow');
+    expect(evaluate('Glob', { pattern: '*.ts', path: '/etc' }).decision).toBe('deny');
+    expect(section).toContain('a Glob rule matches on its `path`');
+  });
+
+  it('the two caps the section states are the parsers\' own constants', () => {
+    const { section } = loaded();
+    expect(section).toContain(`more than ${MAX_RULES} rules or ${MAX_ALLOW_ENTRIES} allowlist entries`);
   });
 
   it('a tool no rule names gets the user default deny, because the project example omits defaultDecision', () => {
@@ -121,6 +150,8 @@ describe('README `## Settings`: the examples load through the real composition',
         defaultDecision: 'allow',
       },
     });
+    const before = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
+    expect(before('Edit', { file_path: '/repo/x.ts' }).decision).toBe('deny');
     const evaluate = createPermissionEvaluator(compose(userDoc, widened).permissions).evaluate;
     expect(evaluate('Edit', { file_path: '/repo/x.ts' }).decision).toBe('allow');
     expect(section).toContain('project overrides user');
@@ -151,6 +182,16 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(sandbox.allowPath('/etc/passwd')).toBe(true);
   });
 
+  it('the paths dimension, when on, is the boundary-safe prefix the section shows', () => {
+    const { section } = loaded();
+    const user = JSON.stringify({ sandbox: { paths: { allow: ['/allowed'] } } });
+    const sandbox = createSandbox(compose(user, undefined).sandbox);
+    expect(sandbox.pathsEnabled).toBe(true);
+    expect(sandbox.allowPath('/allowed/x')).toBe(true);
+    expect(sandbox.allowPath('/allowed-extra')).toBe(false);
+    expect(section).toContain('`/allowed` covers `/allowed/x` and never `/allowed-extra`');
+  });
+
   it('quotes the ask-without-prompter warning verbatim, and the denial suffix the hook emits', async () => {
     const { section } = loaded();
     const asking = JSON.stringify({ permissions: { rules: [{ tool: 'Bash', decision: 'ask' }] } });
@@ -170,7 +211,7 @@ describe('README `## Settings`: the examples load through the real composition',
     }
     expect(thrown).toBeInstanceOf(PermissionDenied);
     const suffix = "'ask' with no prompter configured";
-    expect((thrown as Error).message).toContain(suffix);
+    expect((thrown as Error).message.endsWith(suffix)).toBe(true);
     expect(section).toContain(suffix);
   });
 });
