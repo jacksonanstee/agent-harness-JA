@@ -94,12 +94,14 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(compose(userDoc, projectDoc).warnings).toEqual([]);
   });
 
-  it('a project deny rule tightens: WebFetch is denied by the project layer', () => {
+  it('a project deny rule tightens: WebFetch is denied by the project layer, with or without a user file', () => {
     const { userDoc, projectDoc } = loaded();
-    const evaluate = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
-    const result = evaluate('WebFetch', { url: 'https://example.invalid' });
+    const alone = createPermissionEvaluator(compose(undefined, projectDoc).permissions).evaluate;
+    const result = alone('WebFetch', { url: 'https://example.invalid' });
     expect(result.decision).toBe('deny');
     expect(result.layer).toBe('project');
+    const merged = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
+    expect(merged('WebFetch', { url: 'https://example.invalid' }).decision).toBe('deny');
   });
 
   it('a user allow rule allows, and a `match` prefix-glob is a prefix (space included)', () => {
@@ -132,29 +134,45 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(section).toContain(`more than ${MAX_RULES} rules or ${MAX_ALLOW_ENTRIES} allowlist entries`);
   });
 
-  it('a tool no rule names gets the user default deny, because the project example omits defaultDecision', () => {
+  it('a tool the allows do not name is denied by the user wildcard deny RULE, which sticky deny protects', () => {
     const { userDoc, projectDoc } = loaded();
     const evaluate = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
     const result = evaluate('Edit', { file_path: '/repo/x.ts' });
     expect(result.decision).toBe('deny');
-    expect(result.layer).toBeNull();
-    expect(result.reason).toBe('permission: default deny (no matching rule)');
+    expect(result.layer).toBe('user');
   });
 
-  it('R-8, as the section states it: a project defaultDecision overrides the user default', () => {
-    const { section, userDoc, projectDoc } = loaded();
-    const widened = JSON.stringify({
-      ...(JSON.parse(projectDoc) as { permissions: object }),
-      permissions: {
-        ...(JSON.parse(projectDoc) as { permissions: object }).permissions,
-        defaultDecision: 'allow',
-      },
+  it('a deny DEFAULT is not sticky: a project allow rule, or a project defaultDecision (R-8), beats it', () => {
+    const { section } = loaded();
+    const denyDefault = JSON.stringify({
+      permissions: { defaultDecision: 'deny', rules: [{ tool: 'Read', decision: 'allow' }] },
     });
-    const before = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
-    expect(before('Edit', { file_path: '/repo/x.ts' }).decision).toBe('deny');
-    const evaluate = createPermissionEvaluator(compose(userDoc, widened).permissions).evaluate;
-    expect(evaluate('Edit', { file_path: '/repo/x.ts' }).decision).toBe('allow');
+    const baseline = createPermissionEvaluator(compose(denyDefault, undefined).permissions).evaluate;
+    expect(baseline('Write', { file_path: '/repo/x' }).decision).toBe('deny');
+    const projectAllowRule = JSON.stringify({ permissions: { rules: [{ tool: '*', decision: 'allow' }] } });
+    const projectDefault = JSON.stringify({ permissions: { defaultDecision: 'allow' } });
+    for (const project of [projectAllowRule, projectDefault]) {
+      const evaluate = createPermissionEvaluator(compose(denyDefault, project).permissions).evaluate;
+      expect(evaluate('Write', { file_path: '/repo/x' }).decision).toBe('allow');
+    }
     expect(section).toContain('project overrides user');
+    expect(section).toContain('is not sticky');
+  });
+
+  it('the hardened example uses a wildcard deny RULE, so a hostile project file cannot re-enable a tool', () => {
+    const { userDoc } = loaded();
+    const attacks = [
+      JSON.stringify({ permissions: { rules: [{ tool: '*', decision: 'allow' }] } }),
+      JSON.stringify({ permissions: { rules: [{ tool: 'Write', decision: 'allow' }] } }),
+      JSON.stringify({ permissions: { defaultDecision: 'allow' } }),
+    ];
+    for (const project of attacks) {
+      const evaluate = createPermissionEvaluator(compose(userDoc, project).permissions).evaluate;
+      const write = evaluate('Write', { file_path: '/repo/x' });
+      expect(write.decision, project).toBe('deny');
+      expect(write.layer, project).toBe('user');
+      expect(evaluate('Read', { file_path: '/repo/x' }).decision, project).toBe('allow');
+    }
   });
 
   it('sticky deny, as the section states it: a user deny survives a project allow of the same tool', () => {
@@ -171,15 +189,18 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(section).toContain('never loosen');
   });
 
-  it('the sandbox example turns on the commands dimension only; paths stays off and allows everything', () => {
-    const { userDoc, projectDoc } = loaded();
+  it('the sandbox example turns on both dimensions: commands to git, paths to the working directory', () => {
+    const { section, userDoc, projectDoc } = loaded();
     const sandbox = createSandbox(compose(userDoc, projectDoc).sandbox);
     expect(sandbox.commandsEnabled).toBe(true);
     expect(sandbox.allowCommand('git status')).toBe(true);
     expect(sandbox.allowCommand('rm -rf /')).toBe(false);
     expect(sandbox.allowCommand('bash -c ls')).toBe(false);
-    expect(sandbox.pathsEnabled).toBe(false);
-    expect(sandbox.allowPath('/etc/passwd')).toBe(true);
+    expect(sandbox.pathsEnabled).toBe(true);
+    expect(sandbox.allowPath(resolve(process.cwd(), 'src'))).toBe(true);
+    expect(sandbox.allowPath('/etc/passwd')).toBe(false);
+    // The residual the section must state: an allowlisted program is trusted as a whole.
+    expect(section).toContain('which program starts, not what it does');
   });
 
   it('the paths dimension, when on, is the boundary-safe prefix the section shows', () => {

@@ -21,7 +21,7 @@ Among one layer's matching rules, specificity wins first, severity breaks ties. 
 
 ### 3. `defaultDecision` knob, default `'allow'`
 
-Tools no rule matches get `defaultDecision` (default `'allow'`). A conservative-by-default `'ask'` would deny every tool for every existing user the moment this module landed, because no prompter is wired (see §4) — a security default that breaks hello-world gets turned off, not configured. The hardened posture is one line of settings: `"defaultDecision": "deny"`.
+Tools no rule matches get `defaultDecision` (default `'allow'`). A conservative-by-default `'ask'` would deny every tool for every existing user the moment this module landed, because no prompter is wired (see §4) — a security default that breaks hello-world gets turned off, not configured. The hardened posture is one line of settings: `"defaultDecision": "deny"`. *Corrected 2026-09-04 (issue #100): that line is not a posture a hostile project file respects. `defaultDecision` is consulted only when neither layer has a matching rule, so a project allow rule such as `{ "tool": "*", "decision": "allow" }` produces a layer winner and the user's deny default is never reached; sticky deny (§5) protects a user deny RULE. The posture that survives a cloned repository is `{ "tool": "*", "decision": "deny" }` in the user file plus explicit allows, shown in README's Settings section and pinned by `src/readme-settings.test.ts`. Found by the security lens on the #100 branch, by execution.*
 
 ### 4. `'ask'` fails closed without a prompter
 
