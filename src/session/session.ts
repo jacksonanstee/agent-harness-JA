@@ -146,11 +146,23 @@ function defangFenceOpener(label: string): string {
   );
 }
 
-const DEFAULT_DESCRIPTOR: TaskDescriptor = {
+/**
+ * The descriptor a session resolves when its caller supplies none. Public API
+ * (issue #88): the CLI's `run` flag defaults derive from here rather than
+ * hand-copying the values, so the flagless route cannot drift. Frozen AND
+ * typed Readonly (code lens on 472b1eb): the parse-time flag defaults and
+ * this fallback share the one object, so an unprotected in-process mutation
+ * would silently re-route every later flagless run, proven by execution. The
+ * type stops a TS consumer at compile time; the freeze stops a JS one at
+ * runtime. The router's exported arrays carry only the type-level guard;
+ * freezing them for parity is issue #123, deliberately not folded into
+ * this diff.
+ */
+export const DEFAULT_DESCRIPTOR: Readonly<TaskDescriptor> = Object.freeze({
   shape: 'build',
   sensitivity: 'low',
   expected_tokens: 4000,
-};
+});
 
 /** Session-summary entries decay; telemetry (Week 2) owns durable metrics. */
 const SUMMARY_TTL_MS = 30 * 24 * 60 * 60 * 1000;

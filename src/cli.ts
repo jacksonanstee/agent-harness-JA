@@ -23,8 +23,9 @@ import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
-import { route } from './router/index.js';
-import { createSession } from './session/index.js';
+import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
+import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
+import { createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
 import type { QueryFn, SessionRefusal } from './session/index.js';
 import {
   createPermissionEvaluator,
@@ -66,6 +67,8 @@ export interface RunArgs {
   skillsDir: string;
   dbPath: string;
   maxTurns: number;
+  /** DEFAULT_DESCRIPTOR plus any --shape/--sensitivity/--expected-tokens overrides (issue #88). */
+  descriptor: TaskDescriptor;
 }
 
 export interface TelemetryExportArgs {
@@ -172,11 +175,23 @@ export function parseRunArgs(argv: string[]): ParseResult {
   let skillsDir = './skills';
   let dbPath = DEFAULT_DB_PATH;
   let maxTurns = 10;
+  // Descriptor defaults are the session's own fallback values, imported
+  // rather than hand-copied, so the flagless route cannot drift (issue #88).
+  let shape = DEFAULT_DESCRIPTOR.shape;
+  let sensitivity = DEFAULT_DESCRIPTOR.sensitivity;
+  let expectedTokens = DEFAULT_DESCRIPTOR.expected_tokens;
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === undefined) break;
-    if (arg === '--skills-dir' || arg === '--db' || arg === '--max-turns') {
+    if (
+      arg === '--skills-dir' ||
+      arg === '--db' ||
+      arg === '--max-turns' ||
+      arg === '--shape' ||
+      arg === '--sensitivity' ||
+      arg === '--expected-tokens'
+    ) {
       const value = rest[i + 1];
       if (value === undefined) {
         return { ok: false, error: `Missing value for ${arg}. ${USAGE}` };
@@ -184,11 +199,39 @@ export function parseRunArgs(argv: string[]): ParseResult {
       if (arg === '--skills-dir') skillsDir = value;
       if (arg === '--db') dbPath = value;
       if (arg === '--max-turns') {
+        // isSafeInteger, not isInteger: above 2^53 parseInt silently rewrites
+        // the digits (code lens on 472b1eb), and a bound the operator never
+        // typed is worse than a rejection.
         const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-        if (!Number.isInteger(parsed) || parsed < 1) {
+        if (!Number.isSafeInteger(parsed) || parsed < 1) {
           return { ok: false, error: `--max-turns must be a positive integer. ${USAGE}` };
         }
         maxTurns = parsed;
+      }
+      if (arg === '--shape') {
+        if (!(TASK_SHAPES as readonly string[]).includes(value)) {
+          return { ok: false, error: `--shape must be one of ${TASK_SHAPES.join('|')}. ${USAGE}` };
+        }
+        shape = value as TaskShape;
+      }
+      if (arg === '--sensitivity') {
+        if (!(TASK_SENSITIVITIES as readonly string[]).includes(value)) {
+          return {
+            ok: false,
+            error: `--sensitivity must be one of ${TASK_SENSITIVITIES.join('|')}. ${USAGE}`,
+          };
+        }
+        sensitivity = value as TaskSensitivity;
+      }
+      if (arg === '--expected-tokens') {
+        // 0 is valid: route() accepts any non-negative finite number and the
+        // golden-task schema says minimum 0. This bound matches the layer the
+        // value feeds, deliberately unlike --max-turns's >= 1.
+        const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
+        if (!Number.isSafeInteger(parsed) || parsed < 0) {
+          return { ok: false, error: `--expected-tokens must be a non-negative integer. ${USAGE}` };
+        }
+        expectedTokens = parsed;
       }
       i += 1;
     } else if (arg.startsWith('--')) {
@@ -204,7 +247,17 @@ export function parseRunArgs(argv: string[]): ParseResult {
     return { ok: false, error: `A non-empty prompt is required. ${USAGE}` };
   }
 
-  return { ok: true, value: { command: 'run', prompt, skillsDir, dbPath, maxTurns } };
+  return {
+    ok: true,
+    value: {
+      command: 'run',
+      prompt,
+      skillsDir,
+      dbPath,
+      maxTurns,
+      descriptor: { shape, sensitivity, expected_tokens: expectedTokens },
+    },
+  };
 }
 
 function runTelemetryExport(args: TelemetryExportArgs): number {
@@ -394,7 +447,7 @@ export async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const { prompt, skillsDir, dbPath, maxTurns } = parsed.value;
+  const { prompt, skillsDir, dbPath, maxTurns, descriptor } = parsed.value;
 
   // A malicious clone can commit its skills directory as a symlink whose
   // target escapes the project; load() realpaths the root and scans the
@@ -490,6 +543,7 @@ export async function main(argv: string[]): Promise<number> {
     {
       skillsDir,
       maxTurns,
+      descriptor,
       generateId: () => harnessSessionId,
       turnId,
       onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),

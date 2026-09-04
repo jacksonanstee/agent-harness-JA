@@ -91,3 +91,31 @@ One rationale in the table above is worth reading with the amendment in hand. Ro
 What this ADR still owns is unchanged: the `TaskDescriptor` shape, the `ModelChoice` shape, `rule_id` as the machine-parseable counterpart to `reason`, first-match-wins ordering, the 20k/50k thresholds and their unseated-defaults caveat, and the custom-table footgun. ADR-0024 supersedes only the model names.
 
 **Process note.** The six-week gap between PR #10 changing the code and this amendment recording it is the failure this amendment exists to close. ADR-0024 classifies future refreshes as mechanical (Class A, no ADR, but update the pinned literals) or semantic (Class B, ADR required), so the next model release resolves to a known process instead of an open question.
+
+## Amendment (2026-09-02, issue #88): the CLI's `run` command now sets the descriptor
+
+`run` gained `--shape`, `--sensitivity` and `--expected-tokens`, validated against the same
+`TASK_SHAPES` / `TASK_SENSITIVITIES` arrays `route()` enforces, and rendered into the usage text from
+those arrays, so the validator and the usage line draw their notion of what is valid from one
+source and cannot drift apart the way two hand-copied lists would (an in-process mutation of the
+shared array remains the residual, filed as issue #123). Before this,
+every `run` resolved the session's fixed fallback descriptor and the default table sent it to
+`claude-sonnet-5` via `shape-build-small`; the router was exercised per task only by the eval path
+(ADR-0017) and by scaffolded projects' own code. The gap was recorded in the Week 6 devlog and filed
+as issue #88 from the 2026-08-25 external review.
+
+Absent flags fall back to the session's `DEFAULT_DESCRIPTOR`
+(`{shape: 'build', sensitivity: 'low', expected_tokens: 4000}`), which this change exports as public
+API: the CLI derives its flag defaults from the constant rather than hand-copying the values, and
+this ADR already classes the defaults as stable surface rather than internals. Existing invocations
+therefore route exactly as before.
+
+`--expected-tokens` accepts 0, because `route()` accepts any non-negative finite number and the
+golden-task schema's minimum is 0; the bound matches the layer the value feeds, deliberately unlike
+`--max-turns`, whose floor of 1 belongs to the turn loop.
+
+`hint` is deliberately not exposed as a flag: the default table ignores it by design (see above), and
+a custom-table consumer constructs descriptors programmatically rather than through the CLI. Nothing
+else here moves: the shapes, sensitivities, the 20k/50k thresholds, first-match-wins ordering, and
+the custom-table footgun all stand, and reaching `claude-opus-5` from the CLI via
+`--sensitivity high` is this table's existing policy becoming reachable, not new policy.

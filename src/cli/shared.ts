@@ -16,6 +16,7 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
+import { TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -29,8 +30,13 @@ export const EVAL_OUT_DIR = join('.harness', 'eval');
 // and reading `parseTelemetryArgs`'s rejection message (src/cli.ts), which
 // renders the same array — so both surfaces now come from one source and
 // cannot disagree about what is valid.
+// The run line's --shape/--sensitivity lists derive from TASK_SHAPES /
+// TASK_SENSITIVITIES the same way (issue #88): the router's validator and
+// the usage text share one source for what is valid, so they cannot drift
+// apart the way two hand-copied lists would (the in-process-mutation
+// residual is issue #123).
 export const USAGE =
-  'Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>]\n' +
+  `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>]\n` +
   '       agent-harness-ja eval [taskDir] [--challenge]\n' +
   '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
