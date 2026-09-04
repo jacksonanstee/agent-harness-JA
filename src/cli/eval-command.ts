@@ -34,6 +34,7 @@ import {
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
+  WARNING_PREFIX,
   writeScorecard,
 } from './shared.js';
 import type { SecurityComposition } from './shared.js';
@@ -157,7 +158,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
     throw error;
   }
   for (const warning of security.warnings) {
-    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
+    process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
   }
 
   // Pre-flight, before any spend: the write path must be trustworthy. A

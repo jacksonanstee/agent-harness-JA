@@ -24,6 +24,13 @@ import type { TelemetryEventInput } from '../telemetry/index.js';
  *  scorecard producers writing through the same `writeScorecard` helper). */
 export const EVAL_OUT_DIR = join('.harness', 'eval');
 
+/**
+ * Prefix of every startup warning line `run` and `eval` write to stderr.
+ * README's Settings section quotes it and src/readme-settings.test.ts pins
+ * the quote to this constant, so both loops must write it (issue #100).
+ */
+export const WARNING_PREFIX = 'warning: ';
+
 // The `--type` values are DERIVED from TELEMETRY_EVENT_TYPES, not hand-copied:
 // a fifth event type appears in the usage text without anyone remembering to
 // come here. Before this, `--type <t>` was discoverable only by guessing wrong

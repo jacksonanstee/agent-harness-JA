@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { composeSecurity } from './cli/shared.js';
+import { composeSecurity, WARNING_PREFIX } from './cli/shared.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
   createPermissionEvaluator,
@@ -61,7 +61,7 @@ function compose(userDoc: string | undefined, projectDoc: string | undefined) {
   });
 }
 
-/** Read lazily inside each test so a missing section is eleven red tests, not a collection failure. */
+/** Read lazily inside each test so a missing section is every test in this file red, not a collection failure. */
 function loaded(): { section: string; blocks: string[]; userDoc: string; projectDoc: string } {
   const section = settingsSection();
   const blocks = fencedJson(section);
@@ -234,5 +234,37 @@ describe('README `## Settings`: the examples load through the real composition',
     const suffix = "'ask' with no prompter configured";
     expect((thrown as Error).message.endsWith(suffix)).toBe(true);
     expect(section).toContain(suffix);
+  });
+  it('the `warning: ` prefix the section quotes is the constant both commands write to stderr', () => {
+    const { section } = loaded();
+    expect(section).toContain(`prefixed \`${WARNING_PREFIX}\``);
+  });
+
+  it('every metacharacter the section lists denies a command outright; `[`, `*`, `~` and trimmed ends do not', () => {
+    const { section, userDoc, projectDoc } = loaded();
+    const sandbox = createSandbox(compose(userDoc, projectDoc).sandbox);
+    const listed = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '!', '\n', '\r'];
+    for (const ch of listed) {
+      expect(sandbox.allowCommand(`git status ${ch} x`), JSON.stringify(ch)).toBe(false);
+    }
+    expect(sandbox.allowCommand('git add [abc]')).toBe(true);
+    expect(sandbox.allowCommand('git add *.ts')).toBe(true);
+    expect(sandbox.allowCommand('git add ~/notes')).toBe(true);
+    expect(sandbox.allowCommand('  git status\n')).toBe(true);
+    expect(section).toContain('a newline or a carriage return');
+    expect(section).toContain('after leading and trailing whitespace is trimmed');
+  });
+
+  it('a `match` pattern and its target are canonicalised on both sides (ADR-0014 §1)', () => {
+    const { section, userDoc, projectDoc } = loaded();
+    const user = JSON.stringify({
+      permissions: { rules: [{ tool: 'Read', match: '/etc/*', decision: 'deny' }] },
+    });
+    const denyEtc = createPermissionEvaluator(compose(user, undefined).permissions).evaluate;
+    expect(denyEtc('Read', { file_path: '/tmp/../etc/passwd' }).decision).toBe('deny');
+    expect(denyEtc('Read', { file_path: '/tmp/etc/passwd' }).decision).toBe('allow');
+    const example = createPermissionEvaluator(compose(userDoc, projectDoc).permissions).evaluate;
+    expect(example('Bash', { command: '  git   status' }).decision).toBe('allow');
+    expect(section).toContain('canonicalised on both sides');
   });
 });

@@ -11,6 +11,7 @@ import {
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
+  WARNING_PREFIX,
 } from './cli/shared.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
@@ -490,7 +491,7 @@ export async function main(argv: string[]): Promise<number> {
     throw error;
   }
   for (const warning of security.warnings) {
-    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
+    process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
   }
 
   const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };

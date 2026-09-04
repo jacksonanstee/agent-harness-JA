@@ -36,7 +36,10 @@ answers from:
   hello-harness.oracle.mjs.
 - The security policy in .harness/settings.json denies exactly two tools:
   WebFetch and WebSearch. It omits defaultDecision, so this project can
-  tighten a user-level policy but never loosen it.
+  tighten a user-level policy and cannot loosen a user deny rule. A user
+  deny default is not sticky (a project allow rule beats it), so a hardened
+  user file is a wildcard deny rule plus explicit allows (harness README,
+  Settings).
 - Before running eval on a project you did not create, read the oracle file
   (hello-harness.oracle.mjs) first: oracles are in-process code the eval CLI
   executes with no gate (security-model residual risk R-10).
@@ -117,7 +120,10 @@ committed security policy, and one golden eval task.
 
 \`.harness/settings.json\` denies the two network tools, WebFetch and
 WebSearch. It deliberately omits \`defaultDecision\`: a project policy can
-tighten your user-level policy but never loosen it.
+tighten your user-level policy and cannot loosen a user deny rule. A user
+deny default is not sticky (a project allow rule beats it), so harden your
+user file with a wildcard deny rule plus explicit allows, as the Settings
+section of the harness README shows.
 
 Watch a request get denied, attributed to the rule and layer that fired:
 
