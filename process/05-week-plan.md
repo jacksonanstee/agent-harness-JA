@@ -131,7 +131,7 @@ If a checkpoint fails:
 1. Stop. Do not start the next week's work.
 2. Write a devlog entry naming what slipped and why.
 3. Decide explicitly: extend the week, cut scope, or both.
-4. Update this file with the new dates and any cut requirements (mark them `DEFERRED-v1.x` in `01-requirements.md`).
+4. Update this file with the new dates and any cut requirements (mark them `Deferred to v1.x.` in the Verification column of `01-requirements.md`; *spelling aligned 2026-09-07 to the file's own marker, issue #101*).
 5. Tell future-me what changed in the devlog so the audit trail stays honest.
 
 The goal is not to hit every date. The goal is to ship v1.0 with the documentation, eval coverage, and security posture promised — even if it takes 5 or 6 weeks instead of 4.

@@ -28,7 +28,10 @@ interface Row {
   id: string;
   layer: string;
   priority: string;
+  /** The requirement sentence, with any trailing dated note removed. */
   requirement: string;
+  /** The trailing `*( ... )*` note, or null when the cell carries none. */
+  note: string | null;
   verification: string;
 }
 
@@ -41,6 +44,10 @@ const ID_RE = /^([HSEN])-[1-9]\d*$/;
 const HEADER = 'ID|Priority|Requirement|Verification';
 const SEPARATOR_RE = /^\|(?:\s*:?-+:?\s*\|)+$/;
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+// The file's in-row note idiom: `sentence. *(dated note)*`. Pins read the
+// sentence, not the note; the architecture lens showed three word-pins bound
+// to the note's wording when the whole cell was matched.
+const NOTE_RE = /^(.*?)\s*\*\((.*)\)\*$/s;
 
 /**
  * The last ID of each layer, hand-pinned on purpose: adding a requirement is a
@@ -90,10 +97,13 @@ function requirementTables(): Table[] {
       const raw = lines[j] ?? '';
       const parsed = cells(raw);
       if (parsed === null) throw new Error(`malformed requirement row at line ${j + 1}: ${raw}`);
-      const [id = '', priority = '', requirement = '', verification = ''] = parsed;
+      const [id = '', priority = '', cell = '', verification = ''] = parsed;
       const layer = ID_RE.exec(id)?.[1];
-      if (layer === undefined) throw new Error(`requirement row at line ${j + 1} has no valid ID: ${raw}`);
-      rows.push({ id, layer, priority, requirement, verification });
+      if (layer === undefined) throw new Error(`requirement row at line  has no valid ID: `);
+      const split = NOTE_RE.exec(cell);
+      const requirement = split?.[1] ?? cell;
+      const note = split?.[2] ?? null;
+      rows.push({ id, layer, priority, requirement, note, verification });
     }
     const layers = [...new Set(rows.map((row) => row.layer))];
     if (layers.length !== 1) {
@@ -158,6 +168,7 @@ describe('the roadmap rows from issue #101', () => {
     expect(h7.requirement).toMatch(/token/);
     expect(h7.requirement).toMatch(/wall-clock/);
     expect(h7.requirement).toMatch(/cancel/);
+    expect(h7.note).toMatch(/issue #101/);
     expect(h7.verification).toContain('Deferred to v1.x');
   });
 
@@ -166,6 +177,7 @@ describe('the roadmap rows from issue #101', () => {
     expect(h8.priority).toBe('COULD');
     expect(h8.requirement).toMatch(/retr(y|ies)/);
     expect(h8.requirement).toMatch(/timeout/);
+    expect(h8.note).toMatch(/issue #101/);
     expect(h8.verification).toContain('Deferred to v1.x');
   });
 });

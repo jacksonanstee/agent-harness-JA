@@ -267,11 +267,13 @@ as specified except for four points that surfaced during implementation:
   bounds count, not price.
 - The SDK grows an abort channel on `QueryFn` — implement per-task
   wall-clock timeout support then.
-  **Corrected 2026-09-07 (issue #101):** the premise was wrong at the only
-  SDK version the lockfile has ever resolved, 0.3.201, whose `query()`
-  options declare `abortController`; what carries no abort channel is the harness's own
-  `QueryFn` seam (`model`, `systemPrompt`, `maxTurns`, `hooks`). The trigger
-  is the harness choosing to carry it, now requirement H-7, not an SDK change.
+  **FIRED 2026-09-07 (issue #101), action deferred to H-7:** the condition
+  held from the first pin. The `query()` options of 0.3.201, the only SDK
+  version the lockfile has ever resolved, declare `abortController`; what
+  carries no abort channel is the harness's own `QueryFn` seam (`model`,
+  `systemPrompt`, `maxTurns`, `hooks`). The per-task wall-clock timeout this
+  bullet promised is requirement H-7, deferred to v1.x; it waits on the
+  harness widening its seam (ADR-0010 Revisit if), not on an SDK change.
 - Partial-scorecard-on-SIGINT semantics become worth building, in step with
   E-3 (there is no consumer for a partial scorecard until a baseline exists
   to compare it against).
