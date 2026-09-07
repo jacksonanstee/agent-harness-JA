@@ -3269,38 +3269,66 @@ describe('DEFAULT_DESCRIPTOR', () => {
 });
 
 describe('SDK API retries are invisible to the harness (requirement H-8, issue #101)', () => {
-  it('an api_retry system message is skipped: the run completes and nothing warns or records it', async () => {
-    // The pinned SDK retries a failed API request on its own and reports each
-    // attempt as `{ type: 'system', subtype: 'api_retry', attempt, max_retries,
-    // retry_delay_ms, error_status }` (SDKAPIRetryMessage). The session loop
-    // has no branch for it, so a run that was retried looks identical to one
-    // that was not: no warning, no telemetry row, nothing on the result. H-8
-    // records that as the gap; this test pins the gap so that closing it must
-    // change this file.
-    const retry = {
-      type: 'system',
-      subtype: 'api_retry',
-      attempt: 1,
-      max_retries: 10,
-      retry_delay_ms: 500,
-      error_status: 529,
-      session_id: 'sdk-123',
-    } as SdkMessage;
-    const fake = fakeQuery([INIT, retry, RESULT]);
+  // The SDK declares `{ type: 'system', subtype: 'api_retry', attempt,
+  // max_retries, retry_delay_ms, error_status, error, uuid, session_id }`
+  // (SDKAPIRetryMessage) for each API retry it performs on its own, and the
+  // session loop has no branch for it. H-8 records that as the gap. The pin is
+  // DIFFERENTIAL rather than a list of things that must be absent: the same
+  // run is observed on every channel the session can write (the returned
+  // result, onWarning, onText, the telemetry sink, the hook-event sink, the
+  // memory store) with and without the retry message in its stream, and the
+  // two observations must be equal. A future field, warning, row, hook or
+  // memory note that records the retry breaks the equality whatever it is
+  // called, which a substring or key-name check cannot promise.
+  const RETRY = {
+    type: 'system',
+    subtype: 'api_retry',
+    attempt: 1,
+    max_retries: 10,
+    retry_delay_ms: 500,
+    error_status: 529,
+    error: 'rate_limit',
+    uuid: '00000000-0000-4000-8000-000000000001',
+    session_id: 'sdk-123',
+  };
+
+  async function observe(messages: SdkMessage[]) {
     const telemetry = fakeTelemetry();
+    const hookRecords: unknown[] = [];
+    const hooks = createHookRuntime({ onEvent: (record) => hookRecords.push(record) });
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
     const warnings: string[] = [];
-    const session = createSession(makeDeps(fake, { telemetry }), {
+    const texts: string[] = [];
+    const session = createSession(makeDeps(fakeQuery(messages), { telemetry, hooks, memory }), {
       skillsDir: null,
+      now: () => 1000,
+      generateId: () => 'harness-1',
+      turnId: 'turn-1',
+      generateNonce: () => TEST_NONCE,
       onWarning: (w) => warnings.push(w),
+      onText: (t) => texts.push(t),
     });
-
     const result = await session.run('hi');
+    // The store stamps rows with the wall clock, which is not injectable;
+    // everything else on a row is compared.
+    const rows = memory
+      .read({})
+      .map((r) => Object.fromEntries(Object.entries(r).filter(([key]) => key !== 'createdAt' && key !== 'updatedAt')));
+    return { result, warnings, texts, telemetry: telemetry.events, hookRecords, rows };
+  }
 
-    expect(result.resultText).toBe('hello from claude');
-    expect(result.resultSubtype).toBe('success');
-    expect(warnings).toEqual([]);
-    expect(telemetry.events.map((event) => event.type)).toEqual(['turn-cost']);
-    expect(JSON.stringify(telemetry.events)).not.toContain('retry');
-    expect(JSON.stringify(result)).not.toContain('retry');
+  it('a run whose stream carries an api_retry message is indistinguishable, on every channel, from one that does not', async () => {
+    const clean = await observe([INIT, ASSISTANT, RESULT]);
+    const retried = await observe([INIT, RETRY, ASSISTANT, RESULT]);
+
+    // Positive controls: every compared channel is live, so the equality
+    // below is not an equality of empties.
+    expect(clean.result.resultText).toBe('hello from claude');
+    expect(clean.texts).toEqual(['hello from claude']);
+    expect(clean.telemetry.map((event) => event.type)).toEqual(['turn-cost']);
+    expect(clean.hookRecords.map((record) => (record as { event: string }).event)).toEqual(['session-start', 'stop']);
+    expect(clean.rows).toHaveLength(1);
+
+    expect(retried).toEqual(clean);
   });
 });

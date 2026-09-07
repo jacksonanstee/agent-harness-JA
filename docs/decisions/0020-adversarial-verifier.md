@@ -205,8 +205,8 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   completion and bill — which is why timed-out findings count as unpriced
   spend (§7).
   **Corrected 2026-09-07 (issue #101):** the SDK does declare one,
-  `abortController` on the `query()` options, in the only version ever pinned
-  (0.3.201); `AdversaryFn` and the harness `QueryFn` seam carry none, by
+  `abortController` on the `query()` options, at the only version the lockfile
+  has ever resolved (0.3.201); `AdversaryFn` and the harness `QueryFn` seam carry none, by
   omission rather than decision. The unpriced-spend consequence stands until
   the seam carries it; requirement H-7 is the record to cite.
 - **Unknown enum values are never widened at parse time** (binding condition
