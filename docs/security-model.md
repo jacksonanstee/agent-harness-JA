@@ -381,6 +381,7 @@ hygiene, not a security boundary: R-10 already accepts arbitrary in-process
 oracle code from the same pack.
 Judge cost — the economic DoS — is handled by keeping the judge off by
 default, haiku-class, single-call, no-retry (ADR-0016 §5).
+
 The primary session is bounded by turn count only (amended 2026-09-07, issue
 #101). `maxTurns` (`run` default 10, `--max-turns`) is the sole whole-run bound
 the harness passes to the SDK; the seam carries no wall-clock ceiling, no

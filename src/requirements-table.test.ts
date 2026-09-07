@@ -99,7 +99,7 @@ function requirementTables(): Table[] {
       if (parsed === null) throw new Error(`malformed requirement row at line ${j + 1}: ${raw}`);
       const [id = '', priority = '', cell = '', verification = ''] = parsed;
       const layer = ID_RE.exec(id)?.[1];
-      if (layer === undefined) throw new Error(`requirement row at line  has no valid ID: `);
+      if (layer === undefined) throw new Error(`requirement row at line ${j + 1} has no valid ID: ${raw}`);
       const split = NOTE_RE.exec(cell);
       const requirement = split?.[1] ?? cell;
       const note = split?.[2] ?? null;
