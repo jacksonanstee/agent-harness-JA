@@ -3319,7 +3319,9 @@ describe('SDK API retries are invisible to the harness (requirement H-8, issue #
 
   it('a run whose stream carries an api_retry message is indistinguishable, on every channel, from one that does not', async () => {
     const clean = await observe([INIT, ASSISTANT, RESULT]);
-    const retried = await observe([INIT, RETRY, ASSISTANT, RESULT]);
+    // Two retries, so a guard on "more than one" or "a second message" cannot
+    // hide behind a boundary fixture (security lens, issue #101).
+    const retried = await observe([INIT, RETRY, { ...RETRY, attempt: 2 }, ASSISTANT, RESULT]);
 
     // Positive controls: every compared channel is live, so the equality
     // below is not an equality of empties.

@@ -14,10 +14,12 @@ import type {
   PreToolUseHookSpecificOutput,
   SDKAPIRetryMessage,
   SDKMessage,
+  SDKResultMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   QueryOptions,
   SdkHookMatcher,
+  SdkResultMessage,
   SdkPostToolUseInput,
   SdkPreToolDenyOutput,
   SdkPreToolUseInput,
@@ -126,6 +128,11 @@ const _sdkBudgetNotAny: IsAny<Options['maxBudgetUsd']> = false;
 const _sdkMessageUnionAcceptsAnything: Assignable<string, SDKMessage> = true;
 const _retrySubtype: Assignable<SDKAPIRetryMessage['subtype'], 'api_retry'> = true;
 const _retryCountsAttempts: Assignable<SDKAPIRetryMessage['attempt'], number> = true;
+// The SDK result carries the timings a retry's delay would show (both result
+// variants declare them), and the harness view reads neither: H-8's "not
+// read" is pinned in both directions.
+const _sdkResultHasDurations: Assignable<'duration_ms' | 'duration_api_ms', keyof SDKResultMessage> = true;
+const _viewReadsNoDurations: Assignable<'duration_ms' | 'duration_api_ms', keyof SdkResultMessage> = false;
 
 // Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks}.
 const _seamExact: ExactKeys<QueryOptions, 'model' | 'systemPrompt' | 'maxTurns' | 'hooks'> = true;
@@ -153,6 +160,8 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _sdkMessageUnionAcceptsAnything,
       _retrySubtype,
       _retryCountsAttempts,
+      _sdkResultHasDurations,
+      _viewReadsNoDurations,
       _seamExact,
       _seamScalarsMatchSdk,
       _seamRejectsAbort,
