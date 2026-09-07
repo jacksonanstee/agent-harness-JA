@@ -128,9 +128,9 @@ const _sdkBudgetNotAny: IsAny<Options['maxBudgetUsd']> = false;
 const _sdkMessageUnionAcceptsAnything: Assignable<string, SDKMessage> = true;
 const _retrySubtype: Assignable<SDKAPIRetryMessage['subtype'], 'api_retry'> = true;
 const _retryCountsAttempts: Assignable<SDKAPIRetryMessage['attempt'], number> = true;
-// The SDK result carries the timings a retry's delay would show (both result
-// variants declare them), and the harness view reads neither: H-8's "not
-// read" is pinned in both directions.
+// The SDK result declares two duration fields (on both result variants), and
+// the harness view reads neither: H-8's "declared but not read" is pinned in
+// both directions.
 // One pin per key and per direction: a union of keys on the left of
 // `Assignable` holds only when EVERY member holds, so a single added or
 // dropped key would slip through a two-key pin (a mutation showed it).
