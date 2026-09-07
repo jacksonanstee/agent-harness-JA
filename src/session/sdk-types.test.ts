@@ -8,11 +8,15 @@ import { describe, it, expect } from 'vitest';
 import type {
   HookCallbackMatcher,
   HookJSONOutput,
+  Options,
   PostToolUseHookInput,
   PreToolUseHookInput,
   PreToolUseHookSpecificOutput,
+  SDKAPIRetryMessage,
+  SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  QueryOptions,
   SdkHookMatcher,
   SdkPostToolUseInput,
   SdkPreToolDenyOutput,
@@ -72,6 +76,66 @@ describe('SDK hook-input type parity', () => {
       _matcherNoExtra,
       _denyPayloadNoExtra,
       _rejectsOldField,
+    ]).toBeDefined();
+  });
+});
+
+// ---- Roadmap pins (issue #101, requirements H-7 and H-8) --------------------
+//
+// H-7 and H-8 in process/01-requirements.md record what the harness does NOT
+// do today: it passes the SDK no cancellation channel, no budget and no
+// timeout, and it neither configures nor records the SDK's own API retries.
+// Those are claims about code and about the pinned SDK, so they are pinned the
+// same way the hook views are, in two directions:
+//
+//   1. The SDK really declares what the rows say it declares. If a future SDK
+//      pin drops `abortController` or `maxBudgetUsd`, or stops reporting
+//      retries, the rows' rationale is stale and typecheck reddens here.
+//   2. The harness seam (`QueryOptions`) still carries exactly the four keys it
+//      carries today. The day H-7 lands, the seam grows a key, this reddens,
+//      and the row's "today" sentence is rewritten in the same change. A pin on
+//      an absence is unusual; it exists so a roadmap row cannot silently
+//      outlive the gap it records.
+
+// True only if T has exactly the keys K: none missing, none extra.
+type ExactKeys<T, K extends PropertyKey> = [Exclude<keyof T, K>] extends [never]
+  ? [Exclude<K, keyof T>] extends [never]
+    ? true
+    : false
+  : false;
+
+// SDK side (0.3.201): the channels exist and have the shapes the rows describe.
+const _sdkDeclaresAbort: Assignable<'abortController', keyof Options> = true;
+const _sdkAbortIsController: Assignable<NonNullable<Options['abortController']>, AbortController> = true;
+const _sdkDeclaresBudget: Assignable<'maxBudgetUsd', keyof Options> = true;
+const _sdkBudgetIsNumber: Assignable<NonNullable<Options['maxBudgetUsd']>, number> = true;
+// The SDK reports each API retry as a system message the stream can carry.
+const _sdkReportsRetries: Assignable<SDKAPIRetryMessage, SDKMessage> = true;
+const _retrySubtype: Assignable<SDKAPIRetryMessage['subtype'], 'api_retry'> = true;
+const _retryCountsAttempts: Assignable<SDKAPIRetryMessage['attempt'], number> = true;
+
+// Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks}.
+const _seamExact: ExactKeys<QueryOptions, 'model' | 'systemPrompt' | 'maxTurns' | 'hooks'> = true;
+// And a literal carrying the SDK's cancellation key does not type-check
+// against the seam (excess property), the same idiom as `_rejectsOldField`.
+const _seamRejectsAbort: QueryOptions = {
+  maxTurns: 1,
+  // @ts-expect-error abortController is not a key the harness seam carries (H-7 is deferred)
+  abortController: new AbortController(),
+};
+
+describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
+  it('hold at compile time: the SDK declares the channels, the harness seam still carries none', () => {
+    expect([
+      _sdkDeclaresAbort,
+      _sdkAbortIsController,
+      _sdkDeclaresBudget,
+      _sdkBudgetIsNumber,
+      _sdkReportsRetries,
+      _retrySubtype,
+      _retryCountsAttempts,
+      _seamExact,
+      _seamRejectsAbort,
     ]).toBeDefined();
   });
 });

@@ -3267,3 +3267,40 @@ describe('DEFAULT_DESCRIPTOR', () => {
     expect(DEFAULT_DESCRIPTOR.sensitivity).toBe('low');
   });
 });
+
+describe('SDK API retries are invisible to the harness (requirement H-8, issue #101)', () => {
+  it('an api_retry system message is skipped: the run completes and nothing warns or records it', async () => {
+    // The pinned SDK retries a failed API request on its own and reports each
+    // attempt as `{ type: 'system', subtype: 'api_retry', attempt, max_retries,
+    // retry_delay_ms, error_status }` (SDKAPIRetryMessage). The session loop
+    // has no branch for it, so a run that was retried looks identical to one
+    // that was not: no warning, no telemetry row, nothing on the result. H-8
+    // records that as the gap; this test pins the gap so that closing it must
+    // change this file.
+    const retry = {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 1,
+      max_retries: 10,
+      retry_delay_ms: 500,
+      error_status: 529,
+      session_id: 'sdk-123',
+    } as SdkMessage;
+    const fake = fakeQuery([INIT, retry, RESULT]);
+    const telemetry = fakeTelemetry();
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, { telemetry }), {
+      skillsDir: null,
+      onWarning: (w) => warnings.push(w),
+    });
+
+    const result = await session.run('hi');
+
+    expect(result.resultText).toBe('hello from claude');
+    expect(result.resultSubtype).toBe('success');
+    expect(warnings).toEqual([]);
+    expect(telemetry.events.map((event) => event.type)).toEqual(['turn-cost']);
+    expect(JSON.stringify(telemetry.events)).not.toContain('retry');
+    expect(JSON.stringify(result)).not.toContain('retry');
+  });
+});
