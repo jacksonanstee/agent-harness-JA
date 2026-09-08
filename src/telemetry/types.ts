@@ -72,7 +72,7 @@ export type ToolRewriteUnobservedReason =
   | 'no-user-message'
   | 'both-present'
   | 'unwalkable'
-  | 'stream-ended';
+  | 'neither-token';
 
 export interface ToolTracePayload {
   tool: string;

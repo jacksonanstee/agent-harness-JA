@@ -290,8 +290,10 @@ class RewriteSkip extends Error {}
  * #84, D1). String leaves go through `fn`; arrays and plain objects are rebuilt
  * with their element/key ORDER intact (keys are never rewritten — a key is
  * schema, and a changed key is a changed shape the SDK silently drops); numbers,
- * booleans and null pass through. A non-JSON value (a function, a cycle, a class
- * instance) or one exceeding `MAX_REWRITE_NODES`/`MAX_REWRITE_DEPTH` returns
+ * booleans and null pass through. A non-JSON value (a function, a class instance),
+ * a repeated object reference (a cycle OR a non-cyclic shared node, both caught by
+ * the visited set: unreachable from the SDK's JSON, which is a tree, and fail-safe
+ * either way), or a value exceeding `MAX_REWRITE_NODES`/`MAX_REWRITE_DEPTH` returns
  * `{ skipped: true }` with the INPUT unchanged, never a wrong-shaped rewrite.
  * Explicit stack, no recursion (G-7). Returns a NEW value (immutability).
  */
@@ -1206,7 +1208,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       findings: number,
       truncated: boolean,
       outcome: OutputRewriteOutcome,
-      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'stream-ended',
+      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'neither-token',
     ): void {
       outputRewrites.push({ tool, tool_use_id: toolUseId, findings, truncated, outcome });
       recordTelemetry({
@@ -1255,9 +1257,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Pass 2 (D1): the model-facing rewrite. Returns the rewritten value when a
     // rewrite is warranted (findings, a failed-closed leaf, or an oversized
     // leaf), else null. Records `skipped`/`unrewritten` outcomes immediately and
-    // enrols a returned rewrite in `pendingRewrites` for the verifier. The whole
-    // body is guarded by the caller so no throw after the rewrite is computed
-    // can lose it.
+    // enrols a returned rewrite in `pendingRewrites` for the verifier. Protection
+    // against losing a computed rewrite is by CONSTRUCTION, not a try/catch: this
+    // function does not throw (the redactor calls are wrapped and fail closed, the
+    // walk returns `skipped` rather than throwing), and the annotation and
+    // telemetry rows are recorded before it returns.
     function buildModelRewrite(
       tool: string,
       toolUseId: string | null,
@@ -1394,7 +1398,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       rendered: string | null,
     ): {
       outcome: OutputRewriteOutcome;
-      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'stream-ended';
+      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'neither-token';
     } {
       if (rendered === null) return { outcome: 'unobserved', reason: 'unwalkable' };
       const hasSpan = p.spanLines.some((s) => rendered.includes(s));
@@ -1402,13 +1406,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // A DELIVERED blackout stays failed-closed, never applied (A-1).
         if (hasSpan) return { outcome: 'leaked' };
         if (rendered.includes(REDACTION_FAILED)) return { outcome: 'failed-closed' };
-        return { outcome: 'unobserved', reason: 'stream-ended' };
+        return { outcome: 'unobserved', reason: 'neither-token' };
       }
       const hasMarker = p.markers.some((m) => rendered.includes(m));
       if (hasSpan && hasMarker) return { outcome: 'unobserved', reason: 'both-present' };
       if (hasSpan) return { outcome: 'leaked' };
       if (hasMarker) return { outcome: 'applied' };
-      return { outcome: 'unobserved', reason: 'stream-ended' };
+      return { outcome: 'unobserved', reason: 'neither-token' };
     }
 
     // D8: redacts a FAILED call's error text for the tool-trace row and warns

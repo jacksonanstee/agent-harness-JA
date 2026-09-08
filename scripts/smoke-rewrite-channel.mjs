@@ -127,12 +127,12 @@ const failures = [];
   }
 }
 
-// Drive 2: the same token in a command that EXITS NON-ZERO. Established by
-// execution 2026-09-08 (tasks/issue-84-evidence/design-review/postoolfailure-finding.md):
-// a non-zero shell exit fires the normal PostToolUse, NOT PostToolUseFailure, so
-// D1 rewrites its output like any success. Assert the secret was still APPLIED.
-// (PostToolUseFailure is the tool-EXECUTION-error path and is not exercised here;
-// its handler is covered by the fake-driven unit pins.)
+// Drive 2: a command that EXECUTES and fails (cat a missing file). Established by
+// execution 2026-09-08 (tasks/issue-84-evidence/design-review/postoolfailure-finding.md,
+// probe C): such a call fires PostToolUseFailure, which has NO rewrite channel, so
+// D8 scans/redacts/annotates but cannot rewrite. Assert the failure hook fired on
+// live traffic and produced ZERO rewrites. (A blocked compound `&&` or out-of-cwd
+// command never runs and fires only PreToolUse, so it is not used here.)
 {
   const sink = { inputs: [], transcriptPath: undefined };
   const session = makeSession(sink);

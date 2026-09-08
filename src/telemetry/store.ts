@@ -101,7 +101,7 @@ const TOOL_REWRITE_REASON_SET: ReadonlySet<string> = new Set([
   'no-user-message',
   'both-present',
   'unwalkable',
-  'stream-ended',
+  'neither-token',
 ]);
 
 /**

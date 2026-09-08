@@ -175,10 +175,12 @@ describe('genuine SDK hook fixture: rewrite channel (issue #84)', () => {
     expect(rewritten.stdout).not.toContain(FAKE_AWS_KEY);
   });
 
-  // TODO(orchestrator): re-run scripts/capture-sdk-hook-fixture.mjs with the
-  // failing drive so the fixture gains a genuine `postToolUseFailure` event
-  // (out-of-band, needs ANTHROPIC_API_KEY). Until then this leg is skipped, and
-  // D8's failure-hook shape rests on the SDK type plus the spike observation.
+  // A genuine `postToolUseFailure` event was captured out-of-band 2026-09-08
+  // (scripts/capture-sdk-hook-fixture.mjs driving `cat <cwd>/missing`, which
+  // executes and fails), so this leg RUNS and pins D8's failure-hook shape
+  // against real traffic. `skipIf` remains only as a guard for a future
+  // re-capture that could not elicit the event; re-run the capture after an SDK
+  // bump the same way.
   const failureFixture = (fixture as unknown as { postToolUseFailure?: { hook_event_name?: string; error?: string } }).postToolUseFailure;
   it.skipIf(!failureFixture)('replays a genuine PostToolUseFailure event (skips until captured)', () => {
     expect(failureFixture?.hook_event_name).toBe('PostToolUseFailure');
