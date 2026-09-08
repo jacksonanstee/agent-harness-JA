@@ -3652,6 +3652,24 @@ describe('issue #84 D2/G-6: notice is bounded and charset-restricted', () => {
     // At most NOTICE_RULE_IDS_MAX ids interpolated.
     expect(NOTICE_RULE_IDS_MAX).toBeGreaterThan(0);
   });
+
+  it('truncates a 64-char valid rule id below the base64 floor so the notice still scans pass (S-3)', async () => {
+    const longId = 'a'.repeat(64);
+    const scanInjection = (text: string): ScanResult =>
+      text.includes('a'.repeat(48)) && !text.includes('flagme')
+        ? { verdict: 'block', rule_ids: [longId], excerpts: [], suspicious: false }
+        : { verdict: 'block', rule_ids: [longId], excerpts: [], suspicious: false };
+    const fake = richQuery([INIT, RESULT], [{ tool: 'Bash', input: {}, output: 'flagme' }]);
+    const session = createSession(makeDeps({ query: fake.query, captured: [] }, { scanInjection }), {
+      skillsDir: '/nowhere',
+    });
+    await session.run('hi');
+    const ctx = hookSpecific(fake.outputs[0]?.out)?.additionalContext ?? '';
+    // The 64-char id is cut to NOTICE_RULE_ID_MAX (<60), so no 60+ run survives,
+    // and the harness's own notice does not trip the base64-blob rule.
+    expect(ctx).not.toContain('a'.repeat(60));
+    expect(scan(ctx).verdict).toBe('pass');
+  });
 });
 
 describe('issue #84 D4: in-band three-state verifier', () => {
@@ -3666,6 +3684,19 @@ describe('issue #84 D4: in-band three-state verifier', () => {
     });
     const result = await session.run('hi');
     expect(result.outputRewrites.find((r) => r.tool_use_id === 'toolu_1')?.outcome).toBe('applied');
+  });
+
+  it('contains a throwing hostile-proxy tool_response as skipped, never a lost rewrite (S-1)', async () => {
+    const hostile = new Proxy({}, { ownKeys() { throw new Error('trap'); }, getOwnPropertyDescriptor() { throw new Error('trap'); }, get() { throw new Error('trap'); } });
+    const warnings: string[] = [];
+    const fake = richQuery([INIT, RESULT], [{ tool: 'Bash', input: {}, output: hostile }]);
+    const session = createSession(makeDeps({ query: fake.query, captured: [] }, { redactSecrets: makeLeafRedactor() }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('hi');
+    expect(result.outputRewrites.some((r) => r.outcome === 'skipped')).toBe(true);
+    expect(warnings.some((w) => w.toLowerCase().includes('skipped'))).toBe(true);
   });
 
   it('reports leaked with a warning and a tool-rewrite row when the raw secret line survives (pin 3)', async () => {
@@ -3697,6 +3728,27 @@ describe('issue #84 D4: in-band three-state verifier', () => {
     });
     const result = await session.run('hi');
     expect(result.outputRewrites.find((r) => r.tool_use_id === 'toolu_1')?.outcome).toBe('applied');
+  });
+
+  it('classifies a leaked secret as leaked even when the model copy JSON-escapes it (S-4)', async () => {
+    const SPECIAL = 'SECRET"TOKEN12345';
+    const redactSecrets = (text: string) => {
+      const idx = text.indexOf(SPECIAL);
+      if (idx < 0) return { redacted: text, findings: [] };
+      return { redacted: text.split(SPECIAL).join('[REDACTED:x]'), findings: [{ rule_id: 'x', start: idx, end: idx + SPECIAL.length, length: SPECIAL.length }] };
+    };
+    // The model's copy is a STRUCTURED object, so stringifyForScan JSON-escapes
+    // the surviving raw secret's embedded quote; the raw span would not match.
+    const fake = richQuery(
+      [INIT, RESULT],
+      [{ tool: 'Read', input: {}, output: { stdout: `x ${SPECIAL}` } }],
+      [{ toolUseId: 'toolu_1', content: { stdout: `x ${SPECIAL}` } }],
+    );
+    const session = createSession(makeDeps({ query: fake.query, captured: [] }, { redactSecrets }), {
+      skillsDir: '/nowhere',
+    });
+    const result = await session.run('hi');
+    expect(result.outputRewrites.find((r) => r.tool_use_id === 'toolu_1')?.outcome).toBe('leaked');
   });
 
   it('reports unobserved with a stream-end row when no user message arrives (pin 3)', async () => {

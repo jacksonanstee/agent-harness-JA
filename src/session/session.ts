@@ -254,6 +254,10 @@ export const NOTICE_RULE_IDS_MAX = 5;
 
 /** Rule ids kept verbatim in the notice; anything else becomes `unknown-rule`. */
 const NOTICE_RULE_ID_RE = /^[a-z0-9-]{1,64}$/;
+// Each rule id is capped BELOW the base64-blob rule's 60-char floor before it
+// enters the model-facing notice, so the harness's own note can never trip a
+// downstream re-scan even if a custom scanner returns a long id (S-3).
+const NOTICE_RULE_ID_MAX = 48;
 
 /**
  * The tool name is bounded HARDER than `cleanSdkToken`'s general 100 for the
@@ -1197,7 +1201,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const ids = Array.isArray(ruleIds) ? ruleIds : [];
       return ids
         .slice(0, NOTICE_RULE_IDS_MAX)
-        .map((id) => (typeof id === 'string' && NOTICE_RULE_ID_RE.test(id) ? id : 'unknown-rule'));
+        .map((id) =>
+          typeof id === 'string' && NOTICE_RULE_ID_RE.test(id)
+            ? id.slice(0, NOTICE_RULE_ID_MAX)
+            : 'unknown-rule',
+        );
     }
 
     // Records one rewrite outcome on BOTH the structural result array and the
@@ -1257,11 +1265,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Pass 2 (D1): the model-facing rewrite. Returns the rewritten value when a
     // rewrite is warranted (findings, a failed-closed leaf, or an oversized
     // leaf), else null. Records `skipped`/`unrewritten` outcomes immediately and
-    // enrols a returned rewrite in `pendingRewrites` for the verifier. Protection
-    // against losing a computed rewrite is by CONSTRUCTION, not a try/catch: this
-    // function does not throw (the redactor calls are wrapped and fail closed, the
-    // walk returns `skipped` rather than throwing), and the annotation and
-    // telemetry rows are recorded before it returns.
+    // enrols a returned rewrite in `pendingRewrites` for the verifier. It does
+    // not throw: the redactor calls are wrapped and fail closed, and the walk is
+    // wrapped so even a hostile-proxy `tool_response` whose traps throw (S-1)
+    // becomes an observable `skipped` outcome rather than a lost rewrite. The
+    // annotation and telemetry rows are recorded before it returns.
     function buildModelRewrite(
       tool: string,
       toolUseId: string | null,
@@ -1309,7 +1317,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         if (result.redacted.includes(OVERSIZED_REDACTION_MARKER)) anyTruncated = true;
         return result.redacted;
       };
-      const walk = rewriteStringLeaves(toolResponse, leafFn);
+      let walk: { value: unknown; skipped: boolean };
+      try {
+        walk = rewriteStringLeaves(toolResponse, leafFn);
+      } catch (error: unknown) {
+        // rewriteStringLeaves rethrows anything that is not a RewriteSkip so a
+        // genuine bug surfaces; a hostile-proxy `tool_response` whose traps throw
+        // (S-1, unreachable from the SDK's JSON) would otherwise propagate out of
+        // the callback and lose the rewrite with no row, the issue #83 no-op
+        // shape. Contain it here as an observable `skipped` outcome.
+        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped');
+        warn(`model-facing rewrite skipped for ${tool} output: the walk threw (${describeError(error)}); the raw output reached the model (#84)`);
+        return null;
+      }
       if (walk.skipped) {
         recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped');
         warn(
@@ -1401,7 +1421,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'neither-token';
     } {
       if (rendered === null) return { outcome: 'unobserved', reason: 'unwalkable' };
-      const hasSpan = p.spanLines.some((s) => rendered.includes(s));
+      const spanIn = (r: string, s: string): boolean =>
+        r.includes(s) || r.includes(JSON.stringify(s).slice(1, -1));
+      const hasSpan = p.spanLines.some((s) => spanIn(rendered, s));
       if (p.failedClosed) {
         // A DELIVERED blackout stays failed-closed, never applied (A-1).
         if (hasSpan) return { outcome: 'leaked' };
