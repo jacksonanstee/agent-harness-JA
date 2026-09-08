@@ -9,6 +9,7 @@ export {
   SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
   TOOL_REWRITE_OUTCOMES,
+  TOOL_REWRITE_REASONS,
   TOOL_TRACE_PHASES,
 } from './store.js';
 export { MIGRATIONS, runMigrations, type Migration } from './migrations/index.js';

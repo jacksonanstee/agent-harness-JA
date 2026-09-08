@@ -45,8 +45,11 @@ import {
   MAX_REWRITE_DEPTH,
   NOTICE_RULE_IDS_MAX,
   OUTPUT_REWRITE_OUTCOMES,
+  REWRITE_UNOBSERVED_REASONS,
+  OVERSIZED_REDACTION_MARKER,
 } from './session.js';
-import { TOOL_REWRITE_OUTCOMES, TOOL_TRACE_PHASES } from '../telemetry/index.js';
+import { TOOL_REWRITE_OUTCOMES, TOOL_REWRITE_REASONS, TOOL_TRACE_PHASES } from '../telemetry/index.js';
+import { OVERSIZED_MARKER } from '../security/secrets/redact.js';
 import type {
   QueryFn,
   QueryOptions,
@@ -3966,5 +3969,13 @@ describe('issue #84 D5/G-10: mirrored union drift', () => {
     expect([...OUTPUT_REWRITE_OUTCOMES].sort()).toEqual(
       ['applied', 'failed-closed', 'leaked', 'skipped', 'unobserved', 'unrewritten'],
     );
+  });
+
+  it('REWRITE_UNOBSERVED_REASONS equals the telemetry mirror TOOL_REWRITE_REASONS (A-2)', () => {
+    expect([...REWRITE_UNOBSERVED_REASONS].sort()).toEqual([...TOOL_REWRITE_REASONS].sort());
+  });
+
+  it('OVERSIZED_REDACTION_MARKER re-derives the redactor OVERSIZED_MARKER, no hand-copy drift (A-3)', () => {
+    expect(OVERSIZED_REDACTION_MARKER).toBe(OVERSIZED_MARKER);
   });
 });

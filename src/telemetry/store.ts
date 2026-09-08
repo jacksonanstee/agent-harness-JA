@@ -17,6 +17,7 @@ import type {
   TelemetryStore,
   ToolAnnotationVerdict,
   ToolRewriteOutcome,
+  ToolRewriteUnobservedReason,
   ToolRewritePayload,
   ToolTracePayload,
   ToolTracePhase,
@@ -94,15 +95,22 @@ const TOOL_REWRITE_OUTCOME_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_OUTCO
 const TOOL_ANNOTATION_VERDICT_PRESENCE: Record<ToolAnnotationVerdict, true> = { block: true, ask: true };
 const TOOL_ANNOTATION_VERDICT_SET: ReadonlySet<string> = new Set(Object.keys(TOOL_ANNOTATION_VERDICT_PRESENCE));
 
-// The `unobserved` reason mirror (U-11). A plain set: the four causes are
-// authored here and in session; the drift that matters (outcome/phase) is
-// pinned above, and a bad reason simply fails validation like any bad enum.
-const TOOL_REWRITE_REASON_SET: ReadonlySet<string> = new Set([
-  'no-user-message',
-  'both-present',
-  'unwalkable',
-  'neither-token',
-]);
+// The `unobserved` reason mirror (U-11). A presence RECORD over the type, like
+// the outcome/verdict mirrors above, so adding a reason to the type is a compile
+// error here (A-2); `session.test.ts` drift-tests the exported array against the
+// session-side origin. Reason drift dead-letters the WHOLE tool-rewrite row (the
+// validator rejects it and recordTelemetry downgrades to a warning), so the
+// graceful degradation is not a licence to let it drift.
+const TOOL_REWRITE_REASON_PRESENCE: Record<ToolRewriteUnobservedReason, true> = {
+  'no-user-message': true,
+  'both-present': true,
+  unwalkable: true,
+  'neither-token': true,
+};
+export const TOOL_REWRITE_REASONS = Object.keys(
+  TOOL_REWRITE_REASON_PRESENCE,
+) as readonly ToolRewriteUnobservedReason[];
+const TOOL_REWRITE_REASON_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_REASONS);
 
 /**
  * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a

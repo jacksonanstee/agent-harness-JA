@@ -22,7 +22,7 @@ const DEFAULT_MAX_FINDINGS = 50;
  * never the raw tail — and the session flags the rewrite `truncated`.
  */
 const MAX_INPUT = 131_072;
-const OVERSIZED_MARKER = '[REDACTED:oversized-input]';
+export const OVERSIZED_MARKER = '[REDACTED:oversized-input]';
 
 /**
  * Shannon entropy in bits/char. Used to gate heuristic rules: a real 40-char

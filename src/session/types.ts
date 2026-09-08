@@ -194,8 +194,8 @@ export type SdkPostToolFailureOutput =
 /**
  * The bare/default hook output, kept SOURCE-COMPATIBLE with the pre-#84
  * definition (deny-or-empty). A value typed by the BARE `SdkHookCallback` must
- * still narrow `out.hookSpecificOutput?.permissionDecision` (U-8): three sites
- * cast `matcher.hooks as SdkHookCallback[]` and read it. A union that also
+ * still narrow `out.hookSpecificOutput?.permissionDecision` (U-8): several test
+ * sites cast `matcher.hooks as SdkHookCallback[]` and read it. A union that also
  * carried the rewrite/annotate arms would make `.permissionDecision`
  * inaccessible (only the deny arm declares it), so those members live on the
  * per-event outputs above, never here. `SdkHookOutputFor<SdkHookInput>` resolves

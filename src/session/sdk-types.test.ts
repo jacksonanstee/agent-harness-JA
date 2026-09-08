@@ -191,11 +191,13 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
 
 // ---- Issue #84 D6 parity pins ------------------------------------------------
 //
-// The rewrite channel (updatedToolOutput) and the failure-hook annotation
-// channel (additionalContext on PostToolUseFailure) are typed per event; these
-// pins bind the harness views to the installed SDK in both directions, one per
-// key per direction (the 09-07 lesson: a union on the LEFT of `Assignable` is
-// an AND, so members are written out).
+// These pins freeze the decision recorded in ADR-0035 (D6) and carry its
+// revisit-if (an SDK bump re-captures the fixture and re-runs these). The
+// rewrite channel (updatedToolOutput) and the failure-hook annotation channel
+// (additionalContext on PostToolUseFailure) are typed per event; the pins bind
+// the harness views to the installed SDK in both directions, one per key per
+// direction (the 09-07 lesson: a union on the LEFT of `Assignable` is an AND,
+// so members are written out).
 
 // The rewrite output is ACCEPTABLE to the SDK, and its payload invents no key
 // the SDK's PostToolUse output lacks.

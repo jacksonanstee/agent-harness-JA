@@ -277,7 +277,7 @@ const REDACTION_MARKER_RE = /\[REDACTED:[^\]]+\]/g;
  * which is how the session detects a truncated leaf without importing the
  * redactor's private `MAX_INPUT`.
  */
-const OVERSIZED_REDACTION_MARKER = '[REDACTED:oversized-input]';
+export const OVERSIZED_REDACTION_MARKER = '[REDACTED:oversized-input]';
 
 /**
  * Minimum length of a secret span's first line for the verifier to treat it as
@@ -381,6 +381,17 @@ const OUTPUT_REWRITE_OUTCOME_PRESENCE: Record<OutputRewriteOutcome, true> = {
   skipped: true,
   'failed-closed': true,
 };
+
+// Session-side origin of the `unobserved` reasons; the telemetry mirror
+// `TOOL_REWRITE_REASONS` is drift-tested against this (A-2). Layering forbids
+// importing the telemetry type here, so the two lists are kept equal by test.
+export const REWRITE_UNOBSERVED_REASONS = [
+  'no-user-message',
+  'both-present',
+  'unwalkable',
+  'neither-token',
+] as const;
+type RewriteUnobservedReason = (typeof REWRITE_UNOBSERVED_REASONS)[number];
 
 export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
   OUTPUT_REWRITE_OUTCOME_PRESENCE,
@@ -1216,7 +1227,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       findings: number,
       truncated: boolean,
       outcome: OutputRewriteOutcome,
-      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'neither-token',
+      reason?: RewriteUnobservedReason,
     ): void {
       outputRewrites.push({ tool, tool_use_id: toolUseId, findings, truncated, outcome });
       recordTelemetry({
@@ -1418,7 +1429,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       rendered: string | null,
     ): {
       outcome: OutputRewriteOutcome;
-      reason?: 'no-user-message' | 'both-present' | 'unwalkable' | 'neither-token';
+      reason?: RewriteUnobservedReason;
     } {
       if (rendered === null) return { outcome: 'unobserved', reason: 'unwalkable' };
       const spanIn = (r: string, s: string): boolean =>
