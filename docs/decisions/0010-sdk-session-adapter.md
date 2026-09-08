@@ -105,3 +105,15 @@ Three design questions:
   `SdkHookInput` carries.
 - Multi-turn interactive sessions (v1.x) need `resume` — the adapter currently
   models one `run()` per session.
+- The seam needs to carry an SDK option the harness does not pass today.
+  **Added 2026-09-07 (issue #101):** `QueryOptions` passes `model`,
+  `systemPrompt`, `maxTurns` and `hooks` and nothing else, while the locked SDK
+  (0.3.201) also declares `abortController`, `maxBudgetUsd` and an alpha
+  `taskBudget` on its `query()` options. Requirements H-7 and H-8 record the
+  ceilings, cancellation and retry policy that would ride on them, and
+  `src/session/sdk-types.test.ts` pins the seam at exactly those four keys, so
+  landing H-7 means widening decision 2 from "the fields the harness reads" to
+  the options it passes, and moving that pin in the same change. One more
+  limit of decision 3 belongs here: `stop` fires in `finally`, which a signal
+  death skips; the harness installs no signal handler, so a Ctrl-C ends the
+  process without the stop hook or the turn-cost row (security-model R-21).

@@ -204,6 +204,11 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   no wall-clock timeout either), so the underlying call may still run to
   completion and bill — which is why timed-out findings count as unpriced
   spend (§7).
+  **Corrected 2026-09-07 (issue #101):** the SDK does declare one,
+  `abortController` on the `query()` options, at the only version the lockfile
+  has ever resolved (0.3.201); `AdversaryFn` and the harness `QueryFn` seam carry none, by
+  omission rather than decision. The unpriced-spend consequence stands until
+  the seam carries it; requirement H-7 is the record to cite.
 - **Unknown enum values are never widened at parse time** (binding condition
   3, §10): the category tuple will be wrong at the margins — it was designed
   before any real challenge was observed, which is what `other` and the
@@ -552,6 +557,8 @@ fallout) were confirmed clean, not defects.
   `call-failed` finding, but the orphaned call may run to completion and
   bill (no abort channel exists — ADR-0017's recorded limitation, doubled
   here and mitigated where sessions couldn't be).
+  **Corrected 2026-09-07 (issue #101):** the channel exists in the SDK and is
+  unplumbed here; see the correction under decision 4. The hazard stands.
 - **Long outputs reach the adversary truncated.** `redact()` caps input at
   128 KiB (tail replaced with a marker); a challenge over a truncated
   output judges the truncation. A fidelity caveat, not a security one.

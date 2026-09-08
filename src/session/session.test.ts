@@ -3267,3 +3267,70 @@ describe('DEFAULT_DESCRIPTOR', () => {
     expect(DEFAULT_DESCRIPTOR.sensitivity).toBe('low');
   });
 });
+
+describe('SDK API retries are invisible to the harness (requirement H-8, issue #101)', () => {
+  // The SDK declares `{ type: 'system', subtype: 'api_retry', attempt,
+  // max_retries, retry_delay_ms, error_status, error, uuid, session_id }`
+  // (SDKAPIRetryMessage) for each API retry it performs on its own, and the
+  // session loop has no branch for it. H-8 records that as the gap. The pin is
+  // DIFFERENTIAL rather than a list of things that must be absent: the same
+  // run is observed on every channel the session can write (the returned
+  // result, onWarning, onText, the telemetry sink, the hook-event sink, the
+  // memory store) with and without the retry message in its stream, and the
+  // two observations must be equal. A future field, warning, row, hook or
+  // memory note that records the retry breaks the equality whatever it is
+  // called, which a substring or key-name check cannot promise.
+  const RETRY = {
+    type: 'system',
+    subtype: 'api_retry',
+    attempt: 1,
+    max_retries: 10,
+    retry_delay_ms: 500,
+    error_status: 529,
+    error: 'rate_limit',
+    uuid: '00000000-0000-4000-8000-000000000001',
+    session_id: 'sdk-123',
+  };
+
+  async function observe(messages: SdkMessage[]) {
+    const telemetry = fakeTelemetry();
+    const hookRecords: unknown[] = [];
+    const hooks = createHookRuntime({ onEvent: (record) => hookRecords.push(record) });
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const warnings: string[] = [];
+    const texts: string[] = [];
+    const session = createSession(makeDeps(fakeQuery(messages), { telemetry, hooks, memory }), {
+      skillsDir: null,
+      now: () => 1000,
+      generateId: () => 'harness-1',
+      turnId: 'turn-1',
+      generateNonce: () => TEST_NONCE,
+      onWarning: (w) => warnings.push(w),
+      onText: (t) => texts.push(t),
+    });
+    const result = await session.run('hi');
+    // The store stamps rows with the wall clock, which is not injectable;
+    // everything else on a row is compared.
+    const rows = memory
+      .read({})
+      .map((r) => Object.fromEntries(Object.entries(r).filter(([key]) => key !== 'createdAt' && key !== 'updatedAt')));
+    return { result, warnings, texts, telemetry: telemetry.events, hookRecords, rows };
+  }
+
+  it('a run whose stream carries an api_retry message is indistinguishable, on every channel, from one that does not', async () => {
+    const clean = await observe([INIT, ASSISTANT, RESULT]);
+    // Two retries, so a guard on "more than one" or "a second message" cannot
+    // hide behind a boundary fixture (security lens, issue #101).
+    const retried = await observe([INIT, RETRY, { ...RETRY, attempt: 2 }, ASSISTANT, RESULT]);
+
+    // Positive controls: every compared channel is live, so the equality
+    // below is not an equality of empties.
+    expect(clean.result.resultText).toBe('hello from claude');
+    expect(clean.texts).toEqual(['hello from claude']);
+    expect(clean.telemetry.map((event) => event.type)).toEqual(['turn-cost']);
+    expect(clean.hookRecords.map((record) => (record as { event: string }).event)).toEqual(['session-start', 'stop']);
+    expect(clean.rows).toHaveLength(1);
+
+    expect(retried).toEqual(clean);
+  });
+});
