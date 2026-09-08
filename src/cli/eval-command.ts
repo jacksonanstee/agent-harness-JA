@@ -34,6 +34,7 @@ import {
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
+  WARNING_PREFIX,
   writeScorecard,
 } from './shared.js';
 import type { SecurityComposition } from './shared.js';
@@ -157,7 +158,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
     throw error;
   }
   for (const warning of security.warnings) {
-    process.stderr.write(`warning: ${sanitizeForTerminal(warning)}\n`);
+    process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
   }
 
   // Pre-flight, before any spend: the write path must be trustworthy. A
@@ -200,7 +201,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
   // Oracle execution is arbitrary in-process code from the task directory
   // (docs/security-model.md R-10) — say so before the first import.
   process.stderr.write(
-    'warning: golden-eval oracles are arbitrary code from the task directory, executed in-process — only run eval on repos you trust (security-model R-10)\n',
+    `${WARNING_PREFIX}golden-eval oracles are arbitrary code from the task directory, executed in-process — only run eval on repos you trust (security-model R-10)\n`,
   );
 
   // In-memory DB per eval run: never contaminates the operator's real
@@ -220,7 +221,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
           );
           if (!result.ok) {
             process.stderr.write(
-              `warning: telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+              `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
             );
           }
         },
@@ -246,7 +247,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
           turnId,
           // No onText: eval's stdout is the scorecard, nothing else.
           onWarning: (message) =>
-            process.stderr.write(`warning: ${sanitizeForTerminal(message)}\n`),
+            process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
         },
       );
     };
@@ -288,8 +289,8 @@ export async function runEval(args: EvalArgs): Promise<number> {
     // RETAINED artefact is what suppression protects (issue #64, ADR-0030).
     if (scorecard.meta.taskDirForm === 'suppressed') {
       process.stderr.write(
-        `${sanitizeForTerminal(
-          'warning: meta.taskDir suppressed in the written scorecard (working directory is not at or above the task directory)',
+        `${WARNING_PREFIX}${sanitizeForTerminal(
+          'meta.taskDir suppressed in the written scorecard (working directory is not at or above the task directory)',
         )}\n`,
       );
     }

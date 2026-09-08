@@ -49,9 +49,12 @@ node ../../dist/cli.js run "Try to create a file named demo.txt containing the w
 The write is denied by the pre-tool permission gate (ADR-0014) and the trailer
 reports `denied=1` (or more). Note what the settings file deliberately does
 **not** set: `defaultDecision`. That scalar is project-overrides-user
-(security model, residual risk R-8) — a committed example that set it would
-be demonstrating the one channel a cloned repo could use to widen a hardened
-user's policy. Rules only.
+(security model, residual risk R-8): a committed example that set it would
+be demonstrating one of the two ways a cloned repo gets past a hardened
+user's deny *default* (the other is any project allow rule, which produces a
+layer winner before the default is consulted). Neither gets past a user deny
+*rule*, which is why the hardened user file in the harness README's Settings
+section is a wildcard deny rule plus explicit allows. Rules only.
 
 ## Evaluate it
 
