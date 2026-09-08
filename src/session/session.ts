@@ -1773,7 +1773,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         for (const p of pendingRewrites) {
           if (p.resolved) continue;
           p.resolved = true;
-          recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, 'unobserved', 'no-user-message');
+          // Guard PER pending (V-3): recordTelemetry already swallows a throwing
+          // sink, so this is defence in depth, but a per-iteration guard means a
+          // throw on one pending cannot skip the rows for the rest.
+          try {
+            recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, 'unobserved', 'no-user-message');
+          } catch (error: unknown) {
+            warn(`rewrite flush error for ${p.tool}: ${describeError(error)}`);
+          }
         }
       } catch (error: unknown) {
         warn(`rewrite flush error: ${describeError(error)}`);
