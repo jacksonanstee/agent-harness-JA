@@ -32,6 +32,15 @@ down in bold.
 > account, including how the wrong premise survived. The essay is left standing
 > with this note rather than quietly rewritten.
 
+> **Update, 2026-09-08:** the R-4 rewrite followed the skill channel out of
+> observe-only for tool output (issue #84, [ADR-0035](../decisions/0035-model-facing-enforcement-via-rewrite-channels.md)).
+> A successful call's secrets are redacted from the model's copy through
+> `updatedToolOutput`, and a flagged result is annotated with a plain note;
+> nothing is withheld, because withholding is the judge's call (#96). One leg
+> stays open by the SDK's own shape: a failed call fires a hook with no rewrite
+> channel, so its output reaches the model unredacted, now tracked as R-22.
+> Observe-only was a posture, not a fate.
+
 Why does writing it down matter beyond ethics? Because named gaps compose.
 The model's §6 chains R-4 with R-3 (ungated network egress) into the
 "critical-shaped scenario": flagged-but-not-blocked injection steers the

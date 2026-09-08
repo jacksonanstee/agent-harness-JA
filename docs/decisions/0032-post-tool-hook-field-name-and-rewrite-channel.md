@@ -74,7 +74,7 @@ that from the day it was written. This was an internal contradiction, not SDK dr
    correction also reopens the INPUT side: ADR-0013 §9 rejected secret-in-input enforcement because
    the only option was deny (over-eager), but `updatedInput` is the redact-in-place middle option it
    lacked. That too is issue #84's scope, not a v1 change; it is named here so the next reader does
-   not re-derive it.
+   not re-derive it. *(2026-09-08: superseded on the adoption point by [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md), which adopts `updatedToolOutput` for secret redaction and `additionalContext` for injection verdicts on tool output, keeping the input side observe-only (D3). This decision's correction of the "no channel exists" record stands unchanged.)*
 
 ## Alternatives considered
 
@@ -113,4 +113,4 @@ just the instance.
   re-capture forced by the version assertion on an SDK bump is the only place it surfaces, so read
   a bump's captured diff.
 - Issue #84 adopts `updatedToolOutput`: R-4 moves from "observe-only, deferred" to "enforced", and
-  this ADR's decision 4 is superseded on that point.
+  this ADR's decision 4 is superseded on that point. **FIRED 2026-09-08 ([ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md)):** issue #84 adopted `updatedToolOutput` for secret redaction on a successful call and `additionalContext` for injection verdicts; R-4 narrows to the injection leg and a failed call's output (R-22), and decision 4 is superseded on the adoption point while its correction of the record stands.
