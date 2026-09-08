@@ -69,7 +69,7 @@ building it.
    (`src/internal/sanitize.ts`), truncated (120 chars), deduped, and capped
    (10). `rule_ids` is **not** capped by the excerpt budget — under-reporting
    which rules fired would mislead audit/telemetry consumers.
-9. **Session wiring observes only.** *(Scoped 2026-07-28 by [ADR-0026](./0026-skill-channel-block-on-flag.md): this decision still governs TOOL OUTPUT, whose enforcement is a deferred design decision (ADR-0032, issue #84) — the SDK rewrite channel exists; earlier text here called it absent. It no longer governs the harness-owned skill channel, where a high-confidence block now drops the skill from the system prompt.)* The scanner runs on the **full** tool
+9. **Session wiring observes only.** *(Scoped 2026-07-28 by [ADR-0026](./0026-skill-channel-block-on-flag.md): this decision still governs TOOL OUTPUT, whose enforcement is a deferred design decision (ADR-0032, issue #84) — the SDK rewrite channel exists; earlier text here called it absent. It no longer governs the harness-owned skill channel, where a high-confidence block now drops the skill from the system prompt.)* *(Amended 2026-09-08 by [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md): for tool output the harness now ANNOTATES a block or ask verdict on the model's copy through the SDK's `additionalContext` channel, a plain note that treats the result as untrusted data; the flagged output is still shown, nothing is withheld. So this decision's observe-only stance now holds only for WITHHOLDING, which is deferred to the judge, issue #96.)* The scanner runs on the **full** tool
    output (not the truncated telemetry summary) and its `ScanResult` feeds the
    post-tool hook's `scan` field (architecture step 10). Block/ask verdicts
    warn; the run continues. **Enforcement (`on_block` redact/drop/error) is
@@ -106,4 +106,4 @@ building it.
 - A telemetry event type for scan verdicts is wanted → new `telemetry_events`
   CHECK-constraint migration (currently scan results ride only the hook payload
   + warnings).
-- Enforcement is needed before S-2 → revisit the observe-only decision (§9). **FIRED 2026-07-28 for the skill channel only — see [ADR-0026](./0026-skill-channel-block-on-flag.md). Still open for tool output.**
+- Enforcement is needed before S-2 → revisit the observe-only decision (§9). **FIRED 2026-07-28 for the skill channel (see [ADR-0026](./0026-skill-channel-block-on-flag.md)) and again 2026-09-08 for tool output (see [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md), where a verdict now annotates the model's copy). WITHHOLDING tool output stays open for the judge, issue #96.**

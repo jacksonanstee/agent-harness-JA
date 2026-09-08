@@ -94,6 +94,12 @@ Three design questions:
   shipped reading a `tool_output` field the SDK never sends, blinding the
   post-tool data plane for seven weeks — issue #83. security-model R-4's later
   "no rewrite channel exists" statement contradicted this very paragraph.)**
+  *(2026-09-08, ADR-0035: closed. The seam now uses `updatedToolOutput` on a
+  successful call, exactly as this note called for; the redactor rewrites the
+  model-facing copy in place, data-flow step 13 is expressible, and a
+  wrong-shaped rewrite the SDK would otherwise drop with no signal is caught by
+  an in-band verifier. A FAILED call still has no rewrite surface, which is the
+  named residual R-22.)*
 - **SDK hook-timeout semantics are unverified.** The deny path is fail-closed
   on the harness side (any pre-tool throw denies, including `fire()` itself
   failing), but whether the SDK fails open on a hook *timeout* is SDK-defined.

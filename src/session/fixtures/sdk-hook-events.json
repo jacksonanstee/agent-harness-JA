@@ -18,7 +18,7 @@
     "tool_name": "Bash",
     "tool_input": {
       "command": "echo harness-fixture-capture-marker",
-      "description": "Print fixture capture marker"
+      "description": "Echo harness fixture capture marker"
     },
     "tool_use_id": "<tool_use_id>"
   },
@@ -35,7 +35,7 @@
     "tool_name": "Bash",
     "tool_input": {
       "command": "echo harness-fixture-capture-marker",
-      "description": "Print fixture capture marker"
+      "description": "Echo harness fixture capture marker"
     },
     "tool_response": {
       "stdout": "harness-fixture-capture-marker",
@@ -45,6 +45,26 @@
       "noOutputExpected": false
     },
     "tool_use_id": "<tool_use_id>",
+    "duration_ms": 0
+  },
+  "postToolUseFailure": {
+    "session_id": "<session>",
+    "transcript_path": "<transcript>",
+    "cwd": "<cwd>",
+    "prompt_id": "<prompt>",
+    "permission_mode": "default",
+    "effort": {
+      "level": "xhigh"
+    },
+    "hook_event_name": "PostToolUseFailure",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat /Users/jackson/Documents/agent-harness-JA/harness-fixture-capture-missing-84.txt",
+      "description": "Print contents of harness fixture file"
+    },
+    "tool_use_id": "<tool_use_id>",
+    "error": "Exit code 1\ncat: /Users/jackson/Documents/agent-harness-JA/harness-fixture-capture-missing-84.txt: No such file or directory",
+    "is_interrupt": false,
     "duration_ms": 0
   }
 }

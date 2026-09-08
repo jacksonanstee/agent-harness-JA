@@ -81,11 +81,26 @@ export interface SdkModelRefusalMessage {
   session_id?: string;
 }
 
+/**
+ * Minimal structural view of the SDK's `SDKUserMessage` (sdk.d.ts:4292), read
+ * by the in-band rewrite verifier (issue #84, D4). Only the fields the harness
+ * reads are modelled: the message envelope (whose `content` carries the
+ * `tool_result` blocks) and `parent_tool_use_id`. `content` is `unknown`
+ * because the SDK types it `string | Array<ContentBlockParam>` and the verifier
+ * walks it structurally. Parity-pinned both directions in sdk-types.test.ts.
+ */
+export interface SdkUserMessage {
+  type: 'user';
+  message: { content: unknown };
+  parent_tool_use_id?: string | null;
+}
+
 export type SdkMessage =
   | SdkSystemMessage
   | SdkAssistantMessage
   | SdkModelRefusalMessage
   | SdkResultMessage
+  | SdkUserMessage
   | { type: string };
 
 /**
@@ -113,7 +128,28 @@ export interface SdkPostToolUseInput {
   session_id?: string;
 }
 
-export type SdkHookInput = SdkPreToolUseInput | SdkPostToolUseInput;
+/**
+ * Structural view of the SDK's `PostToolUseFailureHookInput` (sdk.d.ts:2146),
+ * fired instead of PostToolUse when a tool call FAILS (issue #84, D8, S-1). The
+ * model receives `error` as the tool result; the harness scans and (data-plane)
+ * redacts it, and annotates on a verdict, but CANNOT rewrite it — the failure
+ * hook has no `updatedToolOutput` channel. Parity-pinned like the other two
+ * inputs.
+ */
+export interface SdkPostToolUseFailureInput {
+  hook_event_name: 'PostToolUseFailure';
+  tool_name: string;
+  tool_input: unknown;
+  tool_use_id?: string;
+  error: string;
+  is_interrupt?: boolean;
+  session_id?: string;
+}
+
+export type SdkHookInput =
+  | SdkPreToolUseInput
+  | SdkPostToolUseInput
+  | SdkPostToolUseFailureInput;
 
 export interface SdkPreToolDenyOutput {
   hookSpecificOutput: {
@@ -123,13 +159,69 @@ export interface SdkPreToolDenyOutput {
   };
 }
 
-export type SdkHookOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
+/**
+ * Post-tool rewrite output (issue #84, D1/D2). On a SUCCESSFUL call either
+ * channel may fire: `updatedToolOutput` replaces the model-facing copy (secret
+ * redaction), `additionalContext` adds the harness injection notice. Written as
+ * a union requiring AT LEAST ONE of the two keys, because the harness never
+ * returns an identity rewrite — every returned rewrite is a chance for the SDK
+ * to silently drop one (spike p2/p3). `updatedToolOutput: unknown` still admits
+ * `undefined` as a value, so "unspellable" is not claimed (G-13).
+ */
+export type SdkPostToolRewriteOutput = {
+  hookSpecificOutput:
+    | { hookEventName: 'PostToolUse'; updatedToolOutput: unknown; additionalContext?: string }
+    | { hookEventName: 'PostToolUse'; updatedToolOutput?: unknown; additionalContext: string };
+};
+
+/**
+ * Failure-hook annotation output (issue #84, D8). A failed call has NO rewrite
+ * channel — `PostToolUseFailureHookSpecificOutput` (sdk.d.ts:2159) declares
+ * `additionalContext` only — so the harness can annotate but never rewrite it.
+ */
+export type SdkPostToolFailureAnnotateOutput = {
+  hookSpecificOutput: { hookEventName: 'PostToolUseFailure'; additionalContext: string };
+};
+
+// Per-event output unions (D6, G-8). Each event's callback returns exactly the
+// outputs valid for that event, plus the empty no-op.
+export type SdkPreToolOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
+export type SdkPostToolOutput = SdkPostToolRewriteOutput | { hookSpecificOutput?: undefined };
+export type SdkPostToolFailureOutput =
+  | SdkPostToolFailureAnnotateOutput
+  | { hookSpecificOutput?: undefined };
+
+/**
+ * The bare/default hook output, kept SOURCE-COMPATIBLE with the pre-#84
+ * definition (deny-or-empty). A value typed by the BARE `SdkHookCallback` must
+ * still narrow `out.hookSpecificOutput?.permissionDecision` (U-8): several test
+ * sites cast `matcher.hooks as SdkHookCallback[]` and read it. A union that also
+ * carried the rewrite/annotate arms would make `.permissionDecision`
+ * inaccessible (only the deny arm declares it), so those members live on the
+ * per-event outputs above, never here. `SdkHookOutputFor<SdkHookInput>` resolves
+ * to this type.
+ */
+export type SdkHookOutput = SdkPreToolOutput;
+
+/**
+ * Maps a hook INPUT event to its valid output (D6). Non-distributive
+ * (`[I] extends [...]`) so the BARE case (`I = SdkHookInput`, the whole union)
+ * falls through to `SdkHookOutput` — the widest output that still narrows
+ * `permissionDecision` (U-8) — rather than distributing member by member.
+ */
+export type SdkHookOutputFor<I extends SdkHookInput> = [I] extends [SdkPreToolUseInput]
+  ? SdkPreToolOutput
+  : [I] extends [SdkPostToolUseInput]
+    ? SdkPostToolOutput
+    : [I] extends [SdkPostToolUseFailureInput]
+      ? SdkPostToolFailureOutput
+      : SdkHookOutput;
 
 export type SdkHookCallback<I extends SdkHookInput = SdkHookInput> = (
   input: I,
   toolUseID: string | undefined,
   context: { signal: AbortSignal },
-) => Promise<SdkHookOutput>;
+) => Promise<SdkHookOutputFor<I>>;
 
 export interface SdkHookMatcher<I extends SdkHookInput = SdkHookInput> {
   hooks: SdkHookCallback<I>[];
@@ -140,13 +232,13 @@ export interface QueryOptions {
   systemPrompt?: string;
   maxTurns?: number;
   // Typed per event so a callback that reads a post-only field (`tool_response`)
-  // cannot be registered under `PreToolUse`, and vice versa. A callback typed
-  // over the wider union stays assignable to either slot by contravariance, so
-  // the defaults keep the bare `SdkHookCallback`/`SdkHookMatcher` spelling
-  // source-compatible for the published surface (ADR-0023).
+  // cannot be registered under `PreToolUse`, and so each callback returns only
+  // the outputs valid for its event (D6). `PostToolUseFailure` is the failure
+  // seam (D8): the SDK routes a failed call there, never to PostToolUse (S-1).
   hooks?: {
     PreToolUse?: SdkHookMatcher<SdkPreToolUseInput>[];
     PostToolUse?: SdkHookMatcher<SdkPostToolUseInput>[];
+    PostToolUseFailure?: SdkHookMatcher<SdkPostToolUseFailureInput>[];
   };
 }
 
@@ -164,20 +256,26 @@ export interface SessionDeps {
   /** Optional durable metrics sink (ADR-0011). Failures warn, never abort. */
   telemetry?: Pick<TelemetryStore, 'record'>;
   /**
-   * Optional prompt-injection scanner (S-1). Runs on each tool output; the
-   * result feeds the post-tool hook's `scan` field. Failures warn, never
-   * abort. Enforcement (redact/drop) composes with S-2, not here.
+   * Optional prompt-injection scanner (S-1). Runs on each tool output (and, per
+   * issue #84 D8, on a FAILED call's error text); the result feeds the
+   * post-tool hook's `scan` field. On a `block`/`ask` verdict the harness now
+   * ANNOTATES the model-facing copy with a plain-language note via the SDK's
+   * `additionalContext` channel (issue #84, D2) — nothing is withheld
+   * (withholding is #96). The INPUT side stays observe-and-log (D3). Failures
+   * warn, never abort, and add no annotation (fail open, ADR-0026 decision 7).
    */
   scanInjection?: (text: string) => ScanResult;
   /**
-   * Optional secret redactor (S-2). Applied to tool inputs (pre-tool), tool
-   * outputs (before the telemetry row; findings feed the hook `redactions`
-   * field), the memory summary (`prompt`, `resultText`, `denied[]` reasons)
-   * and each assistant text block before `onText` (issue #91). When absent,
-   * none of those are redacted: both CLI composition roots inject `redact`;
-   * a library caller must too. Failures warn on the tool-output and `onText`
-   * paths and are silent on the memory path; every failing path writes the
-   * `[REDACTION FAILED]` sentinel, never the raw text.
+   * Optional secret redactor (S-2). Applied to tool inputs (pre-tool,
+   * observe-only, D3), tool outputs (both the telemetry row AND, per issue #84
+   * D1, the model-facing copy rewritten in place through the SDK's
+   * `updatedToolOutput` channel — a SUCCESSFUL call only; a failed call's error
+   * text is redacted for telemetry but cannot be rewritten, D8), the memory
+   * summary (`prompt`, `resultText`, `denied[]` reasons) and each assistant text
+   * block before `onText` (issue #91). When absent, none of those are redacted:
+   * both CLI composition roots inject `redact`; a library caller must too.
+   * Failures fail CLOSED per leaf/sink to the `[REDACTION FAILED]` sentinel,
+   * never the raw text.
    */
   redactSecrets?: (text: string) => RedactResult;
 }
@@ -285,6 +383,63 @@ export interface SessionResult {
    * not a load failure, which is why it is not a `SkillError`.
    */
   droppedSkills: DroppedSkill[];
+  /**
+   * Model-facing secret-redaction rewrites of SUCCESSFUL tool output (issue
+   * #84, D1/D5), one per call that carried a detectable secret, failed a leaf
+   * closed, was oversized, or was skipped/unrewritten. Reported structurally so
+   * an eval oracle asserts enforcement without scraping stderr.
+   *
+   * `outputRewrites.length === 0` means "no successful call carried a detectable
+   * secret in a rewritable leaf" — NOT "the model saw no secret" (U-3, U-17). A
+   * `leaked`/`unobserved`/`unrewritten` row, or ANY failed call (which cannot be
+   * rewritten, D8), each mean the model may have seen a raw secret. The input
+   * side stays observe-only (D3).
+   */
+  outputRewrites: OutputRewrite[];
+  /**
+   * Injection-scanner verdicts surfaced to the model as a note (issue #84,
+   * D2/D5): `block`/`ask` on a successful call (phase 'post-tool') or a failed
+   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is #96.
+   */
+  outputAnnotations: OutputAnnotation[];
+}
+
+/** Outcome of a model-facing tool-output rewrite (issue #84, D4/D5). */
+export type OutputRewriteOutcome =
+  /** A `[REDACTED:<id>]` marker was observed in the model's copy, no raw span. */
+  | 'applied'
+  /** A raw secret span survived into the model's copy (verifier alarm). */
+  | 'leaked'
+  /** The rewrite could not be confirmed in band (no user message, ambiguous, unwalkable). */
+  | 'unobserved'
+  /** The telemetry pass found a secret the per-leaf model pass did not (blind spot, G-9). */
+  | 'unrewritten'
+  /** Non-JSON or over-bound output: the walk was skipped, output left raw (D1). */
+  | 'skipped'
+  /** A leaf redaction failed closed to the sentinel and the blackout was delivered (A-1). */
+  | 'failed-closed';
+
+/**
+ * A model-facing rewrite decision (issue #84). `tool_use_id` is the SDK's id
+ * when it arrived, else null. `findings` is the per-leaf model-pass count;
+ * `truncated` is true when an oversized leaf carried the redactor's
+ * `[REDACTED:oversized-input]` marker.
+ */
+export interface OutputRewrite {
+  tool: string;
+  tool_use_id: string | null;
+  findings: number;
+  truncated: boolean;
+  outcome: OutputRewriteOutcome;
+}
+
+/** A model-facing injection-verdict annotation (issue #84, D2/D5). */
+export interface OutputAnnotation {
+  tool: string;
+  tool_use_id: string | null;
+  phase: 'post-tool' | 'post-tool-failure';
+  verdict: 'block' | 'ask';
+  ruleIds: string[];
 }
 
 /** Why a loaded skill did not reach the system prompt. */

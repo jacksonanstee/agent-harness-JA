@@ -1,7 +1,7 @@
 # agent-harness-JA
 
 > Most repos show the artefact; this one shows the thinking.
-> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 34 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
+> A local-first agent harness on the Claude Agent SDK (model routing, security guardrails, adversarial evals) with every non-trivial decision recorded: 35 ADRs, a threat model mapped to the OWASP Agentic Top 10, and a red-team gate on every PR.
 
 This repo is **both a working tool and a documented build process.**
 
@@ -22,7 +22,7 @@ A thin, MIT-licensed, local-first harness that wraps the Claude Agent SDK and pr
 | Layer | What it gives you |
 |---|---|
 | **Harness** | Multi-model routing (Haiku/Sonnet/Opus by task shape, with Fable targetable from a custom table — [ADR-0024](./docs/decisions/0024-router-model-tiers.md)), skill loading, hook runtime, telemetry, memory. **A custom table can downgrade `sensitivity: 'high'`**: routing is first-match-wins and the table is fully replaceable, so a catch-all rule at the top silently sends sensitive work to a weaker model. The router imposes no safety floor by design ([ADR-0007](./docs/decisions/0007-task-descriptor-schema.md)) |
-| **Security** | Prompt-injection scanner on tool results (observe-only) and on skill content (enforced when a scanner is wired, as the CLI does: a flagged skill is kept out of the system prompt), secret redaction, permission model, sandbox boundaries |
+| **Security** | Prompt-injection scanner on tool results (a flagged result is annotated for the model with a note, not withheld) and on skill content (enforced when a scanner is wired, as the CLI does: a flagged skill is kept out of the system prompt), secret redaction (secrets redacted from the model's copy on a successful call, injection flagged with a note; failed-call output and tool input observed only), permission model, sandbox boundaries |
 | **Evaluation** | Golden-task regression suite, red-team corpus (≥50 cases), two-pass adversarial verification |
 
 ## What this is not
@@ -120,7 +120,7 @@ If you are evaluating this repo as a portfolio piece or code sample, the recomme
 
 1. **[process/00-problem-framing.md](./process/00-problem-framing.md)**: Why this project exists and who it is for.
 2. **[process/01-requirements.md](./process/01-requirements.md)**: Functional and non-functional requirements with traceable IDs.
-3. **[docs/decisions/](./docs/decisions/)**: Thirty-four ADRs (0001–0034) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, block-on-flag enforcement for the skill channel, cleartext paths in retained sinks, the nonce-authenticated skill-section delimiter, why the documentation gate checks structure rather than claims, the scorecard task directory that suppresses an escaping path rather than leaking it, and the deny reason that names a rule without quoting the operator's glob, and the post-tool hook field-name fix that made the output scan and redactor actually run (the SDK sends `tool_response`, not the `tool_output` the harness read), and the tool table derived from the SDK's own declarations in both directions after five declared path/command tools were found to have never been in it, and the settings file treated as hostile input at every level (unknown keys and command entries the shell would rewrite fail loud, and the loader refuses symlinks and non-files and caps the file, the envelope the red-team baseline already had).
+3. **[docs/decisions/](./docs/decisions/)**: Thirty-five ADRs (0001–0035) covering harness positioning, licence, SDK target, telemetry storage, injection scanning, secret redaction, permissions and sandboxing, the deliberately-deferred LLM judge, the golden runner, the red-team corpus, the fail-on-any-drift regression gate, the adversarial verifier, the init scaffolder, the npm publish path, the locked public API surface, the router's model tiers, refusal handling, block-on-flag enforcement for the skill channel, cleartext paths in retained sinks, the nonce-authenticated skill-section delimiter, why the documentation gate checks structure rather than claims, the scorecard task directory that suppresses an escaping path rather than leaking it, and the deny reason that names a rule without quoting the operator's glob, and the post-tool hook field-name fix that made the output scan and redactor actually run (the SDK sends `tool_response`, not the `tool_output` the harness read), and the tool table derived from the SDK's own declarations in both directions after five declared path/command tools were found to have never been in it, and the settings file treated as hostile input at every level (unknown keys and command entries the shell would rewrite fail loud, and the loader refuses symlinks and non-files and caps the file, the envelope the red-team baseline already had), and the model-facing enforcement of tool output through the SDK's rewrite channels (secrets redacted from a successful call's copy, injection flagged with a note; a failed call's output cannot be rewritten).
 4. **[docs/architecture.md](./docs/architecture.md)**: System design and module boundaries.
 5. **[docs/security-model.md](./docs/security-model.md)**: Threat model and mitigations.
 6. **[docs/eval-methodology.md](./docs/eval-methodology.md)**: How the harness measures itself: gates vs. reported metrics, regression semantics, case authoring.
@@ -166,8 +166,8 @@ As of 2026-08-08:
 | Harness layer (router, skills, hooks, telemetry) | Complete (Weeks 1–2) |
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
-| ADRs | 0001–0034 |
-| Tests | 1524 at the 2026-09-08 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| ADRs | 0001–0035 |
+| Tests | 1575 at the 2026-09-08 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
