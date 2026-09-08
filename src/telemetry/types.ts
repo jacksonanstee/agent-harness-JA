@@ -1,4 +1,4 @@
-export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop';
+export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop' | 'tool-rewrite';
 
 export interface TurnUsage {
   inputTokens: number;
@@ -49,10 +49,59 @@ export interface TurnCostPayload {
  * persisted, exported surface. Add one only when it can be derived truthfully
  * from `tool_response` (ADR-0032 made that field actually readable).
  */
+/**
+ * Structural MIRROR of the session layer's tool-trace phases and rewrite
+ * outcomes (issue #84). Deliberately NOT imported from src/session — telemetry
+ * is a leaf below harness (layering.test.ts), the same rule that makes
+ * `HookEventKind` a mirror of hooks' kinds and `SkillDropReason` a mirror of
+ * session's. The origin unions live in src/session/types.ts; a presence-record
+ * drift test in src/session/session.test.ts (the `SkillDropReason` idiom, G-10)
+ * proves the two stay equal, because nothing here can derive one from the other.
+ */
+export type ToolTracePhase = 'post-tool' | 'post-tool-failure';
+export type ToolAnnotationVerdict = 'block' | 'ask';
+export type ToolRewriteOutcome =
+  | 'applied'
+  | 'leaked'
+  | 'unobserved'
+  | 'unrewritten'
+  | 'skipped'
+  | 'failed-closed';
+/** Why an `unobserved` rewrite could not be confirmed in band (mirror, U-11). */
+export type ToolRewriteUnobservedReason =
+  | 'no-user-message'
+  | 'both-present'
+  | 'unwalkable'
+  | 'stream-ended';
+
 export interface ToolTracePayload {
   tool: string;
-  phase: 'post-tool';
+  /**
+   * 'post-tool' for a successful call, 'post-tool-failure' for a failed one
+   * (issue #84, D8). WIDENED from 'post-tool' only; `isToolTracePayload` and
+   * store.test.ts were extended in the same change (G-4) — a validator that
+   * still accepted 'post-tool' only would dead-letter every failure row.
+   */
+  phase: ToolTracePhase;
   resultSummary: string | null;
+  /** The injection verdict when the scan flagged this result, else absent (D5). */
+  annotation?: ToolAnnotationVerdict;
+}
+
+/**
+ * Model-facing rewrite decision for one tool call (issue #84, D5). Written when
+ * the outcome is decided (verifier), at stream end for each still-`unobserved`
+ * rewrite, and once per `unrewritten` call — every path leaves a row.
+ * `findings` is the per-leaf model-pass count; `truncated` marks an oversized
+ * leaf carrying the redactor's marker. `reason` is present on `unobserved` rows.
+ */
+export interface ToolRewritePayload {
+  tool: string;
+  tool_use_id: string | null;
+  findings: number;
+  truncated: boolean;
+  outcome: ToolRewriteOutcome;
+  reason?: ToolRewriteUnobservedReason;
 }
 
 /**
@@ -349,7 +398,8 @@ export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'turn-cost'; payload: TurnCostPayload })
   | (TelemetryEventBase & { type: 'tool-trace'; payload: ToolTracePayload })
   | (TelemetryEventBase & { type: 'hook-event'; payload: HookEventPayload })
-  | (TelemetryEventBase & { type: 'skill-drop'; payload: SkillDropPayload });
+  | (TelemetryEventBase & { type: 'skill-drop'; payload: SkillDropPayload })
+  | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload });
 
 interface TelemetryInputBase {
   sessionId: string;
@@ -363,7 +413,8 @@ export type TelemetryEventInput =
   | (TelemetryInputBase & { type: 'turn-cost'; payload: TurnCostPayload })
   | (TelemetryInputBase & { type: 'tool-trace'; payload: ToolTracePayload })
   | (TelemetryInputBase & { type: 'hook-event'; payload: HookEventPayload })
-  | (TelemetryInputBase & { type: 'skill-drop'; payload: SkillDropPayload });
+  | (TelemetryInputBase & { type: 'skill-drop'; payload: SkillDropPayload })
+  | (TelemetryInputBase & { type: 'tool-rewrite'; payload: ToolRewritePayload });
 
 export interface TelemetryFilter {
   sessionId?: string;

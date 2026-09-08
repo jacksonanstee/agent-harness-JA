@@ -23,6 +23,15 @@ export interface PostToolPayload {
   scan: unknown;
   /** Owned by security/secrets-scanner; typed `unknown` for the same reason. Leak-safe (offsets only). */
   redactions: unknown;
+  /**
+   * True when this fired for a FAILED tool call (issue #84, D8): `result` is
+   * then the SDK's error STRING, not a tool-output structure, and there is no
+   * rewrite channel (the model has already received the error). ADDITIVE and
+   * OPTIONAL, so a handler written before D8 compiles unchanged — but a handler
+   * that assumed post-tool meant success MUST now read this: absent or false is
+   * a successful call, true is a failure. See ADR-0035 Consequences.
+   */
+  failed?: boolean;
 }
 
 export interface SessionStartPayload {

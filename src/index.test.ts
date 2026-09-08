@@ -4,6 +4,9 @@ import * as barrel from './index.js';
 import type {
   AdversaryFn,
   ChallengeInput,
+  OutputAnnotation,
+  OutputRewrite,
+  OutputRewriteOutcome,
   RefusalSource,
   ScanResult,
   RedactResult,
@@ -104,9 +107,15 @@ describe('root barrel (src/index.ts)', () => {
     // names at all (ADR-0023 residual).
     const source: RefusalSource = 'system-event';
     const refusal: SessionRefusal = { source, category: null, fallbackModel: null };
+    // Issue #84 additive public types: reachable from the root barrel.
+    const outcome: OutputRewriteOutcome = 'applied';
+    const rewrite: OutputRewrite = { tool: 'Bash', tool_use_id: null, findings: 0, truncated: false, outcome };
+    const annotation: OutputAnnotation = { tool: 'Bash', tool_use_id: null, phase: 'post-tool', verdict: 'block', ruleIds: [] };
     expect(typeof adversary).toBe('function');
     expect(input.taskId).toBe('t');
     expect(refusal.source).toBe('system-event');
+    expect(rewrite.outcome).toBe('applied');
+    expect(annotation.phase).toBe('post-tool');
     expect([verdictOf, findingsOf, idOf, closeOf].every((f) => typeof f === 'function')).toBe(true);
   });
 });

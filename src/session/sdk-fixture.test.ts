@@ -134,3 +134,54 @@ describe('genuine SDK hook fixture', () => {
     expect(trace.payload.resultSummary).toContain(fixture._provenance.marker);
   });
 });
+
+// ---- Issue #84 pin 5: rewrite shape by construction against genuine traffic --
+//
+// Replay the FROZEN Bash post-tool event with stdout swapped for a synthetic
+// secret (assembled at runtime, never a literal in the repo). The returned
+// updatedToolOutput must carry EXACTLY the fixture's tool_response key set: the
+// shape-preserving walk is pinned against a real SDK payload, so a future SDK
+// that changes the Bash output shape reddens after re-capture.
+const FAKE_AWS_KEY = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+
+describe('genuine SDK hook fixture: rewrite channel (issue #84)', () => {
+  it('rewrites the frozen Bash output in place, preserving exactly the fixture key set (pin 5)', async () => {
+    const swapped: SdkPostToolUseInput = {
+      ...fixture.postToolUse,
+      tool_response: { ...(fixture.postToolUse.tool_response as Record<string, unknown>), stdout: `logged ${FAKE_AWS_KEY}` },
+    };
+    const outputs: unknown[] = [];
+    const query: QueryFn = (args) =>
+      (async function* () {
+        const signal = new AbortController().signal;
+        for (const matcher of args.options?.hooks?.PostToolUse ?? []) {
+          for (const cb of matcher.hooks as SdkHookCallback[]) {
+            outputs.push(await cb(swapped, 'toolu_fix', { signal }));
+          }
+        }
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-1' } as SdkMessage;
+        yield RESULT;
+      })();
+    const session = createSession(makeDeps({ query }), { skillsDir: '/nowhere' });
+    await session.run('echo the marker');
+
+    const hso = (outputs[0] as { hookSpecificOutput?: { updatedToolOutput?: unknown } } | undefined)?.hookSpecificOutput;
+    expect(hso?.updatedToolOutput).toBeDefined();
+    const rewritten = hso?.updatedToolOutput as Record<string, unknown>;
+    expect(Object.keys(rewritten).sort()).toEqual(
+      Object.keys(fixture.postToolUse.tool_response as Record<string, unknown>).sort(),
+    );
+    expect(rewritten.stdout).toContain('[REDACTED:aws-access-key-id]');
+    expect(rewritten.stdout).not.toContain(FAKE_AWS_KEY);
+  });
+
+  // TODO(orchestrator): re-run scripts/capture-sdk-hook-fixture.mjs with the
+  // failing drive so the fixture gains a genuine `postToolUseFailure` event
+  // (out-of-band, needs ANTHROPIC_API_KEY). Until then this leg is skipped, and
+  // D8's failure-hook shape rests on the SDK type plus the spike observation.
+  const failureFixture = (fixture as unknown as { postToolUseFailure?: { hook_event_name?: string; error?: string } }).postToolUseFailure;
+  it.skipIf(!failureFixture)('replays a genuine PostToolUseFailure event (skips until captured)', () => {
+    expect(failureFixture?.hook_event_name).toBe('PostToolUseFailure');
+    expect(typeof failureFixture?.error).toBe('string');
+  });
+});

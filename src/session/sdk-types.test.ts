@@ -9,20 +9,31 @@ import type {
   HookCallbackMatcher,
   HookJSONOutput,
   Options,
+  PostToolUseFailureHookInput,
+  PostToolUseFailureHookSpecificOutput,
   PostToolUseHookInput,
+  PostToolUseHookSpecificOutput,
   PreToolUseHookInput,
   PreToolUseHookSpecificOutput,
   SDKAPIRetryMessage,
   SDKMessage,
   SDKResultMessage,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   QueryOptions,
+  SdkHookCallback,
+  SdkHookInput,
   SdkHookMatcher,
+  SdkHookOutputFor,
   SdkResultMessage,
+  SdkPostToolFailureAnnotateOutput,
+  SdkPostToolRewriteOutput,
+  SdkPostToolUseFailureInput,
   SdkPostToolUseInput,
   SdkPreToolDenyOutput,
   SdkPreToolUseInput,
+  SdkUserMessage,
 } from './types.js';
 
 // True only if A is assignable to B.
@@ -39,9 +50,11 @@ const _postAssignable: Assignable<PostToolUseHookInput, SdkPostToolUseInput> = t
 const _preNoExtra: NoExtraKeys<SdkPreToolUseInput, PreToolUseHookInput> = true;
 const _postNoExtra: NoExtraKeys<SdkPostToolUseInput, PostToolUseHookInput> = true;
 
-// Output side: the deny bridge is the harness's one enforced model-facing
-// control, so its shape must be ACCEPTABLE to the SDK (our output assignable to
-// the SDK's), and the matcher must invent no key the SDK's matcher lacks. Note
+// Output side: the deny bridge is one of two enforced model-facing controls
+// (the other is the post-tool `updatedToolOutput` rewrite adopted in issue #84,
+// pinned below), so its shape must be ACCEPTABLE to the SDK (our output
+// assignable to the SDK's), and the matcher must invent no key the SDK's
+// matcher lacks. Note
 // the direction: for inputs the SDK value flows to us (SDK -> view); for outputs
 // our value flows to the SDK (view -> SDK).
 const _denyOutputAccepted: Assignable<SdkPreToolDenyOutput, HookJSONOutput> = true;
@@ -172,6 +185,101 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _seamExact,
       _seamScalarsMatchSdk,
       _seamRejectsAbort,
+    ]).toBeDefined();
+  });
+});
+
+// ---- Issue #84 D6 parity pins ------------------------------------------------
+//
+// The rewrite channel (updatedToolOutput) and the failure-hook annotation
+// channel (additionalContext on PostToolUseFailure) are typed per event; these
+// pins bind the harness views to the installed SDK in both directions, one per
+// key per direction (the 09-07 lesson: a union on the LEFT of `Assignable` is
+// an AND, so members are written out).
+
+// The rewrite output is ACCEPTABLE to the SDK, and its payload invents no key
+// the SDK's PostToolUse output lacks.
+const _rewriteAccepted: Assignable<SdkPostToolRewriteOutput, HookJSONOutput> = true;
+const _rewritePayloadNoExtra: NoExtraKeys<
+  SdkPostToolRewriteOutput['hookSpecificOutput'],
+  PostToolUseHookSpecificOutput
+> = true;
+
+// updatedToolOutput is declared on PostToolUse and NOT on PostToolUseFailure.
+const _updatedOnPostTool: Assignable<'updatedToolOutput', keyof PostToolUseHookSpecificOutput> = true;
+const _updatedNotOnFailure: Assignable<'updatedToolOutput', keyof PostToolUseFailureHookSpecificOutput> = false;
+// additionalContext is a string on both event outputs.
+const _ctxOnPostTool: Assignable<'additionalContext', keyof PostToolUseHookSpecificOutput> = true;
+const _ctxIsStringPostTool: Assignable<NonNullable<PostToolUseHookSpecificOutput['additionalContext']>, string> = true;
+const _ctxOnFailure: Assignable<'additionalContext', keyof PostToolUseFailureHookSpecificOutput> = true;
+const _ctxIsStringFailure: Assignable<NonNullable<PostToolUseFailureHookSpecificOutput['additionalContext']>, string> = true;
+
+// Failure hook input: the SDK value flows to the harness view (SDK -> view),
+// and the view invents no key the SDK lacks.
+const _failInputAssignable: Assignable<PostToolUseFailureHookInput, SdkPostToolUseFailureInput> = true;
+const _failInputNoExtra: NoExtraKeys<SdkPostToolUseFailureInput, PostToolUseFailureHookInput> = true;
+// Failure output: ACCEPTABLE to the SDK, additionalContext only.
+const _failOutputAccepted: Assignable<SdkPostToolFailureAnnotateOutput, HookJSONOutput> = true;
+const _failPayloadNoExtra: NoExtraKeys<
+  SdkPostToolFailureAnnotateOutput['hookSpecificOutput'],
+  PostToolUseFailureHookSpecificOutput
+> = true;
+
+// A failure output carrying updatedToolOutput does not type-check (the failure
+// hook has no rewrite channel, S-1).
+const _rejectsFailureRewrite: SdkPostToolFailureAnnotateOutput = {
+  hookSpecificOutput: {
+    hookEventName: 'PostToolUseFailure',
+    additionalContext: 'note',
+    // @ts-expect-error PostToolUseFailure output declares no updatedToolOutput
+    updatedToolOutput: 'gone',
+  },
+};
+
+// User-message view: SDK value flows to the view; the view invents no key.
+const _userAssignable: Assignable<SDKUserMessage, SdkUserMessage> = true;
+const _userNoExtra: NoExtraKeys<SdkUserMessage, SDKUserMessage> = true;
+
+// Bare-callback narrowing (U-8): a value typed by the BARE SdkHookCallback
+// still narrows `hookSpecificOutput?.permissionDecision`, because
+// SdkHookOutputFor<SdkHookInput> keeps the deny member.
+type BareOutput = Awaited<ReturnType<SdkHookCallback>>;
+const _bareIsWidest: Assignable<SdkHookOutputFor<SdkHookInput>, BareOutput> = true;
+const _bareNarrows: (o: BareOutput) => 'deny' | 'other' = (o) =>
+  o.hookSpecificOutput?.permissionDecision === 'deny' ? 'deny' : 'other';
+
+// A post-tool callback returning a PRE-tool deny is a type error (the mismatch
+// is reported at the assignment, where the whole function type is checked).
+// @ts-expect-error a PreToolUse deny is not a valid PostToolUse output
+const _postCannotDeny: SdkHookCallback<SdkPostToolUseInput> = async () => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse' as const,
+    permissionDecision: 'deny' as const,
+    permissionDecisionReason: 'x',
+  },
+});
+
+describe('issue #84 D6 rewrite/failure/user-message type parity', () => {
+  it('holds at compile time', () => {
+    expect([
+      _rewriteAccepted,
+      _rewritePayloadNoExtra,
+      _updatedOnPostTool,
+      _updatedNotOnFailure,
+      _ctxOnPostTool,
+      _ctxIsStringPostTool,
+      _ctxOnFailure,
+      _ctxIsStringFailure,
+      _failInputAssignable,
+      _failInputNoExtra,
+      _failOutputAccepted,
+      _failPayloadNoExtra,
+      _rejectsFailureRewrite,
+      _userAssignable,
+      _userNoExtra,
+      _bareIsWidest,
+      _bareNarrows,
+      _postCannotDeny,
     ]).toBeDefined();
   });
 });

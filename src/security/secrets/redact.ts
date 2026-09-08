@@ -15,8 +15,11 @@ const DEFAULT_MAX_FINDINGS = 50;
  * synchronous cost of the private-key rule's lazy body on attacker-sized tool
  * output (a >256 KB blob of unterminated `-----BEGIN … PRIVATE KEY-----`
  * headers is otherwise O(len · cap); see ADR-0013). 128 KB dwarfs any real
- * secret-bearing snippet, and the only consumer of the redacted text is a
- * 200-char telemetry summary.
+ * secret-bearing snippet. The redacted text now has TWO consumers (issue #84,
+ * D1, S-4): the 200-char telemetry summary AND the model-facing tool-output
+ * copy rewritten in place. An oversized leaf therefore reaches the model with
+ * the `[REDACTED:oversized-input]` marker in place of its unscanned tail —
+ * never the raw tail — and the session flags the rewrite `truncated`.
  */
 const MAX_INPUT = 131_072;
 const OVERSIZED_MARKER = '[REDACTED:oversized-input]';
