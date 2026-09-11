@@ -81,6 +81,40 @@ layer's injection scanner, no model call involved, so it runs on every PR.
   the committed baseline's rows, so a stale one fails the build rather than
   ageing in place.
 
+### Judge arm (`cli redteam --judge`): keyed, report-only
+
+Since [ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) the same
+command can measure the S-5 judge. It needs `ANTHROPIC_API_KEY`, never runs in
+CI, and never touches the gate: the heuristic arm runs first and unchanged and
+decides the exit code; the judge arm then makes one call per case the heuristic
+did not block, through the shipped `createJudgedScanner`, and derives both modes
+(`always` and `suspicious`) from that one call. Its scorecard is a separate file
+(`judge-scorecard-<stamp>.json`) with its own producer, never compared to the
+baseline, and its markdown opens with "report-only; not the gate". A second
+machine-readable line, `JUDGE_ARM=<skipped|complete|partial|failed>`, follows the
+gate line; `skipped` (after a heuristic infrastructure exit) and `failed`
+(nothing judged, an early stop after three consecutive failures, or a lost
+scorecard) exit 2, and `partial` prints a remedy line with the counts. One
+progress line per call goes to stderr with the case id and status, never text.
+
+<!-- corpus-gate: skip -->
+`--holdout <path>` adds a private held-out slice, a JSON array of `{ id, category,
+text, expected }` kept outside the repository (recommended home
+`~/.harness/redteam-holdout.json`), loaded as hostile input: guarded read, exact
+schema, a byte cap on each text, at most 100 cases, benign implies `pass` and
+malicious implies not `pass`, no id shared with the corpus, and two rules checked
+against the live scanner at load (every malicious case must be a heuristic
+`pass`, every benign case must be non-block). The slice used for ADR-0036 holds
+24 cases: 12 malicious and 12 benign, authored behind a wall and hashed before the
+judge prompt existed; its hash and id table are in that ADR.
+<!-- corpus-gate: resume -->
+
+The two preconditions below are met as follows: the held-out slice is the first;
+the second is met through its calibration-set branch (the labelled slice), with
+the agreement between two Claude tiers recorded as a consistency reading rather
+than the cross-provider quorum. The judge figures live in ADR-0036, dated with
+model ids, and are outside this document's corpus gate by construction.
+
 ## What counts as a regression (the E-3 gate)
 
 `cli redteam` is compare-by-default: every run's canonical JSON is diffed
@@ -107,7 +141,9 @@ Baseline update flow: `npm run redteam -- --update-baseline`, review the
 diff, commit `eval/redteam/baseline.json`. Exit codes: `0`
 (`GATE_FAILURE=none`), `1` (`false-block`, `drift`, or
 `false-block+drift`), `2` (`internal` — a producer/differ bug, which no
-baseline update could ever fix). `--update-baseline`'s own refusal paths
+baseline update could ever fix; under `--judge`, `2` also follows a
+`JUDGE_ARM=skipped|failed` line printed after the gate line, the heuristic
+scorecard having already been written). `--update-baseline`'s own refusal paths
 (symlink-planted baseline/tmp path, missing parent directory, write or
 rename failure) also exit `2` with a dedicated stderr message — a Week-4
 fix; previously such failures escaped as a gate-colliding exit `1` with no
@@ -256,3 +292,6 @@ which is exactly what attacker-LLM red-teaming (generative paraphrase
 mutation of existing cases) is good at producing. That is the natural
 corpus-growth mechanism when S-5 work begins; a static committed corpus is
 the v1 design, not the end state.
+
+*(2026-09-11: S-5 work began; ADR-0036 records how both preconditions were
+met for its measurement and names the same-family limitation.)*

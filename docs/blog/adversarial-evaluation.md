@@ -65,7 +65,7 @@ deny-all pre-tool hook), and it can never change an exit code
 ([ADR-0020](../decisions/0020-adversarial-verifier.md)). The adversary reads
 attacker-influenceable content, so it is itself injectable; a compromised
 adversary can at worst generate noise in a report-only channel. The same
-tighten-only philosophy shows up in the deferred LLM judge
+tighten-only philosophy shows up in the deferred (since 2026-09, built and measured, ADR-0036) LLM judge
 ([ADR-0016](../decisions/0016-llm-judge-design-deferred.md)): semi-trusted
 components get one-way authority, so successful attacks on them degrade into
 false positives, not policy bypasses.

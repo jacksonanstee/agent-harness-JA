@@ -123,7 +123,8 @@ channel has been ENFORCED since 2026-07-28 (ADR-0026).
    throw. Both path gates resolve against `process.cwd()`, the same base the
    SDK inherits — parity that must be re-verified if an executor with its own
    working directory ever lands (ADR-0015 §2).
-4. **The future LLM judge is semi-trusted.** It reads adversarial content and
+4. **The LLM judge is semi-trusted.** *(Implemented 2026-09-11, ADR-0036, and
+   measured; not yet wired into the session.)* It reads adversarial content and
    is itself injectable, so ADR-0016 grants it one-way authority: it may
    tighten a heuristic verdict, never loosen one. A successful attack on the
    judge can only produce false positives.
@@ -394,7 +395,12 @@ before any file is parsed or any session exists (ADR-0017 amendment). Cost
 hygiene, not a security boundary: R-10 already accepts arbitrary in-process
 oracle code from the same pack.
 Judge cost — the economic DoS — is handled by keeping the judge off by
-default, haiku-class, single-call, no-retry (ADR-0016 §5).
+default, haiku-class, single-call, no-retry (ADR-0016 §5); since ADR-0036 also
+by a 128 KiB input cap (over it, the judge is not called), a scanner-owned 60 s
+timer, and the isolation keys on the judge subprocess. A timed-out call's
+subprocess is not aborted (H-7) and lives until the run ends; the keyed judge
+arm bounds its calls by the corpus size, a cap of one hundred held-out cases and an early
+stop after three consecutive failures with nothing judged.
 
 The primary session is bounded by turn count only (amended 2026-09-07, issue
 #101). `maxTurns` (`run` default 10, `--max-turns`) is the sole whole-run bound
@@ -438,7 +444,7 @@ R-1/R-2 rather than half-solved.
 | R-2 | Interpreter-as-wrapper (`node -e`, `python -c`) and argv-level exec when the interpreter is allowlisted | Medium | argv[0] honesty: the gate bounds which program starts; containment beyond that needs an OS sandbox | ADR-0015 §3 |
 | R-3 | Network egress ungated (`WebFetch`/`WebSearch` absent from the tool table) | Medium | Needs a URL/domain dimension, not a path prefix; deliberate exclusion over false claim | ADR-0015 revisit-if |
 | R-4 | Model-facing enforcement gap for TOOL OUTPUT. NARROWED twice. 2026-07-28 (ADR-0026): the harness-owned skill channel is ENFORCED, because R-4's rationale never applied to a prompt the harness assembles itself, and a high-confidence block drops the whole skill. 2026-09-08 (ADR-0035): on a SUCCESSFUL tool call secret redaction now rewrites the copy the model reads (`updatedToolOutput`) and injection verdicts ANNOTATE it with a plain note. What remains of R-4 is the INJECTION leg, a flagged result is shown to the model with a note rather than withheld, and its composition with R-3; secret redaction of a successful call is no longer a model-facing gap | High | **Corrected 2026-08-25 (ADR-0032):** the SDK's `updatedToolOutput` rewrite channel DOES exist and was present in the pinned SDK all along. Separately the observe-only data plane was itself blind until issue #83, whose field-name repair made scan, redact and `resultSummary` run on every live call. **Adopted 2026-09-08 (ADR-0035):** the deterministic half shipped, so redaction is enforced for the model on a successful call and a verdict annotates it. **Re-cost held at High:** WITHHOLDING a flagged injection result stays deferred to the judge (issue #96), and R-4's steering half still composes with R-3 into §6's critical-shaped scenario, so the highest-value-follow-up standing passes to #96 rather than closing. The failed-call and rewrite residuals are R-22. Skill bodies: raw-scanned, charset-stripped, aggregate size budget, block-on-flag SHIPPED 2026-07-28 (ADR-0026); enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0026, ADR-0035, ADR-0006 amendment; §6 R-22 |
-| R-5 | LLM judge is injectable once implemented | Low (bounded) | Tighten-only authority converts compromise into false positives at worst | ADR-0016 §2 |
+| R-5 | LLM judge is injectable (implemented 2026-09-11, ADR-0036; measured, not wired). Input over the 128 KiB cap is never judged, and a consumer reading only `verdict` cannot tell that `pass` from a judged one (the result's `judge` field can) | Low (bounded) | Tighten-only authority converts compromise into false positives at worst; PR-B must decide what the session does with an unjudged oversized result before wiring | ADR-0016 §2, ADR-0036 |
 | R-6 | Path canonicalization conflates distinct files that share a canonical form: case folding on opt-in case-sensitive volumes (darwin/win32), and NFC folding of a file that genuinely differs only by Unicode form (added 2026-07-15, audit finding V11, to close the NFC/NFD deny-rule bypass) | Low | Both fold toward "same file → same string"; the bypasses they close (`/ETC/passwd`, NFC-vs-NFD deny dodge) were live-verified, and both conflation cases are rare and fail toward stricter for deny rules | ADR-0015 §2 |
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
 | R-8 | Project `defaultDecision` overrides the user's — a cloned repo can flip a hardened `deny` default back to `allow` for everything outside the user's explicit rules. *Added 2026-09-04 (issue #100, by execution): a project allow rule reaches the same result without touching the scalar, because the default is consulted only when no rule in either layer matches; a deny default is not sticky either way* | High (for hardened users) | ADR-0014 §5 chose scalar-override deliberately; sticky deny still wins wherever a user rule exists, so the posture that survives a cloned repo is a wildcard deny rule plus explicit allows in the user file (README Settings, ADR-0014 §3 correction) | ADR-0014 §5 |
@@ -507,6 +513,15 @@ not live values:
   guaranteed 0%) is a **reported** metric feeding the ADR-0016 §6 S-5
   decision. That reported on/off split is the test that the layer does
   real work rather than decorating the repo.
+
+  Since 2026-09-11 ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md))
+  a keyed, report-only judge arm reports a second column beside that gate: with
+  the default `claude-haiku-4-5` judge in `always` mode, 40 of 41 corpus and 9 of
+  12 held-out malicious cases detected with zero false-blocks (every miss an
+  unparseable reply), and with `claude-sonnet-5` 41 of 41 and 12 of 12 with zero
+  false-blocks and two benign `ask` flags; the figures, their dates, their limits
+  and the held-out slice's hash live in that ADR, outside this document's corpus
+  gate by construction.
 <!-- corpus-gate: resume -->
 
 ## 8. ADR index
@@ -532,6 +547,7 @@ not live values:
 | [0032](./decisions/0032-post-tool-hook-field-name-and-rewrite-channel.md) | The post-tool hook read `tool_output`; the SDK sends `tool_response`, so scan/redact/`resultSummary` were no-ops on every live run (issue #83, fixed with a compile-time SDK-parity pin and a genuine-traffic replay fixture); the `updatedToolOutput` rewrite channel R-4 called absent existed all along (enforcement deferred to issue #84) |
 | [0031](./decisions/0031-retained-deny-reasons-drop-the-glob.md) | Retained deny reasons drop the permission glob and index within the rule's own layer file (R-17 channels (c) and (d) closed); skill-drop paths store root-relative with a `pathForm` signal (channel (a) narrowed); the explicit-argument export scrub shipped as `telemetry export --scrub-prefix` (opt-in, per-row `scrub` signal, export copy only, channels unchanged); telemetry hook-event reasons redact-then-truncated at the mapping seam (issue #75, 2026-08-25) |
 | [0035](./decisions/0035-model-facing-enforcement-via-rewrite-channels.md) | Model-facing enforcement of tool output through the SDK's rewrite channels: on a successful call secrets are redacted from the model's copy (`updatedToolOutput`) and injection verdicts annotate it (`additionalContext`), verified in band in three states; nothing is withheld (that is the judge, issue #96) and a failed call's output cannot be rewritten (R-22) |
+| [0036](./decisions/0036-s5-judge-implemented-and-measured.md) | The S-5 judge implemented to the ADR-0016 contract (tighten-only, off by default, fails closed to the heuristic) with a public hardened builder (blind prompt, six SDK isolation keys, de-fanged, closed parse) and measured through a keyed report-only red-team arm on the corpus and a private held-out slice; not wired into the session, nothing withheld (PR-B of #96) |
 
 ## 9. OWASP Agentic Top 10 mapping
 

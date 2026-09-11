@@ -79,7 +79,7 @@ The most security-sensitive work in the project. Bias toward conservative defaul
 
 - [x] **Telemetry module** — SQLite schema, migration runner, per-turn cost + cache + tool-trace events. Export to JSONL. *(2026-07-06, ADR-0011)*
 - [x] **Injection scanner** (S-1) — heuristic pass with confidence-scored rules. *(2026-07-06, ADR-0012)*
-- [x] **LLM-judge** (S-5) — design locked (ADR-0016: tighten-only `scanWithJudge` contract); implementation deferred to the Week-3 <90% red-team trigger. *(2026-07-08)*
+- [x] **LLM-judge** (S-5) — design locked (ADR-0016: tighten-only `scanWithJudge` contract); implementation deferred to the Week-3 <90% red-team trigger. *(2026-07-08)* *(Corrected 2026-09-11: implemented and measured ahead of the trigger, ADR-0036; not yet wired.)*
 - [x] **Secret scanner** (S-2) — ≥20 patterns (API keys, tokens, private keys). Redact + log. *(2026-07-06, ADR-0013; 25 rules)*
 - [x] **Permission model** (S-3) — allow / ask / deny, inheritable from settings files. *(2026-07-06, ADR-0014)*
 - [x] **Sandbox boundaries** (S-4) — path allowlist for file tools, command allowlist for bash. *(2026-07-06, ADR-0015)*

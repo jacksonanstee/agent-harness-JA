@@ -106,4 +106,4 @@ building it.
 - A telemetry event type for scan verdicts is wanted → new `telemetry_events`
   CHECK-constraint migration (currently scan results ride only the hook payload
   + warnings).
-- Enforcement is needed before S-2 → revisit the observe-only decision (§9). **FIRED 2026-07-28 for the skill channel (see [ADR-0026](./0026-skill-channel-block-on-flag.md)) and again 2026-09-08 for tool output (see [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md), where a verdict now annotates the model's copy). WITHHOLDING tool output stays open for the judge, issue #96.**
+- Enforcement is needed before S-2 → revisit the observe-only decision (§9). **FIRED 2026-07-28 for the skill channel (see [ADR-0026](./0026-skill-channel-block-on-flag.md)) and again 2026-09-08 for tool output (see [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md), where a verdict now annotates the model's copy). WITHHOLDING tool output stays open for the judge, issue #96.** *(2026-09-11: the S-5 seam is consumed by ADR-0036's `createJudgedScanner`; withholding still open, PR-B.)*

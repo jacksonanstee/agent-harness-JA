@@ -122,7 +122,7 @@ Two issues to file, named here so they are not re-derived: the omitted `settingS
 ## Revisit if
 
 - The SDK signals a refused rewrite in band: then D4's stream heuristic can be replaced by reading that signal directly.
-- Issue #96 lands: its judge can move `block` from annotate to withhold behind a tighten-only decision, without reopening this seam.
+- Issue #96 lands: its judge can move `block` from annotate to withhold behind a tighten-only decision, without reopening this seam. *(2026-09-11: the judge exists and is measured, ADR-0036, PR-A of #96; it is not wired and nothing is withheld. Withholding remains PR-B's.)*
 - The SDK is bumped: re-capture the hook fixture (its `sdkVersion` assertion forces it) and re-run the keyed smoke, because the wire is what these gates check, not the declared type.
 - A custom-hook rewrite API is requested: today custom hooks observe only, and adding a hook-driven rewrite would need its own ordering and refusal-detection design.
 - A cleaner way to elicit a genuine tool-execution failure than `cat <cwd>/nonexistent.txt` is found: that elicitation is load-bearing for the D8 replay fixture and the smoke's drive 2.

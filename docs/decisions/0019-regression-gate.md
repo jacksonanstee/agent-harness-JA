@@ -154,6 +154,13 @@ surveyed pattern) was rejected outright: offsetting flips net to zero.
    remedy command would exit 1 in exactly the drift scenario it exists to
    resolve).
 
+   *(2026-09-11, ADR-0036: `redteam --judge` adds a second machine-readable
+   line, `JUDGE_ARM=<skipped|complete|partial|failed>`, printed after the gate
+   line; `skipped` and `failed` are a second exit-2 case that can follow a
+   `GATE_FAILURE=none` line, the heuristic scorecard having been written. Both
+   lines now start at column 0; before this the markdown footer had no trailing
+   newline and `GATE_FAILURE=` was glued to it.)*
+
 7. **Repo/CI consumer contract; Week-4 publish decision point.**
    `package.json` has a `bin` entry, so `redteam` is in principle an
    installed command — but the npm `files` list excludes `eval/`, and the
