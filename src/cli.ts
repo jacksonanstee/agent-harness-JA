@@ -431,7 +431,9 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (parsed.value.command === 'redteam') {
-    return runRedteamCommand(parsed.value);
+    // Async since issue #96 (`--judge` awaits the judge arm); `main` already
+    // awaits `runEval` the same way.
+    return await runRedteamCommand(parsed.value);
   }
 
   if (parsed.value.command === 'init') {

@@ -12,9 +12,17 @@ export * from './eval/index.js';
 // keep this file the single audited public surface (V15/V25, ADR-0023).
 export {
   createInjectionScanner,
+  createJudgedScanner,
   scan,
   DEFAULT_INJECTION_RULES,
+  JUDGE_MODES,
+  JUDGE_RULE_IDS,
+  JUDGE_TIMEOUT_MS,
+  MAX_JUDGE_INPUT_BYTES,
   STARTER_CORPUS,
+  toInjectionJudge,
+  // verdictRank / stricterVerdict stay on the security barrel only: no public
+  // signature references them (ADR-0023; issue #96 pin 13).
   createPermissionEvaluator,
   PermissionDenied,
   loadSettingsFile,
@@ -41,6 +49,14 @@ export type {
   InjectionJudge,
   InjectionRule,
   InjectionScanner,
+  JudgeCall,
+  JudgeCallResult,
+  JudgedScanner,
+  JudgedScannerOptions,
+  JudgedScanResult,
+  JudgeErrorKind,
+  JudgeMode,
+  JudgeRunState,
   RedTeamCase,
   RuleFamily,
   ScannerOptions,

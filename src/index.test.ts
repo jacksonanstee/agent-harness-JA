@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import * as barrel from './index.js';
+import * as securityBarrel from './security/index.js';
+import * as sessionBarrel from './session/index.js';
 import type {
   AdversaryFn,
   ChallengeInput,
+  JudgeCall,
+  JudgeCallResult,
+  JudgedScanner,
+  JudgedScannerOptions,
+  JudgedScanResult,
+  JudgeErrorKind,
+  JudgeMode,
+  JudgeRunState,
   OutputAnnotation,
   OutputRewrite,
   OutputRewriteOutcome,
+  QueryFn,
   RefusalSource,
   ScanResult,
   RedactResult,
@@ -87,6 +98,51 @@ describe('root barrel (src/index.ts)', () => {
       }
     }
     expect(collisions, collisions.join('; ')).toEqual([]);
+  });
+
+  // Issue #96 PR-A, pin 13 (ADR-0023, G-7, U-10): the judged scanner AND the
+  // hardened builder are public; the judge's wire internals are not, exactly
+  // as the verifier's buildChallengePrompt/parseAdversaryResponse/ParsedWire
+  // stay off. verdictRank/stricterVerdict live on the SECURITY barrel only.
+  it('exports the S-5 judge surface: createJudgedScanner, toInjectionJudge, the four constants and buildJudge', () => {
+    expect(typeof barrel.createJudgedScanner).toBe('function');
+    expect(typeof barrel.toInjectionJudge).toBe('function');
+    expect(typeof barrel.buildJudge).toBe('function');
+    expect(barrel.JUDGE_MODES).toEqual(['off', 'suspicious', 'always']);
+    expect(barrel.JUDGE_TIMEOUT_MS).toBe(60_000);
+    expect(barrel.MAX_JUDGE_INPUT_BYTES).toBe(131_072);
+    expect(barrel.JUDGE_RULE_IDS).toEqual({ block: 'judge-block', ask: 'judge-ask' });
+  });
+
+  it('keeps the judge wire internals off the root and session barrels, and the verdict helpers on the security barrel only', () => {
+    const rootNames = Object.keys(barrel);
+    const sessionNames = Object.keys(sessionBarrel);
+    for (const internal of ['buildJudgePrompt', 'parseJudgeResponse', 'JUDGE_SYSTEM_PROMPT']) {
+      expect(rootNames, `root barrel must not export ${internal}`).not.toContain(internal);
+      expect(sessionNames, `session barrel must not export ${internal}`).not.toContain(internal);
+    }
+    expect(sessionNames).toContain('buildJudge');
+    expect(typeof securityBarrel.verdictRank).toBe('function');
+    expect(typeof securityBarrel.stricterVerdict).toBe('function');
+    expect(rootNames).not.toContain('verdictRank');
+    expect(rootNames).not.toContain('stricterVerdict');
+  });
+
+  it('exports the judge type closure its public signatures reference (compile-time; npm run typecheck is the gate)', () => {
+    const mode: JudgeMode = 'suspicious';
+    const state: JudgeRunState = 'judged';
+    const kind: JudgeErrorKind = 'call-failed';
+    const ok: JudgeCallResult = { ok: true, verdict: 'ask', costUsd: null };
+    const failed: JudgeCallResult = { ok: false, errorKind: kind, costUsd: null };
+    const call: JudgeCall = async () => ok;
+    const opts: JudgedScannerOptions = { mode, judge: barrel.toInjectionJudge(call) };
+    const scanner: JudgedScanner = barrel.createJudgedScanner(opts);
+    const resultOf = (r: JudgedScanResult): JudgeRunState => r.judge;
+    const query: QueryFn = () => (async function* () {})();
+    const built: JudgeCall = barrel.buildJudge(query, 'claude-haiku-4-5');
+    expect(typeof scanner.scanWithJudge).toBe('function');
+    expect(typeof built).toBe('function');
+    expect([state, failed.ok, typeof resultOf]).toEqual(['judged', false, 'function']);
   });
 
   it('exports the type closure its own signatures reference (compile-time)', () => {

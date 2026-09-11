@@ -1,12 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
+import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { readPackageVersion, USAGE } from './shared.js';
+import { readPackageVersion, USAGE, writeScorecard } from './shared.js';
+
+/** The router table's model ids, deduplicated in first-appearance order: the
+ *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
+const TABLE_MODEL_IDS = [...new Set(DEFAULT_ROUTING_TABLE.map((rule) => rule.model))];
 
 describe('USAGE', () => {
   /**
@@ -54,6 +59,52 @@ describe('USAGE', () => {
     const evalLine = USAGE.split('\n').find((line) => line.includes(' eval '));
     expect(evalLine).toBeDefined();
     expect(evalLine).toContain('[--max-tasks <n>]');
+  });
+
+  // Issue #96 PR-A, pins 21 and 32: the redteam line gains the judge arm's
+  // three flags, and the `--judge-model` list is RENDERED from the router
+  // table the same way --shape/--type are (an empty or reordered table fails
+  // here; a hand-copied list goes red the day the table changes).
+  it('the redteam line names --judge, --holdout and a --judge-model list derived from the router table', () => {
+    const redteamLine = USAGE.split('\n').find((line) => line.includes(' redteam '));
+    expect(redteamLine).toBeDefined();
+    expect(TABLE_MODEL_IDS.length).toBeGreaterThan(1);
+    expect(redteamLine).toBe(
+      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${TABLE_MODEL_IDS.join('|')}>] [--holdout <path>]`,
+    );
+  });
+});
+
+describe('writeScorecard filename prefix (issue #96 pin 31)', () => {
+  const dirs: string[] = [];
+  const freshDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'write-scorecard-'));
+    dirs.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop();
+      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  const NOW_MS = Date.UTC(2026, 0, 2, 3, 4, 5, 678);
+  const card = { rows: [] as { id: string }[] };
+
+  it("default: 'scorecard-<stamp>.json' (the existing name, unchanged)", () => {
+    const out = freshDir();
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z.json') });
+    expect(readdirSync(out)).toEqual(['scorecard-2026-01-02T03-04-05Z.json']);
+  });
+
+  it("with the prefix 'judge-scorecard': 'judge-scorecard-<stamp>.json', so two writes in one second cannot collide", () => {
+    const out = freshDir();
+    const heuristic = writeScorecard(card, out, NOW_MS);
+    const judge = writeScorecard(card, out, NOW_MS, 'judge-scorecard');
+    expect(heuristic).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z.json') });
+    expect(judge).toEqual({ ok: true, path: join(out, 'judge-scorecard-2026-01-02T03-04-05Z.json') });
+    expect(readdirSync(out).sort()).toEqual(['judge-scorecard-2026-01-02T03-04-05Z.json', 'scorecard-2026-01-02T03-04-05Z.json']);
   });
 });
 

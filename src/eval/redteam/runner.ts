@@ -9,8 +9,10 @@ export type RedteamFailureKind = (typeof REDTEAM_FAILURE_KINDS)[number];
  *  author-controlled free-text field that reaches the rendered artifact, so a
  *  beacon-shaped id (`x-![b](http://e/x)`) must be rejected here at runtime —
  *  not only by the corpus unit test — mirroring golden's parse-time id schema.
- *  Same shape as `corpus.test.ts`'s pin; both guards are kept independently. */
-const CORPUS_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+ *  Same shape as `corpus.test.ts`'s pin; both guards are kept independently.
+ *  Exported for the holdout loader's schema and the judge runner (issue #96),
+ *  so the three id guards on the eval side share one pattern. */
+export const CORPUS_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export type RedteamRow = ScorecardRowCore<RedteamFailureKind> & {
   category: Category;

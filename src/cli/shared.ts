@@ -16,7 +16,7 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
-import { TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
+import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -48,10 +48,18 @@ export const WARNING_PREFIX = 'warning: ';
 // the usage text share one source for what is valid, so they cannot drift
 // apart the way two hand-copied lists would (the in-process-mutation
 // residual is issue #123).
+// The redteam line's --judge-model list derives from the router TABLE the
+// same way (issue #96, U-6): the ids, deduplicated in first-appearance
+// order. `parseRedteamArgs` validates against this same array, so a tier
+// bump that retires an id changes the usage text and the rejection together.
+// The router is not USED for the judge (ADR-0016 decision 6); only its list
+// of known ids is read.
+export const JUDGE_MODEL_IDS: readonly string[] = [...new Set(DEFAULT_ROUTING_TABLE.map((rule) => rule.model))];
+
 export const USAGE =
   `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>]\n` +
   '       agent-harness-ja eval [taskDir] [--challenge] [--max-tasks <n>]\n' +
-  '       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>]\n' +
+  `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${JUDGE_MODEL_IDS.join('|')}>] [--holdout <path>]\n` +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
   '       agent-harness-ja init [dir]';
 
@@ -65,10 +73,13 @@ export function sanitizeForTerminal(text: string): string {
 }
 
 
+// `prefix` names the producer (issue #96): the judge arm writes
+// `judge-scorecard-<stamp>.json` beside the heuristic `scorecard-<stamp>.json`,
+// so two writes in one second cannot collide.
 /** Filesystem-safe scorecard timestamp (spec: arbiter condition 2 — no colons). */
-export function scorecardFilename(nowMs: number): string {
+export function scorecardFilename(nowMs: number, prefix = 'scorecard'): string {
   const stamp = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-');
-  return `scorecard-${stamp}.json`;
+  return `${prefix}-${stamp}.json`;
 }
 
 /**
@@ -101,14 +112,17 @@ export function refuseSymlinkedDir(path: string): void {
  * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
  * committed at the output path), EACCES, and ENOSPC all end here too.
  *
- * Generic over any scorecard envelope (golden, redteam, ...): the same
- * constraint `toCanonicalJson` requires, so every scorecard producer writes
- * through this one helper instead of duplicating it.
+ * Generic over any scorecard envelope (golden, redteam, redteam-judge, ...):
+ * the same constraint `toCanonicalJson` requires, so every scorecard
+ * producer writes through this one helper instead of duplicating it. The
+ * optional filename `prefix` (default `scorecard`) is how the judge arm's
+ * write in the same second as the heuristic one lands on its own name.
  */
 export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }>(
   scorecard: T,
   outDir: string,
   nowMs: number = Date.now(),
+  prefix = 'scorecard',
 ): { ok: true; path: string } | { ok: false; message: string } {
   try {
     mkdirSync(outDir, { recursive: true });
@@ -116,7 +130,7 @@ export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }
     // opened by mkdir but does not close it — an in-process oracle can write
     // anywhere regardless (security-model R-10).
     refuseSymlinkedDir(outDir);
-    const path = join(outDir, scorecardFilename(nowMs));
+    const path = join(outDir, scorecardFilename(nowMs, prefix));
     writeFileSync(path, toCanonicalJson(scorecard));
     return { ok: true, path };
   } catch (error: unknown) {

@@ -1310,11 +1310,21 @@ describe('parseRedteamArgs', () => {
   // src/cli/redteam-command.test.ts (E-3 Task 8); these two are kept here
   // only as the pre-existing pin that parseArgs('redteam', ...) reaches this
   // parser unchanged post-extraction.
+  // The three judge fields (issue #96, ADR-0036 D4) are pinned by literal,
+  // as redteam-command.test.ts pins them; the parser's full coverage is there.
   it('defaults out to the shared eval scorecard directory', () => {
     const result = parseRedteamArgs([]);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'redteam', out: join('.harness', 'eval'), updateBaseline: false, baselinePath: 'eval/redteam/baseline.json' },
+      value: {
+        command: 'redteam',
+        out: join('.harness', 'eval'),
+        updateBaseline: false,
+        baselinePath: 'eval/redteam/baseline.json',
+        judge: false,
+        judgeModel: 'claude-haiku-4-5',
+        holdoutPath: null,
+      },
     });
   });
 
@@ -1322,7 +1332,15 @@ describe('parseRedteamArgs', () => {
     const result = parseRedteamArgs(['--out', '/tmp/redteam-out']);
     expect(result).toEqual({
       ok: true,
-      value: { command: 'redteam', out: '/tmp/redteam-out', updateBaseline: false, baselinePath: 'eval/redteam/baseline.json' },
+      value: {
+        command: 'redteam',
+        out: '/tmp/redteam-out',
+        updateBaseline: false,
+        baselinePath: 'eval/redteam/baseline.json',
+        judge: false,
+        judgeModel: 'claude-haiku-4-5',
+        holdoutPath: null,
+      },
     });
   });
 

@@ -44,4 +44,13 @@ describe('toRedteamMarkdown', () => {
     const evil = { ...card, rows: [{ ...card.rows[0]!, id: 'x-|pipe' }] };
     expect(toRedteamMarkdown(evil)).toContain('x-\\|pipe');
   });
+  // Issue #96 PR-A, pin 25's precondition (U-3, a pre-existing defect): the
+  // CLI writes `${gateLine}\n` straight after this markdown, so without a
+  // trailing newline `GATE_FAILURE=` is glued to the footer line and never
+  // starts at column 0 (live at 7033526: `grep -c '^GATE_FAILURE='` = 0).
+  it('ends with exactly one trailing newline, so the machine-readable line after it starts at column 0', () => {
+    const md = toRedteamMarkdown(card);
+    expect(md.endsWith('\n')).toBe(true);
+    expect(md.endsWith('\n\n')).toBe(false);
+  });
 });

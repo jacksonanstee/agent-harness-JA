@@ -84,8 +84,9 @@ export function createInjectionScanner(opts: ScannerOptions = {}): InjectionScan
   const rules = opts.rules ?? DEFAULT_INJECTION_RULES;
   const maxExcerpts = opts.maxExcerpts ?? DEFAULT_MAX_EXCERPTS;
   const maxExcerptLength = opts.maxExcerptLength ?? DEFAULT_MAX_EXCERPT_LENGTH;
-  // opts.judge is the S-5 seam: typed and accepted, unused in the heuristic
-  // stage (ADR-0012 — the async judge wrapper is additive).
+  // opts.judge is the S-5 seam: typed and accepted, IGNORED by this sync
+  // scanner. The seam is consumed by the additive async wrapper in judge.ts
+  // (`createJudgedScanner`, ADR-0012 / ADR-0016 / ADR-0036).
 
   function cleanExcerpt(raw: string): string {
     // Strip smuggling chars (incl. bidi controls) then C0/C1 controls, so an

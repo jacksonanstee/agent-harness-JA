@@ -31,7 +31,9 @@ export interface ScanResult {
   /**
    * True when only medium-confidence rules fired (verdict 'ask') — the
    * escalation trigger for the S-5 LLM-judge stage (ADR-0005 `judge:
-   * suspicious`).
+   * suspicious`). After `scanWithJudge` (`createJudgedScanner`, ADR-0036),
+   * `false` means the judge ran and the escalation is resolved; `true` means
+   * it did not run (see the result's `judge` field for why).
    */
   suspicious: boolean;
 }
@@ -48,7 +50,12 @@ export interface ScannerOptions {
   maxExcerpts?: number;
   /** Cap on each excerpt's length. Default 120. */
   maxExcerptLength?: number;
-  /** S-5 seam — accepted but unused in S-1 (heuristic-only). */
+  /**
+   * S-5 seam, ignored by the SYNC scanner (the heuristic stage never
+   * consults a judge); pass the judge to `createJudgedScanner`
+   * instead, whose async `scanWithJudge` composes it onto the heuristic
+   * verdict, tighten-only (ADR-0016, ADR-0036).
+   */
   judge?: InjectionJudge;
 }
 
