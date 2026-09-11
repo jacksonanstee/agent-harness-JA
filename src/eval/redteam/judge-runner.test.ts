@@ -340,6 +340,8 @@ describe('pin 27: runRedteamJudge', () => {
     const cases = [...CORPUS, ...HOLDOUT];
     const { judge } = scriptedJudge(cases, {});
     const card = await runRedteamJudge({ corpus: CORPUS, holdout: HOLDOUT, scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS });
+    // The loop below is vacuous on an empty `rows` (code-lens C-17).
+    expect(card.rows).toHaveLength(cases.length);
     for (const row of card.rows) {
       for (const [field, value] of Object.entries(row)) {
         if (typeof value !== 'string') continue;
@@ -348,6 +350,18 @@ describe('pin 27: runRedteamJudge', () => {
         }
       }
     }
+  });
+
+  it('a holdout id that duplicates a corpus id is refused before any call: the heuristic map is keyed by id (code-lens C-5)', async () => {
+    const [first] = CORPUS;
+    const [mal] = HOLDOUT;
+    if (first === undefined || mal === undefined) throw new Error('fixture is empty');
+    const clash: CorpusCase = { ...mal, id: first.id };
+    const { judge, spy } = scriptedJudge([...CORPUS, clash], {});
+    await expect(
+      runRedteamJudge({ corpus: CORPUS, holdout: [clash], scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS }),
+    ).rejects.toThrow(`duplicate case id: ${first.id}`);
+    expect(spy).toHaveBeenCalledTimes(0);
   });
 
   it('emits one onProgress line per attempted call: `judge <n>/<attempted> <id>: <status>`, sequential, id-and-status only', async () => {

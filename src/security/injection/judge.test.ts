@@ -522,4 +522,10 @@ describe('pin 14: the doc comments a consumer reads on the d.ts (U-2)', () => {
     const comment = docCommentBefore('suspicious: boolean;');
     expect(comment).toContain('scanWithJudge');
   });
+
+  it('InjectionJudge names its consumer (createJudgedScanner) and no longer calls itself unused (code-lens C-9)', () => {
+    const comment = docCommentBefore('export type InjectionJudge');
+    expect(comment).toContain('createJudgedScanner');
+    expect(comment).not.toContain('unused');
+  });
 });

@@ -247,8 +247,16 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     ...deps.corpus.map((c) => ({ c, slice: 'corpus' as const })),
     ...deps.holdout.map((c) => ({ c, slice: 'holdout' as const })),
   ];
+  // Ids key the heuristic map below, so a duplicate (a holdout id that
+  // collides with a corpus id, or a repeated id within either slice) would
+  // silently hand one case another's heuristic. `loadHoldout` refuses the
+  // collision for the CLI; this refuses it for every other caller of the
+  // public runner (code-lens fold, C-5).
+  const seen = new Set<string>();
   for (const { c } of cases) {
     if (!CORPUS_ID_RE.test(c.id)) throw new Error(`invalid case id: ${c.id}`);
+    if (seen.has(c.id)) throw new Error(`duplicate case id: ${c.id}`);
+    seen.add(c.id);
   }
   // The progress denominator: every case `always` mode escalates over both
   // slices in a complete run (heuristic non-block).

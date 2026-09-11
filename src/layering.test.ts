@@ -64,6 +64,14 @@ describe('eslint layering rules', () => {
     expect(violations.length).toBeGreaterThan(0);
   });
 
+  it('blocks the security layer importing the session judge builder (the one upward edge the S-5 judge tempts; code-lens C-12)', async () => {
+    const violations = await lintViolations(
+      'src/security/injection/bad-import.ts',
+      "import { buildJudge } from '../../session/judge.js';\nbuildJudge;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
   it('allows the security layer importing the shared internal leaf', async () => {
     const violations = await lintViolations(
       'src/security/injection/good-import.ts',

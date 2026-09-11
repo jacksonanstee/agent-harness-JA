@@ -6,16 +6,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import { CORPUS, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from '../eval/index.js';
-import type { BaselineScorecard, RedteamRow, RedteamTotals } from '../eval/index.js';
+import type { BaselineScorecard, RedteamJudgeRow, RedteamJudgeScorecard, RedteamRow, RedteamTotals } from '../eval/index.js';
 import { DEFAULT_ROUTING_TABLE } from '../router/index.js';
 import { scan } from '../security/index.js';
 import type { JudgeCall, Verdict } from '../security/index.js';
+import type { QueryFn, QueryOptions, SdkMessage } from '../session/types.js';
 import {
   DEFAULT_BASELINE_PATH,
   gateOutcome,
   JUDGE_MODEL,
   judgeArmOutcome,
+  judgeArmState,
   parseRedteamArgs,
+  remedyLine,
   runRedteamCommand,
 } from './redteam-command.js';
 import type { RedteamArgs, RedteamCommandDeps } from './redteam-command.js';
@@ -569,7 +572,7 @@ describe('runRedteamCommand: --update-baseline mode', () => {
 
 // ---- Issue #96 pins 22-26: the judge arm ---------------------------------------
 
-describe('runRedteamCommand --judge: every keyless refusal before the key is demanded (pin 22)', () => {
+describe('runRedteamCommand --judge: every refusal the judge arm adds comes before the key is demanded (pin 22)', () => {
   it('an INVALID holdout (a malicious case the heuristic blocks) refuses KEYLESS: exit 2, the shape-rule message, empty stdout, nothing written, no SDK import, no judge call', async () => {
     withoutKey();
     const { deps, judgeSpy, importSdk } = spiedDeps();
@@ -577,7 +580,9 @@ describe('runRedteamCommand --judge: every keyless refusal before the key is dem
     const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
     expect(code).toBe(2);
     expect(stderr).toContain("holdout case 'ho-caught' is direct but the heuristic scanner returns 'block'; ");
-    expect(stderr.includes(INVALID_HOLDOUT[0]?.text ?? ' ')).toBe(false);
+    const [invalid] = INVALID_HOLDOUT;
+    if (invalid === undefined) throw new Error('INVALID_HOLDOUT fixture is empty');
+    expect(stderr.includes(invalid.text)).toBe(false);
     expect(stderr).not.toContain('ANTHROPIC_API_KEY');
     expect(stdout).toBe('');
     expect(readdirSync(args.out)).toEqual([]);
@@ -658,6 +663,82 @@ describe('runRedteamCommand --judge: every keyless refusal before the key is dem
     expect(stderr).not.toContain('ANTHROPIC_API_KEY');
     expect(judgeSpy).toHaveBeenCalledTimes(0);
     expect(importSdk).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe('judgeArmState and remedyLine (code-lens C-7: the nothing-judged branch the compiled-in corpus never reaches)', () => {
+  const t = (stoppedEarly: boolean, attempted: number, judged: number): RedteamJudgeScorecard['totals'] =>
+    ({ stoppedEarly, attempted, judged }) as RedteamJudgeScorecard['totals'];
+
+  it('stopped early -> failed; nothing attempted or all judged -> complete; some judged -> partial; attempted but none judged -> failed', () => {
+    expect(judgeArmState(t(true, 3, 0))).toBe('failed');
+    expect(judgeArmState(t(false, 0, 0))).toBe('complete');
+    expect(judgeArmState(t(false, 4, 4))).toBe('complete');
+    expect(judgeArmState(t(false, 4, 1))).toBe('partial');
+    expect(judgeArmState(t(false, 2, 0))).toBe('failed');
+  });
+
+  it('the nothing-judged remedy (not an early stop) lists all four kinds with counts and the remedy tail, exactly; complete and skipped print none', () => {
+    const rows = [{ status: 'call-failed' }, { status: 'timed-out' }] as RedteamJudgeRow[];
+    const card = { totals: t(false, 2, 0), rows } as RedteamJudgeScorecard;
+    expect(remedyLine('failed', card)).toBe(
+      'judged 0/2; call-failed 1, timed-out 1, unparseable 0, unknown-enum 0; nothing was judged; check the key, the endpoint and the model id, then re-run',
+    );
+    expect(remedyLine('complete', card)).toBeNull();
+    expect(remedyLine('skipped', card)).toBeNull();
+  });
+});
+
+describe('runRedteamCommand --judge: obtainJudge from the SDK seam (code-lens C-3: the branch every deps.judge test bypasses)', () => {
+  const resultFor = (verdict: Verdict): SdkMessage => ({
+    type: 'result',
+    subtype: 'success',
+    result: JSON.stringify({ verdict }),
+    session_id: 'sdk-redteam-1',
+    num_turns: 1,
+    total_cost_usd: 0.001,
+    usage: { input_tokens: 10, output_tokens: 5 },
+  });
+
+  it("hands the operator's --judge-model id to every SDK query, not the default (m11)", async () => {
+    withFakeKey();
+    const captured: { prompt: string; options?: QueryOptions }[] = [];
+    const query: QueryFn = (call) => {
+      captured.push(call);
+      return (async function* () {
+        yield resultFor('pass');
+      })();
+    };
+    const importSdk = vi.fn(async (): Promise<{ query: unknown }> => ({ query }));
+    const args = baseArgs({ judge: true, judgeModel: 'claude-sonnet-5', baselinePath: byteEqualBaseline() });
+    const { code, stdout } = await captureIO(() => runRedteamCommand(args, { importSdk, now: () => NOW_MS }));
+    expect(importSdk).toHaveBeenCalledTimes(1);
+    expect(captured).toHaveLength(CORPUS_ATTEMPTED);
+    expect(new Set(captured.map((c) => c.options?.model))).toEqual(new Set(['claude-sonnet-5']));
+    expect(stdout.endsWith('JUDGE_ARM=complete\n')).toBe(true);
+    expect(code).toBe(0);
+  });
+
+  it('an SDK import failure: the stderr line names the package and the detail, JUDGE_ARM=failed, exit 2', async () => {
+    withFakeKey();
+    const importSdk = vi.fn(async (): Promise<{ query: unknown }> => {
+      throw new Error('boom: module not found');
+    });
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, { importSdk, now: () => NOW_MS }));
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/^could not load \S+ for --judge: boom: module not found$/m);
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
+  });
+
+  it('an SDK without query(): the pinned stderr line, JUDGE_ARM=failed, exit 2 (m12)', async () => {
+    withFakeKey();
+    const importSdk = vi.fn(async (): Promise<{ query: unknown }> => ({ query: undefined }));
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, { importSdk, now: () => NOW_MS }));
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/^The installed \S+ does not export query\(\); check the SDK version\.$/m);
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
   });
 });
 

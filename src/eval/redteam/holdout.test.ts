@@ -122,6 +122,21 @@ describe('loadHoldout (pin 29)', () => {
     );
   });
 
+  it("a path starting with '~' (the shell did not expand it) is refused with a message that says so, keyless, before any read (code-lens C-10)", () => {
+    const error = errorOf('~/.harness/redteam-holdout.json');
+    expect(error).toBeInstanceOf(HoldoutError);
+    expect(error?.message).toContain("starts with '~', which the shell did not expand");
+    expect(error?.message).not.toContain('no holdout file at');
+  });
+
+  it('a UTF-8 byte-order mark is refused by name, before the JSON parse (code-lens C-10)', () => {
+    const path = writeHoldout('\uFEFF[]');
+    const error = errorOf(path);
+    expect(error).toBeInstanceOf(HoldoutError);
+    expect(error?.message).toContain('byte-order mark');
+    expect(error?.message).not.toContain('failed to parse as JSON');
+  });
+
   it('a symlink at the file is refused', () => {
     const dir = freshDir();
     const real = join(dir, 'real.json');
@@ -158,12 +173,12 @@ describe('loadHoldout (pin 29)', () => {
   });
 
   it('invalid JSON: the message contains no input bytes', () => {
-    const path = writeHoldout('{[31mEVIL');
+    const path = writeHoldout('{\u001b[31mEVIL');
     const error = errorOf(path);
     expect(error).toBeInstanceOf(HoldoutError);
     expect(error?.message).not.toBe('');
     expect(error?.message).not.toContain('EVIL');
-    expect(error?.message).not.toContain('');
+    expect(error?.message).not.toContain('\u001b');
   });
 
   describe('schema misses (exact allowlist)', () => {

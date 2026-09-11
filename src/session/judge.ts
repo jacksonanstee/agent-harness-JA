@@ -13,8 +13,9 @@ import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './t
 // in-repo tests, kept off every barrel (ADR-0023's verifier precedent).
 //
 // This is the SECOND copy of the de-fanged single-completion shape
-// (`buildAdversary`, src/cli/eval-command.ts, is the first). ADR-0008's
-// pattern extracts at the fourth; PR-A records the copy and files nothing.
+// (`buildAdversary`, src/cli/eval-command.ts, is the first). The house rule
+// hoists a helper on its third consumer (ADR-0034, the guarded-read
+// precedent); PR-A records the copy and files the follow-up for the third.
 
 /**
  * Byte cap on the judge's reply before any parse. A literal, not an import:
@@ -130,8 +131,9 @@ function costOf(result: SdkResultMessage): number | null {
  * CLAUDE.md, MCP servers, built-in tools, discovered skills, the preset
  * system prompt and the transcript sink. Never wrapped in `createSession`
  * (no memory or telemetry pollution). One call, no harness retries; a
- * stream with no result message, or a transport that throws, is one opaque
- * `call-failed` (the model id is checked before the run by the CLI).
+ * stream with no result message, an error-subtype result, or a transport
+ * that throws, is one opaque `call-failed` (the model id is checked before
+ * the run by the CLI).
  * `costUsd` is read from `total_cost_usd` when finite, else null, on both
  * arms: a reply that failed to parse was still charged.
  */
@@ -171,7 +173,15 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
     }
     if (result === null) return { ok: false, errorKind: 'call-failed', costUsd: null };
     const costUsd = costOf(result);
-    const wire = parseJudgeResponse(result.result ?? '');
+    // An error-subtype result (the SDK's `SDKResultError`: no `result` field,
+    // the detail in `errors[]`) or a `result` that is not a string is a call
+    // that FAILED, not a reply that failed to parse; the cost, if any, was
+    // still charged. Without this branch a dead endpoint or a bad key was
+    // counted as `unparseable` (code-lens fold, C-2 and C-11).
+    if (result.subtype !== 'success' || typeof result.result !== 'string') {
+      return { ok: false, errorKind: 'call-failed', costUsd };
+    }
+    const wire = parseJudgeResponse(result.result);
     return wire.ok ? { ok: true, verdict: wire.verdict, costUsd } : { ok: false, errorKind: wire.errorKind, costUsd };
   };
 }
