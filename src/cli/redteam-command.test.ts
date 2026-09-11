@@ -751,6 +751,8 @@ describe('runRedteamCommand --judge: judgeArmOutcome drives the exit (pin 24)', 
     expect(columnZeroMatches(stdout, 'GATE_FAILURE=')).toBe(1);
     expect(columnZeroMatches(stdout, 'JUDGE_ARM=')).toBe(1);
     expect(stdout).toContain('JUDGE_ARM=failed\n');
+    // T19: the remedy line prints BEFORE the arm line, so the arm line is always the last line of stdout.
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
     expect(stdout).toMatch(
       /^judge stopped after 3 consecutive failures with nothing judged \(call-failed 2, unparseable 1\); check the key, the endpoint and the model id, then re-run$/m,
     );
@@ -793,6 +795,8 @@ describe('runRedteamCommand --judge: judgeArmOutcome drives the exit (pin 24)', 
     expect(judgeSpy).toHaveBeenCalledTimes(CORPUS_ATTEMPTED);
     expect(columnZeroMatches(stdout, 'JUDGE_ARM=')).toBe(1);
     expect(stdout).toContain('JUDGE_ARM=partial\n');
+    // T19: the remedy line prints BEFORE the arm line, so the arm line is always the last line of stdout.
+    expect(stdout.endsWith('JUDGE_ARM=partial\n')).toBe(true);
     expect(stdout).toMatch(
       new RegExp(
         `^judged ${CORPUS_ATTEMPTED - 2}/${CORPUS_ATTEMPTED}; call-failed 2, timed-out 0, unparseable 0, unknown-enum 0; the figures above are partial; re-run to complete$`,
