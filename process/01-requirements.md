@@ -31,7 +31,7 @@ Requirements are split into three layers matching the architecture (harness / se
 | S-2 | MUST | Secret patterns (API keys, tokens, private keys) are scanned in tool inputs and outputs; matches are redacted with a logged event. *(Note 2026-09-08, issue #84 (ADR-0035): the model-facing copy of a SUCCESSFUL tool call is now redacted too, rewritten in place through the SDK `updatedToolOutput` channel (D1), not only the harness's retained copies. A FAILED call's output cannot be rewritten, because its hook has no rewrite channel (D8), so the model still sees its raw error; the tool input side stays observe-only (D3).)* | Unit tests for ≥20 secret patterns drawn from `trufflehog`/`gitleaks` rule sets. |
 | S-3 | MUST | A permission model gates tool execution. Permissions are declarative (allow / ask / deny) and inheritable from settings files. | Integration test asserting denied tools never execute. |
 | S-4 | MUST | Bash/file tools execute inside a sandbox with a configurable allowlist of paths and commands. | Negative tests asserting blocked paths fail closed. |
-| S-5 | SHOULD | The injection scanner uses a hybrid heuristic + LLM-judge approach, with the LLM judge optional (off by default for cost). | Toggle test; documented in `docs/security-model.md`. |
+| S-5 | SHOULD | The injection scanner uses a hybrid heuristic + LLM-judge approach, with the LLM judge optional (off by default for cost). | Toggle test; documented in `docs/security-model.md`. *(2026-09-11: toggle test at the scanner level and the judge measured, ADR-0036; the hybrid in the running harness is PR-B of issue #96.)* |
 | S-6 | COULD | Threat model document maintained in `docs/security-model.md` covering STRIDE categories. | Deferred but tracked. |
 
 ## Eval layer

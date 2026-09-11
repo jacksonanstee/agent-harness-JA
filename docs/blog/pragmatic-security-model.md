@@ -41,6 +41,8 @@ down in bold.
 > channel, so its output reaches the model unredacted, now tracked as R-22.
 > Observe-only was a posture, not a fate.
 
+*(2026-09-11: the judge now exists and is measured, ADR-0036; withholding is still its call and still PR-B's.)*
+
 Why does writing it down matter beyond ethics? Because named gaps compose.
 The model's §6 chains R-4 with R-3 (ungated network egress) into the
 "critical-shaped scenario": flagged-but-not-blocked injection steers the

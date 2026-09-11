@@ -1,6 +1,6 @@
-# ADR-0016: LLM-judge second stage — design locked, implementation deferred
+# ADR-0016: LLM-judge second stage — design locked, implementation deferred (implemented 2026-09, ADR-0036)
 
-- **Status:** Accepted (implementation deferred)
+- **Status:** Accepted (implemented 2026-09-11 by [ADR-0036](./0036-s5-judge-implemented-and-measured.md), ahead of the §6 trigger; not yet wired into the session)
 - **Date:** 2026-07-08
 - **Requirements:** S-5 (SHOULD)
 - **Refines:** ADR-0005 (hybrid pipeline), ADR-0012 (heuristic stage + seam)
@@ -94,6 +94,11 @@ fires.
 
 ## Consequences
 
+*(Note, 2026-09-11, ADR-0036: the contract below is implemented as `createJudgedScanner`, whose result carries the
+`scanWithJudge` method rather than a module-level export, because no default judge can exist below the composition
+root. Decision 7 holds: the judge is a keyed, report-only arm beside the deterministic gate. The 2026-07-28 note on
+the skill channel is PR-B's decision.)*
+
 ### Positive
 
 - The seam is now a contract: Week-3 eval work can design against
@@ -123,7 +128,9 @@ fires.
 
 1. **Implement S-5 now.** Rejected — front-runs the Week-3 evidence the
    design says should drive it; adds cost and an injectable component with no
-   measured need.
+   measured need. *(2026-09-11: this is what ADR-0036 does. The reason lapsed:
+   the corpus and its three cited semantic misses now exist, and the judge was
+   measured on a held-out slice before any live effect was claimed.)*
 2. **Judge with full verdict authority (can downgrade).** Rejected — creates
    the verdict-laundering channel described in decision 2.
 3. **Drop S-5 entirely.** Rejected — the heuristic's known evasions (NFKC,
@@ -143,6 +150,8 @@ slice and bias-aware (quorum/calibrated) scoring — are defined in
 they bind any implementation triggered by the clauses below.)*
 
 - The Week-3 corpus pass rate falls below 90% → implement per this contract.
+  *(Not fired. Implemented 2026-09-11 anyway, at 90.24%, on the external
+  review's promotion (issue #96); argued in ADR-0036 rather than overlooked.)*
 - Judge cost dominates a typical run once implemented → cache verdicts on
   identical inputs (ADR-0005 revisit clause).
 - Numeric confidence calibration becomes possible from judge data →

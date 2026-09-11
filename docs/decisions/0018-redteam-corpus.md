@@ -292,7 +292,9 @@ read.
 - The three known misses (`indirect-09`, `jailbreak-03`, `exfil-02`) — or
   the broader jailbreak/paraphrase-persona gap they expose — motivate
   building the ADR-0016 S-5 judge; that decision should cite this ADR's
-  strength split, not the bare detection percentage.
+  strength split, not the bare detection percentage. *(2026-09-11: ADR-0036
+  reads the strength split, 23 `block` and 14 `ask` of 37, and carries the
+  three misses' judge results.)*
 - The corpus grows enough (materially beyond 51 cases) that per-case
   sensitivity (~2.2%) stops being a caveat worth stating.
 - A recalibration edit is ever made without an accompanying rule-confidence
