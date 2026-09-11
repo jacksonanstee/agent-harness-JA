@@ -152,8 +152,52 @@ const _sdkResultHasDurationApiMs: Assignable<'duration_api_ms', keyof SDKResultM
 const _viewReadsNoDurationMs: Assignable<'duration_ms', keyof SdkResultMessage> = false;
 const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMessage> = false;
 
-// Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks}.
-const _seamExact: ExactKeys<QueryOptions, 'model' | 'systemPrompt' | 'maxTurns' | 'hooks'> = true;
+// Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks}
+// plus the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6):
+// settingSources, strictMcpConfig, tools, skills, persistSession. Nine keys.
+// The SESSION still passes its four; the five are passed by the judge only.
+const _seamExact: ExactKeys<
+  QueryOptions,
+  | 'model'
+  | 'systemPrompt'
+  | 'maxTurns'
+  | 'hooks'
+  | 'settingSources'
+  | 'strictMcpConfig'
+  | 'tools'
+  | 'skills'
+  | 'persistSession'
+> = true;
+// Each new key is a structural mirror of the SDK's field, pinned one per key
+// in the harness -> SDK direction (a union on the LEFT of Assignable is an
+// AND, so members are written out). The array-typed keys must be MUTABLE as
+// the SDK declares them (G-5): a `readonly SettingSource[]` on the harness
+// side is NOT assignable to the SDK's `SettingSource[]` and reddens here.
+const _settingSourcesMirrorsSdk: Assignable<
+  NonNullable<QueryOptions['settingSources']>,
+  NonNullable<Options['settingSources']>
+> = true;
+const _strictMcpConfigMirrorsSdk: Assignable<
+  NonNullable<QueryOptions['strictMcpConfig']>,
+  NonNullable<Options['strictMcpConfig']>
+> = true;
+const _toolsMirrorsSdk: Assignable<NonNullable<QueryOptions['tools']>, NonNullable<Options['tools']>> = true;
+const _skillsMirrorsSdk: Assignable<NonNullable<QueryOptions['skills']>, NonNullable<Options['skills']>> = true;
+const _persistSessionMirrorsSdk: Assignable<
+  NonNullable<QueryOptions['persistSession']>,
+  NonNullable<Options['persistSession']>
+> = true;
+// The judge's literal isolation values type-check against the seam.
+const _judgeIsolationLiteral: QueryOptions = {
+  model: 'claude-haiku-4-5',
+  maxTurns: 1,
+  systemPrompt: 'bare',
+  settingSources: [],
+  strictMcpConfig: true,
+  tools: [],
+  skills: [],
+  persistSession: false,
+};
 // And the three scalar keys carry the SDK's value types (the hooks key is
 // pinned above by `_matcherNoExtra`), so a widening such as
 // `maxTurns?: number | string` reddens here rather than surviving keys-only.
@@ -185,6 +229,12 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _seamExact,
       _seamScalarsMatchSdk,
       _seamRejectsAbort,
+      _settingSourcesMirrorsSdk,
+      _strictMcpConfigMirrorsSdk,
+      _toolsMirrorsSdk,
+      _skillsMirrorsSdk,
+      _persistSessionMirrorsSdk,
+      _judgeIsolationLiteral,
     ]).toBeDefined();
   });
 });

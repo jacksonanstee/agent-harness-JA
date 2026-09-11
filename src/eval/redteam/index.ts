@@ -6,6 +6,21 @@ export type {
   RedteamScorecard,
   RedteamTotals,
 } from './runner.js';
+// The measured judge arm (issue #96, ADR-0036 D5/D6).
+export { DEFAULT_EARLY_STOP_AFTER, runRedteamJudge } from './judge-runner.js';
+export type {
+  JudgeStatus,
+  ModeTotals,
+  RedteamJudgeDeps,
+  RedteamJudgeMeta,
+  RedteamJudgeRow,
+  RedteamJudgeScorecard,
+  RedteamJudgeTotals,
+  Slice,
+} from './judge-runner.js';
+export { toRedteamJudgeMarkdown } from './judge-markdown.js';
+export { HoldoutError, loadHoldout, MAX_HOLDOUT_BYTES, MAX_HOLDOUT_CASES } from './holdout.js';
+export type { HoldoutCase } from './holdout.js';
 export {
   BaselineError,
   classifyDrift,

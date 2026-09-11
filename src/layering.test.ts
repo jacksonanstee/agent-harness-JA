@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 // Proves the no-restricted-imports layering rules in eslint.config.js
@@ -163,5 +166,50 @@ describe('eslint layering rules', () => {
       "import { toCanonicalJson } from '../scorecard/index.js';\ntoCanonicalJson;\n",
     );
     expect(violations).toEqual([]);
+  });
+});
+
+// Issue #96 PR-A, pin 20 (design spec D2; the second half is issue #102's ask):
+// no non-test source file under src/security/** or src/session/** imports the
+// SDK. The lint config does not ban the SDK from these layers (the judge
+// "calls the SDK directly via an injected dependency"), so this is a grep-
+// shaped pin that HOLDS the rule rather than proving a lint fires. It may pass
+// on the unmodified tree; it exists so src/session/judge.ts (the file that
+// would tempt it) and src/security/injection/judge.ts cannot grow the import.
+
+const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
+
+function sourceFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) {
+      out.push(...sourceFilesUnder(path));
+    } else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts') && !entry.endsWith('.d.ts')) {
+      out.push(path);
+    }
+  }
+  return out.sort();
+}
+
+/** Drops block comments and `//` line comments (a `//` after `:` is a URL, kept). */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+describe('SDK import wall (issue #96 pin 20 / issue #102)', () => {
+  it('no non-test .ts file under src/security/** or src/session/** names the SDK package outside a comment', () => {
+    const files = [...sourceFilesUnder(join(process.cwd(), 'src', 'security')), ...sourceFilesUnder(join(process.cwd(), 'src', 'session'))];
+    expect(files.length).toBeGreaterThan(0);
+    const offenders = files.filter((file) => stripComments(readFileSync(file, 'utf8')).includes(SDK_PACKAGE));
+    expect(offenders).toEqual([]);
+  });
+
+  it('the comment stripper it relies on cannot hide a real import (self-check)', () => {
+    expect(stripComments(`// ${SDK_PACKAGE}\nconst x = 1;`)).not.toContain(SDK_PACKAGE);
+    expect(stripComments(`/* ${SDK_PACKAGE} */ const x = 1;`)).not.toContain(SDK_PACKAGE);
+    expect(stripComments(`import { query } from '${SDK_PACKAGE}';`)).toContain(SDK_PACKAGE);
+    expect(stripComments(`const sdk = await import('${SDK_PACKAGE}');`)).toContain(SDK_PACKAGE);
+    expect(stripComments(`const u = 'https://x.invalid/${SDK_PACKAGE}';`)).toContain(SDK_PACKAGE);
   });
 });

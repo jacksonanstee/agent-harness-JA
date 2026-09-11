@@ -54,5 +54,8 @@ export function toRedteamMarkdown(scorecard: RedteamScorecard): string {
     '',
     '_Verdict deltas across arms (this scorecard vs. the off-arm control) will surface in the E-3 baseline diff._',
   ];
-  return lines.join('\n');
+  // Exactly one trailing newline (issue #96, U-3): the CLI writes the
+  // machine-readable `GATE_FAILURE=` line straight after this markdown, and
+  // without it the line was glued to the footer and never started at column 0.
+  return `${lines.join('\n')}\n`;
 }

@@ -231,6 +231,21 @@ export interface QueryOptions {
   model?: string;
   systemPrompt?: string;
   maxTurns?: number;
+  // The SDK's isolation keys (issue #96, ADR-0036 D3; G-1/G-2): structural
+  // mirrors of `Options` in the pinned SDK, parity-pinned one per key in
+  // sdk-types.test.ts. The array types are MUTABLE as the SDK declares them
+  // (G-5). The judge passes all five; the session passes none of them today
+  // (issue #140 decides `settingSources` for the session and the adversary).
+  /** `[]` disables every filesystem settings layer (SDK isolation mode). */
+  settingSources?: ('user' | 'project' | 'local')[];
+  /** `true` ignores `.mcp.json`, settings-declared and plugin MCP servers. */
+  strictMcpConfig?: boolean;
+  /** `[]` disables every built-in tool. */
+  tools?: string[];
+  /** `[]` loads no discovered skills. */
+  skills?: string[];
+  /** `false` writes no transcript under `CLAUDE_CONFIG_DIR`. */
+  persistSession?: boolean;
   // Typed per event so a callback that reads a post-only field (`tool_response`)
   // cannot be registered under `PreToolUse`, and so each callback returns only
   // the outputs valid for its event (D6). `PostToolUseFailure` is the failure
