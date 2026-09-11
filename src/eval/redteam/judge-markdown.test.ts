@@ -98,6 +98,33 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
     expect(lineWith(md, 'holdout', 'suspicious', '0/2')).toBeDefined();
   });
 
+  it('pins one mode line exactly, from eight distinct figures, so no two figures can swap labels unnoticed (code-lens C-4)', () => {
+    const distinct: RedteamJudgeScorecard = {
+      ...card,
+      totals: {
+        ...card.totals,
+        bySlice: {
+          ...card.totals.bySlice,
+          corpus: {
+            ...card.totals.bySlice.corpus,
+            always: { malicious: 12, detected: 9, blocked: 7, flaggedOnly: 2, missed: 3, benignJudged: 6, falseBlockCount: 1, falseFlagCount: 4 },
+          },
+        },
+      },
+    };
+    expect(lines(toRedteamJudgeMarkdown(distinct))).toContain(
+      '- **corpus / always:** detected 9/12 malicious; blocked 7 / flagged-only 2; missed 3; benign judged 6; false-blocks 1; false-flags 4',
+    );
+  });
+
+  it('renders the no-calls cost line exactly when nothing was attempted (code-lens C-14)', () => {
+    const idle: RedteamJudgeScorecard = {
+      ...card,
+      totals: { ...card.totals, attempted: 0, judged: 0, judgeErrors: 0, costUsd: null, costUnknown: 0 },
+    };
+    expect(lines(toRedteamJudgeMarkdown(idle))).toContain('- Judge cost: none (no calls attempted)');
+  });
+
   it('renders the cost as a floor with the unpriced count when any attempted call was unpriced', () => {
     const md = toRedteamJudgeMarkdown(card);
     expect(lineWith(md, 'Judge cost: ≥ $0.0123 (2 calls unpriced)')).toBeDefined();

@@ -449,8 +449,11 @@ function runHeuristicArm(args: RedteamArgs, now: () => number): GateExit {
 // ---- The judge arm (issue #96 PR-A, ADR-0036 D4) ----------------------------
 
 /** State over ATTEMPTED calls (rows the scanner escalated): a lost or
- *  stopped run measured nothing; a mixed run is still worth writing down. */
-function judgeArmState(totals: RedteamJudgeScorecard['totals']): JudgeArmState {
+ *  stopped run measured nothing; a mixed run is still worth writing down.
+ *  Exported for its unit pins: the compiled-in corpus holds far more
+ *  non-block cases than the early-stop threshold, so a CLI run always trips
+ *  the early stop before the nothing-judged branch (code-lens C-7). */
+export function judgeArmState(totals: RedteamJudgeScorecard['totals']): JudgeArmState {
   if (totals.stoppedEarly) return 'failed';
   if (totals.attempted === 0 || totals.judged === totals.attempted) return 'complete';
   if (totals.judged === 0) return 'failed';
@@ -472,8 +475,9 @@ const REMEDY_TAIL = 'check the key, the endpoint and the model id, then re-run';
  * `partial` lists all four failure kinds with their counts; the early stop
  * lists only the kinds that occurred. `complete` prints none (a write
  * failure prints `writeScorecard`'s message instead, before this is reached).
+ * Exported for the same reason as `judgeArmState`.
  */
-function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): string | null {
+export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): string | null {
   if (state !== 'partial' && state !== 'failed') return null;
   const { totals, rows } = card;
   const count = (status: JudgeStatus): number => rows.filter((r) => r.status === status).length;
@@ -581,8 +585,10 @@ async function runJudgeArm(
  * E-3: compare-by-default against a committed baseline (§Gate rule), or
  * `--update-baseline` to rewrite it.
  *
- * Order under `--judge` (D4; S-4, S-8, U-21): every keyless refusal before
- * the key is demanded. (1) The parse has already run. (2) The holdout loads
+ * Order under `--judge` (D4; S-4, S-8, U-21): every refusal the judge arm
+ * ADDS comes before the key is demanded; the heuristic arm's own refusals
+ * (a missing baseline, an unwritable output path) run inside that arm,
+ * after the key check, unchanged. (1) The parse has already run. (2) The holdout loads
  * NOW, keyless, before any scorecard; a `HoldoutError` is stderr + exit 2
  * and nothing is written. (3) No key: the pinned message, exit 2, nothing
  * written. (4) The heuristic arm runs unchanged and its exit is remembered.

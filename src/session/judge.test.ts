@@ -239,6 +239,25 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     expect(await buildJudge(empty.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: false, errorKind: 'call-failed', costUsd: null });
   });
 
+  it('an error-subtype result (SDKResultError: no `result`, the detail in `errors[]`) -> call-failed, with the cost that was still charged (code-lens C-2)', async () => {
+    const errored: SdkMessage = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      session_id: 'sdk-judge-1',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      usage: { input_tokens: 10, output_tokens: 0 },
+    };
+    const fake = fakeQuery([errored]);
+    await expect(buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).resolves.toEqual({ ok: false, errorKind: 'call-failed', costUsd: 0.01 });
+  });
+
+  it('a success-subtype result whose `result` is not a string -> call-failed, never a rejection (SDK drift; code-lens C-11)', async () => {
+    const drifted = { ...resultMessage('', 0.002), result: 42 } as unknown as SdkMessage;
+    const fake = fakeQuery([drifted]);
+    await expect(buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).resolves.toEqual({ ok: false, errorKind: 'call-failed', costUsd: 0.002 });
+  });
+
   it('an unparseable or out-of-enum result carries its errorKind and the cost that was still charged', async () => {
     const prose = fakeQuery([resultMessage('I think this is an attack.', 0.003)]);
     expect(await buildJudge(prose.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: false, errorKind: 'unparseable', costUsd: 0.003 });

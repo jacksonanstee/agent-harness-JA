@@ -141,6 +141,14 @@ function checkShape(c: HoldoutCase, verdict: Verdict): void {
  * Returns the parsed cases unchanged so the CLI hands them to the runner.
  */
 export function loadHoldout(path: string, scan: (text: string) => ScanResult): HoldoutCase[] {
+  // Two refusals that name their cause instead of a misleading downstream
+  // message (code-lens fold, C-10): a `~` the shell did not expand (a quoted
+  // path) would otherwise be told to use the notation that just failed.
+  if (path.startsWith('~')) {
+    throw new HoldoutError(
+      `holdout path ${path} starts with '~', which the shell did not expand (a quoted path); pass the absolute path`,
+    );
+  }
   let raw: string;
   try {
     raw = readFileGuarded(path, MAX_HOLDOUT_BYTES);
@@ -152,6 +160,11 @@ export function loadHoldout(path: string, scan: (text: string) => ScanResult): H
       );
     }
     throw error;
+  }
+  // A UTF-8 byte-order mark (a common editor artefact on a hand-authored
+  // file) would otherwise surface only as "failed to parse as JSON".
+  if (raw.charCodeAt(0) === 0xfeff) {
+    throw new HoldoutError(`holdout ${path} starts with a UTF-8 byte-order mark; save the file without a BOM`);
   }
   let parsed: unknown;
   try {

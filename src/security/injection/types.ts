@@ -40,7 +40,8 @@ export interface ScanResult {
 
 /**
  * S-5 seam (ADR-0012): an injected async judge that re-evaluates suspicious
- * text. Typed now so the S-5 wrapper is additive; unused in S-1.
+ * text. Consumed by `createJudgedScanner` (ADR-0036); the sync `scan()`
+ * never calls it. `toInjectionJudge` builds one from a `JudgeCall`.
  */
 export type InjectionJudge = (text: string, heuristic: ScanResult) => Promise<Verdict>;
 
