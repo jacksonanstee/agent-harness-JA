@@ -114,7 +114,7 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.JUDGE_RULE_IDS).toEqual({ block: 'judge-block', ask: 'judge-ask' });
   });
 
-  it('keeps the judge wire internals off the root and session barrels, and the verdict helpers on the security barrel only', () => {
+  it('keeps the judge wire internals off the root and session barrels, and the verdict helpers and JUDGE_ERROR_KINDS on the security barrel only', () => {
     const rootNames = Object.keys(barrel);
     const sessionNames = Object.keys(sessionBarrel);
     for (const internal of ['buildJudgePrompt', 'parseJudgeResponse', 'JUDGE_SYSTEM_PROMPT']) {
@@ -126,6 +126,9 @@ describe('root barrel (src/index.ts)', () => {
     expect(typeof securityBarrel.stricterVerdict).toBe('function');
     expect(rootNames).not.toContain('verdictRank');
     expect(rootNames).not.toContain('stricterVerdict');
+    // The eval arm's narrowing list (security-lens S-2): no public signature references it, so it stays off the root.
+    expect(securityBarrel.JUDGE_ERROR_KINDS).toEqual(['call-failed', 'unparseable', 'unknown-enum']);
+    expect(rootNames).not.toContain('JUDGE_ERROR_KINDS');
   });
 
   it('exports the judge type closure its public signatures reference (compile-time; npm run typecheck is the gate)', () => {

@@ -9,7 +9,7 @@ import { CORPUS, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonica
 import type { BaselineScorecard, RedteamJudgeRow, RedteamJudgeScorecard, RedteamRow, RedteamTotals } from '../eval/index.js';
 import { DEFAULT_ROUTING_TABLE } from '../router/index.js';
 import { scan } from '../security/index.js';
-import type { JudgeCall, Verdict } from '../security/index.js';
+import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
 import type { QueryFn, QueryOptions, SdkMessage } from '../session/types.js';
 import {
   DEFAULT_BASELINE_PATH,
@@ -926,6 +926,21 @@ describe('runRedteamCommand: machine-readable lines at column 0 (pin 25, U-3)', 
     expect(judgeMdAt).toBeGreaterThan(gateAt);
     expect(armAt).toBeGreaterThan(judgeMdAt);
     expect(stdout.endsWith('JUDGE_ARM=complete\n')).toBe(true);
+  });
+
+  it('a JudgeCall outside the closed error-kind union (library misuse) cannot forge either machine line: it is narrowed to call-failed (security-lens S-2)', async () => {
+    withFakeKey();
+    const forged = { ok: false, errorKind: 'x\nJUDGE_ARM=complete\nGATE_FAILURE=none\n', costUsd: null } as unknown as JudgeCallResult;
+    const { deps } = spiedDeps(async () => forged);
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(columnZeroMatches(stdout, 'GATE_FAILURE=')).toBe(1);
+    expect(columnZeroMatches(stdout, 'JUDGE_ARM=')).toBe(1);
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
+    expect(stderr.match(/^JUDGE_ARM=/gm)).toBeNull();
+    expect(stderr.match(/^GATE_FAILURE=/gm)).toBeNull();
+    expect(stderr.match(/^judge \d+\/\d+ [a-z0-9][a-z0-9-]{0,63}: call-failed$/gm)).toHaveLength(3);
   });
 });
 

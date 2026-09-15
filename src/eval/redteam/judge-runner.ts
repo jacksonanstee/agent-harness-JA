@@ -1,5 +1,5 @@
-import { createJudgedScanner, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
-import type { JudgeCall, JudgeCallResult, JudgedScanResult, ScanResult, Verdict } from '../../security/index.js';
+import { createJudgedScanner, JUDGE_ERROR_KINDS, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
+import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, ScanResult, Verdict } from '../../security/index.js';
 import { computeByFailureKind } from '../scorecard/index.js';
 import type { ScorecardRowCore, ScorecardTotalsCore } from '../scorecard/index.js';
 import { CORPUS_ID_RE, REDTEAM_FAILURE_KINDS } from './runner.js';
@@ -141,6 +141,11 @@ function recorder(judge: JudgeCall): Recorder {
   };
 }
 
+/** The seam's `errorKind` narrowed like the `ok` arm's verdict: a `JudgeCall`
+ *  outside the closed union (library misuse) reads `call-failed`, so no
+ *  caller-supplied string becomes a row status, a progress line or a cell. */
+const isJudgeErrorKind = (value: string): value is JudgeErrorKind => (JUDGE_ERROR_KINDS as readonly string[]).includes(value);
+
 /** `status` from the scanner's `judge` state first, the recorder second (U-18): no guessing from closure timing. */
 function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | null, id: string): JudgeStatus {
   switch (state) {
@@ -151,7 +156,7 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
     case 'timed-out':
       return 'timed-out';
     case 'failed':
-      return recorded !== null && !recorded.ok ? recorded.errorKind : 'call-failed';
+      return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) ? recorded.errorKind : 'call-failed';
     case 'off':
     case 'oversized':
       // Unreachable by construction: the arm runs in `always` mode, the loader

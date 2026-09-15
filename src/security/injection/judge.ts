@@ -32,7 +32,11 @@ export interface JudgedScanResult extends ScanResult {
   judge: JudgeRunState;
 }
 
-export type JudgeErrorKind = 'call-failed' | 'unparseable' | 'unknown-enum';
+/** The closed error kinds a `JudgeCall` may report. The eval arm narrows a
+ *  recorded kind against this list before it becomes a row status, exactly
+ *  as the `ok` arm's verdict is narrowed by `isVerdict`. */
+export const JUDGE_ERROR_KINDS = ['call-failed', 'unparseable', 'unknown-enum'] as const;
+export type JudgeErrorKind = (typeof JUDGE_ERROR_KINDS)[number];
 
 /**
  * The rich result of one judge completion: the verdict, or a closed error
@@ -91,6 +95,16 @@ export function toInjectionJudge(call: JudgeCall): InjectionJudge {
   };
 }
 
+/**
+ * The floor as the judge sees it: a copy with fresh arrays. The composition
+ * reads `heuristic` AFTER the call, so a judge that mutates its argument
+ * (library misuse; the shipped adapter discards the argument) cannot reach
+ * the object the tighten-only rule is applied to.
+ */
+function floorCopy(heuristic: ScanResult): ScanResult {
+  return { ...heuristic, rule_ids: [...heuristic.rule_ids], excerpts: [...heuristic.excerpts] };
+}
+
 type JudgeOutcome = { kind: 'timed-out' } | { kind: 'failed' } | { kind: 'judged'; verdict: Verdict };
 
 /**
@@ -114,7 +128,7 @@ function callUnderTimer(
     };
     let pending: Promise<Verdict>;
     try {
-      pending = Promise.resolve(judge(text, heuristic));
+      pending = Promise.resolve(judge(text, floorCopy(heuristic)));
     } catch {
       settle({ kind: 'failed' });
       return;

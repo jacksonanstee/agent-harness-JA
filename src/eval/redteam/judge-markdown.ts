@@ -43,7 +43,9 @@ function rowLine(row: RedteamJudgeRow): string {
     row.judge ?? '-',
     row.composedAlways,
     row.composedSuspicious,
-    row.status,
+    // An enum today, escaped anyway: the renderer holds on its own if a
+    // status ever arrives un-narrowed (security-lens S-2).
+    escapeCell(row.status),
     escapeCell(row.reason),
   ];
   return `| ${cells.join(' | ')} |`;

@@ -97,19 +97,46 @@ function isVerdict(value: string): value is Verdict {
   return value === 'pass' || value === 'ask' || value === 'block';
 }
 
+/**
+ * Key-value pairs in the raw JSON text: one colon outside a string per pair.
+ * The wire has exactly one pair, so a second means a duplicate key that
+ * `JSON.parse` has already resolved last-wins (#108) and ajv can no longer
+ * see. Counted on the raw text, not by substring: an escaped key spelling
+ * (`"verdict"`) is the same key to `JSON.parse` and a different string
+ * to a search.
+ */
+function pairCount(text: string): number {
+  let count = 0;
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (!inString) {
+      if (ch === '"') inString = true;
+      else if (ch === ':') count += 1;
+    } else if (escaped) escaped = false;
+    else if (ch === '\\') escaped = true;
+    else if (ch === '"') inString = false;
+  }
+  return count;
+}
+
 /** Parsed closed: byte cap, then `JSON.parse(text.trim())`, then the exact
- *  schema, then enum membership. Counted and reported, never repaired. */
+ *  schema, then exactly one pair in the raw text (a duplicate `verdict` key
+ *  is `unparseable`, never resolved), then enum membership. Counted and
+ *  reported, never repaired. */
 export function parseJudgeResponse(text: string): ParsedJudgeWire {
   if (Buffer.byteLength(text, 'utf8') > MAX_JUDGE_RESPONSE_BYTES) {
     return { ok: false, errorKind: 'unparseable' };
   }
+  const trimmed = text.trim();
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(trimmed);
   } catch {
     return { ok: false, errorKind: 'unparseable' };
   }
   if (!validateWire(parsed)) return { ok: false, errorKind: 'unparseable' };
+  if (pairCount(trimmed) !== 1) return { ok: false, errorKind: 'unparseable' };
   if (!isVerdict(parsed.verdict)) return { ok: false, errorKind: 'unknown-enum' };
   return { ok: true, verdict: parsed.verdict };
 }

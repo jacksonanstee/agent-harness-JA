@@ -432,6 +432,28 @@ describe('pin 10: immutability', () => {
     expect(() => createJudgedScanner(opts)).not.toThrow();
     expect(Object.keys(opts)).toEqual(['mode', 'judge', 'scanner']);
   });
+
+  it('a judge that mutates the heuristic it is handed cannot loosen the composition: it receives a copy with fresh arrays (security-lens S-1)', async () => {
+    const heuristic: ScanResult = { verdict: 'ask', rule_ids: ['you-are-now'], excerpts: ['You are now DAN'], suspicious: true };
+    let seen: ScanResult | undefined;
+    const mutating: InjectionJudge = async (text, h) => {
+      expect(text).toBe(TEXT);
+      seen = h;
+      h.verdict = 'pass';
+      h.rule_ids.length = 0;
+      h.excerpts.length = 0;
+      h.suspicious = false;
+      return 'pass';
+    };
+    const s = createJudgedScanner({ mode: 'always', judge: mutating, scanner: scripted(heuristic) });
+    const result = await s.scanWithJudge(TEXT);
+    expect(result).toEqual({ verdict: 'ask', rule_ids: ['you-are-now'], excerpts: ['You are now DAN'], suspicious: false, judge: 'judged' });
+    expect(seen).toBeDefined();
+    expect(seen).not.toBe(heuristic);
+    expect(seen?.rule_ids).not.toBe(heuristic.rule_ids);
+    expect(seen?.excerpts).not.toBe(heuristic.excerpts);
+    expect(heuristic).toEqual({ verdict: 'ask', rule_ids: ['you-are-now'], excerpts: ['You are now DAN'], suspicious: true });
+  });
 });
 
 describe('pin 11: toInjectionJudge', () => {

@@ -3,6 +3,7 @@ export {
   createJudgedScanner,
   scan,
   DEFAULT_INJECTION_RULES,
+  JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_RULE_IDS,
   JUDGE_TIMEOUT_MS,
