@@ -65,7 +65,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `security/injection-scanner`
 
 - **Owns:** detection of prompt-injection patterns in arbitrary text.
-- **Public API:** `scan(text: string): ScanResult` where `ScanResult = { verdict: 'pass' | 'block' | 'ask', rule_ids: string[], excerpts: string[], suspicious: boolean }` (`suspicious` = medium-only hits, the S-5 judge trigger). Heuristic stage shipped ([ADR-0012](./decisions/0012-injection-heuristics-implementation.md)); LLM-judge (S-5) is a typed seam.
+- **Public API:** `scan(text: string): ScanResult` where `ScanResult = { verdict: 'pass' | 'block' | 'ask', rule_ids: string[], excerpts: string[], suspicious: boolean }` (`suspicious` = medium-only hits, the S-5 judge trigger). Heuristic stage shipped ([ADR-0012](./decisions/0012-injection-heuristics-implementation.md)); LLM-judge (S-5) implemented as `createJudgedScanner` with a public `buildJudge` ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md)), not consumed by the session (its seam is the sync `scan`; wiring is PR-B of issue #96).
 - **Depends on:** `security/rules` (rule registry); the LLM-judge stage calls the SDK directly via an injected `InjectionJudge` — never the harness `router` ([ADR-0016](./decisions/0016-llm-judge-design-deferred.md)).
 - **Design notes:** Heuristic-first; LLM judge is off by default. See [ADR-0005](./decisions/0005-injection-scanner-hybrid.md).
 
@@ -131,7 +131,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `harness/session`
 
 - **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
-- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`.
+- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`; `buildJudge(query, model)`, the S-5 injection judge's single isolated model call, which takes the injected `query` and imports no SDK ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) D2).
 - **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
 - **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)). Each assistant text block passes the injected redactor before `onText` (fail-closed to the sentinel, issue #91); `resultText` on the returned result is raw and is redacted only at the memory write.
 
@@ -154,7 +154,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `eval/red-team`
 
 - **Owns:** the ≥50-case adversarial corpus and per-case pass/fail evaluation.
-- **Public API:** `runRedteam(corpus: readonly CorpusCase[], scan, opts): RedteamScorecard` — the corpus is compiled-in TS literals (no directory scan), and the scanner is injected as a function.
+- **Public API:** `runRedteam(corpus: readonly CorpusCase[], scan, opts): RedteamScorecard` — the corpus is compiled-in TS literals (no directory scan), and the scanner is injected as a function. The report-only judge arm (ADR-0036 D6): `runRedteamJudge(deps): Promise<RedteamJudgeScorecard>` over the corpus and a holdout, `loadHoldout(path, scan)` (the holdout file read as hostile input, D5) and `toRedteamJudgeMarkdown(scorecard)`.
 - **Depends on:** `eval/scorecard` for the scoring machinery; `security/injection-scanner` for verdict comparison; `internal/guarded-read` for the baseline file's symlink refusal, `O_NOFOLLOW` read and byte cap (one implementation shared with the settings loader and the scorecard-directory refusal since ADR-0034).
 - **Design notes:** Corpus categories — direct injection, indirect injection, jailbreak, exfil, and benign (the benign slice drives the absolute `falseBlockCount === 0` gate). Each case includes a `source` field citing the public research it draws from.
 
@@ -311,7 +311,7 @@ Configuration is fully optional — every module ships sensible defaults. The st
 
 These are not yet resolved. Each will be answered in an ADR before the affected module is built.
 
-1. **How is the LLM judge in the injection scanner invoked?** The scanner is in the security layer; the router is in the harness layer. The harness depending on security is correct; security depending on harness is not. Resolution: the judge calls Claude directly via the SDK, not via the router. The router is a harness-layer concept; the security layer talks to the SDK directly when it needs a model. **Resolved in [ADR-0016](./decisions/0016-llm-judge-design-deferred.md)** (design locked — tighten-only `scanWithJudge` contract; implementation deferred to the Week-3 red-team trigger).
+1. **How is the LLM judge in the injection scanner invoked?** The scanner is in the security layer; the router is in the harness layer. The harness depending on security is correct; security depending on harness is not. Resolution: the judge calls Claude directly via the SDK, not via the router. The router is a harness-layer concept; the security layer talks to the SDK directly when it needs a model. **Resolved in [ADR-0016](./decisions/0016-llm-judge-design-deferred.md)** (design locked — tighten-only `scanWithJudge` contract; implementation deferred to the Week-3 red-team trigger). *(2026-09-11: implemented and measured in [ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md); the builder lives in the session layer and takes an injected `query`, so the security layer still imports no SDK.)*
 
 2. **What is the exact schema for a `TaskDescriptor`?** Field names matter for clarity; the routing table is a public API. Will be locked in an ADR before Week 1 implementation.
 

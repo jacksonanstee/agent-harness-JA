@@ -123,3 +123,10 @@ Three design questions:
   limit of decision 3 belongs here: `stop` fires in `finally`, which a signal
   death skips; the harness installs no signal handler, so a Ctrl-C ends the
   process without the stop hook or the turn-cost row (security-model R-21).
+
+  **Added 2026-09-11 (issue #96, ADR-0036):** `QueryOptions` now mirrors nine SDK
+  keys. The five new ones (`settingSources`, `strictMcpConfig`, `tools`, `skills`,
+  `persistSession`) are the judge's isolation keys, passed only by `buildJudge`;
+  the session still passes its four, and `systemPrompt` is not new. The exact-keys
+  pin moved to nine in the same change; the session's own `settingSources` is
+  issue #140's decision.

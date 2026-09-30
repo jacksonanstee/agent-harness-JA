@@ -1,5 +1,5 @@
 import type { ScanResult } from '../../security/index.js';
-import { computeByFailureKind, type ScorecardEnvelope, type ScorecardRowCore } from '../scorecard/index.js';
+import { computeByFailureKind, type ScorecardEnvelope, type ScorecardRowCore, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type { Category, CorpusCase } from './types.js';
 
 export const REDTEAM_FAILURE_KINDS = ['missed', 'false-flag', 'false-block'] as const;
@@ -9,8 +9,10 @@ export type RedteamFailureKind = (typeof REDTEAM_FAILURE_KINDS)[number];
  *  author-controlled free-text field that reaches the rendered artifact, so a
  *  beacon-shaped id (`x-![b](http://e/x)`) must be rejected here at runtime —
  *  not only by the corpus unit test — mirroring golden's parse-time id schema.
- *  Same shape as `corpus.test.ts`'s pin; both guards are kept independently. */
-const CORPUS_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+ *  Same shape as `corpus.test.ts`'s pin; both guards are kept independently.
+ *  Exported for the holdout loader's schema and the judge runner (issue #96),
+ *  so the three id guards on the eval side share one pattern. */
+export const CORPUS_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export type RedteamRow = ScorecardRowCore<RedteamFailureKind> & {
   category: Category;
@@ -65,7 +67,7 @@ export function runRedteam(
   };
   return {
     schemaVersion: 1, producer: 'redteam',
-    meta: { createdAt: new Date(now()).toISOString(), harnessVersion: opts.harnessVersion ?? '0.0.0-unknown', corpusSize: rows.length, armLabel: opts.armLabel },
+    meta: { createdAt: new Date(now()).toISOString(), harnessVersion: opts.harnessVersion ?? UNKNOWN_HARNESS_VERSION, corpusSize: rows.length, armLabel: opts.armLabel },
     rows: [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
     totals,
   };

@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { TaskDescriptor } from '../../router/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
-import { cleanForScorecard, computeByFailureKind } from '../scorecard/index.js';
+import { cleanForScorecard, computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type {
   GoldenFailureKind,
   GoldenRow,
@@ -347,7 +347,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   const loadOracle = deps.loadOracle ?? defaultLoadOracle;
   const parseTask = deps.parseTask ?? parseTaskFile;
   const now = deps.now ?? Date.now;
-  const harnessVersion = deps.harnessVersion ?? '0.0.0-unknown';
+  const harnessVersion = deps.harnessVersion ?? UNKNOWN_HARNESS_VERSION;
   const clean = (text: string): string => cleanForScorecard(text, deps.redactSecrets);
 
   // id is NOT run through clean(): redacting a schema-valid id would corrupt

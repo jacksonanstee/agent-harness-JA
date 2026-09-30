@@ -1,12 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
+import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { readPackageVersion, USAGE } from './shared.js';
+import { apiKeyMissingMessage, loadSdkQuery, readPackageVersion, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
+
+/** The router table's model ids, deduplicated in first-appearance order: the
+ *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
+const TABLE_MODEL_IDS = [...new Set(DEFAULT_ROUTING_TABLE.map((rule) => rule.model))];
 
 describe('USAGE', () => {
   /**
@@ -55,6 +60,52 @@ describe('USAGE', () => {
     expect(evalLine).toBeDefined();
     expect(evalLine).toContain('[--max-tasks <n>]');
   });
+
+  // Issue #96 PR-A, pins 21 and 32: the redteam line gains the judge arm's
+  // three flags, and the `--judge-model` list is RENDERED from the router
+  // table the same way --shape/--type are (an empty or reordered table fails
+  // here; a hand-copied list goes red the day the table changes).
+  it('the redteam line names --judge, --holdout and a --judge-model list derived from the router table', () => {
+    const redteamLine = USAGE.split('\n').find((line) => line.includes(' redteam '));
+    expect(redteamLine).toBeDefined();
+    expect(TABLE_MODEL_IDS.length).toBeGreaterThan(1);
+    expect(redteamLine).toBe(
+      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${TABLE_MODEL_IDS.join('|')}>] [--holdout <path>]`,
+    );
+  });
+});
+
+describe('writeScorecard filename prefix (issue #96 pin 31)', () => {
+  const dirs: string[] = [];
+  const freshDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'write-scorecard-'));
+    dirs.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop();
+      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  const NOW_MS = Date.UTC(2026, 0, 2, 3, 4, 5, 678);
+  const card = { rows: [] as { id: string }[] };
+
+  it("default: 'scorecard-<stamp>.json' (the existing name, unchanged)", () => {
+    const out = freshDir();
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z.json') });
+    expect(readdirSync(out)).toEqual(['scorecard-2026-01-02T03-04-05Z.json']);
+  });
+
+  it("with the prefix 'judge-scorecard': 'judge-scorecard-<stamp>.json', so two writes in one second cannot collide", () => {
+    const out = freshDir();
+    const heuristic = writeScorecard(card, out, NOW_MS);
+    const judge = writeScorecard(card, out, NOW_MS, 'judge-scorecard');
+    expect(heuristic).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z.json') });
+    expect(judge).toEqual({ ok: true, path: join(out, 'judge-scorecard-2026-01-02T03-04-05Z.json') });
+    expect(readdirSync(out).sort()).toEqual(['judge-scorecard-2026-01-02T03-04-05Z.json', 'scorecard-2026-01-02T03-04-05Z.json']);
+  });
 });
 
 describe('readPackageVersion', () => {
@@ -62,5 +113,55 @@ describe('readPackageVersion', () => {
     const raw = readFileSync(join(process.cwd(), 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as { version: string };
     expect(readPackageVersion()).toBe(parsed.version);
+  });
+});
+
+// Architecture lens A-3: the key refusal and the SDK load-and-guard had a copy
+// in each of cli.ts, eval-command.ts and redteam-command.ts, and only the
+// redteam text was pinned. One helper each; every caller's text pinned here.
+describe('apiKeyMissingMessage (architecture lens A-3)', () => {
+  const tail =
+    'Export it, then re-run:\n' +
+    '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
+    'Get a key at https://console.anthropic.com/settings/keys\n';
+
+  it('the run path: no reason clause', () => {
+    expect(apiKeyMissingMessage()).toBe(`ANTHROPIC_API_KEY is not set.\n\n${tail}`);
+  });
+
+  it('eval and redteam --judge: the reason in parentheses before the full stop', () => {
+    expect(apiKeyMissingMessage('required for eval')).toBe(`ANTHROPIC_API_KEY is not set (required for eval).\n\n${tail}`);
+    expect(apiKeyMissingMessage('required for --judge; the red-team gate itself runs without it')).toBe(
+      `ANTHROPIC_API_KEY is not set (required for --judge; the red-team gate itself runs without it).\n\n${tail}`,
+    );
+  });
+});
+
+describe('loadSdkQuery (architecture lens A-3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the one SDK package', () => {
+    expect(SDK_PACKAGE).toBe('@anthropic-ai/claude-agent-sdk');
+  });
+
+  it('returns the module query() and writes nothing', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const query = vi.fn();
+    await expect(loadSdkQuery(() => Promise.resolve({ query }))).resolves.toBe(query);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('a module without query() is reported on stderr and read as null', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    await expect(loadSdkQuery(() => Promise.resolve({ query: 'not a function' }))).resolves.toBeNull();
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk))).toEqual([
+      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
+    ]);
+  });
+
+  it('an import rejection propagates: each caller keeps its own policy for it', async () => {
+    await expect(loadSdkQuery(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
   });
 });

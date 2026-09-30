@@ -1,5 +1,5 @@
 export { toCanonicalJson } from './canonical.js';
-export { computeByFailureKind } from './core.js';
+export { computeByFailureKind, UNKNOWN_HARNESS_VERSION } from './core.js';
 export { diffRows } from './diff.js';
 export type { ChangedRow, RowDiff } from './diff.js';
 export type { Producer, ScorecardEnvelope, ScorecardRowCore, ScorecardTotalsCore } from './core.js';
