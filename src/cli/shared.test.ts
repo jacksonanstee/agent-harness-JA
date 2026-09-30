@@ -2,12 +2,12 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { readPackageVersion, USAGE, writeScorecard } from './shared.js';
+import { apiKeyMissingMessage, loadSdkQuery, readPackageVersion, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
 
 /** The router table's model ids, deduplicated in first-appearance order: the
  *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
@@ -113,5 +113,55 @@ describe('readPackageVersion', () => {
     const raw = readFileSync(join(process.cwd(), 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as { version: string };
     expect(readPackageVersion()).toBe(parsed.version);
+  });
+});
+
+// Architecture lens A-3: the key refusal and the SDK load-and-guard had a copy
+// in each of cli.ts, eval-command.ts and redteam-command.ts, and only the
+// redteam text was pinned. One helper each; every caller's text pinned here.
+describe('apiKeyMissingMessage (architecture lens A-3)', () => {
+  const tail =
+    'Export it, then re-run:\n' +
+    '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
+    'Get a key at https://console.anthropic.com/settings/keys\n';
+
+  it('the run path: no reason clause', () => {
+    expect(apiKeyMissingMessage()).toBe(`ANTHROPIC_API_KEY is not set.\n\n${tail}`);
+  });
+
+  it('eval and redteam --judge: the reason in parentheses before the full stop', () => {
+    expect(apiKeyMissingMessage('required for eval')).toBe(`ANTHROPIC_API_KEY is not set (required for eval).\n\n${tail}`);
+    expect(apiKeyMissingMessage('required for --judge; the red-team gate itself runs without it')).toBe(
+      `ANTHROPIC_API_KEY is not set (required for --judge; the red-team gate itself runs without it).\n\n${tail}`,
+    );
+  });
+});
+
+describe('loadSdkQuery (architecture lens A-3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the one SDK package', () => {
+    expect(SDK_PACKAGE).toBe('@anthropic-ai/claude-agent-sdk');
+  });
+
+  it('returns the module query() and writes nothing', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const query = vi.fn();
+    await expect(loadSdkQuery(() => Promise.resolve({ query }))).resolves.toBe(query);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('a module without query() is reported on stderr and read as null', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    await expect(loadSdkQuery(() => Promise.resolve({ query: 'not a function' }))).resolves.toBeNull();
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk))).toEqual([
+      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
+    ]);
+  });
+
+  it('an import rejection propagates: each caller keeps its own policy for it', async () => {
+    await expect(loadSdkQuery(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
   });
 });

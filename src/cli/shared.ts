@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { EvalUsageError, toCanonicalJson } from '../eval/index.js';
+import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { loadJsonSettings } from '../internal/settings.js';
@@ -16,6 +16,7 @@ import {
   SandboxSettingsError,
 } from '../security/index.js';
 import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
+import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
@@ -138,13 +139,46 @@ export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }
   }
 }
 
+/** The one SDK package; the CLI root is the only place it is imported (ADR-0010 decision 1). */
+export const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
+
+export type ImportSdk = () => Promise<{ query: unknown }>;
+
+const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;
+
+/**
+ * The CLI's SDK load-and-guard, hoisted on its third consumer (run, eval,
+ * redteam --judge; architecture lens A-3, the ADR-0034 rule). An import
+ * rejection propagates, so each caller keeps its own policy for it; a module
+ * without `query()` is reported on stderr and read as `null`.
+ */
+export async function loadSdkQuery(importSdk: ImportSdk = defaultImportSdk): Promise<QueryFn | null> {
+  const sdk = await importSdk();
+  if (typeof sdk.query !== 'function') {
+    process.stderr.write(`The installed ${SDK_PACKAGE} does not export query(); check the SDK version.\n`);
+    return null;
+  }
+  return sdk.query as QueryFn;
+}
+
+/** The key refusal every keyed command prints; `requiredFor` says why this command needs it (A-3). */
+export function apiKeyMissingMessage(requiredFor?: string): string {
+  const reason = requiredFor === undefined ? '' : ` (${requiredFor})`;
+  return (
+    `ANTHROPIC_API_KEY is not set${reason}.\n\n` +
+    'Export it, then re-run:\n' +
+    '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
+    'Get a key at https://console.anthropic.com/settings/keys\n'
+  );
+}
+
 export function readPackageVersion(): string {
   try {
     const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
     const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === 'string' ? parsed.version : '0.0.0-unknown';
+    return typeof parsed.version === 'string' ? parsed.version : UNKNOWN_HARNESS_VERSION;
   } catch {
-    return '0.0.0-unknown';
+    return UNKNOWN_HARNESS_VERSION;
   }
 }
 

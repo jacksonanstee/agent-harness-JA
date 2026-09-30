@@ -6,8 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
 import {
+  apiKeyMissingMessage,
   composeSecurity,
   hookRecordToTelemetryInput,
+  loadSdkQuery,
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
@@ -27,7 +29,7 @@ import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
 import { createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
-import type { QueryFn, SessionRefusal } from './session/index.js';
+import type { SessionRefusal } from './session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
@@ -441,12 +443,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    process.stderr.write(
-      'ANTHROPIC_API_KEY is not set.\n\n' +
-        'Export it, then re-run:\n' +
-        '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
-        'Get a key at https://console.anthropic.com/settings/keys\n',
-    );
+    process.stderr.write(apiKeyMissingMessage());
     return 2;
   }
 
@@ -496,14 +493,8 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
   }
 
-  const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
-  if (typeof sdk.query !== 'function') {
-    process.stderr.write(
-      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
-    );
-    return 2;
-  }
-  const query = sdk.query as QueryFn;
+  const query = await loadSdkQuery();
+  if (query === null) return 2;
 
   // One shared connection: openTelemetryDatabase runs the migration runner,
   // which owns the shared-DB schema (memory's DDL is migration 001).

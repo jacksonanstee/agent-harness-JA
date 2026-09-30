@@ -1,5 +1,5 @@
 import type { ScanResult } from '../../security/index.js';
-import { computeByFailureKind, type ScorecardEnvelope, type ScorecardRowCore } from '../scorecard/index.js';
+import { computeByFailureKind, type ScorecardEnvelope, type ScorecardRowCore, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type { Category, CorpusCase } from './types.js';
 
 export const REDTEAM_FAILURE_KINDS = ['missed', 'false-flag', 'false-block'] as const;
@@ -67,7 +67,7 @@ export function runRedteam(
   };
   return {
     schemaVersion: 1, producer: 'redteam',
-    meta: { createdAt: new Date(now()).toISOString(), harnessVersion: opts.harnessVersion ?? '0.0.0-unknown', corpusSize: rows.length, armLabel: opts.armLabel },
+    meta: { createdAt: new Date(now()).toISOString(), harnessVersion: opts.harnessVersion ?? UNKNOWN_HARNESS_VERSION, corpusSize: rows.length, armLabel: opts.armLabel },
     rows: [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
     totals,
   };

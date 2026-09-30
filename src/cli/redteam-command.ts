@@ -32,13 +32,17 @@ import type { JudgeCall } from '../security/index.js';
 import { buildJudge } from '../session/index.js';
 import type { QueryFn } from '../session/index.js';
 import {
+  apiKeyMissingMessage,
   EVAL_OUT_DIR,
   JUDGE_MODEL_IDS,
+  loadSdkQuery,
   readPackageVersion,
   sanitizeForTerminal,
+  SDK_PACKAGE,
   USAGE,
   writeScorecard,
 } from './shared.js';
+import type { ImportSdk } from './shared.js';
 
 /** Default location of the committed baseline (design §Update mechanics),
  *  beside `EVAL_OUT_DIR` — both are CLI-owned path constants. */
@@ -231,7 +235,7 @@ export function judgeArmOutcome(opts: { gateExit: GateExit; state: JudgeArmState
  */
 export interface RedteamCommandDeps {
   judge?: JudgeCall;
-  importSdk?: () => Promise<{ query: unknown }>;
+  importSdk?: ImportSdk;
   now?: () => number;
 }
 
@@ -242,17 +246,7 @@ const REMEDY_MESSAGE =
   'and commit eval/redteam/baseline.json. (The gate fails on improvements too — see docs/decisions/0019.)';
 
 /** U-15: `--judge` is the one keyed path of an otherwise keyless command. */
-const KEY_MESSAGE =
-  'ANTHROPIC_API_KEY is not set (required for --judge; the red-team gate itself runs without it).\n\n' +
-  'Export it, then re-run:\n' +
-  '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
-  'Get a key at https://console.anthropic.com/settings/keys\n';
-
-const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
-
-/** The `eval-command.ts` dynamic-import shape: the SDK is touched only here, only under `--judge`. */
-const defaultImportSdk = (): Promise<{ query: unknown }> =>
-  import(SDK_PACKAGE) as Promise<{ query: unknown }>;
+const KEY_MESSAGE = apiKeyMissingMessage('required for --judge; the red-team gate itself runs without it');
 
 function newCaseOnlySummary(findings: readonly DriftFinding[]): string {
   const n = findings.length;
@@ -501,20 +495,16 @@ export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): s
  */
 async function obtainJudge(args: RedteamArgs, deps: RedteamCommandDeps): Promise<JudgeCall | null> {
   if (deps.judge !== undefined) return deps.judge;
-  const importSdk = deps.importSdk ?? defaultImportSdk;
-  let sdk: { query: unknown };
+  // The SDK is touched only here, only under `--judge`.
+  let query: QueryFn | null;
   try {
-    sdk = await importSdk();
+    query = await loadSdkQuery(deps.importSdk);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${sanitizeForTerminal(`could not load ${SDK_PACKAGE} for --judge: ${detail}`)}\n`);
     return null;
   }
-  if (typeof sdk.query !== 'function') {
-    process.stderr.write(`The installed ${SDK_PACKAGE} does not export query(); check the SDK version.\n`);
-    return null;
-  }
-  return buildJudge(sdk.query as QueryFn, args.judgeModel);
+  return query === null ? null : buildJudge(query, args.judgeModel);
 }
 
 /**

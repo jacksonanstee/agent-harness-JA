@@ -1,6 +1,6 @@
-import { createJudgedScanner, JUDGE_ERROR_KINDS, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
+import { createJudgedScanner, JUDGE_ERROR_KINDS, MAX_JUDGE_INPUT_BYTES, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
 import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, ScanResult, Verdict } from '../../security/index.js';
-import { computeByFailureKind } from '../scorecard/index.js';
+import { computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type { ScorecardRowCore, ScorecardTotalsCore } from '../scorecard/index.js';
 import { CORPUS_ID_RE, REDTEAM_FAILURE_KINDS } from './runner.js';
 import type { RedteamFailureKind } from './runner.js';
@@ -159,9 +159,9 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
       return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) ? recorded.errorKind : 'call-failed';
     case 'off':
     case 'oversized':
-      // Unreachable by construction: the arm runs in `always` mode, the loader
-      // caps holdout text at the judge input cap and the corpus maximum is far
-      // below it (S-20). Reaching here is a wiring bug, not a judge state.
+      // Unreachable by construction: the arm runs in `always` mode and
+      // runRedteamJudge refuses an over-cap case before any call (A-2).
+      // Reaching here is a wiring bug, not a judge state.
       throw new Error(`runRedteamJudge: unexpected judge state '${state}' for case '${id}'`);
   }
 }
@@ -256,11 +256,14 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
   // collides with a corpus id, or a repeated id within either slice) would
   // silently hand one case another's heuristic. `loadHoldout` refuses the
   // collision for the CLI; this refuses it for every other caller of the
-  // public runner (code-lens fold, C-5).
+  // public runner (code-lens fold, C-5). The byte cap is the loader's third
+  // precondition: refused here too, before any call, so an over-cap case from
+  // another caller cannot throw mid-run after spend (architecture lens A-2).
   const seen = new Set<string>();
   for (const { c } of cases) {
     if (!CORPUS_ID_RE.test(c.id)) throw new Error(`invalid case id: ${c.id}`);
     if (seen.has(c.id)) throw new Error(`duplicate case id: ${c.id}`);
+    if (Buffer.byteLength(c.text, 'utf8') > MAX_JUDGE_INPUT_BYTES) throw new Error(`case text over the judge input cap: ${c.id}`);
     seen.add(c.id);
   }
   // The progress denominator: every case `always` mode escalates over both
@@ -330,7 +333,7 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     producer: 'redteam-judge',
     meta: {
       createdAt: new Date(now()).toISOString(),
-      harnessVersion: deps.harnessVersion ?? '0.0.0-unknown',
+      harnessVersion: deps.harnessVersion ?? UNKNOWN_HARNESS_VERSION,
       armLabel: 'judge',
       judgeModel: deps.judgeModel,
       corpusSize: deps.corpus.length,

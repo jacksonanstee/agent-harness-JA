@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createJudgedScanner, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
+import { createJudgedScanner, MAX_JUDGE_INPUT_BYTES, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../../security/index.js';
 import { MAX_JUDGE_RESPONSE_BYTES } from '../../session/judge.js';
 import { MAX_ADVERSARY_RESPONSE_BYTES } from '../verifier/index.js';
@@ -362,6 +362,30 @@ describe('pin 27: runRedteamJudge', () => {
       runRedteamJudge({ corpus: CORPUS, holdout: [clash], scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS }),
     ).rejects.toThrow(`duplicate case id: ${first.id}`);
     expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  it('a case over the judge input cap in BYTES is refused before any call, not thrown mid-run after spend (architecture lens A-2)', async () => {
+    const [mal] = HOLDOUT;
+    if (mal === undefined) throw new Error('fixture is empty');
+    // Two-byte code points: one byte over the cap, far under it in code points.
+    const text = 'é'.repeat(MAX_JUDGE_INPUT_BYTES / 2) + 'a';
+    expect(Buffer.byteLength(text, 'utf8')).toBe(MAX_JUDGE_INPUT_BYTES + 1);
+    expect(text.length).toBeLessThan(MAX_JUDGE_INPUT_BYTES);
+    const big: CorpusCase = { ...mal, id: 'ho-big-01', text };
+    const { judge, spy } = scriptedJudge([...CORPUS, big], {});
+    await expect(
+      runRedteamJudge({ corpus: CORPUS, holdout: [big], scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS }),
+    ).rejects.toThrow('case text over the judge input cap: ho-big-01');
+    expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  it('a case at exactly the judge input cap is judged, so the up-front refusal is not off by one (A-2 control)', async () => {
+    const [mal] = HOLDOUT;
+    if (mal === undefined) throw new Error('fixture is empty');
+    const atCap: CorpusCase = { ...mal, id: 'ho-cap-01', text: 'a'.repeat(MAX_JUDGE_INPUT_BYTES) };
+    const { judge } = scriptedJudge([atCap], {});
+    const card = await runRedteamJudge({ corpus: [], holdout: [atCap], scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS });
+    expect(card.rows.map((r) => [r.id, r.status])).toEqual([['ho-cap-01', 'judged']]);
   });
 
   it('emits one onProgress line per attempted call: `judge <n>/<attempted> <id>: <status>`, sequential, id-and-status only', async () => {

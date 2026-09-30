@@ -42,6 +42,7 @@ export {
   stripBidi,
   toCanonicalJson,
   truncateWellFormed,
+  UNKNOWN_HARNESS_VERSION,
 } from './scorecard/index.js';
 export type {
   ChangedRow,

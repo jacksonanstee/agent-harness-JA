@@ -178,12 +178,14 @@ describe('eslint layering rules', () => {
 });
 
 // Issue #96 PR-A, pin 20 (design spec D2; the second half is issue #102's ask):
-// no non-test source file under src/security/** or src/session/** imports the
-// SDK. The lint config does not ban the SDK from these layers (the judge
-// "calls the SDK directly via an injected dependency"), so this is a grep-
-// shaped pin that HOLDS the rule rather than proving a lint fires. It may pass
-// on the unmodified tree; it exists so src/session/judge.ts (the file that
-// would tempt it) and src/security/injection/judge.ts cannot grow the import.
+// no non-test source file outside the CLI root (src/cli.ts, src/cli/**)
+// imports the SDK (ADR-0010 decision 1). The lint config does not ban the SDK
+// from the library layers (the judge "calls the SDK directly via an injected
+// dependency"), so this is a grep-shaped pin that HOLDS the rule rather than
+// proving a lint fires. It may pass on the unmodified tree; it exists so
+// src/session/judge.ts, src/security/injection/judge.ts and the eval judge arm
+// cannot grow the import. It first walked security and session only, which let
+// an SDK import in src/eval/redteam/judge-runner.ts pass (architecture lens A-1).
 
 const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
 
@@ -200,17 +202,35 @@ function sourceFilesUnder(dir: string): string[] {
   return out.sort();
 }
 
+const SRC = join(process.cwd(), 'src');
+
+/** Every non-test source file except the CLI root, the one place the SDK is imported. */
+function libraryFiles(): string[] {
+  const cliRoot = join(SRC, 'cli');
+  return sourceFilesUnder(SRC).filter((file) => file !== `${cliRoot}.ts` && !file.startsWith(`${cliRoot}/`));
+}
+
 /** Drops block comments and `//` line comments (a `//` after `:` is a URL, kept). */
 function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
 describe('SDK import wall (issue #96 pin 20 / issue #102)', () => {
-  it('no non-test .ts file under src/security/** or src/session/** names the SDK package outside a comment', () => {
-    const files = [...sourceFilesUnder(join(process.cwd(), 'src', 'security')), ...sourceFilesUnder(join(process.cwd(), 'src', 'session'))];
+  it('no non-test .ts file outside the CLI root names the SDK package outside a comment', () => {
+    const files = libraryFiles();
     expect(files.length).toBeGreaterThan(0);
     const offenders = files.filter((file) => stripComments(readFileSync(file, 'utf8')).includes(SDK_PACKAGE));
     expect(offenders).toEqual([]);
+  });
+
+  it('walks every library layer, the eval judge arm included, and skips only the CLI root (self-check, A-1)', () => {
+    const files = libraryFiles().map((file) => file.slice(SRC.length + 1));
+    for (const layer of ['eval/redteam/judge-runner.ts', 'security/injection/judge.ts', 'session/judge.ts', 'internal/guarded-read.ts']) {
+      expect(files, `the wall must cover src/${layer}`).toContain(layer);
+    }
+    expect(files).not.toContain('cli.ts');
+    expect(files.filter((file) => file.startsWith('cli/'))).toEqual([]);
+    expect(files.filter((file) => file.endsWith('.test.ts'))).toEqual([]);
   });
 
   it('the comment stripper it relies on cannot hide a real import (self-check)', () => {

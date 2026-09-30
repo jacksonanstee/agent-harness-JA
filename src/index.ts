@@ -15,14 +15,19 @@ export {
   createJudgedScanner,
   scan,
   DEFAULT_INJECTION_RULES,
+  JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_RULE_IDS,
   JUDGE_TIMEOUT_MS,
   MAX_JUDGE_INPUT_BYTES,
   STARTER_CORPUS,
   toInjectionJudge,
-  // verdictRank / stricterVerdict stay on the security barrel only: no public
-  // signature references them (ADR-0023; issue #96 pin 13).
+  // The judge's values a consumer needs to compose, configure or validate it
+  // are public: the tuples behind JudgeMode and JudgeErrorKind (a consumer
+  // who builds a JudgeCall narrows errorKind against the latter), the rule
+  // ids and the caps. verdictRank / stricterVerdict are the eval arm's
+  // internal ordering helpers and stay on the security barrel only (ADR-0023;
+  // issue #96 pin 13; architecture lens A-4).
   createPermissionEvaluator,
   PermissionDenied,
   loadSettingsFile,

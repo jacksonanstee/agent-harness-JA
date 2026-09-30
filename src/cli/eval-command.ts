@@ -26,9 +26,11 @@ import {
 import { load as loadSkills } from '../skills/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import {
+  apiKeyMissingMessage,
   composeSecurity,
   EVAL_OUT_DIR,
   hookRecordToTelemetryInput,
+  loadSdkQuery,
   readPackageVersion,
   refuseSymlinkedDir,
   sanitizeForTerminal,
@@ -135,12 +137,7 @@ export const buildAdversary =
 
 export async function runEval(args: EvalArgs): Promise<number> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    process.stderr.write(
-      'ANTHROPIC_API_KEY is not set (required for eval).\n\n' +
-        'Export it, then re-run:\n' +
-        '  export ANTHROPIC_API_KEY=sk-ant-...\n\n' +
-        'Get a key at https://console.anthropic.com/settings/keys\n',
-    );
+    process.stderr.write(apiKeyMissingMessage('required for eval'));
     return 2;
   }
 
@@ -176,14 +173,8 @@ export async function runEval(args: EvalArgs): Promise<number> {
     throw error;
   }
 
-  const sdk = (await import('@anthropic-ai/claude-agent-sdk')) as { query: unknown };
-  if (typeof sdk.query !== 'function') {
-    process.stderr.write(
-      'The installed @anthropic-ai/claude-agent-sdk does not export query(); check the SDK version.\n',
-    );
-    return 2;
-  }
-  const query = sdk.query as QueryFn;
+  const query = await loadSdkQuery();
+  if (query === null) return 2;
 
   // Report-only second pass over already-passed tasks (E-4): the adversary is
   // routed the same way any other task descriptor is, and both the AdversaryFn

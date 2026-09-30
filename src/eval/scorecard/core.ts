@@ -17,6 +17,9 @@ export interface ScorecardTotalsCore<K extends string> {
 
 export type Producer = 'golden' | 'redteam';
 
+/** `meta.harnessVersion` when the package version cannot be read; one home for every producer (architecture lens A-3, the ADR-0008 fourth-consumer threshold). */
+export const UNKNOWN_HARNESS_VERSION = '0.0.0-unknown';
+
 export interface ScorecardEnvelope<Meta, Row, Totals> {
   schemaVersion: 1;
   producer: Producer;
