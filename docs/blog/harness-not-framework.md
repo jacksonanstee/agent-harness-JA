@@ -136,6 +136,14 @@ So far it has held.
 > the harness cannot inspect or suppress. The thesis holds; this example did
 > not, and the honest thing is to say so rather than rewrite the history.
 
+> **Update, 2026-09-08:** the deferred rewrite shipped for the deterministic
+> half (issue #84, [ADR-0035](../decisions/0035-model-facing-enforcement-via-rewrite-channels.md)).
+> On a successful tool call the redactor now rewrites the copy the model reads,
+> and a flagged result carries a plain note rather than being withheld. The
+> boundary this passage draws still holds where the SDK draws it: a FAILED tool
+> call routes to a hook with no rewrite channel, so the model sees its raw
+> error, and that residual is named (R-22) rather than forked around.
+
 If these essays share one stance, it is this: constrain power, make claims
 falsifiable, and prefer a visible limitation to a hidden capability.
 

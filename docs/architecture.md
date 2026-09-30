@@ -74,7 +74,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** redaction of secrets in tool inputs and outputs, in the memory summary, and in each assistant text block before the session emits it through `onText` (issue #91).
 - **Public API:** `redact(text: string): { redacted: string, findings: SecretFinding[] }`.
 - **Depends on:** built-in pattern registry; optional user-supplied patterns via config.
-- **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)); **observe-only** — redacts everything the harness persists/emits, but the model still sees the raw result (adopting the SDK's `updatedToolOutput` rewrite channel is deferred, ADR-0032/issue #84), same limit as S-1.
+- **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)). Since 2026-09-08 the model-facing copy of a SUCCESSFUL tool call is redacted too, rewritten in place through the SDK's `updatedToolOutput` channel ([ADR-0035](./decisions/0035-model-facing-enforcement-via-rewrite-channels.md)); a FAILED call's output cannot be rewritten (its hook has no rewrite channel) and the tool input side stays observe-only, so those still reach the model raw (R-4, R-22).
 
 #### `security/permissions`
 
@@ -228,7 +228,7 @@ The sequence below traces what happens when the user sends a message to a harnes
    → each skill scanned (raw fields + assembled section);
      a high-confidence block keeps it OUT of the system
      prompt and is reported in result.droppedSkills
-     [ADR-0026 — the one enforced model-facing gate]
+     [ADR-0026 skill drop; ADR-0035 rewrites/annotates tool output]
    │
    ▼
 4. hooks.fire('session-start')                           [harness]
@@ -261,7 +261,7 @@ The sequence below traces what happens when the user sends a message to a harnes
 12. hooks.fire('post-tool', { result, scan, redactions })[harness]
     │
     ▼
-13. SDK receives the tool result — NB: scan/redact are observe-only in v1 (harness data plane; the data plane itself was blind until issue #83 / ADR-0032 fixed the hook field name); model-facing rewriting via the SDK's `updatedToolOutput` channel is a deferred follow-up (ADR-0032, issue #84)
+13. SDK receives the tool result. NB: on a SUCCESSFUL call secrets are now redacted from the model's copy (`updatedToolOutput`) and a flagged verdict is annotated (`additionalContext`), verified in band (ADR-0035); a FAILED call routes to PostToolUseFailure, which has no rewrite channel, so its output reaches the model raw (R-22); the input side stays observe-only (ADR-0032, ADR-0035, issue #84)
     │
     ▼
 14. SDK turn completes

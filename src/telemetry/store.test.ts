@@ -876,7 +876,7 @@ describe('skill-drop events', () => {
 
   it('TELEMETRY_EVENT_TYPES covers every member of the union', () => {
     expect([...TELEMETRY_EVENT_TYPES].sort()).toEqual(
-      ['hook-event', 'skill-drop', 'tool-trace', 'turn-cost'],
+      ['hook-event', 'skill-drop', 'tool-rewrite', 'tool-trace', 'turn-cost'],
     );
   });
 
@@ -1287,5 +1287,92 @@ describe('openTelemetryDatabase', () => {
     dbs.push(db);
     const store = createTelemetryStore(db);
     expect(store.query()).toEqual([]);
+  });
+});
+
+// ---- Issue #84: tool-rewrite event + tool-trace failure phase (pin 6) --------
+describe('tool-rewrite events and the post-tool-failure phase', () => {
+  const TOOL_REWRITE: TelemetryEventInput = {
+    type: 'tool-rewrite',
+    sessionId: 's1',
+    turnId: 't1',
+    payload: { tool: 'Bash', tool_use_id: 'toolu_1', findings: 1, truncated: false, outcome: 'applied' },
+  };
+
+  it('round-trips a valid tool-rewrite row', () => {
+    const { store } = openStore();
+    const result = store.record(TOOL_REWRITE);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.type).toBe('tool-rewrite');
+  });
+
+  it('accepts every outcome in the enum and an optional reason', () => {
+    const { store } = openStore();
+    for (const outcome of ['applied', 'leaked', 'unobserved', 'unrewritten', 'skipped', 'failed-closed'] as const) {
+      const r = store.record({
+        ...TOOL_REWRITE,
+        payload: { ...TOOL_REWRITE.payload, outcome, ...(outcome === 'unobserved' ? { reason: 'no-user-message' } : {}) },
+      } as TelemetryEventInput);
+      expect(r.ok, outcome).toBe(true);
+    }
+  });
+
+  it('rejects an outcome outside the enum', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, outcome: 'nope' } } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects a negative or non-integer findings count', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, findings: -1 } } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+    expect(() =>
+      store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, findings: 1.5 } } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects a non-boolean truncated', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, truncated: 'yes' } } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+  });
+
+  it('accepts a tool-trace row with phase post-tool-failure and an annotation', () => {
+    const { store } = openStore();
+    const r = store.record({
+      type: 'tool-trace',
+      sessionId: 's1',
+      turnId: 't1',
+      payload: { tool: 'Bash', phase: 'post-tool-failure', resultSummary: 'Exit 1', annotation: 'block' },
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects a tool-trace row with an unknown phase', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'tool-trace',
+        sessionId: 's1',
+        turnId: 't1',
+        payload: { tool: 'Bash', phase: 'mid-tool', resultSummary: 'x' },
+      } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects a tool-trace annotation outside block|ask', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({
+        type: 'tool-trace',
+        sessionId: 's1',
+        turnId: 't1',
+        payload: { tool: 'Bash', phase: 'post-tool', resultSummary: 'x', annotation: 'deny' },
+      } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
   });
 });

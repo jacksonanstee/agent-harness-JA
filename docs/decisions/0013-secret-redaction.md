@@ -73,6 +73,7 @@ before they get there.
    (`updatedToolOutput`, `updatedInput`) for that is the same deferred decision
    that governs S-1's block/drop gating (ADR-0012 §9, ADR-0032, issue #84); it
    is a choice, not the missing capability the pre-2026-08-25 text called it.
+   *(Amended 2026-09-08 by [ADR-0035](./0035-model-facing-enforcement-via-rewrite-channels.md): the OUTPUT half is now ADOPTED. On a SUCCESSFUL tool call the secret redactor rewrites the copy the model reads, in place through `updatedToolOutput`, shape-preserving by a bounded JSON-leaf walk (D1); a FAILED call has no rewrite channel, so its error text is redacted for telemetry but still reaches the model raw (D8, security-model R-22). The INPUT side stays observe-and-log per D3: `updatedInput` is not adopted, because a redaction marker inside a command is a shell word and a secret in tool input is often legitimate.)*
    - **Deliberate exception — the post-tool hook `result`/`scan` fields carry
      RAW bytes** (a hook may need real content to act; injection detection needs
      raw text). These are typed `unknown` with a doc warning that handlers must

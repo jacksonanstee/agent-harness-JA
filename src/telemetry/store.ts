@@ -15,7 +15,12 @@ import type {
   TelemetryEventType,
   TelemetryFilter,
   TelemetryStore,
+  ToolAnnotationVerdict,
+  ToolRewriteOutcome,
+  ToolRewriteUnobservedReason,
+  ToolRewritePayload,
   ToolTracePayload,
+  ToolTracePhase,
   TurnCostPayload,
   TurnUsage,
 } from './types.js';
@@ -51,6 +56,7 @@ const EVENT_TYPE_PRESENCE: Record<TelemetryEventType, true> = {
   'tool-trace': true,
   'hook-event': true,
   'skill-drop': true,
+  'tool-rewrite': true,
 };
 
 export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonly TelemetryEventType[];
@@ -58,6 +64,53 @@ export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
 const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-error', 'hook-fired']);
+
+/**
+ * Exhaustive BY CONSTRUCTION over the telemetry MIRRORS of session's tool-trace
+ * phase and rewrite-outcome unions (issue #84), the EVENT_TYPE_PRESENCE idiom.
+ * Layering forbids importing the session origin, so these are the read-path
+ * source of truth; a presence-record drift test in session.test.ts (G-10)
+ * proves each equal to its origin. Grow an origin union without bumping the
+ * mirror here and the new value fails validation, throws in assertValidInput,
+ * and recordTelemetry downgrades the lost row to one stderr warning.
+ */
+const TOOL_TRACE_PHASE_PRESENCE: Record<ToolTracePhase, true> = {
+  'post-tool': true,
+  'post-tool-failure': true,
+};
+export const TOOL_TRACE_PHASES = Object.keys(TOOL_TRACE_PHASE_PRESENCE) as readonly ToolTracePhase[];
+const TOOL_TRACE_PHASE_SET: ReadonlySet<string> = new Set(TOOL_TRACE_PHASES);
+
+const TOOL_REWRITE_OUTCOME_PRESENCE: Record<ToolRewriteOutcome, true> = {
+  applied: true,
+  leaked: true,
+  unobserved: true,
+  unrewritten: true,
+  skipped: true,
+  'failed-closed': true,
+};
+export const TOOL_REWRITE_OUTCOMES = Object.keys(TOOL_REWRITE_OUTCOME_PRESENCE) as readonly ToolRewriteOutcome[];
+const TOOL_REWRITE_OUTCOME_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_OUTCOMES);
+
+const TOOL_ANNOTATION_VERDICT_PRESENCE: Record<ToolAnnotationVerdict, true> = { block: true, ask: true };
+const TOOL_ANNOTATION_VERDICT_SET: ReadonlySet<string> = new Set(Object.keys(TOOL_ANNOTATION_VERDICT_PRESENCE));
+
+// The `unobserved` reason mirror (U-11). A presence RECORD over the type, like
+// the outcome/verdict mirrors above, so adding a reason to the type is a compile
+// error here (A-2); `session.test.ts` drift-tests the exported array against the
+// session-side origin. Reason drift dead-letters the WHOLE tool-rewrite row (the
+// validator rejects it and recordTelemetry downgrades to a warning), so the
+// graceful degradation is not a licence to let it drift.
+const TOOL_REWRITE_REASON_PRESENCE: Record<ToolRewriteUnobservedReason, true> = {
+  'no-user-message': true,
+  'both-present': true,
+  unwalkable: true,
+  'neither-token': true,
+};
+export const TOOL_REWRITE_REASONS = Object.keys(
+  TOOL_REWRITE_REASON_PRESENCE,
+) as readonly ToolRewriteUnobservedReason[];
+const TOOL_REWRITE_REASON_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_REASONS);
 
 /**
  * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a
@@ -226,8 +279,34 @@ function isToolTracePayload(value: unknown): value is ToolTracePayload {
   return (
     isObject(value) &&
     typeof value.tool === 'string' &&
-    value.phase === 'post-tool' &&
-    isStringOrNull(value.resultSummary)
+    // WIDENED (issue #84, G-4): 'post-tool-failure' now validates too, so a
+    // failed-call trace row is not dead-lettered as a warning. Membership, not
+    // equality, from the exhaustive phase mirror above.
+    typeof value.phase === 'string' &&
+    TOOL_TRACE_PHASE_SET.has(value.phase) &&
+    isStringOrNull(value.resultSummary) &&
+    (value.annotation === undefined ||
+      (typeof value.annotation === 'string' && TOOL_ANNOTATION_VERDICT_SET.has(value.annotation)))
+  );
+}
+
+function isToolRewritePayload(value: unknown): value is ToolRewritePayload {
+  return (
+    isObject(value) &&
+    typeof value.tool === 'string' &&
+    isStringOrNull(value.tool_use_id) &&
+    // Non-negative integer: `typeof NaN`/`typeof Infinity` are both 'number'
+    // and JSON.stringify writes them as `null`, so the read-back would reject
+    // what the write accepted (the isHookEventPayload lesson). Number.isInteger
+    // closes both at the pre-write gate.
+    typeof value.findings === 'number' &&
+    Number.isInteger(value.findings) &&
+    value.findings >= 0 &&
+    typeof value.truncated === 'boolean' &&
+    typeof value.outcome === 'string' &&
+    TOOL_REWRITE_OUTCOME_SET.has(value.outcome) &&
+    (value.reason === undefined ||
+      (typeof value.reason === 'string' && TOOL_REWRITE_REASON_SET.has(value.reason)))
   );
 }
 
@@ -491,6 +570,8 @@ function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
       return isHookEventPayload(payload);
     case 'skill-drop':
       return isSkillDropPayload(payload);
+    case 'tool-rewrite':
+      return isToolRewritePayload(payload);
     default: {
       // `payload` is unknown here, so the old unguarded fall-through gave NO
       // compile-time protection: a fifth type would have been validated
@@ -538,6 +619,18 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       ...p,
       tool: sanitizeText(p.tool),
       resultSummary: p.resultSummary === null ? null : sanitizeText(p.resultSummary),
+      // `phase`/`annotation` ride through the spread untouched: both are
+      // validated closed unions, not attacker prose.
+    };
+  }
+  if (event.type === 'tool-rewrite') {
+    const p = event.payload;
+    return {
+      ...p,
+      tool: sanitizeText(p.tool),
+      // The SDK-supplied id can carry control chars; outcome/reason are
+      // validated enums and ride through the spread untouched.
+      tool_use_id: p.tool_use_id === null ? null : sanitizeText(p.tool_use_id),
     };
   }
   if (event.type === 'skill-drop') {

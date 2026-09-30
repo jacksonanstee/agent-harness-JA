@@ -75,6 +75,8 @@ export {
   // constants survive in one surface.
   DEFAULT_DB_PATH as TELEMETRY_DEFAULT_DB_PATH,
   TELEMETRY_EVENT_TYPES,
+  TOOL_REWRITE_OUTCOMES,
+  TOOL_TRACE_PHASES,
   MIGRATIONS,
   runMigrations,
 } from './telemetry/index.js';
@@ -90,7 +92,12 @@ export type {
   TelemetryEventType,
   TelemetryFilter,
   TelemetryStore,
+  ToolAnnotationVerdict,
+  ToolRewriteOutcome,
+  ToolRewritePayload,
+  ToolRewriteUnobservedReason,
   ToolTracePayload,
+  ToolTracePhase,
   TurnCostPayload,
   TurnUsage,
 } from './telemetry/index.js';

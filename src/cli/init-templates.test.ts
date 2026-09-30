@@ -36,6 +36,8 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     memoryEntryId: null,
     skillErrors: [],
     droppedSkills: [],
+    outputRewrites: [],
+    outputAnnotations: [],
     ...overrides,
   };
 }

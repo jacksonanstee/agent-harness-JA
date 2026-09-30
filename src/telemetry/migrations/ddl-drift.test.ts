@@ -131,4 +131,38 @@ describe('dual-owned schema constants', () => {
       afterDb.close();
     }
   });
+
+  // Same drift guard for the m003→m004 rebuild (issue #84): m004 hand-copies
+  // m003's column definitions to add 'tool-rewrite' to the CHECK. Bounds are
+  // pinned to `<= 3` and `<= 4` so this stays a permanent record of the
+  // m003→m004 delta, not a moving "current schema" check.
+  it('rebuilds telemetry_events identically to m003 except for the widened CHECK', () => {
+    const beforeDb = new Database(':memory:');
+    const afterDb = new Database(':memory:');
+    try {
+      runMigrations(beforeDb, MIGRATIONS.filter((m) => m.id <= 3));
+      runMigrations(afterDb, MIGRATIONS.filter((m) => m.id <= 4));
+
+      const tableSql = (db: Database.Database): string =>
+        (
+          db
+            .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'telemetry_events';")
+            .get() as { sql: string }
+        ).sql.replace(/\s+/g, ' ');
+
+      // Both sides are rename-rebuilds, so both carry the quoting artefact; the
+      // only allowed difference is the CHECK list.
+      const normalise = (sql: string): string => sql.replace(/CHECK \(type IN \([^)]*\)\)/, 'CHECK(<TYPES>)');
+
+      expect(normalise(tableSql(afterDb))).toBe(normalise(tableSql(beforeDb)));
+
+      // And pin that the widened list is exactly the old one plus one literal.
+      expect(tableSql(afterDb)).toContain(
+        "CHECK (type IN ('turn-cost','tool-trace','hook-event','skill-drop','tool-rewrite'))",
+      );
+    } finally {
+      beforeDb.close();
+      afterDb.close();
+    }
+  });
 });

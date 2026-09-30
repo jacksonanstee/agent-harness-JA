@@ -20,7 +20,12 @@ after five declared tools were found never to have been in it (ADR-0033, R-9),
 and a 2026-09-07 amendment recording that the primary session has no
 wall-clock, token or dollar ceiling and no cancellation channel, with the
 SDK's own retries invisible to every harness sink (§6 R-21, §9 ASI08;
-requirements H-7 and H-8).
+requirements H-7 and H-8), and a 2026-09-08 amendment for model-facing
+enforcement of tool output (ADR-0035, issue #84): on a successful call
+secrets are now redacted from the copy the model reads and a flagged result
+is annotated with a note, so R-4 narrows to the injection leg, and the
+rewrite's own residuals, headed by a failed call's output reaching the model
+unredacted, are R-22.
 This document says
 > what the layer defends, against whom, and — just as deliberately — what
 > it does not. Claims here are anchored to shipped code and to incidents
@@ -43,8 +48,12 @@ assembly (step 3): a skill whose content trips a high-confidence injection
 block is kept out of the system prompt entirely ([ADR-0026](./decisions/0026-skill-channel-block-on-flag.md)).
 
 Defaults are deliberately conservative where cheap (fail-closed on ambiguity,
-sticky deny, intersection merges) and honest where enforcement is not yet
-possible (S-1/S-2 are observe-only in v1 for tool output — see §6, residual risk R-4 — with one deliberate exception: the harness-owned skill channel is ENFORCED since 2026-07-28, ADR-0026).
+sticky deny, intersection merges) and honest where enforcement is partial. For
+tool output, since 2026-09-08 secret redaction rewrites the model-facing copy
+of a SUCCESSFUL call and injection verdicts add a note there (ADR-0035), while
+a flagged result is still shown to the model and a FAILED call's output reaches
+it unredacted (residual risks R-4 and R-22 in §6); the harness-owned skill
+channel has been ENFORCED since 2026-07-28 (ADR-0026).
 
 ## 2. Attacker model
 
@@ -154,7 +163,7 @@ converge. The property form closes it by construction and tracks ICU, and a
 test sweeps every code point in the class (6,080 of them) rather than a
 sample. Known evasions are named rather than papered
 over: NFKC-normalization tricks and homoglyphs are deferred to the semantic
-judge (ADR-0016), and the scanner is observe-only in v1 for tool output (R-4); the skill channel is enforced (ADR-0026).
+judge (ADR-0016), and on tool output a flagged result is annotated for the model with a note rather than withheld (R-4, ADR-0035); the skill channel is enforced (ADR-0026).
 
 The judge itself is a spoofing target — content arguing "this is safe" to the
 model evaluating it. ADR-0016's tighten-only rule bounds the blast radius.
@@ -313,12 +322,15 @@ This is the thinnest leg, and honestly so. Telemetry (ADR-0011) records every
 step of the turn with session/turn correlation ids, hook denials land as
 `denied-by-hook` events, and `rule_ids` is deliberately never capped by the
 excerpt budget so the record of *which* rules fired is complete (ADR-0012
-§8). Since 2026-07-29 (issue #46) the harness's one model-facing enforcement
-action is covered too: a skill dropped from the system prompt writes a
+§8). Since 2026-07-29 (issue #46) the harness's model-facing enforcement
+actions are covered too: a skill dropped from the system prompt writes a
 `skill-drop` row naming the skill, the reason, the scanned channels and the
-rules that fired, so "when did this skill stop reaching the model, and why?"
-is answerable from the record rather than only from a stderr line that scrolls
-away. Two limits on that, stated rather than glossed: recording is best-effort
+rules that fired, and since 2026-09-08 a model-facing tool-output rewrite
+writes a `tool-rewrite` row and a widened `tool-trace` phase carries the
+injection verdict (ADR-0035), so "when did this skill stop reaching the model,
+and why?" and "did the redaction the model was meant to get actually land?" are
+both answerable from the record rather than only from a stderr line that
+scrolls away. Two limits on that, stated rather than glossed: recording is best-effort
 (`deps.telemetry` is optional and a failed write is downgraded to a warning),
 and the row carries which rules fired, not the matched text (R-c). But the
 store is a local SQLite file with no integrity protection: any
@@ -341,14 +353,16 @@ closed** — inside the redactor a malformed rule is skipped per-rule, and at
 the session wiring a redactor throw records the sentinel
 `[REDACTION FAILED]` (`src/session/session.ts`), never the raw text.
 
-The disclosure paths that remain open are stated in R-3 and R-4: network
-egress tools (`WebFetch`/`WebSearch`) are ungated by design — they need a
-URL/domain dimension the path gate cannot honestly claim — and the *model*
-still sees unredacted output in v1, because redaction is a data-plane control
-and adopting the SDK's tool-output rewrite channel is a deferred decision
-(ADR-0032, issue #84). `Glob`/`Grep` — read-shaped tools an
-exfiltrating agent reaches for first — are gated since the dual-table fix,
-including the bare-directory case (`Glob(path='/secrets')` vs `/secrets/*`,
+The disclosure paths that remain open are stated in R-3 and R-4. Network
+egress tools (`WebFetch`/`WebSearch`) are ungated by design, because they need
+a URL/domain dimension the path gate cannot honestly claim. On tool output the
+picture changed on 2026-09-08 (ADR-0035): a SUCCESSFUL call's copy is now
+redacted before the model reads it, through the SDK's `updatedToolOutput`
+channel, but a FAILED call's output has no rewrite channel and reaches the
+model unredacted (R-22), and a flagged injection result is annotated rather
+than withheld, so it is still shown to the model. `Glob`/`Grep`, read-shaped
+tools an exfiltrating agent reaches for first, are gated since the dual-table
+fix, including the bare-directory case (`Glob(path='/secrets')` vs `/secrets/*`,
 a verify-pass finding).
 
 **Model choice is a disclosure dimension, not only a cost one (2026-07-27,
@@ -423,7 +437,7 @@ R-1/R-2 rather than half-solved.
 | R-1 | Symlink inside an allowed directory pointing outside defeats the path gate | High (targeted) | `realpath` is impure, needs existence fallbacks, still TOCTOU-racy; documented over half-solved | ADR-0015 §2, revisit-if |
 | R-2 | Interpreter-as-wrapper (`node -e`, `python -c`) and argv-level exec when the interpreter is allowlisted | Medium | argv[0] honesty: the gate bounds which program starts; containment beyond that needs an OS sandbox | ADR-0015 §3 |
 | R-3 | Network egress ungated (`WebFetch`/`WebSearch` absent from the tool table) | Medium | Needs a URL/domain dimension, not a path prefix; deliberate exclusion over false claim | ADR-0015 revisit-if |
-| R-4 | Model-facing enforcement gap for TOOL OUTPUT: S-1 verdicts observe-only, S-2 redaction doesn't rewrite what the model sees. NARROWED 2026-07-28 (ADR-0026): the skill channel — descriptions and bodies, which enter the system prompt at system-prompt authority — is now ENFORCED, because R-4's no-rewrite-channel rationale never applied to a prompt the harness assembles itself. A high-confidence block drops the whole skill | High | **Corrected 2026-08-25 (ADR-0032):** the SDK's `updatedToolOutput` rewrite channel DOES exist (it was present in the pinned SDK all along); model-facing enforcement of tool output is a deferred design decision (issue #84), not an upstream blocker. Separately, the observe-only data plane was itself blind until issue #83 — `postToolCallback` read a `tool_output` field the SDK never sends, so scan/redact/`resultSummary` were no-ops on every live run; #83 repaired the field name and pinned the SDK contract, so persist/emit is now genuinely covered. **Re-cost 2026-08-25:** the acceptance basis changed from upstream-blocked to deferred-by-choice, which is the weaker justification, so the rating is deliberately held at High (not downgraded) and the deferral is bounded to issue #84's decision, not open-ended; R-4 composes with R-3 into §6's critical-shaped scenario, so #84 keeps its highest-value-follow-up standing. Skill bodies: raw-scanned + charset-stripped + aggregate size budget; block-on-flag for this harness-owned channel SHIPPED 2026-07-28 (ADR-0026), with its accepted false-positive classes named there; enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0006 amendment |
+| R-4 | Model-facing enforcement gap for TOOL OUTPUT. NARROWED twice. 2026-07-28 (ADR-0026): the harness-owned skill channel is ENFORCED, because R-4's rationale never applied to a prompt the harness assembles itself, and a high-confidence block drops the whole skill. 2026-09-08 (ADR-0035): on a SUCCESSFUL tool call secret redaction now rewrites the copy the model reads (`updatedToolOutput`) and injection verdicts ANNOTATE it with a plain note. What remains of R-4 is the INJECTION leg, a flagged result is shown to the model with a note rather than withheld, and its composition with R-3; secret redaction of a successful call is no longer a model-facing gap | High | **Corrected 2026-08-25 (ADR-0032):** the SDK's `updatedToolOutput` rewrite channel DOES exist and was present in the pinned SDK all along. Separately the observe-only data plane was itself blind until issue #83, whose field-name repair made scan, redact and `resultSummary` run on every live call. **Adopted 2026-09-08 (ADR-0035):** the deterministic half shipped, so redaction is enforced for the model on a successful call and a verdict annotates it. **Re-cost held at High:** WITHHOLDING a flagged injection result stays deferred to the judge (issue #96), and R-4's steering half still composes with R-3 into §6's critical-shaped scenario, so the highest-value-follow-up standing passes to #96 rather than closing. The failed-call and rewrite residuals are R-22. Skill bodies: raw-scanned, charset-stripped, aggregate size budget, block-on-flag SHIPPED 2026-07-28 (ADR-0026); enforcement is a property of the composition, since `scanInjection` is optional | ADR-0012 §9 + revisit-if, ADR-0013 §9, ADR-0026, ADR-0035, ADR-0006 amendment; §6 R-22 |
 | R-5 | LLM judge is injectable once implemented | Low (bounded) | Tighten-only authority converts compromise into false positives at worst | ADR-0016 §2 |
 | R-6 | Path canonicalization conflates distinct files that share a canonical form: case folding on opt-in case-sensitive volumes (darwin/win32), and NFC folding of a file that genuinely differs only by Unicode form (added 2026-07-15, audit finding V11, to close the NFC/NFD deny-rule bypass) | Low | Both fold toward "same file → same string"; the bypasses they close (`/ETC/passwd`, NFC-vs-NFD deny dodge) were live-verified, and both conflation cases are rare and fail toward stricter for deny rules | ADR-0015 §2 |
 | R-7 | Telemetry store has no integrity protection | Low | Operator and OS are trusted in this model (§2) | §5 Repudiation |
@@ -441,23 +455,31 @@ R-1/R-2 rather than half-solved.
 | R-19 | **A well-formed but WRONG settings value is indistinguishable from intent.** The parsers can catch every SHAPE error (unknown keys at every level, values outside the enum, command entries the shell would rewrite, non-regular files, list and byte caps, all fail loud at startup since ADR-0034), but `/tpm` for `/tmp`, a rule on the wrong tool name, or `allow` where `deny` was meant parse cleanly and gate exactly as written. One SHAPE error is in this row rather than closed: a duplicated JSON key keeps its LAST value inside `JSON.parse`, before any parser sees the document, so `"defaultDecision": "deny"` followed by `"allow"` is `allow` with no signal (security review of ADR-0034, by execution; follow-up filed to scan the raw body) | Low | Accepted. There is no oracle for intent inside a parser; the mitigation is visibility: every deny reason names the rule and layer (ADR-0031), and a `permissions list` diagnostic that renders the resolved rule table is issue #74. What ADR-0034 closes is the class where a typo produced a DIFFERENT, more open configuration with no signal; what survives is a typo that produces a valid one | ADR-0034; issue #74 |
 | R-20 | **The skills root itself may be a symlink a clone commits, and the `run` guard refuses it only at the leaf.** `load()` realpaths the root and contains entries below it only, so a repo committing its skills directory as a symlink to an outside directory had the target scanned into the system prompt (issue #92, confirmed by execution). Closed for the default `./skills` and every single-segment or leaf case: the `run` wiring refuses a symlink at `resolve(skillsDir)` before the SDK is reached (`src/cli.ts`), and the eval path refuses the same layout by full realpath containment against the task directory (`containSkillsDir`, ADR-0017, which also catches the intermediate-symlink case below). What survives on `run` is a multi-segment `--skills-dir`, RELATIVE OR ABSOLUTE, whose intermediate component is a repo-committed symlink (e.g. `--skills-dir "$PWD/sub/skills"` in the clone with committed `sub -> /outside`): `lstat` on the leaf follows every intermediate component regardless of absoluteness, so leaf refusal does not see it | Low. Covered: the default `./skills`, and every path whose intermediate components are not themselves repo-committed symlinks (a legitimate absolute `--skills-dir` under an OS-owned symlink like macOS `/tmp` still loads). The residual needs the operator to pass a multi-segment path AND the clone to have committed a symlink at an intermediate component of exactly that path; the payload is still skill-schema-valid files only. Also advisory, not raced-proof: the guard `lstat`s `resolve(skillsDir)` and `load()` re-`realpath`s and walks it later with no `O_NOFOLLOW` backstop, so a live local process swapping the leaf between the two calls is out of the static-clone model this closes (follow-up #114) | Accepted. Closing it on `run` means refusing a symlink at the path components that lie strictly BELOW cwd (repo-committable) while leaving components at or above cwd alone (operator/OS territory), since blanket cwd-containment would reject the tested outside-cwd `--skills-dir` and an absolute-path ancestor walk would false-reject OS-owned symlinks like `/tmp`. Deferred: the `refuseAncestorSymlinks` relative walk is itself unit-tested, but an end-to-end CLI drive of the below-cwd walk cannot be: a relative `lstat` resolves against the kernel cwd, which a `process.cwd()` spy does not change (only `process.chdir()` does, and chdir is process-global and unsafe under vitest's concurrent tests). Follow-up #114 | issue #92; ADR-0006 amendment; ADR-0017; `src/cli.ts`; `src/internal/guarded-read.ts` |
 | R-21 | **The primary session has no wall-clock, token or dollar ceiling and no cancellation channel.** `maxTurns` is the only whole-run bound the harness passes to the SDK; the bundled CLI retries a failed API request on its own beneath every turn, with its own retry count and per-request timeout, and reports each retry as an `api_retry` message no harness sink records; the harness installs no signal handler, so a Ctrl-C ends the process without the stop hook or the turn-cost row and an interrupted run leaves no cost trace | Medium (spend and availability, not confidentiality) | Recorded 2026-09-07 as roadmap requirements H-7 and H-8 (COULD, v1.x) beside H-6; the SDK declares the channels (`abortController`, `maxBudgetUsd`, an alpha `taskBudget`, `SDKAPIRetryMessage`) and the harness seam carries none of them, by omission rather than decision. The eval pack and the judge carry the bounds the DoS section names, and the adversary those of §5 and ADR-0020; the primary session carries only `maxTurns` | process/01-requirements.md H-6, H-7, H-8; ADR-0010 Revisit if; ADR-0017 Revisit if; ADR-0020 decision 4 and Consequences; `src/session/sdk-types.test.ts` |
+| R-22 | **A FAILED tool call's output reaches the model UNREDACTED, because `PostToolUseFailure` has no rewrite channel (ADR-0035 D8).** An attacker who controls a tool's exit code selects this path. Beyond it, the rewrite's own residuals: the SDK DROPS a wrong-shaped rewrite with no in-band signal, so a landed rewrite is DETECTED not prevented (D4's three-state verifier, whose positive `applied` claim is not forgeable but whose alarm an attacker can force only to `unobserved`); enforcement is composition-dependent, since no injected redactor or scanner means no rewrite and no note; the `additionalContext` injection note is not in the SDK stream, so its delivery is unobservable in band; a leaf past the redactor's 128 KiB cap reaches the model truncated with the oversized marker in place of its tail; a secret used AS a JSON key is not rewritten by the per-leaf pass and is left as an `unrewritten` row; the telemetry and model-facing redaction passes can disagree on findings by design; a custom post-tool hook that runs past the SDK's unset matcher timeout can lose the rewrite; a competing operator PostToolUse hook has an undocumented merge order (R-11); MCP tools are unverified, since the smoke drives Bash only; and the tool INPUT side stays observe-only (D3) | Medium | The failed-call leg is ADR-0035's headline residual: no rewrite channel exists on the failure hook, so the harness scans, redacts for telemetry and annotates that path but cannot rewrite it, and it composes with R-3 the way R-4's steering leg does. The detection residuals are accepted because the alternative, reading the runtime's undocumented on-disk transcript from the session, couples the harness to a private format (rejected in ADR-0035 D4; it is the out-of-band smoke's oracle instead). Each residual leaves a structural trace: a `tool-rewrite` row per outcome, a widened `tool-trace` phase for a failed call, a distinct stderr warning on a failed-call secret, and the `run` summary's warning line. Revisit-if in ADR-0035: an SDK signal for a refused rewrite, the judge (issue #96) taking the withhold decision, or a custom-hook rewrite API | ADR-0035 (D1, D2, D4, D8); §6 R-3, R-4, R-11; `src/session/session.ts`, `src/telemetry/store.ts` |
 
-The single most important honest statement in this document is **R-4**: in
-v1, a malicious tool result that the scanner flags still reaches the model,
-and a secret the redactor catches is still visible to the model. The security
-layer currently protects the *record* and gates the *next action*
-(pre-tool denies are fully enforced); protecting the model's own context
-requires adopting the SDK's result-rewrite channel, which exists (ADR-0032);
-doing so is the named cross-cutting follow-up (issue #84).
+The single most important honest statement in this document is **R-4**: a
+malicious tool result that the scanner flags still reaches the model, shown
+with a note rather than withheld (ADR-0035). Since 2026-09-08 a secret the
+redactor catches on a SUCCESSFUL call is rewritten out of the copy the model
+reads, so the redaction half of R-4 is closed for successful calls; what stays
+open is that a flagged injection result is annotated, not withheld (the judge
+decides withholding, issue #96), and that a FAILED call's output reaches the
+model unredacted, because the failure hook has no rewrite channel (R-22). The
+security layer protects the *record*, gates the *next action* (pre-tool denies
+are fully enforced), and now rewrites a successful call's model-facing copy;
+the parts it does not yet enforce are the named follow-ups (issue #96 for
+withholding, R-22 for the failed-call leg).
 
 **Residual risks compose.** R-3 and R-4 chain into the most exploitable
 end-to-end path under this attacker model: an adversarial tool result steers
-the model (R-4 — flagged but not blocked from context), the model has seen an
-unredacted secret (R-4 again), and `WebFetch` exfiltrates it in a URL query
-string with no gate anywhere in the chain (R-3). Scored individually the
-halves read Medium/High; composed, this is the critical-shaped scenario, and
-it is why R-4's result-rewrite channel and R-3's URL/domain dimension are the
-two highest-value follow-ups rather than independent nice-to-haves. Partial
+the model (R-4, flagged but shown with a note, not withheld), the model reaches
+a secret through a leg that is not redacted for it (a FAILED call, R-22, or a
+`leaked` or `unobserved` rewrite, or a boundary the redactor's rules do not
+match), and `WebFetch` exfiltrates it in a URL query string with no gate
+anywhere in the chain (R-3). Scored individually the halves read Medium/High;
+composed, this is the critical-shaped scenario, and it is why the
+injection-withholding decision (issue #96) and R-3's URL/domain dimension are
+the two highest-value follow-ups rather than independent nice-to-haves. Partial
 mitigation today: permission/sandbox rules can deny `WebFetch`/`WebSearch`
 outright (the tools are known to the permission grammar even though the
 path-based sandbox table excludes them).
@@ -509,6 +531,7 @@ not live values:
 | [0030](./decisions/0030-taskdir-escape-suppression.md) | Golden scorecard `meta.taskDir` suppresses every escaping form: null plus an always-present `taskDirForm` signal instead of any walk-up; R-17 channel (b) closed, the other four channels unchanged |
 | [0032](./decisions/0032-post-tool-hook-field-name-and-rewrite-channel.md) | The post-tool hook read `tool_output`; the SDK sends `tool_response`, so scan/redact/`resultSummary` were no-ops on every live run (issue #83, fixed with a compile-time SDK-parity pin and a genuine-traffic replay fixture); the `updatedToolOutput` rewrite channel R-4 called absent existed all along (enforcement deferred to issue #84) |
 | [0031](./decisions/0031-retained-deny-reasons-drop-the-glob.md) | Retained deny reasons drop the permission glob and index within the rule's own layer file (R-17 channels (c) and (d) closed); skill-drop paths store root-relative with a `pathForm` signal (channel (a) narrowed); the explicit-argument export scrub shipped as `telemetry export --scrub-prefix` (opt-in, per-row `scrub` signal, export copy only, channels unchanged); telemetry hook-event reasons redact-then-truncated at the mapping seam (issue #75, 2026-08-25) |
+| [0035](./decisions/0035-model-facing-enforcement-via-rewrite-channels.md) | Model-facing enforcement of tool output through the SDK's rewrite channels: on a successful call secrets are redacted from the model's copy (`updatedToolOutput`) and injection verdicts annotate it (`additionalContext`), verified in band in three states; nothing is withheld (that is the judge, issue #96) and a failed call's output cannot be rewritten (R-22) |
 
 ## 9. OWASP Agentic Top 10 mapping
 
@@ -516,12 +539,12 @@ not live values:
 
 | ASI | Risk | This harness | Ref |
 |-----|------|--------------|-----|
-| ASI01 | Agent Goal Hijack | Heuristic injection scanner (S-1) on tool results; LLM-judge stage designed, not yet implemented. Residual: verdicts are observe-only in v1 (R-4) | ADR-0012, ADR-0016, §6 R-4/R-5 |
+| ASI01 | Agent Goal Hijack | Heuristic injection scanner (S-1) on tool results; LLM-judge stage designed, not yet implemented. Residual: a flagged verdict annotates the model's copy with a plain note rather than withholding it (R-4, ADR-0035); withholding is the judge, issue #96 | ADR-0012, ADR-0016, ADR-0035, §6 R-4/R-5 |
 | ASI02 | Tool Misuse & Exploitation | Pre-tool permission + sandbox gates, fail-closed | ADR-0014, ADR-0015, §6 R-2/R-9 |
 | ASI03 | Agent Identity & Privilege Abuse | Sticky deny; intersection merge (project config tightens, never widens). Residual: a user deny default is not sticky, whether a project overrides the scalar or ships an allow rule (R-8) | ADR-0014 §5, §6 R-8 |
 | ASI04 | Agentic Supply Chain Compromise | Cloned repo is in-scope attacker (§2); baseline loaded as hostile input; skills-loader per-entry symlink containment (below the root), with the skills-root symlink refused at the run wiring and the eval parse (R-20, ADR-0006 amendment). Outbound: publish is OIDC trusted publishing with provenance, SHA-pinned actions, and `id-token: write` confined to a job that runs no dependency code — the gates it depends on run from a shared `workflow_call` workflow whose jobs are capped by the permissions of the *calling* job (a callee can only downgrade, never elevate) and by its own `contents: read` declaration, so the deploy path runs the same checks as PR CI and no more privilege. Residual: the approval environment is inert until reviewers are configured, the tarball is packed at publish time rather than being the byte-identical gated artefact, and no Dependabot config exists so no pin auto-updates | ADR-0022 (+2026-07-24, 2026-07-28 amendments), ADR-0019, ADR-0006 amendment, §6 R-20, §3, §5 Tampering |
 | ASI05 | Unexpected Code Execution | Oracles named as ungated in-scope code, runtime-warned, never in per-PR CI; frontmatter JS-engine neutralized | ADR-0017, §6 R-10, §5 Tampering |
-| ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Since 2026-07-28 a high-confidence block DROPS the whole skill from the prompt (ADR-0026); the observe-only gap now applies to tool output only. Section headers are nonce-authenticated (ADR-0028), and bodies now keep their newlines, so flattening no longer prevents a body from reaching column 0; the block-level structure that reachability admits is tracked as R-18 | §6 R-4 and R-18, §5 Tampering, ADR-0012 §9, ADR-0026, ADR-0028, ADR-0006 amendment |
+| ASI06 | Memory & Context Poisoning | Skill descriptions (2026-07-13) and full bodies (2026-07-14) scanned + smuggling-stripped before the system prompt; aggregate injected-size budget. Since 2026-07-28 a high-confidence block DROPS the whole skill from the prompt (ADR-0026); the observe-only gap for tool output narrowed again on 2026-09-08 (ADR-0035), when secret redaction began rewriting a successful call's model-facing copy and verdicts began annotating it, leaving the failed-call leg and injection withholding (R-22, R-4). Section headers are nonce-authenticated (ADR-0028), and bodies now keep their newlines, so flattening no longer prevents a body from reaching column 0; the block-level structure that reachability admits is tracked as R-18 | §6 R-4, R-18 and R-22, §5 Tampering, ADR-0012 §9, ADR-0026, ADR-0028, ADR-0035, ADR-0006 amendment |
 | ASI07 | Insecure Inter-Agent Communication | Verifier channel: per-call random boundary tokens, untrusted labelling, oracle source never sent | ADR-0020 |
 | ASI08 | Cascading Agent Failures | Fail-closed posture; drift gate fails red rather than degrading. Residual: no wall-clock, token or dollar bound and no cancellation on the primary session, and the SDK's retries are invisible (R-21; H-7, H-8) | §1, ADR-0015, ADR-0019, §6 R-21 |
 | ASI09 | Human-Agent Trust Exploitation | Named gap: no control. The §5 spoofing detectors defend the agent from impersonated authority (the ASI01 direction), not the human from over-trusting agent output; the harness ships no mechanism that flags persuasive output or requires independent validation before human approval | §5 Spoofing (contrast) |
