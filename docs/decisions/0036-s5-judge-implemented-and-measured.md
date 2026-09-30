@@ -44,7 +44,7 @@ A JSON array of `{ id, category, text, expected }` outside the repository (recom
 Freeze evidence for this ADR's measurement:
 
 - Held-out slice: 24 cases, sha256 `60ac5f1e070b9822378acbf090a09cd1f246a64323c0f8bd2ff074325bee9afe`, recorded 2026-09-09 19:34 AEST. Malicious 12 (`indirect` 4, `jailbreak` 4, `exfil` 4; expected `block` 9, `ask` 3), all heuristic `pass`. Benign 12, all heuristic `pass`. Ids: `ho-indirect-01` to `-04`, `ho-jailbreak-01` to `-04`, `ho-exfil-01` to `-04`, `ho-benign-01` to `-12`; expected `ask` on `ho-indirect-03`, `ho-jailbreak-04`, `ho-exfil-03`, `block` on the other nine malicious cases.
-- Prompt: `src/session/judge.ts` sha256 `7f75aa665f2edd9fde2e78b9e40acaafe363da9aaa7c014be7461d84240c6294` at commit `9706ef8`, recorded 2026-09-11 before the first keyed run. The code-lens fold of 2026-09-11 changed only `buildJudge`'s error classification in that file (an error-subtype result is `call-failed`, not `unparseable`); `JUDGE_SYSTEM_PROMPT` and `buildJudgePrompt` are byte-identical to `9706ef8`, so the measured prompt stands.
+- Prompt: `src/session/judge.ts` sha256 `7f75aa665f2edd9fde2e78b9e40acaafe363da9aaa7c014be7461d84240c6294` at commit `9706ef8`, recorded 2026-09-11 before the first keyed run. Two folds in this PR changed that file after the runs, so its sha no longer matches: the code-lens fold of 2026-09-11 changed `buildJudge`'s error classification (an error-subtype result is `call-failed`, not `unparseable`) and the comments around it, and the security-lens fold of 2026-09-15 added the parser's duplicate-key refusal (D3). Neither touched `JUDGE_SYSTEM_PROMPT` or `buildJudgePrompt`, which are byte-identical to `9706ef8`, so the measured prompt stands; the freeze is on those two strings, not on the file (restated 2026-09-30 after the adversarial verify).
 
 ### D6. The arm drives the shipped judged scanner and derives both modes from one call
 
@@ -94,7 +94,7 @@ What the numbers say, and no more:
   retries beneath the harness's single call (H-8); sonnet's 2.6 minutes had none. The timed-out call's spend is
   unknown (`costUnknown` 1) and the haiku floor is therefore a floor.
 
-Freeze 3: the prompt file was not changed between the freeze-2 hash and these runs, nor after them in this PR.
+Freeze 3: the prompt file was not changed between the freeze-2 hash and these runs. After them, the two folds named under freeze 2 changed the file but not the prompt strings (corrected 2026-09-30: this sentence first said the file was not changed after the runs either).
 
 Precondition 1 of the evaluation methodology is met by D5. Precondition 2 is met through its calibration-set branch: the labelled, blind-authored holdout is the explicit calibration set. The two-tier agreement is a consistency reading across Claude tiers, not the cross-provider quorum the methodology means (self-preference bias is same-provider), and with 12 malicious held-out cases one case is 8.3 points; both limits stand beside every figure. Every corpus-derived figure in this ADR is outside the docs gate by construction (`check:corpus` excludes ADRs).
 

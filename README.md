@@ -158,8 +158,6 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Status
 
-As of 2026-09-11:
-
 | Milestone | Status |
 |---|---|
 | Problem framing + requirements | Complete |
