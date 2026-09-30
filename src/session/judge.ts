@@ -15,7 +15,8 @@ import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './t
 // This is the SECOND copy of the de-fanged single-completion shape
 // (`buildAdversary`, src/cli/eval-command.ts, is the first). The house rule
 // hoists a helper on its third consumer (ADR-0034, the guarded-read
-// precedent); PR-A records the copy and files the follow-up for the third.
+// precedent); PR-A records the copy, and whichever change adds a third
+// consumer hoists the shape (no follow-up issue is filed for it).
 
 /**
  * Byte cap on the judge's reply before any parse. A literal, not an import:
