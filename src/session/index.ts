@@ -3,6 +3,8 @@ export { createSession, DEFAULT_DESCRIPTOR } from './session.js';
 // (buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse, ParsedJudgeWire)
 // stay off every barrel, as the verifier's do (ADR-0023).
 export { buildJudge, JUDGE_MODEL } from './judge.js';
+// The judge session-state tuple only (pin 31); the fixed constants stay module exports.
+export { JUDGE_SESSION_STATES } from './judged-scan.js';
 export type {
   DeniedToolCall,
   DroppedSkill,
