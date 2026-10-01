@@ -17,7 +17,8 @@ import {
 } from './cli/shared.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
-import type { SecurityComposition } from './cli/shared.js';
+import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
+import type { CliSeams, SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
 import { parseInitArgs, runInit } from './cli/init-command.js';
@@ -414,7 +415,7 @@ export function formatRefusalLine(
   );
 }
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], seams: CliSeams = {}): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
     // Parse errors echo the offending argv verbatim (e.g. an attacker-named
@@ -429,7 +430,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (parsed.value.command === 'eval') {
-    return runEval(parsed.value);
+    return runEval(parsed.value, seams);
   }
 
   if (parsed.value.command === 'redteam') {
@@ -479,7 +480,7 @@ export async function main(argv: string[]): Promise<number> {
   let security: SecurityComposition;
   try {
     security = composeSecurity({
-      userDir: homedir(),
+      userDir: seams.userDir ?? homedir(),
       projectDir: process.cwd(),
     });
   } catch (error: unknown) {
@@ -493,8 +494,9 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
   }
 
-  const query = await loadSdkQuery();
+  const query = await loadSdkQuery(seams.importSdk);
   if (query === null) return 2;
+  if (security.judge !== null) process.stderr.write(`${judgeStartLine(security.judge)}\n`);
 
   // One shared connection: openTelemetryDatabase runs the migration runner,
   // which owns the shared-DB schema (memory's DDL is migration 001).
@@ -533,6 +535,7 @@ export async function main(argv: string[]): Promise<number> {
       telemetry,
       scanInjection: (text) => scan(text),
       redactSecrets: (text) => redact(text),
+      ...runJudgeDeps(security.judge, query),
     },
     {
       skillsDir,
@@ -582,6 +585,13 @@ export async function main(argv: string[]): Promise<number> {
         `leaked/unobserved/unrewritten/failed-closed, ${failureAnnotations} failed-call result(s) ` +
         `annotated but NOT rewritten (no rewrite channel on a failed call, #84)\n`,
     );
+  }
+
+  // Issue #96 PR-B1 (spec D7): the judge's own line, after the model-facing one; its spend is not in cost= above.
+  if (result.judge !== null) {
+    const lines = judgeSummaryLines(result.judge);
+    process.stderr.write(`${lines.summary}\n`);
+    if (lines.capWarning !== null) process.stderr.write(`${WARNING_PREFIX}${lines.capWarning}\n`);
   }
 
   return result.resultSubtype === 'success' ? 0 : 1;

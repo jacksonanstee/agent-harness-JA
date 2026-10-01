@@ -147,6 +147,18 @@ export const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
 
 export type ImportSdk = () => Promise<{ query: unknown }>;
 
+/**
+ * Test seams for `main` and `runEval` (issue #96 PR-B1). `userDir`: the user
+ * settings layer, which a vitest worker cannot redirect through HOME because
+ * `os.homedir()` reads libuv's environment (lesson 2026-08-28). `importSdk`:
+ * the SDK loader, so a test drives the run path with a fake `query` (D8a).
+ * Production passes neither.
+ */
+export interface CliSeams {
+  userDir?: string;
+  importSdk?: ImportSdk;
+}
+
 const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;
 
 /**
