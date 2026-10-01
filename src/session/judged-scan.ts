@@ -13,7 +13,7 @@ import { JUDGE_ABORT_GRACE_MS, JUDGE_DRAIN_MS, JUDGE_EARLY_STOP_AFTER, JUDGE_HOO
 import type { InternalSessionJudge } from './judged-scan-constants.js';
 import { foldJudgeSummary } from './judged-scan-fold.js';
 import type { JudgeSummaryEntry } from './judged-scan-fold.js';
-import { JUDGE_HOOK_CANCELLED_WARNING, judgeCapWarning, judgeEarlyStopWarning, judgeFirstFailureWarning, judgeSlotsHeldWarning } from './judged-scan-lines.js';
+import { JUDGE_HOOK_CANCELLED_WARNING, judgeCapWarning, judgeEarlyStopWarning, judgeFirstFailureWarning, judgeScanFailedWarning, judgeSlotsHeldWarning } from './judged-scan-lines.js';
 import { JudgeSlots } from './judged-scan-slots.js';
 import { asFloor, normaliseCallResult } from './judged-scan-validate.js';
 
@@ -49,6 +49,8 @@ export interface JudgeRunContext {
   readonly slots: JudgeSlots;
   readonly records: JudgeRecord[];
   readonly warnOnce: (key: LiveWarning, message: string) => void;
+  /** Every time, not once: the scanner-rejection warning (step 5) is per result, like today's scanner failure. */
+  readonly warn: (message: string) => void;
   reserved: number;
   stopped: boolean;
   disarmed: boolean;
@@ -179,8 +181,9 @@ export async function runJudgedScan(
       timeoutMs: ctx.timeoutMs,
     });
     return finish(await scanner.scanWithJudge(input.text, hook.signal));
-  } catch {
-    // Step 5: the scanner rejects only for a non-string text; floor, as today.
+  } catch (error: unknown) {
+    // Step 5: the scanner rejects only for a non-string text; warn and floor, as today (ADR-0026 D7).
+    ctx.warn(judgeScanFailedWarning(error));
     return finish({ ...floor, judge: 'failed' });
   }
 }
@@ -294,6 +297,7 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       warned.add(key);
       opts.warn(message);
     },
+    warn: opts.warn,
     reserved: 0,
     stopped: false,
     disarmed: false,

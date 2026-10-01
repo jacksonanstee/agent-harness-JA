@@ -230,6 +230,16 @@ describe('Review Focus 1 and 2: forged results and malformed floors', () => {
     expect(fj.texts).toHaveLength(1);
     expect(h.rows).toHaveLength(1);
   });
+
+  it('a scanner rejection (non-string text) lands on the floor as failed AND warns with today\'s scanner-failure prefix (spec D3 step 5, ADR-0026 D7)', async () => {
+    const fj = fakeJudge(() => OK('block'));
+    const h = harness({ call: fj.call, maxCallsPerRun: 5 });
+    const decision = await h.result({ text: 123 as unknown as string });
+    expect(decision).toMatchObject({ state: 'failed', composed: { verdict: 'pass' } });
+    expect(fj.texts).toEqual([]);
+    expect(h.rows).toEqual([expect.objectContaining({ state: 'failed', errorKind: null })]);
+    expect(h.warnings.join('\n')).toMatch(/^injection scan failed: /m);
+  });
 });
 
 describe('the recording wrapper and the cap (spec D3 step 1, R4; pin 7)', () => {
