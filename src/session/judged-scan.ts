@@ -87,6 +87,8 @@ export interface JudgedScanOutcome {
 export interface JudgeDecision {
   state: JudgeSessionState;
   composed: ScanResult;
+  /** `composed` as the custom hook's `scan` (spec D3 step 4, 3a and 3b included), carrying the scanner's judge token. */
+  scan: JudgedScanResult;
   deliver: boolean;
   outcome: JudgedScanOutcome;
 }
@@ -211,7 +213,7 @@ export function decideJudgedResult(hook: JudgeHookState, outcome: JudgedScanOutc
   if (input.phase === 'post-tool-failure' && input.redacted && state !== 'hook-cancelled') {
     composed = tightenToAsk(composed, JUDGE_REDACTED_RULE_ID);
   }
-  return { state, composed, deliver: !hook.cancelled && composed.verdict !== 'pass', outcome };
+  return { state, composed, scan: { ...composed, judge: scan.judge }, deliver: !hook.cancelled && composed.verdict !== 'pass', outcome };
 }
 
 /**

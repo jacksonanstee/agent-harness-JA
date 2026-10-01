@@ -1,4 +1,4 @@
-import { sanitizeControlChars } from '../internal/sanitize.js';
+import { describeError } from './describe-error.js';
 import { JUDGE_EARLY_STOP_AFTER, JUDGE_MAX_CONCURRENT } from './judged-scan-constants.js';
 
 // Issue #96 PR-B1: the judge path's live-line texts (spec D7; U-1, U-3, U-4;
@@ -36,23 +36,9 @@ export function judgeSlotsHeldWarning(seconds: number): string {
   );
 }
 
-/**
- * Spec D3 step 5: a judged-scanner rejection is reported like today's scanner
- * failure (ADR-0026 D7), same prefix. The error is caller-shaped, so it is
- * read field by field and control-char sanitised, as session.ts renders every
- * injected dependency's throw.
- */
+/** Spec D3 step 5: a judged-scanner rejection is reported like today's scanner failure (ADR-0026 D7), same prefix, same renderer. */
 export function judgeScanFailedWarning(error: unknown): string {
-  let detail = 'unknown';
-  try {
-    if (typeof error === 'object' && error !== null && 'message' in error) {
-      const message: unknown = (error as { message: unknown }).message;
-      detail = typeof message === 'string' ? sanitizeControlChars(message) : 'unrepresentable error';
-    }
-  } catch {
-    detail = 'unrepresentable error';
-  }
-  return `injection scan failed: ${detail}`;
+  return `injection scan failed: ${describeError(error)}`;
 }
 
 /** U-4: the existing LEAKED warning, naming the hook timeout as the cause instead of the redactor. */

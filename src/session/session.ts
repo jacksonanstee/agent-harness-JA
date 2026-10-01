@@ -47,6 +47,7 @@ import {
   truncateWellFormed,
 } from '../internal/sanitize.js';
 import { relativeSkillDropPath } from './skill-drop-path.js';
+import { describeError } from './describe-error.js';
 import { createJudgeRun, judgeLeakedByHookTimeoutWarning, validateSessionJudge } from './judged-scan.js';
 import type { InternalSessionJudge, JudgeHook } from './judged-scan.js';
 
@@ -403,25 +404,6 @@ export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
   OUTPUT_REWRITE_OUTCOME_PRESENCE,
 ) as readonly OutputRewriteOutcome[];
 
-
-/**
- * Renders a thrown value or a Result error for a warning or a retained row.
- * Never throws and always returns a string: `message` may be a getter that
- * throws or returns a non-string (found by execution, issue #75), and
- * `sanitizeText` is an untyped replace that would pass a non-string through.
- * Every injected dependency is an arbitrary implementation at the same trust
- * boundary as a hook, so every catch that renders one goes through here.
- * Non-object throws render as 'unknown', the behaviour these sites had.
- */
-function describeError(error: unknown): string {
-  try {
-    if (typeof error !== 'object' || error === null || !('message' in error)) return 'unknown';
-    const rendered: unknown = (error as { message: unknown }).message;
-    return typeof rendered === 'string' ? sanitizeText(rendered) : 'unrepresentable error';
-  } catch {
-    return 'unrepresentable error';
-  }
-}
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;
@@ -1633,13 +1615,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         text: stringifyForScan(rewrite === null ? toolResponse : rewrite.value),
         redacted: rewrite !== null,
       });
+      // Spec D3 step 4: the custom hook reads the COMPOSED verdict (3a, 3b included); decide is pure, so step 6 re-decides after the hook.
+      const preview = jh === null ? null : jh.decide(judged);
 
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
           tool: toolName,
           result: toolResponse,
-          scan: judged?.scan ?? scan,
+          scan: preview?.scan ?? scan,
           redactions: redaction?.findings ?? null,
         });
         for (const error of fireResult.errors) {
@@ -1711,12 +1695,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       if (jh === null) writeTrace(annotation.verdict);
       // Decision 11 and 15: the judge sees the redacted error, never the raw one.
       const judged = jh === null ? null : await jh.scan({ tool: toolName, phase: 'post-tool-failure', floor: scan, text: redactedRow, redacted });
+      // Spec D3 step 4 (failure hook): the composed verdict, decision 15's judge-redacted included; step 6 re-decides after the hook.
+      const preview = jh === null ? null : jh.decide(judged);
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
           tool: toolName,
           result: errorText,
-          scan: judged?.scan ?? scan,
+          scan: preview?.scan ?? scan,
           redactions: findings ?? null,
           failed: true,
         });

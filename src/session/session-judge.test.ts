@@ -253,6 +253,42 @@ describe('composition through the session (pins 5, 6, 20)', () => {
   });
 });
 
+describe('the custom post-tool hook reads the COMPOSED verdict, 3a and 3b included (spec D3 step 4; Task 8 review Important 1)', () => {
+  function captureHookScan(b: Built): ScanResult[] {
+    const seen: ScanResult[] = [];
+    b.deps.hooks.register('post-tool', (payload) => {
+      seen.push(payload.scan as ScanResult);
+    });
+    return seen;
+  }
+
+  it('success hook: an oversized output on a heuristic pass hands the hook ask with judge-oversized, matching the annotation', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', output: 'x'.repeat(MAX_JUDGE_INPUT_BYTES + 1) }]);
+    const fj = fakeJudge(() => OK('block'));
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: fixed(PASS_SCAN) });
+    const seen = captureHookScan(b);
+    const result = await start(b).run('hi');
+    expect(fj.texts).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ verdict: 'ask', rule_ids: ['judge-oversized'], judge: 'oversized' });
+    expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool', verdict: 'ask', ruleIds: ['judge-oversized'] });
+    expect(seen[0]?.rule_ids).toEqual(result.outputAnnotations[0]?.ruleIds);
+  });
+
+  it('failure hook: a redacted error on a heuristic pass hands the hook ask with judge-redacted, matching the annotation', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', failError: `Exit 1 ${AWS}` }]);
+    const fj = fakeJudge(() => OK('pass'));
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: fixed(PASS_SCAN) });
+    const seen = captureHookScan(b);
+    const result = await start(b).run('hi');
+    expect(fj.texts).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ verdict: 'ask', rule_ids: ['judge-redacted'], judge: 'judged' });
+    expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool-failure', verdict: 'ask', ruleIds: ['judge-redacted'] });
+    expect(seen[0]?.rule_ids).toEqual(result.outputAnnotations[0]?.ruleIds);
+  });
+});
+
 describe('the cap and per-run state (pins 7, 8; Review Focus 5)', () => {
   it('N+k parallel hooks against cap N: exactly N calls, k cap-reached rows on the floor', async () => {
     const calls = Array.from({ length: 8 }, (_, i) => ({ id: `toolu_${i}`, output: 'plain notes' }));
