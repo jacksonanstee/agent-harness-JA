@@ -165,4 +165,30 @@ describe('dual-owned schema constants', () => {
       afterDb.close();
     }
   });
+
+  // Same drift guard for the m004->m005 rebuild (issue #96 PR-B1, spec D6):
+  // bounds pinned to `<= 4` and `<= 5` so this stays a permanent record of
+  // the m004->m005 delta.
+  it('rebuilds telemetry_events identically to m004 except for the widened CHECK (m005)', () => {
+    const beforeDb = new Database(':memory:');
+    const afterDb = new Database(':memory:');
+    try {
+      runMigrations(beforeDb, MIGRATIONS.filter((m) => m.id <= 4));
+      runMigrations(afterDb, MIGRATIONS.filter((m) => m.id <= 5));
+      const tableSql = (db: Database.Database): string =>
+        (
+          db
+            .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'telemetry_events';")
+            .get() as { sql: string }
+        ).sql.replace(/\s+/g, ' ');
+      const normalise = (sql: string): string => sql.replace(/CHECK \(type IN \([^)]*\)\)/, 'CHECK(<TYPES>)');
+      expect(normalise(tableSql(afterDb))).toBe(normalise(tableSql(beforeDb)));
+      expect(tableSql(afterDb)).toContain(
+        "CHECK (type IN ('turn-cost','tool-trace','hook-event','skill-drop','tool-rewrite','judge-call'))",
+      );
+    } finally {
+      beforeDb.close();
+      afterDb.close();
+    }
+  });
 });
