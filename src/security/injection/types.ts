@@ -41,9 +41,13 @@ export interface ScanResult {
 /**
  * S-5 seam (ADR-0012): an injected async judge that re-evaluates suspicious
  * text. Consumed by `createJudgedScanner` (ADR-0036); the sync `scan()`
- * never calls it. `toInjectionJudge` builds one from a `JudgeCall`.
+ * never calls it. `toInjectionJudge` builds one from a `JudgeCall`. The
+ * optional `signal` (issue #96 PR-B1, spec D4, R3; ADR-0016 amendment) is
+ * aborted when the scanner's timer fires or the caller's signal aborts; a
+ * two-parameter judge stays assignable, but `Parameters<InjectionJudge>` is
+ * now a 3-tuple (the one non-additive effect, ADR-0037).
  */
-export type InjectionJudge = (text: string, heuristic: ScanResult) => Promise<Verdict>;
+export type InjectionJudge = (text: string, heuristic: ScanResult, signal?: AbortSignal) => Promise<Verdict>;
 
 export interface ScannerOptions {
   rules?: readonly InjectionRule[];
