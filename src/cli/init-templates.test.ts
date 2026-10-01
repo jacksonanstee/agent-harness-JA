@@ -38,6 +38,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     droppedSkills: [],
     outputRewrites: [],
     outputAnnotations: [],
+    judge: null,
     ...overrides,
   };
 }

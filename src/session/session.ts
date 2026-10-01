@@ -1890,6 +1890,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       droppedSkills,
       outputRewrites,
       outputAnnotations,
+      judge: null,
     };
   }
 

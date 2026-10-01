@@ -6,6 +6,8 @@ export { buildJudge } from './judge.js';
 export type {
   DeniedToolCall,
   DroppedSkill,
+  JudgeSessionState,
+  JudgeSummary,
   OutputAnnotation,
   OutputRewrite,
   OutputRewriteOutcome,
@@ -34,6 +36,7 @@ export type {
   Session,
   SessionConfig,
   SessionDeps,
+  SessionJudge,
   SessionRefusal,
   SkillDropReason,
   SessionResult,
