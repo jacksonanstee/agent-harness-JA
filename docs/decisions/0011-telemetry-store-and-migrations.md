@@ -40,6 +40,10 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
    session/turn/type/time", which the three indexes serve.
    - **Extended 2026-07-29 (issue #46):** a fourth type, `skill-drop`, added
      by migration m003. See the amendment below, item 1.
+   - **Extended 2026-09-08 (ADR-0035):** a fifth type, `tool-rewrite`, by
+     migration m004, the same rebuild shape.
+   - **Extended 2026-10-01 (issue #96 PR-B1, ADR-0037):** a sixth type,
+     `judge-call`, by migration m005. See the second amendment below.
 5. **Correlation model.** The composition root (cli) pre-generates a harness
    session id and a turn id, because hook events fire before the SDK reports
    its own session id. Every telemetry writer keys on the harness ids; the SDK
@@ -761,6 +765,40 @@ the table decision 4 already owns.
       strengthens or corrects something is not evidence about itself, its
       author cannot supply the check, and that remains true of the paragraph
       written to record the fact.**
+
+## Amendment (2026-10-01, issue #96 PR-B1, ADR-0037): the `judge-call` event and migration m005
+
+1. **Sixth event type, `judge-call`.** One row per tool result that entered
+   the session's judge path, whatever happened to it: `not-escalated`,
+   `oversized`, `judged`, `timed-out`, `failed`, `cap-reached`,
+   `hook-cancelled`, `stopped` or `queue-timed-out`. Payload `{ tool,
+   tool_use_id, phase, state, heuristic, judge, composed, errorKind, redacted,
+   costUsd, durationMs }` (`src/telemetry/types.ts`), written at the capture
+   site in `src/session/judged-scan.ts` AFTER the custom post-tool hook has
+   run, so a hook the SDK cancels mid-way records `hook-cancelled` rather than
+   a note the model never received. A judged path still running when the
+   session's drain bound runs out may land its row after the summary or not at
+   all, the one stated exception to one-row-per-result (ADR-0037).
+2. **Migration m005 follows the standing rule below:** a table rebuild in
+   m004's shape with one more literal in the CHECK, `rowid` copied explicitly,
+   the three indexes recreated, byte-diffed against m004 in `ddl-drift.test.ts`
+   with only the CHECK literal normalised away, and row and rowid preservation
+   pinned in `m005.test.ts` with a seeded rowid gap. The old-binary lockout of
+   item 3 above attaches to it as to every migration.
+3. **The no-text rule is ENFORCED on this type, not conventional.** The
+   validator (`isJudgeCallPayload`, `src/telemetry/store.ts`) rejects any key
+   outside the payload's closed set BEFORE it checks a value, so no tool
+   output, excerpt or judge reply can ride on the row; `state`, the three
+   verdict fields and `errorKind` are checked against telemetry-side mirrors
+   (`JUDGE_CALL_STATES`, `JUDGE_CALL_VERDICTS`, `JUDGE_CALL_ERROR_KINDS`) whose
+   drift against their session and security origins is pinned; `redacted` must
+   be a boolean, because the closed-key check alone would let a text value
+   through under that key; `costUsd` is finite and non-negative or null;
+   `durationMs` is a non-negative integer. The two strings, `tool` and
+   `tool_use_id`, are sanitised on write like `tool-rewrite`'s.
+4. **Pinned end to end:** a tool output carrying a unique marker string never
+   appears in a `judge-call` row, in `SessionResult.judge`, in a warning or on
+   stderr (`src/session/session-judge.test.ts`).
 
 **Do not overclaim the drift pin.** The `CHECK` ↔ `TELEMETRY_EVENT_TYPES` test
 is inclusion-only: it proves `TELEMETRY_EVENT_TYPES` is a subset of the `CHECK`

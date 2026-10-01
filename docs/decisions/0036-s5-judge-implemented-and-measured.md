@@ -1,6 +1,6 @@
-# ADR-0036: the S-5 judge implemented to the ADR-0016 contract and measured; not yet wired
+# ADR-0036: the S-5 judge implemented to the ADR-0016 contract and measured; not yet wired (wired 2026-10-01, ADR-0037)
 
-- **Status:** Accepted. Ships in PR-A of issue #96 (this PR does not close #96; PR-B wires the judge into the session).
+- **Status:** Accepted. Ships in PR-A of issue #96 (this PR does not close #96; PR-B wires the judge into the session). *(2026-10-01: PR-B1 wired it, annotate-only and off by default, [ADR-0037](./0037-s5-judge-wired-into-the-session.md).)*
 - **Date:** 2026-09-11
 - **Requirements:** S-5 (SHOULD: hybrid heuristic plus LLM judge, judge optional and off by default); issue #96 (the external review's promotion of S-5 at a 90.24% detection rate, 0.24 points from the ADR-0016 trigger); the four-agent design review of 2026-09-09 (Skeptic, Constraint Guardian, User Advocate, then the Arbiter over three rounds), condensed in `process/designs/2026-09-09-issue-96-judge-measured-decision-log.md`
 - **Relates to:** ADR-0016 (the contract this implements), ADR-0018 (the corpus and the strength split this reads), ADR-0019 (the gate this leaves untouched and the second machine-readable line this adds), ADR-0020 (the adversary shape the builder copies), ADR-0010 (the query seam this widens by five structural keys), ADR-0023 (what goes on the public surface), ADR-0035 (which handed withholding to #96); security-model boundary 4, R-5, the DoS section; `docs/eval-methodology.md` on corpus contamination
@@ -102,6 +102,8 @@ Precondition 1 of the evaluation methodology is met by D5. Precondition 2 is met
 
 Off unless composed. One harness call per escalated result and no harness retries, while the bundled CLI retries beneath it with its own count and per-request timeout (H-8, R-21) and the 60 s timer can fire mid-retry. A 128 KiB input cap. Haiku by default. The six isolation keys. The arm's spend is recorded above beside the request shape that produced it, because the cost is a property of the shape. PR-B may wire the judge only when the judge-caused false-block count on the benign corpus and on the benign holdout at `always` with the default model is zero, read from `totals.bySlice.<slice>.always.falseBlockCount` with the denominators stated as the benign cases the judge actually judged; PR-B re-measures if its prompt, model literal or query keys differ from the ones recorded here, otherwise it cites this ADR. The false-flag rate is reported and PR-B's spec bounds it.
 
+*(2026-10-01, ADR-0037 D4 and D8: PR-B1 adds `abortController` to every judge request, a query-key change, so the re-measure this paragraph requires is owed, with the prompt strings still byte-identical to `9706ef8` and the model literal unchanged. It is pending Jackson's go; B1 does not merge before it, and its result is recorded in ADR-0037 D8 when it runs.)*
+
 ## Alternatives considered
 
 1. **Judge inside the security layer importing the SDK.** Lint permits it; the record forbids it (ADR-0016 decision 5, architecture.md, issue #102's direction). Rejected.
@@ -122,17 +124,17 @@ Off unless composed. One harness call per escalated result and no harness retrie
 ### Negative, accepted
 
 - Tighten-only cannot rescue heuristic false positives (carried from ADR-0016).
-- A timed-out call is not aborted: `QueryOptions` carries no abort path (H-7), so the subprocess keeps running and billing until it settles or the process exits; k consecutive timeouts are k live subprocesses. The arm's `process.exit` ends them at run end; a long-lived session would not, and PR-B may not wire the judge without an abort path. Billing of a terminated request is unverified.
-- Size evasion: input over the cap is never judged and a consumer that reads only `verdict` sees a `pass` indistinguishable from a judged one. Nothing consumes this in PR-A; PR-B must decide what the session does with `judge: 'oversized'`.
+- A timed-out call is not aborted: `QueryOptions` carries no abort path (H-7), so the subprocess keeps running and billing until it settles or the process exits; k consecutive timeouts are k live subprocesses. The arm's `process.exit` ends them at run end; a long-lived session would not, and PR-B may not wire the judge without an abort path. Billing of a terminated request is unverified. *(2026-10-01, ADR-0037 D4: closed at the harness side. `buildJudge` passes an `abortController` on every request and the scanner's timer aborts it; the arm's recording judge forwards the signal. That the subprocess then exits is the pending keyed smoke's claim, ADR-0037 D9, and billing of a terminated request stays unverified.)*
+- Size evasion: input over the cap is never judged and a consumer that reads only `verdict` sees a `pass` indistinguishable from a judged one. Nothing consumes this in PR-A; PR-B must decide what the session does with `judge: 'oversized'`. *(2026-10-01, ADR-0037 decision 8: the session composes an oversized result as at least `ask` with rule id `judge-oversized`, so an attacker cannot choose to be unjudged by padding; the scanner's own result is unchanged, so this ADR's figures stand.)*
 - The measurement is a same-family reading twice over: the held-out slice is authored by a Claude subagent and scored by two Claude tiers. "Freshly authored" is met; independence from the judge's training is not attainable in-house.
 - Measuring a hosted judge sends every private case to the provider under its retention posture; the methodology's "privately maintained" protects the repository's history and training contamination, not provider disclosure.
-- Under `always` mode every escalated result is one model call with no dollar cap anywhere in the harness (H-6); the arm is bounded by the corpus size and the holdout cap, the session would be bounded by nothing until PR-B adds its per-run cap.
+- Under `always` mode every escalated result is one model call with no dollar cap anywhere in the harness (H-6); the arm is bounded by the corpus size and the holdout cap, the session would be bounded by nothing until PR-B adds its per-run cap. *(2026-10-01, ADR-0037 D1: the session's required `maxCallsPerRun` bounds the NUMBER of judge calls per `run()`, with a derived per-call ceiling stated beside it; still no dollar cap, and the arm is unchanged.)*
 - Child stderr is ignored by SDK default, so a bad key, a dead endpoint and a retired model id are one opaque `call-failed`; the early stop bounds the spend and the model ids are validated against the router table before the run.
 - Whether installed plugins load under `settingSources: []` is unverified from the typings.
 
 ## Revisit if
 
-- PR-B wires the judge: the settings toggle, the per-run judge-call cap, an abort path on `QueryOptions` (H-7), a signal for `judge: 'oversized'`, telemetry, the withhold decision, and the skills-at-load escalation ADR-0026 R2 named.
+- PR-B wires the judge: the settings toggle, the per-run judge-call cap, an abort path on `QueryOptions` (H-7), a signal for `judge: 'oversized'`, telemetry, the withhold decision, and the skills-at-load escalation ADR-0026 R2 named. **Fired 2026-10-01 ([ADR-0037](./0037-s5-judge-wired-into-the-session.md)):** the toggle, the cap, the abort path, the oversized decision and the `judge-call` telemetry shipped in PR-B1; the withhold and skills-at-load decisions pass to B2.
 - A fourth copy of the de-fanged single-completion shape appears (ADR-0008's threshold): extract it.
 - Judge cost dominates a typical run once wired: cache verdicts on identical inputs (ADR-0016's revisit clause).
 - Issue #140 decides `settingSources` for the session and the adversary: the judge's keys are the precedent.
