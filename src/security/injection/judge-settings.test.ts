@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { hasJudgeKey, JudgeSettingsError, MAX_JUDGE_CALLS_PER_RUN, parseJudgeSettings } from './judge-settings.js';
+import {
+  hasJudgeKey,
+  JUDGE_BYTES_PER_TOKEN_FLOOR,
+  JUDGE_INPUT_USD_PER_MTOK,
+  JUDGE_OUTPUT_USD_PER_MTOK,
+  JUDGE_PRICE_READ_ON,
+  JUDGE_PROMPT_OVERHEAD_TOKENS,
+  JUDGE_REPLY_ALLOWANCE_TOKENS,
+  JUDGE_WORST_CASE_USD_PER_CALL,
+  JudgeSettingsError,
+  MAX_JUDGE_CALLS_PER_RUN,
+  parseJudgeSettings,
+} from './judge-settings.js';
+import { MAX_JUDGE_INPUT_BYTES } from './judge.js';
 
 const REQUIRED =
   'judge.maxCallsPerRun is required when judge.mode is "always" (an integer from 1 to 1000; see README Settings)';
@@ -87,5 +100,15 @@ describe('parseJudgeSettings (spec D1, pin 1)', () => {
     expect(hasJudgeKey({})).toBe(false);
     expect(hasJudgeKey(Object.create({ judge: { mode: 'always' } }))).toBe(false);
     expect(hasJudgeKey('nope')).toBe(false);
+  });
+});
+
+describe('the money ceiling (T-4, N-4; pin 33)', () => {
+  it('JUDGE_WORST_CASE_USD_PER_CALL equals its re-derivation from its named inputs', () => {
+    const inputUnits = MAX_JUDGE_INPUT_BYTES / JUDGE_BYTES_PER_TOKEN_FLOOR + JUDGE_PROMPT_OVERHEAD_TOKENS;
+    const microUsd = inputUnits * JUDGE_INPUT_USD_PER_MTOK + JUDGE_REPLY_ALLOWANCE_TOKENS * JUDGE_OUTPUT_USD_PER_MTOK;
+    expect(Number.isInteger(microUsd)).toBe(true);
+    expect(JUDGE_WORST_CASE_USD_PER_CALL).toBe(microUsd / 1_000_000);
+    expect(JUDGE_PRICE_READ_ON).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

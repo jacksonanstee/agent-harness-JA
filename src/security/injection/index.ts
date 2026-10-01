@@ -24,6 +24,7 @@ export type {
 } from './judge.js';
 export {
   hasJudgeKey,
+  JUDGE_WORST_CASE_USD_PER_CALL,
   JudgeSettingsError,
   MAX_JUDGE_CALLS_PER_RUN,
   parseJudgeSettings,

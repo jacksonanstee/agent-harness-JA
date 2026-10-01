@@ -8,6 +8,9 @@ import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
   createPermissionEvaluator,
   createSandbox,
+  JUDGE_TIMEOUT_MS,
+  JUDGE_WORST_CASE_USD_PER_CALL,
+  parseJudgeSettings,
   parsePermissionSettings,
   parseSandboxSettings,
   PermissionDenied,
@@ -62,20 +65,20 @@ function compose(userDoc: string | undefined, projectDoc: string | undefined) {
 }
 
 /** Read lazily inside each test so a missing section is every test in this file red, not a collection failure. */
-function loaded(): { section: string; blocks: string[]; userDoc: string; projectDoc: string } {
+function loaded(): { section: string; blocks: string[]; userDoc: string; projectDoc: string; judgeDoc: string } {
   const section = settingsSection();
   const blocks = fencedJson(section);
-  return { section, blocks, userDoc: blocks[0] ?? '{}', projectDoc: blocks[1] ?? '{}' };
+  return { section, blocks, userDoc: blocks[0] ?? '{}', projectDoc: blocks[1] ?? '{}', judgeDoc: blocks[2] ?? '{}' };
 }
 
 describe('README `## Settings`: the examples load through the real composition', () => {
 
-  it('has exactly two fenced JSON examples: the user file, then the project file', () => {
+  it('has exactly three fenced JSON examples: the user file, the project file, then the judge block', () => {
     const { blocks } = loaded();
-    expect(blocks).toHaveLength(2);
+    expect(blocks).toHaveLength(3);
   });
 
-  it('both examples parse under BOTH real parsers (the init-templates precedent)', () => {
+  it('every example parses under BOTH real parsers (the init-templates precedent)', () => {
     const { blocks } = loaded();
     for (const doc of blocks) {
       const parsed: unknown = JSON.parse(doc);
@@ -298,5 +301,37 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(raw('Read', { file_path: '/etc/passwd' }).decision).toBe('deny');
     expect(raw('Read', { file_path: '/repo/x' }).decision).toBe('allow');
     expect(section).toContain('canonicalised on both sides');
+  });
+});
+
+describe('README `**Judge.**`: the example loads through the real composition (pin 19)', () => {
+  it('as the user file it turns the judge on with its cap and no warning', () => {
+    const { judgeDoc } = loaded();
+    const s = compose(judgeDoc, undefined);
+    expect(s.judge).toEqual(parseJudgeSettings(JSON.parse(judgeDoc)));
+    expect(s.judge?.mode).toBe('always');
+    expect(s.warnings).toEqual([]);
+  });
+
+  it('as the project file it is ignored with exactly one warning naming the project path', () => {
+    const { judgeDoc } = loaded();
+    const projectDir = layerDir('project', judgeDoc);
+    const s = composeSecurity({ userDir: layerDir('user', undefined), projectDir });
+    expect(s.judge).toBeNull();
+    expect(s.warnings).toEqual([
+      `ignoring "judge" in ${join(projectDir, '.harness', 'settings.json')}: the judge is configured only in ~/.harness/settings.json`,
+    ]);
+  });
+});
+
+describe('README `**Judge.**`: money and time figures re-derive from the code (pin 33, D1, K-11)', () => {
+  it('the ceiling, the typical spend and both wall-clock figures for the example cap', () => {
+    const { section, judgeDoc } = loaded();
+    const cap = (JSON.parse(judgeDoc) as { judge: { maxCallsPerRun: number } }).judge.maxCallsPerRun;
+    const ceilingMicro = cap * Math.round(JUDGE_WORST_CASE_USD_PER_CALL * 1_000_000);
+    expect(section).toContain(`at most USD ${(ceilingMicro / 1_000_000).toFixed(2)} for ${cap} calls at the 128 KiB input cap`);
+    expect(section).toContain(`typically about USD ${((cap * 33) / 10_000).toFixed(2)}`);
+    expect(section).toContain(`at most ${(cap * JUDGE_TIMEOUT_MS) / 60_000} minutes`);
+    expect(section).toContain(`typically about ${(cap * 15) / 60} minutes`);
   });
 });
