@@ -10,11 +10,11 @@ import type { BaselineScorecard, RedteamJudgeRow, RedteamJudgeScorecard, Redteam
 import { DEFAULT_ROUTING_TABLE } from '../router/index.js';
 import { scan } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
+import { JUDGE_MODEL } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkMessage } from '../session/types.js';
 import {
   DEFAULT_BASELINE_PATH,
   gateOutcome,
-  JUDGE_MODEL,
   judgeArmOutcome,
   judgeArmState,
   parseRedteamArgs,
@@ -320,11 +320,6 @@ describe('parseRedteamArgs', () => {
     it('missing values: --judge-model and --holdout each report the pinned message with USAGE', () => {
       expect(parseRedteamArgs(['--judge', '--judge-model'])).toEqual({ ok: false, error: `Missing value for --judge-model. ${USAGE}` });
       expect(parseRedteamArgs(['--judge', '--holdout'])).toEqual({ ok: false, error: `Missing value for --holdout. ${USAGE}` });
-    });
-
-    it('JUDGE_MODEL is the haiku literal and is a model id present in the router table (S-18)', () => {
-      expect(JUDGE_MODEL).toBe('claude-haiku-4-5');
-      expect(TABLE_MODEL_IDS).toContain(JUDGE_MODEL);
     });
   });
 });

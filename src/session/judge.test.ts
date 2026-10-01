@@ -188,7 +188,7 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     const options = fake.captured[0]?.options;
     if (options === undefined) throw new Error('query received no options');
     expect(Object.keys(options).sort()).toEqual(
-      ['hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'skills', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
+      ['abortController', 'hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'skills', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
     );
     expect(options.model).toBe('claude-sonnet-5');
     expect(options.maxTurns).toBe(1);

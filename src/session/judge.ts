@@ -151,6 +151,20 @@ function costOf(result: SdkResultMessage): number | null {
 }
 
 /**
+ * The judge's fixed model (issue #96, ADR-0036 D3; PR-B1 spec D1): the same
+ * literal as `src/router/table.ts` (ADR-0016 names it), deliberately NOT
+ * obtained through `route()` (ADR-0016 decision 6: the router is never used
+ * for the judge). It lives here, beside `buildJudge` and the frozen prompt
+ * strings, so the measured unit (model, prompt, query keys; ADR-0036 D8) is
+ * one module (architect A-9); `run` and `redteam` both import it from the
+ * session barrel. A pin asserts it is present in the router table so a tier
+ * bump cannot retire it silently (S-18). `redteam --judge-model` overrides it
+ * for a measurement run; the session takes no model setting (ADR-0036 D8:
+ * another model means re-measuring).
+ */
+export const JUDGE_MODEL = 'claude-haiku-4-5';
+
+/**
  * Builds the rich judge call (`JudgeCall`) over an injected `query`, the
  * `buildAdversary` shape hardened further: `maxTurns: 1` bounds the agentic
  * loop, the deny-all `PreToolUse` hook fail-closes any tool call the model
@@ -164,6 +178,10 @@ function costOf(result: SdkResultMessage): number | null {
  * the run by the CLI).
  * `costUsd` is read from `total_cost_usd` when finite, else null, on both
  * arms: a reply that failed to parse was still charged.
+ * Every request carries its own `abortController` (issue #96 PR-B1, spec D4,
+ * K-2), linked to the optional incoming signal, so the session and the
+ * redteam arm send the same keys; an aborted iteration resolves `call-failed`
+ * through the existing catch.
  */
 export function buildJudge(query: QueryFn, model: string, randomHex: () => string = defaultRandomHex): JudgeCall {
   const denyAll: SdkHookCallback = async () => ({
@@ -173,8 +191,14 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
       permissionDecisionReason: DENY_REASON,
     },
   });
-  return async (text: string): Promise<JudgeCallResult> => {
+  return async (text: string, signal?: AbortSignal): Promise<JudgeCallResult> => {
     const prompt = buildJudgePrompt(text, randomHex());
+    // The incoming signal is the scanner's short-lived per-call signal; the
+    // one listener is `once` and removed on every path (Gm1#2).
+    const abortController = new AbortController();
+    const onAbort = (): void => abortController.abort();
+    if (signal?.aborted === true) abortController.abort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     // The LAST result message wins when a stream carries more than one (the
     // adversary precedent).
     let result: SdkResultMessage | null = null;
@@ -191,6 +215,7 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
           skills: [],
           persistSession: false,
           hooks: { PreToolUse: [{ hooks: [denyAll] }] },
+          abortController,
         },
       })) {
         const m = message as SdkMessage;
@@ -198,6 +223,8 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
       }
     } catch {
       return { ok: false, errorKind: 'call-failed', costUsd: null };
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
     if (result === null) return { ok: false, errorKind: 'call-failed', costUsd: null };
     const costUsd = costOf(result);
