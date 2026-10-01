@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as barrel from './index.js';
 import * as securityBarrel from './security/index.js';
 import * as sessionBarrel from './session/index.js';
+import type * as Root from './index.js';
 import type {
   AdversaryFn,
   ChallengeInput,
@@ -13,7 +14,11 @@ import type {
   JudgedScanResult,
   JudgeErrorKind,
   JudgeMode,
+  JudgeCallPayload,
   JudgeRunState,
+  JudgeSessionState,
+  JudgeSettings,
+  JudgeSummary,
   OutputAnnotation,
   OutputRewrite,
   OutputRewriteOutcome,
@@ -21,6 +26,7 @@ import type {
   RefusalSource,
   ScanResult,
   RedactResult,
+  SessionJudge,
   SessionRefusal,
   TelemetryStore,
   Verifier,
@@ -147,6 +153,40 @@ describe('root barrel (src/index.ts)', () => {
     expect(typeof scanner.scanWithJudge).toBe('function');
     expect(typeof built).toBe('function');
     expect([state, failed.ok, typeof resultOf]).toEqual(['judged', false, 'function']);
+  });
+
+  // Issue #96 PR-B1, pin 31 (A-8, G-7, B-4): the judge-wiring surface is on
+  // the root; the fixed session constants and the internal smoke type are not.
+  it('exports the PR-B1 judge surface and keeps the fixed constants off the root', () => {
+    expect(barrel.JUDGE_WORST_CASE_USD_PER_CALL).toBe(0.1536);
+    expect(barrel.JUDGE_MODEL).toBe('claude-haiku-4-5');
+    expect(barrel.JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
+    expect(barrel.JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
+    expect(barrel.MAX_JUDGE_CALLS_PER_RUN).toBe(1000);
+    expect(barrel.JUDGE_SESSION_STATES).toHaveLength(9);
+    expect(typeof barrel.parseJudgeSettings).toBe('function');
+    expect(new barrel.JudgeSettingsError('x')).toBeInstanceOf(Error);
+    expect(barrel.JUDGE_CALL_STATES).toHaveLength(9);
+    expect(barrel.JUDGE_CALL_VERDICTS).toHaveLength(3);
+    expect(barrel.JUDGE_CALL_ERROR_KINDS).toHaveLength(3);
+    const rootNames = Object.keys(barrel);
+    for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey']) {
+      expect(rootNames, `root barrel must not export ${fixed}`).not.toContain(fixed);
+    }
+    const settings: JudgeSettings = { mode: 'always', maxCallsPerRun: 1 };
+    const judge: SessionJudge = { call: async () => ({ ok: true, verdict: 'pass', costUsd: null }), maxCallsPerRun: 1 };
+    const state: JudgeSessionState = 'stopped';
+    const row = (p: JudgeCallPayload): string => p.state;
+    const summary = (s: JudgeSummary): number => s.calls;
+    // Pin 31 (B-4): the internal smoke seam type is NOT on the root. If it
+    // ever is, this directive is unused and `npm run typecheck` fails TS2578.
+    // (`import type * as Root`, declared at the file top, not an `import()`
+    // type: eslint consistent-type-imports forbids those, plan review P-8.)
+    // @ts-expect-error InternalSessionJudge is internal to the judged-scan modules
+    type NotOnRoot = Root.InternalSessionJudge;
+    const probe: NotOnRoot | null = null;
+    expect(probe).toBeNull();
+    expect([settings.mode, typeof judge.call, state, typeof row, typeof summary]).toEqual(['always', 'function', 'stopped', 'function', 'function']);
   });
 
   it('exports the type closure its own signatures reference (compile-time)', () => {
