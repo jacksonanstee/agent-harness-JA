@@ -132,8 +132,11 @@ channel has been ENFORCED since 2026-07-28 (ADR-0026).
    content and is itself injectable, so ADR-0016 grants it one-way authority:
    it may tighten a heuristic verdict, never loosen one. A successful attack on
    the judge can only produce false positives. In the session it reads the copy
-   the model receives, with secrets redacted, never the raw tool output; its
-   verdict can add a note and never withholds one (ADR-0037 D3, decision 11).
+   the model receives (the ADR-0035 rewrite when one applied, else the raw
+   response, an R-22 residual per ADR-0037 T-5), and on the failure hook the
+   redacted error text; it never reads text the model has not already
+   received, except that on the failure hook it reads less. Its verdict can add
+   a note and never withholds one (ADR-0037 D3, decision 11).
 
 ## 4. Assets
 
@@ -417,7 +420,8 @@ stop after three consecutive failures with nothing judged. In the session
 (ADR-0037, 2026-10-01): a per-run cap, `judge.maxCallsPerRun` (1 to 1000,
 required when the judge is on), bounds the NUMBER of calls; at most
 `JUDGE_MAX_CONCURRENT` = 4 judge subprocesses are live at once (one child
-measured about 343 MB RSS, so 1,372 MB for four), and a call waiting for a slot
+measured about 343 MB RSS during the spec's review, so 1,372 MB for four: the
+design spec's figure, not re-measured), and a call waiting for a slot
 spends that wait inside the same 60 s; the same early stop, three consecutive
 infrastructure failures with nothing judged, switches the judge off for the
 rest of the run. The cap bounds calls, not dollars per call: one call at the

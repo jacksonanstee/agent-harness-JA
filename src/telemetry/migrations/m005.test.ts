@@ -35,7 +35,7 @@ describe('m005 judge-call-type', () => {
       runMigrations(db, MIGRATIONS.filter((m) => m.id <= 4));
 
       // Seed a rowid gap so a BUGGY rebuild (plain INSERT…SELECT, reassigning
-      // rowids) is distinguishable from the explicit-rowid copy — see the m003
+      // rowids) is distinguishable from the explicit-rowid copy; see the m003
       // test's comment for why the gap-row is deleted AFTER PRE_ROWS exist.
       insertRow(db, 'gap-row', 'turn-cost');
       for (const row of PRE_ROWS) insertPreRow(db, row);

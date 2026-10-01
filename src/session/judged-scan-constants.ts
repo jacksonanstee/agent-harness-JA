@@ -6,9 +6,9 @@ import type { JudgeSessionState, SessionJudge } from './types.js';
 // The constants below are module exports for the tests, deliberately NOT on
 // any barrel: they are fixed, not settings (pin 31's negative list).
 
-/** The tool matchers' timeout when a judge is on (spec D5; K-9: the CLI's observed default is 600 s). */
+/** The tool matchers' timeout when a judge is on (spec D5; K-9: the CLI binary carries a 600 s literal, `bp=600000`, unverified for SDK callback hooks until D9). */
 export const JUDGE_HOOK_TIMEOUT_S = 600;
-/** Live judge calls per run (decision 12; one child measured about 343 MB RSS). */
+/** Live judge calls per run (decision 12; one child measured about 343 MB RSS during the spec's review: the design spec's figure, not re-measured). */
 export const JUDGE_MAX_CONCURRENT = 4;
 /** Consecutive infrastructure failures, nothing judged, before the judge stops for the run (R6). */
 export const JUDGE_EARLY_STOP_AFTER = 3;

@@ -40,7 +40,7 @@ function write(payload: unknown) {
 }
 
 /**
- * `record()` THROWS on an invalid payload (`assertValidInput`, src/telemetry/store.ts:849-850 and :683-685);
+ * `record()` THROWS on an invalid payload (`assertValidInput`, src/telemetry/store.ts:753, called at :934);
  * `ok: false` is only a database failure (plan review P-2). The message pins the payload validator, not the
  * type check, so a leg cannot go green because the TYPE was refused instead.
  */

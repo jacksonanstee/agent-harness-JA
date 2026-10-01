@@ -424,7 +424,7 @@ describe('early stop (R6; pin 28)', () => {
     expect(fj.peak).toBeLessThanOrEqual(JUDGE_MAX_CONCURRENT);
     // Spec R6 bound (decision 17: counted at call settle, BEFORE the permit is
     // released, so the third failure stops the judge before its freed permit
-    // can admit a seventh call). Serialized completion makes it exact.
+    // can admit a seventh call). Serialised completion makes it exact.
     expect(fj.texts).toHaveLength(JUDGE_EARLY_STOP_AFTER + JUDGE_MAX_CONCURRENT - 1);
   });
 
