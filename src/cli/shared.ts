@@ -7,15 +7,18 @@ import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { loadJsonSettings } from '../internal/settings.js';
 import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
+  hasJudgeKey,
+  JudgeSettingsError,
   mergeLayers,
   mergeSandboxLayers,
+  parseJudgeSettings,
   parsePermissionSettings,
   parseSandboxSettings,
   isBlockedFirstToken,
   PermissionSettingsError,
   SandboxSettingsError,
 } from '../security/index.js';
-import type { EvaluatorOptions, RedactResult, SandboxConfig } from '../security/index.js';
+import type { EvaluatorOptions, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -193,7 +196,13 @@ export class SettingsLoadError extends Error {
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
   sandbox: SandboxConfig;
-  /** Startup notices for the operator (prompter gaps, risky allowlists). */
+  /**
+   * The session judge (issue #96 PR-B1, spec D1), from the USER layer only;
+   * null when absent or `off`. Read by every command that composes security,
+   * used only by `run` (D2, R5).
+   */
+  judge: JudgeSettings | null;
+  /** Startup notices for the operator (prompter gaps, risky allowlists, an ignored project judge key). */
   warnings: string[];
 }
 
@@ -210,18 +219,18 @@ export interface ComposeSecurityDeps {
 }
 
 /**
- * Loads and merges both security settings layers. Each file is read ONCE and
- * its parsed doc feeds both key-parsers (permissions ADR-0014, sandbox
+ * Loads and merges both security settings layers, and reads the judge from
+ * the user layer only (spec D1). Each file is read ONCE and its parsed doc
+ * feeds the key-parsers (permissions ADR-0014, sandbox
  * ADR-0015). Module parse errors are re-tagged SettingsLoadError so the
  * shared loader path-prefixes them and main() has one failure type to map to
  * exit 2. Extracted from main() so the composition logic is unit-testable
  * without an SDK or API key.
  */
 export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
-  const layers = [
-    join(deps.userDir, '.harness', 'settings.json'),
-    join(deps.projectDir, '.harness', 'settings.json'),
-  ].map((path) =>
+  const userPath = join(deps.userDir, '.harness', 'settings.json');
+  const projectPath = join(deps.projectDir, '.harness', 'settings.json');
+  const load = (path: string, readJudge: boolean) =>
     loadJsonSettings(
       path,
       (doc) => {
@@ -229,27 +238,35 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
           return {
             permissions: parsePermissionSettings(doc),
             sandbox: parseSandboxSettings(doc),
+            // Decision 9: the project layer's `judge` key is never parsed,
+            // so a malformed one can never exit 2; it is only detected.
+            judge: readJudge ? parseJudgeSettings(doc) : null,
+            judgeKeyPresent: hasJudgeKey(doc),
           };
         } catch (error: unknown) {
           if (
             error instanceof PermissionSettingsError ||
-            error instanceof SandboxSettingsError
+            error instanceof SandboxSettingsError ||
+            error instanceof JudgeSettingsError
           ) {
             throw new SettingsLoadError(error.message);
           }
           throw error;
         }
       },
-      { permissions: { rules: [] }, sandbox: {} },
+      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false },
       SettingsLoadError,
       deps.readFile,
-    ),
-  );
-  const [user, project] = layers as [(typeof layers)[0], (typeof layers)[0]];
+    );
+  const user = load(userPath, true);
+  const project = load(projectPath, false);
   const permissions = mergeLayers(user.permissions, project.permissions);
   const sandbox = mergeSandboxLayers(user.sandbox, project.sandbox);
 
   const warnings: string[] = [];
+  if (project.judgeKeyPresent) {
+    warnings.push(`ignoring "judge" in ${projectPath}: the judge is configured only in ~/.harness/settings.json`);
+  }
   // No prompter is wired yet (no interactive mode), so every 'ask' resolves
   // to deny — fail closed, but tell the settings author (ADR-0014 §4).
   if (
@@ -270,7 +287,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       `sandbox command allowlist includes ${blocked.join(', ')} — shell runners and exec wrappers defeat first-token enforcement and are always denied (ADR-0015 §3)`,
     );
   }
-  return { permissions, sandbox, warnings };
+  return { permissions, sandbox, judge: user.judge, warnings };
 }
 
 /**

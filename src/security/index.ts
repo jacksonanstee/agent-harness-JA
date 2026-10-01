@@ -1,6 +1,10 @@
 export {
   createInjectionScanner,
   createJudgedScanner,
+  hasJudgeKey,
+  JudgeSettingsError,
+  MAX_JUDGE_CALLS_PER_RUN,
+  parseJudgeSettings,
   scan,
   DEFAULT_INJECTION_RULES,
   JUDGE_ERROR_KINDS,
@@ -26,6 +30,7 @@ export type {
   JudgeErrorKind,
   JudgeMode,
   JudgeRunState,
+  JudgeSettings,
   RedTeamCase,
   RuleFamily,
   ScannerOptions,

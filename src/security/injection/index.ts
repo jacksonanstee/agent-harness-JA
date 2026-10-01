@@ -20,6 +20,13 @@ export type {
   JudgeMode,
   JudgeRunState,
 } from './judge.js';
+export {
+  hasJudgeKey,
+  JudgeSettingsError,
+  MAX_JUDGE_CALLS_PER_RUN,
+  parseJudgeSettings,
+} from './judge-settings.js';
+export type { JudgeSettings } from './judge-settings.js';
 export { DEFAULT_INJECTION_RULES } from './rules.js';
 export { STARTER_CORPUS, type RedTeamCase } from './starter-corpus.js';
 export type {
