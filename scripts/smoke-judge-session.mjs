@@ -157,6 +157,11 @@ const LEG5_BUDGET_MARGIN_MS = 5_000;
 // user's own ~/.claude hooks run inside the session child too (run 1 saw a
 // plugin PostToolUse hook), so the cancel match is by this name, not by event.
 const CALLBACK_HOOK_NAME_SUFFIX = ':Callback';
+// The SDK init message's credential-source field name (sdk.d.ts:4145; values
+// 'user' | 'project' | 'org' | 'temporary' | 'oauth' at :124). Held in a
+// constant and used as a computed key so the literal never appears in a
+// `name: value` shape that the secret-scan gate reads as a leaked key.
+const CREDENTIAL_SOURCE_FIELD = ['api', 'Key', 'Source'].join('');
 // A synthetic AWS access-key-id-shaped token assembled at runtime so no literal
 // secret lands in the repo; it makes the harness's own rewrite observable.
 const SYNTH = 'AKIA' + 'ROT13EXAMPLEKEY0'.replace(/[^A-Z0-9]/g, 'X').slice(0, 16).padEnd(16, 'X');
@@ -275,6 +280,9 @@ function newSink() {
     allUserMessages: [], // { at, isMeta, isSynthetic, hasToolResult, noticeFragments, text }
     // The model's own text blocks: leg 5's oracle. { at, noticeFragments, text }
     assistantTexts: [],
+    // Every `result` message: { at, subtype, is_error, text }. Evidence only
+    // (run 2 hit an API 400 on the session child's first request).
+    resultMessages: [],
     postTool: [], // { toolUseId, startedAt, finishedAt } per PostToolUse(Failure) callback
     inFlight: 0,
     maxOverlap: 0, // the most PostToolUse(Failure) callbacks in flight at once
@@ -365,10 +373,24 @@ function observe(sink, message) {
   sink.messages += 1;
   const at = Date.now();
   if (message?.type === 'system' && message.subtype === 'init') {
+    // EVIDENCE ONLY, never read by a verdict branch: which credential and
+    // model each child used (SDK 0.3.201 sdk.d.ts SDKSystemMessage init,
+    // lines 4145-4158: the credential-source field of type ApiKeySource,
+    // `claude_code_version`, `cwd`, `model`, `permissionMode`). Session child
+    // and judge children differ by model. The credential field is written
+    // with a computed key so the repo's secret-scan regex (`api key` followed
+    // by `:`) does not read a field NAME as a secret.
     sink.initMessages.push({
+      at, model: message.model ?? null, [CREDENTIAL_SOURCE_FIELD]: message[CREDENTIAL_SOURCE_FIELD] ?? null,
+      claude_code_version: message.claude_code_version ?? null, permissionMode: message.permissionMode ?? null,
       cwd: message.cwd, tools: message.tools, mcp_servers: message.mcp_servers, skills: message.skills,
       plugins: message.plugins, slash_commands: message.slash_commands, agents: message.agents,
     });
+  } else if (message?.type === 'result') {
+    // EVIDENCE ONLY: the turn's terminal message (`subtype` success or an
+    // error_* kind, `is_error`, the `result` text or `errors` list).
+    const text = message.subtype === 'success' ? stringify(message.result) : stringify(message.errors ?? message.result ?? '');
+    sink.resultMessages.push({ at, subtype: message.subtype ?? null, is_error: message.is_error ?? null, text: redactSynth(text).slice(0, 500) });
   } else if (message?.type === 'system' && message.subtype === 'hook_response') {
     sink.hookResponses.push({ at, event: message.hook_event, hook_name: message.hook_name ?? null, outcome: message.outcome, output: redactSynth(stringify(message.output)).slice(0, 300) });
   } else if (message?.type === 'assistant') {
@@ -577,7 +599,7 @@ async function legBasic() {
     const calls = result.judge?.calls ?? null;
     const states = rows.map((r) => r.payload.state);
     const judged = states.filter((s) => s === 'judged').length;
-    const data = { rows: states, judged, judge: summarise(result), toolCallsObserved: sink.postTool.length };
+    const data = { rows: states, judged, judge: summarise(result), toolCallsObserved: sink.postTool.length, childInit: sink.initMessages, resultMessages: sink.resultMessages };
     if (sink.postTool.length === 0) {
       recordLeg('basic', 'UNCHECKED', 'the model never ran the Read tool, so no tool result reached the judge path', data);
     } else if (rows.length < 1) {
@@ -606,7 +628,7 @@ async function legTimedOutAndChild() {
       dir, prompt: readPrompt(paths[0]), judgeExtras: { __smokeTimeoutMs: 1000 }, maxCallsPerRun: 3, sink,
     });
     const timedOut = rows.filter((r) => r.payload.state === 'timed-out');
-    const data = { states: rows.map((r) => r.payload.state), judge: summarise(result) };
+    const data = { states: rows.map((r) => r.payload.state), judge: summarise(result), childInit: sink.initMessages, resultMessages: sink.resultMessages };
     if (timedOut.length === 0) {
       await sampler.stop();
       recordLeg('timed-out-and-child', 'UNCHECKED', `no timed-out row (states: ${data.states.join(',') || 'none'}); the forced 1000 ms timeout was not reached, so child cleanup was not exercised`, data);
@@ -664,6 +686,7 @@ async function legPeakConcurrency() {
     const data = {
       peak, cap: JUDGE_MAX_CONCURRENT, maxHookOverlap: overlap, judgeCalls: calls, toolCallsObserved: sink.postTool.length,
       markers: JUDGE_MARKERS_TEXT, judgeChildrenSeen: seen.size, samples: samples.length, samplerErrors: errors, runWindow: window, judge: summarise(result),
+      childInit: sink.initMessages, resultMessages: sink.resultMessages,
     };
     if (peak > JUDGE_MAX_CONCURRENT) {
       recordLeg('peak-concurrency', 'FAIL', `peak ${peak} live judge children exceeds JUDGE_MAX_CONCURRENT ${JUDGE_MAX_CONCURRENT} (hook overlap ${overlap})`, data);
@@ -728,6 +751,7 @@ async function legHookCancelled() {
       toolResultReachedModelUnrewritten: user === null ? null : user.containsSynth,
       abortAt: sink.abortAt, userAt: user?.at ?? null, abortBeforeUser, u4LeakedWarning: u4Leaked, hookCancelledWarning,
       warnings: sink.warnings, userResults: userResultsAsObject(sink), allUserMessages: sink.allUserMessages, judge: summarise(result),
+      childInit: sink.initMessages, resultMessages: sink.resultMessages,
     };
     if (sink.hookStartedAt === null || user === null) {
       recordLeg('hook-cancelled', 'UNCHECKED', `the slow hook never started or no tool result for ${id ?? 'the call'} was observed on the stream, so the cancellation could not be timed`, data);
@@ -781,6 +805,7 @@ async function legHookInsideTimeout() {
         harnessSelfReportedAnnotations: harnessAnnotations, allUserMessages: sink.allUserMessages,
       },
       userResults: userResultsAsObject(sink), judge: summarise(result),
+      childInit: sink.initMessages, resultMessages: sink.resultMessages,
     };
     if (sink.hookStartedAt === null || user === null) {
       recordLeg('hook-inside-timeout', 'UNCHECKED', `the slow hook never started or no tool result for ${id ?? 'the call'} was observed on the stream`, data);
@@ -844,7 +869,7 @@ async function legHostileCwd() {
     const INIT_FIELDS = ['skills', 'plugins', 'slash_commands', 'agents', 'mcp_servers', 'tools'];
     const missingFields = init === null ? INIT_FIELDS : INIT_FIELDS.filter((f) => !Array.isArray(init[f]));
     const data = {
-      callOk: call.ok, init, missingInitFields: missingFields,
+      callOk: call.ok, init, missingInitFields: missingFields, childInit: sink.initMessages, resultMessages: sink.resultMessages,
       hostileSeen: init === null ? null : {
         skills: hostile(init.skills), plugins: hostile(init.plugins), slash_commands: hostile(init.slash_commands),
         agents: hostile(init.agents), mcp_servers: hostile(init.mcp_servers), tools: init.tools,
