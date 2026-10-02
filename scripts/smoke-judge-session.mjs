@@ -49,8 +49,15 @@
 //
 // FIXTURE: the note bodies carry a MEDIUM-rule sentence (heuristic ask and
 // suspicious) plus the synthetic key, because a heuristic block never reaches
-// the judge; a keyless pre-flight scan refuses to start (exit 2) if a body
-// scans as block or not suspicious.
+// the judge; a keyless pre-flight refuses to start (exit 2) if a body, bare or
+// in the Read-shaped tool_response the hook scans, scans as block or not
+// suspicious, or if the redactor finds nothing in it.
+//
+// HOOK LEGS: leg 4 sets a 30 s matcher timeout against a 40 s hook, so the
+// CLI must cancel. Leg 5 sets its OWN 60 s matcher timeout against the judge
+// timer (20 s) plus a 10 s hook; the load-time budget assertion (timer + hook
+// + 5 s margin < 60 s, exit 2) means an honest leg 5 run cannot be cut by its
+// own budget and read as killed.
 //
 // RESIDUAL ROUTES, NOT FIXABLE FROM THIS SCRIPT: the session child runs with
 // the SDK's default settingSources, so the user's own ~/.claude settings and
@@ -127,12 +134,29 @@ const POST_DEADLINE_SAMPLE_MS = 3_000;
 const MIN_WINDOW_SAMPLES = 5;
 // Leg 3's cap is pressed only when at least this many judged hooks overlapped.
 const MIN_OVERLAP = 2;
+// Leg 4's matcher timeout: 30 s against a 40 s hook, so the CLI must cancel.
 const HOOK_TIMEOUT_S = 30;
 const HOOK_TIMER_MS = 20_000; // BF-5: the effective-value rule needs both seams
 // Leg 4: the cancellation must land within this of HOOK_TIMEOUT_S * 1000.
 const HOOK_TIMEOUT_TOLERANCE_MS = 5_000;
 const SLOW_HOOK_MS = 40_000;
 const INSIDE_HOOK_MS = 10_000;
+// Leg 5's OWN matcher timeout. The callback runs the judge call (bounded by
+// HOOK_TIMER_MS) and then the custom hook (INSIDE_HOOK_MS); against leg 4's
+// 30 s a judge call at its timer plus the 10 s hook would be cut by the CLI
+// and read as killed on an honest run (re-review 4, C1). 60 s keeps the
+// construction rule (src/session/judged-scan-validate.ts: hookS * 1000 must
+// exceed the timer, 60 000 > 20 000) and the budget below is asserted at load.
+const LEG5_HOOK_TIMEOUT_S = 60;
+const LEG5_BUDGET_MARGIN_MS = 5_000;
+// The CLI names an SDK callback hook `<event>:Callback` when it records its
+// result (CLI 2.1.201 binary: `fen({...,hookName:\`${d}:Callback\`,hookEvent:d})`
+// at byte offset 219655809) and emits it as `hook_name` on the stream's
+// `hook_response` (`WC({type:"system",subtype:"hook_response",hook_id,
+// hook_name:e.hookName,hook_event,...,outcome})` at offset 212929263). The
+// user's own ~/.claude hooks run inside the session child too (run 1 saw a
+// plugin PostToolUse hook), so the cancel match is by this name, not by event.
+const CALLBACK_HOOK_NAME_SUFFIX = ':Callback';
 // A synthetic AWS access-key-id-shaped token assembled at runtime so no literal
 // secret lands in the repo; it makes the harness's own rewrite observable.
 const SYNTH = 'AKIA' + 'ROT13EXAMPLEKEY0'.replace(/[^A-Z0-9]/g, 'X').slice(0, 16).padEnd(16, 'X');
@@ -346,7 +370,7 @@ function observe(sink, message) {
       plugins: message.plugins, slash_commands: message.slash_commands, agents: message.agents,
     });
   } else if (message?.type === 'system' && message.subtype === 'hook_response') {
-    sink.hookResponses.push({ at, event: message.hook_event, outcome: message.outcome, output: redactSynth(stringify(message.output)).slice(0, 300) });
+    sink.hookResponses.push({ at, event: message.hook_event, hook_name: message.hook_name ?? null, outcome: message.outcome, output: redactSynth(stringify(message.output)).slice(0, 300) });
   } else if (message?.type === 'assistant') {
     const content = message.message?.content;
     const blocks = Array.isArray(content) ? content : [];
@@ -649,6 +673,9 @@ async function legPeakConcurrency() {
       recordLeg('peak-concurrency', 'UNCHECKED', `the run was not observed well enough: ${window.ok} successful sample(s) (need ${MIN_WINDOW_SAMPLES}) and ${window.errors} sampler error(s) (need 0)`, data);
     } else if (overlap < MIN_OVERLAP) {
       recordLeg('peak-concurrency', 'UNCHECKED', `at most ${overlap} judged hook(s) were in flight at once (need ${MIN_OVERLAP}), so the cap of ${JUDGE_MAX_CONCURRENT} was never pressed; ${calls} judge call(s), peak seen ${peak}`, data);
+    } else if (peak < 2) {
+      // "Under the cap" is only a claim when children were concurrently live (M3).
+      recordLeg('peak-concurrency', 'UNCHECKED', `peak ${peak} live judge child(ren): the cap of ${JUDGE_MAX_CONCURRENT} was never approached (hook overlap ${overlap}, ${calls} judge call(s)), so "under the cap under pressure" is unobserved`, data);
     } else {
       recordLeg('peak-concurrency', 'PASS', `peak ${peak} live judge children (sampled every ${SAMPLE_MS} ms, a lower bound) with ${overlap} judged hooks in flight at once across ${calls} judge calls; cap ${JUDGE_MAX_CONCURRENT}`, data);
     }
@@ -661,7 +688,12 @@ async function legPeakConcurrency() {
 // ---------------------------------------------------------------------------
 // Legs 4 and 5: hook timeout
 // ---------------------------------------------------------------------------
-const hookWasCancelled = (sink) => sink.hookResponses.some((h) => /PostToolUse/.test(h.event ?? '') && h.outcome === 'cancelled');
+// Only the HARNESS's SDK callback counts (hook_name `<event>:Callback`, see
+// CALLBACK_HOOK_NAME_SUFFIX); the user's own PostToolUse hooks in the session
+// child must not read as the callback being cancelled (M4). The CLI's
+// hook_response carries no tool_use_id, so the name is the only key.
+const isCallbackHookResponse = (h) => /^PostToolUse/.test(h.event ?? '') && typeof h.hook_name === 'string' && h.hook_name.endsWith(CALLBACK_HOOK_NAME_SUFFIX);
+const hookWasCancelled = (sink) => sink.hookResponses.some((h) => isCallbackHookResponse(h) && h.outcome === 'cancelled');
 
 async function legHookCancelled() {
   const sink = newSink();
@@ -721,8 +753,9 @@ async function legHookInsideTimeout() {
   try {
     const { result } = await runSession({
       dir, prompt: echoPrompt(paths[0]), sleepHookMs: INSIDE_HOOK_MS, sink,
-      // The effective-value rule (BF-5): a 30 s hook timeout must exceed the 60 s default timer, so both seams are set.
-      judgeExtras: { __smokeHookTimeoutS: HOOK_TIMEOUT_S, __smokeTimeoutMs: HOOK_TIMER_MS },
+      // Leg 5's own 60 s matcher timeout (C1) over the 20 s judge timer: the
+      // effective-value rule (BF-5) needs both seams, 60 000 > 20 000.
+      judgeExtras: { __smokeHookTimeoutS: LEG5_HOOK_TIMEOUT_S, __smokeTimeoutMs: HOOK_TIMER_MS },
     });
     const { id, user } = firstToolResult(sink);
     const cancelledEvent = hookWasCancelled(sink);
@@ -752,11 +785,11 @@ async function legHookInsideTimeout() {
     if (sink.hookStartedAt === null || user === null) {
       recordLeg('hook-inside-timeout', 'UNCHECKED', `the slow hook never started or no tool result for ${id ?? 'the call'} was observed on the stream`, data);
     } else if (killed) {
-      recordLeg('hook-inside-timeout', 'FAIL', `a ${INSIDE_HOOK_MS} ms hook was killed inside the explicit ${HOOK_TIMEOUT_S} s timeout (abort ${sink.abortAt !== null}, cancelled event ${cancelledEvent}, hook finished before the stream result ${hookFinishedBeforeResult}); blocks the merge`, data);
+      recordLeg('hook-inside-timeout', 'FAIL', `a ${INSIDE_HOOK_MS} ms hook (after a judge call bounded by ${HOOK_TIMER_MS} ms) was killed inside the explicit ${LEG5_HOOK_TIMEOUT_S} s timeout (abort ${sink.abortAt !== null}, cancelled event ${cancelledEvent}, hook finished before the stream result ${hookFinishedBeforeResult}); blocks the merge`, data);
     } else if (!echoed.includes(DECIDING_FRAGMENT)) {
       recordLeg('hook-inside-timeout', 'UNCHECKED', `the hook finished inside its timeout and the result waited for it (${user.at - sink.hookFinishedAt} ms after), but the model's reply did not quote the Read-specific notice fragment (fragments seen: ${echoed.join(',') || 'none'}), so whether the notice reached the model is unobserved (harness self-reported ${harnessAnnotations} annotation(s), which does not count)`, data);
     } else {
-      recordLeg('hook-inside-timeout', 'PASS', `${INSIDE_HOOK_MS} ms hook finished inside the ${HOOK_TIMEOUT_S} s timeout; the result waited for it (${user.at - sink.hookFinishedAt} ms after) and the model quoted the harness notice (${echoed.join(',')} fragment(s)) in its reply`, data);
+      recordLeg('hook-inside-timeout', 'PASS', `${INSIDE_HOOK_MS} ms hook finished inside the ${LEG5_HOOK_TIMEOUT_S} s timeout; the result waited for it (${user.at - sink.hookFinishedAt} ms after) and the model quoted the harness notice (${echoed.join(',')} fragment(s)) in its reply`, data);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -869,13 +902,37 @@ async function legHostileCwd() {
   // mode: 'always'), so a `pass` body would also escalate, but `ask` keeps the
   // heuristic floor and with it the notice leg 5 needs: compose() is
   // stricter-of, so a benign judge verdict cannot lower it to pass.
+  // The hook scans the Read tool's tool_response, not the bare file: the
+  // harness renders it with `stringifyForScan` (src/session/session.ts:1070,
+  // `JSON.stringify` with a cycle guard; `deps.scanInjection(stringifyForScan(
+  // output))` at :1194), so both shapes are checked (M1). The Read response
+  // shape is `{type:'text', file:{filePath, content, numLines, startLine,
+  // totalLines}}`.
+  const stringifyForScan = (output) => (typeof output === 'string' ? output : JSON.stringify(output) ?? '');
+  const readShaped = (path, content) => ({ type: 'text', file: { filePath: path, content, numLines: 1, startLine: 1, totalLines: 1 } });
   for (const n of [1, 2, 3, 4, 5, 6]) {
     const body = noteBody(n);
-    const verdict = scan(body);
-    if (verdict.verdict === 'block' || verdict.suspicious !== true) {
-      console.error(`note body ${n} scans as verdict ${verdict.verdict}, suspicious ${verdict.suspicious}, rule_ids [${verdict.rule_ids.join(',')}]; the judge legs need ask and suspicious (a block never reaches the judge); refusing to run.`);
+    for (const [shape, text] of [['bare', body], ['Read tool_response', stringifyForScan(readShaped(`${placeholderPath}`, body))]]) {
+      const verdict = scan(text);
+      if (verdict.verdict === 'block' || verdict.suspicious !== true) {
+        console.error(`note body ${n} (${shape}) scans as verdict ${verdict.verdict}, suspicious ${verdict.suspicious}, rule_ids [${verdict.rule_ids.join(',')}]; the judge legs need ask and suspicious (a block never reaches the judge); refusing to run.`);
+        process.exit(2);
+      }
+    }
+    // Legs 4 and 5 (body 1; checked on every body) need the redactor to find
+    // the synthetic key: leg 4's LEAKED join needs a pending rewrite and leg
+    // 5's judge copy is the redacted one (M2).
+    const findings = redact(body).findings ?? [];
+    if (findings.length < 1) {
+      console.error(`note body ${n}: redact found nothing, so no rewrite would be pending and legs 4 and 5 could not observe the channel; refusing to run.`);
       process.exit(2);
     }
+  }
+  // Leg 5's budget (C1): the judge timer plus the hook plus a margin must sit
+  // inside the leg's own matcher timeout, or an honest run reads as killed.
+  if (!(HOOK_TIMER_MS + INSIDE_HOOK_MS + LEG5_BUDGET_MARGIN_MS < LEG5_HOOK_TIMEOUT_S * 1000)) {
+    console.error(`leg 5 budget: judge timer ${HOOK_TIMER_MS} ms + hook ${INSIDE_HOOK_MS} ms + margin ${LEG5_BUDGET_MARGIN_MS} ms is not under the leg's ${LEG5_HOOK_TIMEOUT_S} s matcher timeout; refusing to run.`);
+    process.exit(2);
   }
 }
 
