@@ -166,7 +166,7 @@ describe('validateSessionJudge (spec D3, A-10; pins 4, 20, 29, 32)', () => {
       'createSession: deps.judge needs deps.scanInjection (the judge only tightens the heuristic\'s verdict)',
     );
     expect(messageOf(base({ call, maxCallsPerRun: 5 }, { redactSecrets: ABSENT }))).toBe(
-      'createSession: deps.judge needs deps.redactSecrets (the judge\'s tool-output input is redacted first)',
+      'createSession: deps.judge needs deps.redactSecrets (the judge gets the redacted copy wherever the harness rewrites a tool result; ADR-0037 T-5)',
     );
   });
 
