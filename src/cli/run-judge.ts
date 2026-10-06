@@ -2,7 +2,7 @@ import { JUDGE_TIMEOUT_MS } from '../security/index.js';
 import type { JudgeSettings } from '../security/index.js';
 import { buildJudge, JUDGE_MODEL } from '../session/index.js';
 import type { JudgeSessionState, JudgeSummary, QueryFn, SessionJudge } from '../session/index.js';
-import { judgeCapWarning } from '../session/judged-scan.js';
+import { judgeCapWarning } from '../session/judged-scan.js'; // the one pinned deep import: ADR-0023 D3, layering.test.ts ALLOWED_CLI_DEEP_IMPORTS
 
 // Issue #96 PR-B1, spec D2 and D7: the `run` path's judge composition and its
 // two operator lines. The mid-run live lines come from the session through
@@ -22,7 +22,7 @@ export function judgeStartLine(settings: JudgeSettings): string {
   );
 }
 
-/** The unjudged clause's order (spec D7). */
+/** The unjudged clause's order (spec D7). Not derivable from JUDGE_SESSION_STATES (D7 puts oversized third); run-judge.test.ts pins it complete against that tuple. */
 const UNJUDGED: readonly JudgeSessionState[] = ['timed-out', 'failed', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out'];
 
 /**

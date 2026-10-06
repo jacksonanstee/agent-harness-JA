@@ -196,6 +196,16 @@ describe('the summary and start lines (D7; pins 17, 29)', () => {
     expect(capWarning).toBe('the judge call cap (4) was reached; 2 tool result(s) ran on the heuristic only. Raise judge.maxCallsPerRun in ~/.harness/settings.json to judge more.');
   });
 
+  it('every state but not-escalated and judged is printed in the unjudged clause, in the D7 order (architecture lens A-2)', () => {
+    const byState = Object.fromEntries(JUDGE_SESSION_STATES.map((s) => [s, 1])) as JudgeSummary['byState'];
+    const { summary } = judgeSummaryLines(summaryOf({ byState }));
+    const clause = /unjudged: (.*?), cost=/.exec(summary)?.[1] ?? '';
+    const printed = clause.split(', ').map((part) => part.replace(/^1 /, ''));
+    expect(printed).toEqual(['timed-out', 'failed', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out']);
+    // Completeness against the source tuple: a tenth state drops out of the line only by a red test, never silently.
+    expect([...printed, 'not-escalated', 'judged'].sort()).toEqual([...JUDGE_SESSION_STATES].sort());
+  });
+
   it('pending at end appears exactly when pendingAtEnd > 0 (B-2)', () => {
     expect(judgeSummaryLines(summaryOf({ pendingAtEnd: 0 })).summary).not.toMatch(/pending at end/);
     expect(judgeSummaryLines(summaryOf({ pendingAtEnd: 2 })).summary).toMatch(/unjudged: 2 pending at end, /);
