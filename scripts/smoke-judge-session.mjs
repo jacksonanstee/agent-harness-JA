@@ -68,7 +68,7 @@
 // RESIDUAL ROUTES, NOT FIXABLE FROM THIS SCRIPT: the session child runs with
 // the SDK's default settingSources, so the user's own ~/.claude settings and
 // CLAUDE.md sit in the model's context; a notice fragment planted there, or a
-// model that hallucinates the exact 49 or 100 character string, would satisfy
+// model that hallucinates the exact 61-character `prefixRead` string, would satisfy
 // leg 5's echo oracle. The script asserts only over the strings it writes
 // itself (prompts, note bodies, hostile fixtures) and records the full echo in
 // assistantTexts so a reader can check it.
