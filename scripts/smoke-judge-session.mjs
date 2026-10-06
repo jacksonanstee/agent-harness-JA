@@ -228,7 +228,9 @@ function recordLeg(name, status, detail, data) {
   // Final guard (A1): a slice that bypassed redactSynth must not land on disk;
   // the throw reaches `guarded`, which records the leg UNCHECKED with no data.
   if (json.includes(SYNTH)) {
-    throw new Error(`evidence for leg ${name} still contains the synthetic key; refusing to write it`);
+    // Name the carrying top-level keys (script-defined, never data) so the next fix is one step.
+    const carriers = data && typeof data === 'object' ? Object.keys(data).filter((k) => (JSON.stringify(data[k]) ?? '').includes(SYNTH)) : [];
+    throw new Error(`evidence for leg ${name} still contains the synthetic key (data keys: ${carriers.join(',') || 'detail or none'}); refusing to write it`);
   }
   writeFileSync(join(evidenceDir, `${name}.json`), json + '\n');
   console.log(`LEG ${name}: ${status} ${detail}`);
@@ -591,6 +593,8 @@ async function runSession({ dir, prompt, judgeExtras = {}, sleepHookMs = null, m
 
 const readPrompt = (path) =>
   `Call the Read tool exactly once on ${path}. After the tool result, reply with the single word done.`;
+const parallelReadPrompt = (paths) =>
+  `Read these six files with SIX Read tool calls issued together in ONE response (in parallel, not one after another): ${paths.join(' ')} . After the results, reply with the single word done.`;
 
 const summarise = (result) => (result.judge === null ? null : { cap: result.judge.cap, calls: result.judge.calls, byState: result.judge.byState, annotated: result.judge.annotated, costUsd: result.judge.costUsd });
 
@@ -683,8 +687,7 @@ async function legPeakConcurrency() {
   const sampler = startSampler();
   const startedAt = Date.now();
   try {
-    const prompt = `Read these six files with SIX Read tool calls issued together in ONE response (in parallel, not one after another): ${paths.join(' ')} . After the results, reply with the single word done.`;
-    const { result } = await runSession({ dir, prompt, maxCallsPerRun: 12, sink });
+    const { result } = await runSession({ dir, prompt: parallelReadPrompt(paths), maxCallsPerRun: 12, sink });
     await sampler.stop();
     const { seen, peak, samples, errors } = sampler.state;
     const calls = result.judge?.calls ?? 0;
@@ -909,7 +912,7 @@ async function legHostileCwd() {
 // ---------------------------------------------------------------------------
 // Load-time assertion (A2), before any session: no string this script writes
 // where the model can read it may carry a notice fragment, or leg 5's echo
-// oracle would be seeded. Covers both prompts, every note body the legs write
+// oracle would be seeded. Covers every prompt, every note body the legs write
 // (paths are mkdtemp under tmpdir() plus note-N.txt, which cannot carry one)
 // and every hostile-cwd fixture body. Refuses with exit 2.
 // ---------------------------------------------------------------------------
@@ -918,6 +921,7 @@ async function legHostileCwd() {
   const modelVisible = [
     ['leg 5 prompt', echoPrompt(placeholderPath)],
     ['read prompt', readPrompt(placeholderPath)],
+    ['leg 3 prompt', parallelReadPrompt([1, 2, 3, 4, 5, 6].map((n) => `/placeholder/note-${n}.txt`))],
     ...[1, 2, 3, 4, 5, 6].map((n) => [`note body ${n}`, noteBody(n)]),
     ...hostileFixtureFiles('/placeholder/HOSTILE-HOOK-RAN').map(([rel, body]) => [`hostile fixture ${rel}`, body]),
   ];
