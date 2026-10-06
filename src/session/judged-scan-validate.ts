@@ -28,7 +28,7 @@ export function validateSessionJudge(deps: SessionDeps): void {
     throw new TypeError("createSession: deps.judge needs deps.scanInjection (the judge only tightens the heuristic's verdict)");
   }
   if (typeof deps.redactSecrets !== 'function') {
-    throw new TypeError('createSession: deps.judge needs deps.redactSecrets (the judge must only ever see redacted tool output)');
+    throw new TypeError("createSession: deps.judge needs deps.redactSecrets (the judge's tool-output input is redacted first)");
   }
   for (const key of ['__smokeTimeoutMs', '__smokeHookTimeoutS'] as const) {
     if (judge[key] !== undefined && !isPositiveInteger(judge[key])) {

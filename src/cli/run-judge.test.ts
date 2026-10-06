@@ -221,7 +221,6 @@ describe('a project judge key warns with the path neutralised (Task 2 deferral; 
     vi.spyOn(process, 'cwd').mockReturnValue(hostile);
     await main(runArgs().argv, { userDir: dir(), importSdk: async () => ({ query: sdk.query }) });
     const stderr = err.join('');
-    // eslint-disable-next-line no-control-regex
     expect(stderr).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
     expect(stderr).toMatch(/^warning: ignoring "judge" in .*evil {0,3}\[2J {0,3}name.*settings\.json: the judge is configured only in ~\/\.harness\/settings\.json$/m);
   });

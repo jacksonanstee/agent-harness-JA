@@ -17,6 +17,7 @@ import {
   judgeCapWarning,
   judgeEarlyStopWarning,
   judgeFirstFailureWarning,
+  JudgeSlots,
   judgeSlotsHeldWarning,
   normaliseCallResult,
   validateSessionJudge,
@@ -165,7 +166,7 @@ describe('validateSessionJudge (spec D3, A-10; pins 4, 20, 29, 32)', () => {
       'createSession: deps.judge needs deps.scanInjection (the judge only tightens the heuristic\'s verdict)',
     );
     expect(messageOf(base({ call, maxCallsPerRun: 5 }, { redactSecrets: ABSENT }))).toBe(
-      'createSession: deps.judge needs deps.redactSecrets (the judge must only ever see redacted tool output)',
+      'createSession: deps.judge needs deps.redactSecrets (the judge\'s tool-output input is redacted first)',
     );
   });
 
@@ -203,6 +204,9 @@ describe('Review Focus 1 and 2: forged results and malformed floors', () => {
       errorKind: 'call-failed',
       costUsd: 0.2,
     });
+    // Clause-level pins (code lens C-5): Infinity is not finite (the row validator rejects it), and a free call costs 0, not unknown.
+    expect(normaliseCallResult({ ok: true, verdict: 'pass', costUsd: Number.POSITIVE_INFINITY })).toEqual({ ok: true, verdict: 'pass', costUsd: null });
+    expect(normaliseCallResult({ ok: true, verdict: 'pass', costUsd: 0 })).toEqual({ ok: true, verdict: 'pass', costUsd: 0 });
     expect(normaliseCallResult({ ok: true, verdict: 'maybe' })).toEqual(CALL_FAILED);
     expect(normaliseCallResult(null)).toEqual(CALL_FAILED);
     expect(normaliseCallResult('block')).toEqual(CALL_FAILED);
@@ -218,6 +222,9 @@ describe('Review Focus 1 and 2: forged results and malformed floors', () => {
     expect(asFloor({ verdict: 'weird', rule_ids: [], excerpts: [] })).toBeNull();
     expect(asFloor({ verdict: 'ask', rule_ids: 'x', excerpts: [] })).toBeNull();
     expect(asFloor(null)).toBeNull();
+    // The floor's own `suspicious` flag is carried through, and only a literal true counts (code lens C-5).
+    expect(asFloor({ verdict: 'ask', rule_ids: [], excerpts: [], suspicious: true })?.suspicious).toBe(true);
+    expect(asFloor({ verdict: 'ask', rule_ids: [], excerpts: [], suspicious: 'yes' })?.suspicious).toBe(false);
     const fj = fakeJudge(() => OK('block'));
     const h = harness({ call: fj.call, maxCallsPerRun: 5 });
     expect(await h.result({ floor: { verdict: 'weird', rule_ids: [], excerpts: [] } })).toBeNull();
@@ -349,6 +356,50 @@ describe('concurrency (decisions 12 and 14; pin 25)', () => {
   });
 });
 
+describe('JudgeSlots abandon paths and the held-for check (code lens C-1, C-6)', () => {
+  const settled = async (p: Promise<boolean>): Promise<boolean | 'pending'> => Promise.race([p, new Promise<'pending'>((r) => setImmediate(() => r('pending')))]);
+
+  it('an aborted queued waiter leaves the queue itself: the next release frees the permit, it is not handed to the dead waiter (A-11)', async () => {
+    const slots = new JudgeSlots(1);
+    await slots.acquire(undefined, () => undefined);
+    const ac = new AbortController();
+    let abandoned = 0;
+    const queued = slots.acquire(ac.signal, () => {
+      abandoned += 1;
+    });
+    ac.abort();
+    expect(await queued).toBe(false);
+    expect(abandoned).toBe(1);
+    slots.release();
+    expect(await settled(slots.acquire(undefined, () => undefined))).toBe(true);
+  });
+
+  it('an admitted waiter drops its abort listener: a later abort never calls onAbandon (no double decrement)', async () => {
+    const slots = new JudgeSlots(1);
+    await slots.acquire(undefined, () => undefined);
+    const ac = new AbortController();
+    let abandoned = 0;
+    const queued = slots.acquire(ac.signal, () => {
+      abandoned += 1;
+    });
+    slots.release();
+    expect(await queued).toBe(true);
+    ac.abort();
+    expect(abandoned).toBe(0);
+  });
+
+  it('allHeldFor needs every permit HELD, not merely active, and the boundary is >= (B-3)', async () => {
+    const slots = new JudgeSlots(1);
+    await slots.acquire(undefined, () => undefined);
+    // Admitted but not yet holding: active is full, holders is empty.
+    expect(slots.allHeldFor(1_000, 0)).toBe(false);
+    slots.hold(0);
+    expect(slots.allHeldFor(99, 100)).toBe(false);
+    expect(slots.allHeldFor(100, 100)).toBe(true);
+    expect(slots.allHeldFor(101, 100)).toBe(true);
+  });
+});
+
 describe('early stop (R6; pin 28)', () => {
   it('three consecutive call-failed results with nothing judged stop further calls; later results are stopped and never count', async () => {
     const fj = fakeJudge(() => CALL_FAILED);
@@ -361,6 +412,27 @@ describe('early stop (R6; pin 28)', () => {
     expect(summary.costUnknown).toBe(3);
     expect(count(h.warnings, 'the judge failed 3 times in a row')).toBe(1);
     expect(count(h.warnings, 'a judge call failed')).toBe(1);
+  });
+
+  it('a THROWN call counts toward the stop and prints the first-failure line (code lens C-2)', async () => {
+    let calls = 0;
+    const throwing: JudgeCall = async () => {
+      calls += 1;
+      throw new Error('transport exploded');
+    };
+    const h = harness({ call: throwing, maxCallsPerRun: 50 });
+    for (let i = 0; i < 5; i += 1) await h.result({ id: `t${i}` });
+    expect(calls).toBe(JUDGE_EARLY_STOP_AFTER);
+    expect(h.rows.map((r) => r.state)).toEqual(['failed', 'failed', 'failed', 'stopped', 'stopped']);
+    expect(count(h.warnings, 'a judge call failed')).toBe(1);
+    expect(count(h.warnings, 'the judge failed 3 times in a row')).toBe(1);
+  });
+
+  it('at the cap edge a stopped run is labelled stopped, not cap-reached (code lens C-4)', async () => {
+    const fj = fakeJudge(() => CALL_FAILED);
+    const h = harness({ call: fj.call, maxCallsPerRun: JUDGE_EARLY_STOP_AFTER });
+    for (let i = 0; i < JUDGE_EARLY_STOP_AFTER + 1; i += 1) await h.result({ id: `t${i}` });
+    expect(h.rows.map((r) => r.state)).toEqual(['failed', 'failed', 'failed', 'stopped']);
   });
 
   it('timed-out counts toward the stop too, at call settle (decision 17)', async () => {
@@ -581,5 +653,16 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
     const summary = h.run.drain();
     await vi.advanceTimersByTimeAsync(JUDGE_DRAIN_MS);
     expect((await summary).pendingAtEnd).toBe(1);
+  });
+
+  it('a drain that finishes inside the bound clears its 10 s timer (code lens C-6)', async () => {
+    vi.useFakeTimers();
+    const h = harness({ call: async () => OK('pass'), maxCallsPerRun: 5 });
+    const quick = h.run.enter(undefined, 'quick');
+    void quick.track(new Promise<void>((resolve) => setTimeout(resolve, 2_000)));
+    const summary = h.run.drain();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect((await summary).pendingAtEnd).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -253,6 +253,43 @@ describe('composition through the session (pins 5, 6, 20)', () => {
   });
 });
 
+describe('a floor that never entered the judge path still annotates, as with no judge (Review Focus 2; code lens C-3)', () => {
+  // A caller-supplied scanInjection can return a block with no `excerpts` array: runInjectionScan and annotate accept it, asFloor refuses it (null decision).
+  const MALFORMED_BLOCK = (() => ({ verdict: 'block', rule_ids: ['r-mal'] })) as unknown as SessionDeps['scanInjection'];
+
+  it('success hook: the note, one annotation, no judge-call row, identical to judge off', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', output: 'plain notes' }]);
+    const fj = fakeJudge(() => OK('pass'));
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: MALFORMED_BLOCK });
+    const result = await start(b).run('hi');
+    const offFake = drivenQuery([{ id: 'toolu_1', output: 'plain notes' }]);
+    const off = build(offFake.query, undefined, { scanInjection: MALFORMED_BLOCK });
+    const offResult = await start(off).run('hi');
+    expect(contextOf(fake.outputs.get('toolu_1'))).toMatch(/^The harness prompt-injection scanner flagged this Read result \(r-mal\)\./);
+    expect(contextOf(fake.outputs.get('toolu_1'))).toBe(contextOf(offFake.outputs.get('toolu_1')));
+    expect(result.outputAnnotations).toHaveLength(1);
+    expect(result.outputAnnotations).toEqual(offResult.outputAnnotations);
+    expect(fj.texts).toEqual([]);
+    expect(b.judgeRows()).toEqual([]);
+  });
+
+  it('failure hook: the same', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', failError: 'Exit 1: plain failure' }]);
+    const fj = fakeJudge(() => OK('pass'));
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: MALFORMED_BLOCK });
+    const result = await start(b).run('hi');
+    const offFake = drivenQuery([{ id: 'toolu_1', failError: 'Exit 1: plain failure' }]);
+    const off = build(offFake.query, undefined, { scanInjection: MALFORMED_BLOCK });
+    await start(off).run('hi');
+    expect(contextOf(fake.outputs.get('toolu_1'))).toContain('(r-mal)');
+    expect(contextOf(fake.outputs.get('toolu_1'))).toBe(contextOf(offFake.outputs.get('toolu_1')));
+    expect(result.outputAnnotations).toHaveLength(1);
+    expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool-failure', verdict: 'block' });
+    expect(fj.texts).toEqual([]);
+    expect(b.judgeRows()).toEqual([]);
+  });
+});
+
 describe('the custom post-tool hook reads the COMPOSED verdict, 3a and 3b included (spec D3 step 4; Task 8 review Important 1)', () => {
   function captureHookScan(b: Built): ScanResult[] {
     const seen: ScanResult[] = [];
