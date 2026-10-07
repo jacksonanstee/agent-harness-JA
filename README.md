@@ -58,7 +58,7 @@ node dist/cli.js eval --challenge      # report-only second-pass adversarial cha
 node dist/cli.js eval --max-tasks 250  # lift the pre-flight pack-size limit (see docs/decisions/0017)
 npm run redteam                        # keyless drift gate (see docs/decisions/0019)
 npm run redteam -- --judge             # keyed, report-only judge arm (docs/decisions/0036)
-npm run redteam -- --judge --samples 5 # 5 judge runs, a pooled summary and a JUDGE_GATE= line (#148)
+npm run redteam -- --judge --samples 5 # up to 5 judge runs, a pooled summary, a JUDGE_GATE= line (#148)
 node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --scrub-prefix to share
 node dist/cli.js init my-agent         # scaffold a starter project
 ```

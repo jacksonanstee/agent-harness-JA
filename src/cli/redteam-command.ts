@@ -588,8 +588,9 @@ const STATE_RANK: Record<JudgeArmState, number> = { complete: 0, partial: 1, fai
  * `--samples <n>` (issue #148): the judge arm n times over the same slices,
  * each sample's scorecard written as `judge-scorecard-s<k>-<stamp>.json`,
  * then ADR-0036 D8's gate read over the pooled samples against the n
- * REQUESTED, ending in the `JUDGE_GATE=` line, which is always printed (with
- * no sample read it says `incomplete`). Report-only like the arm (ADR-0036
+ * REQUESTED, ending in the `JUDGE_GATE=` line, printed whenever this runs
+ * (with no sample read it says `incomplete`; a judge that cannot be obtained
+ * never reaches here: `JUDGE_ARM=failed`, exit 2, no gate line). Report-only like the arm (ADR-0036
  * D4): the gate line never changes the exit; the returned state is the worst
  * sample's. A sample that is not complete (a call unjudged, an early stop, a
  * lost scorecard) ends the run: the gate can no longer read `pass`, so the
