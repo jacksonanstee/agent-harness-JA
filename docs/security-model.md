@@ -410,7 +410,8 @@ before any file is parsed or any session exists (ADR-0017 amendment). Cost
 hygiene, not a security boundary: R-10 already accepts arbitrary in-process
 oracle code from the same pack.
 Judge cost — the economic DoS — is handled by keeping the judge off by
-default, haiku-class, single-call, no-retry (ADR-0016 §5); since ADR-0036 also
+default, haiku-class, single-call, no-retry (ADR-0016 §5; the class is
+`claude-sonnet-5` since 07/10/2026, issue #148); since ADR-0036 also
 by a 128 KiB input cap (over it, the judge is not called), a scanner-owned 60 s
 timer, and the isolation keys on the judge subprocess. Since ADR-0037 a
 timed-out call is aborted through the SDK's `abortController` on the arm and in
@@ -558,7 +559,9 @@ not live values:
   gate by construction. Those haiku figures date from before 07/10/2026 (#147),
   when the parser began accepting haiku's fenced replies: re-measured then, the
   default judge detected 41 of 41 and 12 of 12 but made three judge-caused
-  false-blocks, failing ADR-0036 D8's zero gate (ADR-0036 D8 note).
+  false-blocks, failing ADR-0036 D8's zero gate (ADR-0036 D8 note). The judge
+  has been `claude-sonnet-5` since then (#148), chosen over repeated samples;
+  its figures are in ADR-0036 D8's #148 notes.
 <!-- corpus-gate: resume -->
 
 ## 8. ADR index

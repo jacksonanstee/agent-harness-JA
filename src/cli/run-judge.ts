@@ -18,7 +18,7 @@ export function runJudgeDeps(settings: JudgeSettings | null, query: QueryFn): { 
 export function judgeStartLine(settings: JudgeSettings): string {
   return (
     `[harness] judge: on (always, cap ${settings.maxCallsPerRun}): each tool result waits for one judge call, ` +
-    `typically about 15 s and at most ${JUDGE_TIMEOUT_MS / 1000} s`
+    `typically about 3 s and at most ${JUDGE_TIMEOUT_MS / 1000} s`
   );
 }
 

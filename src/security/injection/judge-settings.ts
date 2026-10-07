@@ -77,19 +77,19 @@ export function hasJudgeKey(doc: unknown): boolean {
 }
 
 // ----- The money ceiling (spec D1, threat model T-4, N-4). The cap bounds the
-// NUMBER of calls, not dollars per call: ADR-0036 D7's USD 0.0033 per haiku
-// call is the TYPICAL figure on short corpus strings, while a session input
+// NUMBER of calls, not dollars per call: USD 0.0025 per sonnet call (ADR-0036
+// D8's #148 note, 270 calls) is the TYPICAL figure on short corpus strings, while a session input
 // can reach MAX_JUDGE_INPUT_BYTES and the reply has no length bound
 // (decision 16). The ceiling is the cost of one call at the input cap, from
 // the inputs below; pin 33 re-derives it and checks README's figure. The
 // D8 re-measure does not exercise realistic input sizes (ADR-0037).
 
-/** The date the prices below were read (claude-api skill model table, cached 2026-09-25). */
-export const JUDGE_PRICE_READ_ON = '2026-10-01';
-/** claude-haiku-4-5 list price, USD per million input tokens. */
-export const JUDGE_INPUT_USD_PER_MTOK = 1;
-/** claude-haiku-4-5 list price, USD per million output tokens. */
-export const JUDGE_OUTPUT_USD_PER_MTOK = 5;
+/** The date the prices below were read (platform.claude.com/docs/en/about-claude/pricing, base rates). */
+export const JUDGE_PRICE_READ_ON = '2026-10-07';
+/** claude-sonnet-5 list price, USD per million input tokens (standard since 31/08/2026). */
+export const JUDGE_INPUT_USD_PER_MTOK = 2;
+/** claude-sonnet-5 list price, USD per million output tokens. */
+export const JUDGE_OUTPUT_USD_PER_MTOK = 10;
 /** Byte-level tokenisation never spends fewer than one byte per token, so one byte per token is the worst case. */
 export const JUDGE_BYTES_PER_TOKEN_FLOOR = 1;
 /** An allowance for the system prompt, the boundary markers and the CLI's framing around the untrusted block. */
@@ -98,7 +98,7 @@ export const JUDGE_PROMPT_OVERHEAD_TOKENS = 2_048;
 export const JUDGE_REPLY_ALLOWANCE_TOKENS = 4_096;
 /**
  * USD for one judge call at the 128 KiB input cap, from the inputs above:
- * (131,072 / 1 + 2,048) x 1 + 4,096 x 5 = 153,600 micro-USD. A literal, so a
- * changed input without this constant fails pin 33. Root-public (R3-2).
+ * (131,072 / 1 + 2,048) x 2 + 4,096 x 10 = 307,200 micro-USD. A literal, so
+ * a changed input without this constant fails pin 33. Root-public (R3-2).
  */
-export const JUDGE_WORST_CASE_USD_PER_CALL = 0.1536;
+export const JUDGE_WORST_CASE_USD_PER_CALL = 0.3072;

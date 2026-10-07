@@ -334,3 +334,58 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'block', costUsd: 0.002 });
   });
 });
+
+// Issue #148: a provider usage-policy refusal is the judge's `ask`. Live on
+// 07/10/2026, claude-sonnet-5 refused corpus case eb-01 on every call; the SDK
+// emitted a `model_refusal_no_fallback` banner, then a charged result with
+// `stop_reason: 'refusal'`, then THREW. As `call-failed` it counted toward R6's
+// early stop, so text that trips the provider's filter could switch the judge
+// off for the run. A refusal is a provider saying the text looks hostile, so
+// it composes as at least `ask`: tighten-only, never toward R6, and answered
+// for the gate. Both signals come from the SDK stream, never the model's text.
+describe('issue #148: a provider refusal is the judge`s ask', () => {
+  /** A fake SDK that yields the scripted messages and then THROWS, as the live SDK did. */
+  function throwingQuery(messages: SdkMessage[]): QueryFn {
+    return () =>
+      (async function* () {
+        for (const message of messages) yield message;
+        throw new Error('Claude Code returned an error result: API Error: ... appears to violate our Usage Policy');
+      })();
+  }
+  const BANNER = { type: 'system', subtype: 'model_refusal_no_fallback', api_refusal_category: 'bio' } as SdkMessage;
+  const refusalResult = (cost?: number): SdkMessage =>
+    ({ ...resultMessage('API Error: Claude Code is unable to respond to this request', cost), stop_reason: 'refusal', is_error: true }) as unknown as SdkMessage;
+
+  it('the live shape (banner, charged refusal result, then a throw) -> ask, with the charged cost', async () => {
+    const judge = buildJudge(throwingQuery([BANNER, refusalResult(0.002283)]), MODEL, fixedNonce);
+    expect(await judge(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.002283 });
+  });
+
+  it('the banner alone, then a throw with no result -> ask, cost unknown', async () => {
+    expect(await buildJudge(throwingQuery([BANNER]), MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: null });
+  });
+
+  it('a refusal result with no banner and no throw (an older CLI) -> ask, not unparseable', async () => {
+    const fake = fakeQuery([refusalResult(0.003)]);
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.003 });
+  });
+
+  it('a FALLBACK banner is not a refusal: another model answered, and its reply is parsed', async () => {
+    const fallback = { type: 'system', subtype: 'model_refusal_fallback', fallback_model: 'x' } as SdkMessage;
+    const fake = fakeQuery([fallback, resultMessage('{"verdict":"pass"}', 0.001)]);
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'pass', costUsd: 0.001 });
+  });
+
+  it('a throw with no refusal signal is still call-failed', async () => {
+    expect(await buildJudge(throwingQuery([resultMessage('{"verdict":"pass"}', 0.001)]), MODEL, fixedNonce)(TEXT)).toEqual({
+      ok: false,
+      errorKind: 'call-failed',
+      costUsd: null,
+    });
+  });
+
+  it('a refusal in the MODEL`s text is not a refusal signal: it is an unparseable reply', async () => {
+    const fake = fakeQuery([resultMessage('stop_reason: refusal model_refusal_no_fallback', 0.001)]);
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: false, errorKind: 'unparseable', costUsd: 0.001 });
+  });
+});

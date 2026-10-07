@@ -160,6 +160,19 @@ export function parseJudgeResponse(text: string): ParsedJudgeWire {
 
 const defaultRandomHex = (): string => randomBytes(8).toString('hex');
 
+/**
+ * A provider usage-policy refusal (issue #148). Two SDK-stream signals, the
+ * ADR-0025 pair narrowed to the judge: the `model_refusal_no_fallback` banner
+ * (no other model answered) and a result whose `stop_reason` is `refusal`.
+ * Neither can be forged by the model's reply text, which only ever arrives in
+ * `result.result`. A `model_refusal_fallback` banner is NOT a refusal here:
+ * another model answered, and its reply is parsed as usual.
+ */
+function isProviderRefusal(message: SdkMessage): boolean {
+  if (message.type === 'system') return (message as { subtype?: unknown }).subtype === 'model_refusal_no_fallback';
+  return message.type === 'result' && (message as SdkResultMessage).stop_reason === 'refusal';
+}
+
 function costOf(result: SdkResultMessage): number | null {
   return typeof result.total_cost_usd === 'number' && Number.isFinite(result.total_cost_usd)
     ? result.total_cost_usd
@@ -172,13 +185,16 @@ function costOf(result: SdkResultMessage): number | null {
  * obtained through `route()` (ADR-0016 decision 6: the router is never used
  * for the judge). It lives here, beside `buildJudge` and the frozen prompt
  * strings, so the measured unit (model, prompt, query keys, parser;
- * ADR-0036 D8) is one module (architect A-9); `run` and `redteam` both import it from the
- * session barrel. A pin asserts it is present in the router table so a tier
- * bump cannot retire it silently (S-18). `redteam --judge-model` overrides it
- * for a measurement run; the session takes no model setting (ADR-0036 D8:
- * another model means re-measuring).
+ * ADR-0036 D8) is one module (architect A-9); `run` and `redteam` both
+ * import it from the session barrel. A pin asserts it is present in the
+ * router table so a tier bump cannot retire it silently (S-18).
+ * `redteam --judge-model` overrides it for a measurement run; the session
+ * takes no model setting (ADR-0036 D8: another model means re-measuring).
+ * Sonnet since issue #148 (07/10/2026): over 5 samples haiku made 7
+ * judge-caused false-blocks and sonnet none, at a lower measured cost per
+ * call (ADR-0036 D8's #148 notes).
  */
-export const JUDGE_MODEL = 'claude-haiku-4-5';
+export const JUDGE_MODEL = 'claude-sonnet-5';
 
 /**
  * Builds the rich judge call (`JudgeCall`) over an injected `query`, the
@@ -191,7 +207,8 @@ export const JUDGE_MODEL = 'claude-haiku-4-5';
  * (no memory or telemetry pollution). One call, no harness retries; a
  * stream with no result message, an error-subtype result, or a transport
  * that throws, is one opaque `call-failed` (the model id is checked before
- * the run by the CLI).
+ * the run by the CLI), except a provider refusal, which is `ask`
+ * (`isProviderRefusal`, issue #148).
  * `costUsd` is read from `total_cost_usd` when finite, else null, on both
  * arms: a reply that failed to parse was still charged.
  * Every request carries its own `abortController` (issue #96 PR-B1, spec D4,
@@ -218,6 +235,7 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
     // The LAST result message wins when a stream carries more than one (the
     // adversary precedent).
     let result: SdkResultMessage | null = null;
+    let refused = false;
     try {
       for await (const message of query({
         prompt,
@@ -235,13 +253,21 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
         },
       })) {
         const m = message as SdkMessage;
+        if (isProviderRefusal(m)) refused = true;
         if (m.type === 'result') result = m as SdkResultMessage;
       }
     } catch {
-      return { ok: false, errorKind: 'call-failed', costUsd: null };
+      // The live SDK THROWS after a refusal's result (07/10/2026), so the
+      // refusal is read before the throw is read as a failed call.
+      if (!refused) return { ok: false, errorKind: 'call-failed', costUsd: null };
     } finally {
       signal?.removeEventListener('abort', onAbort);
     }
+    // A provider refusal is the judge's `ask` (issue #148): a provider saying
+    // the text looks hostile, so it tightens like any `ask`, is answered for
+    // the gate, and never counts toward R6's early stop as `call-failed` did.
+    // The charged cost rides on it when a result arrived.
+    if (refused) return { ok: true, verdict: 'ask', costUsd: result === null ? null : costOf(result) };
     if (result === null) return { ok: false, errorKind: 'call-failed', costUsd: null };
     const costUsd = costOf(result);
     // An error-subtype result (the SDK's `SDKResultError`: no `result` field,

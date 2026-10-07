@@ -158,8 +158,8 @@ describe('root barrel (src/index.ts)', () => {
   // Issue #96 PR-B1, pin 31 (A-8, G-7, B-4): the judge-wiring surface is on
   // the root; the fixed session constants and the internal smoke type are not.
   it('exports the PR-B1 judge surface and keeps the fixed constants off the root', () => {
-    expect(barrel.JUDGE_WORST_CASE_USD_PER_CALL).toBe(0.1536);
-    expect(barrel.JUDGE_MODEL).toBe('claude-haiku-4-5');
+    expect(barrel.JUDGE_WORST_CASE_USD_PER_CALL).toBe(0.3072);
+    expect(barrel.JUDGE_MODEL).toBe('claude-sonnet-5');
     expect(barrel.JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
     expect(barrel.JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
     expect(barrel.MAX_JUDGE_CALLS_PER_RUN).toBe(1000);
