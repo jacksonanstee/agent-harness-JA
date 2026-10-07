@@ -1,6 +1,6 @@
 # ADR-0038: the S-5 judge runs on claude-sonnet-5, and a provider refusal is the judge's `ask`
 
-- **Status:** Accepted. Ships with issue #148, which closes #148.
+- **Status:** Accepted. Ships in the #148 PR, which closes #148.
 - **Date:** 2026-10-07
 - **Requirements:** S-5 (SHOULD: hybrid heuristic plus LLM judge, optional, off by default).
 - **Supersedes:** ADR-0016 decision 5's model clause ("the cheapest Claude tier, `claude-haiku-4-5`"). **Amends:** ADR-0016 decision 4 (a provider refusal now tightens rather than leaving the heuristic verdict standing), ADR-0036 D3 (the default model) and D8 (the gate is read over repeated samples).
@@ -21,7 +21,7 @@ No candidate qualified. Haiku made 7 false-blocks. Haiku with a judge `block` ov
 ## Consequences
 
 - The re-measure from this change (`redteam --judge --holdout <path> --samples 5`, default model) reads `JUDGE_GATE=pass`: 270 of 270 calls judged, no false-blocks, no false-flags in 120 benign judgements, 41 of 41 and 12 of 12 detected in every sample, `eb-01` read as `ask` in all five, USD 0.6914 (ADR-0036 D8's #148 notes).
-- Latency falls to about 3 s per judged result (measured 2.9 to 3.2 s per call); the start line says so.
+- Latency falls to about 3 s per judged result (2.9 to 3.2 s per call from the scorecard stamps of the five pre-change sonnet runs, 2.9 to 3.1 s in the five post-change runs); the start line says so.
 - The worst-case ceiling per call doubles with the list price even though the typical cost falls.
 - **Observability, accepted for now:** a refusal's `judge-call` row reads `judged`, verdict `ask`, and its summary and live lines are those of a judged `ask`, so telemetry does not tell a provider refusal from a judgement, and `api_refusal_category` is not recorded. B2 (#145) decides withholding from these rows, so a distinct `refused` state, rule id and telemetry mirror is a precondition for B2's analysis (#152).
 - The prompt and the parser are unchanged; the held-out slice was used only to measure, not to tune.
