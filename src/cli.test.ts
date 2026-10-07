@@ -1324,6 +1324,7 @@ describe('parseRedteamArgs', () => {
         judge: false,
         judgeModel: 'claude-haiku-4-5',
         holdoutPath: null,
+        samples: null,
       },
     });
   });
@@ -1340,6 +1341,7 @@ describe('parseRedteamArgs', () => {
         judge: false,
         judgeModel: 'claude-haiku-4-5',
         holdoutPath: null,
+        samples: null,
       },
     });
   });

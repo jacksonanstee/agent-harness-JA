@@ -19,6 +19,9 @@ export type {
   Slice,
 } from './judge-runner.js';
 export { toRedteamJudgeMarkdown } from './judge-markdown.js';
+// ADR-0036 D8's gate over repeated samples (issue #148).
+export { aggregateJudgeSamples, formatJudgeSampleSummary, JUDGE_FALSE_FLAG_BOUND } from './judge-samples.js';
+export type { BenignSampleTally, JudgeSampleGate, JudgeSampleSummary } from './judge-samples.js';
 export { HoldoutError, loadHoldout, MAX_HOLDOUT_BYTES, MAX_HOLDOUT_CASES } from './holdout.js';
 export type { HoldoutCase } from './holdout.js';
 export {

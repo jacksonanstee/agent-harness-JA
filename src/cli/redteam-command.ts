@@ -2,9 +2,11 @@ import { renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
+  aggregateJudgeSamples,
   BaselineError,
   CORPUS,
   classifyDrift,
+  formatJudgeSampleSummary,
   HoldoutError,
   loadBaseline,
   loadHoldout,
@@ -48,6 +50,11 @@ import type { ImportSdk } from './shared.js';
  *  beside `EVAL_OUT_DIR` — both are CLI-owned path constants. */
 export const DEFAULT_BASELINE_PATH = 'eval/redteam/baseline.json';
 
+/** `--samples` upper bound: each sample is a full keyed judge run (issue #148). */
+export const MAX_JUDGE_SAMPLES = 10;
+/** Digits only, no leading zero: no sign, exponent, padding or fraction. */
+const WHOLE_NUMBER_RE = /^[1-9]\d*$/;
+
 export interface RedteamArgs {
   command: 'redteam';
   out: string;
@@ -59,6 +66,10 @@ export interface RedteamArgs {
   judgeModel: string;
   /** `--holdout <path>`: the private held-out slice, or null for the corpus only. */
   holdoutPath: string | null;
+  /** `--samples <n>` (1 to 10): run the judge arm n times and read ADR-0036
+   *  D8's gate over the pooled samples (issue #148); null runs it once with
+   *  the pre-#148 output and no `JUDGE_GATE=` line. */
+  samples: number | null;
 }
 
 /**
@@ -72,12 +83,13 @@ type RedteamParseResult =
 
 /**
  * `--out <dir>`, `--update-baseline`, `--baseline <path>`, `--judge`,
- * `--judge-model <id>`, `--holdout <path>`; no positionals. The cross-flag
- * rules run after the loop so flag order never matters: `--judge-model` and
- * `--holdout` each require `--judge`; `--judge` cannot ride with
- * `--update-baseline` (the update path stays keyless and pure); and
- * `--judge-model` must be a router-table id (the rejection names the valid
- * ids, the same list the usage text renders).
+ * `--judge-model <id>`, `--holdout <path>`, `--samples <n>`; no
+ * positionals. The cross-flag rules run after the loop so flag order never
+ * matters: `--judge-model`, `--holdout` and `--samples` each require
+ * `--judge`; `--judge` cannot ride with `--update-baseline` (the update
+ * path stays keyless and pure); and `--judge-model` must be a router-table
+ * id (the rejection names the valid ids, the same list the usage text
+ * renders).
  */
 export function parseRedteamArgs(argv: string[]): RedteamParseResult {
   let out = EVAL_OUT_DIR;
@@ -86,6 +98,7 @@ export function parseRedteamArgs(argv: string[]): RedteamParseResult {
   let judge = false;
   let judgeModel: string | null = null;
   let holdoutPath: string | null = null;
+  let samples: number | null = null;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === undefined) break;
@@ -121,6 +134,18 @@ export function parseRedteamArgs(argv: string[]): RedteamParseResult {
       }
       holdoutPath = value;
       i += 1;
+    } else if (arg === '--samples') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return { ok: false, error: `Missing value for --samples. ${USAGE}` };
+      }
+      // Each sample is a full keyed run, so the range bounds the spend; the
+      // value is not echoed (the range says everything the operator needs).
+      if (!WHOLE_NUMBER_RE.test(value) || Number(value) > MAX_JUDGE_SAMPLES) {
+        return { ok: false, error: `--samples must be a whole number from 1 to ${MAX_JUDGE_SAMPLES}. ${USAGE}` };
+      }
+      samples = Number(value);
+      i += 1;
     } else {
       return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
     }
@@ -130,6 +155,9 @@ export function parseRedteamArgs(argv: string[]): RedteamParseResult {
   }
   if (holdoutPath !== null && !judge) {
     return { ok: false, error: `--holdout requires --judge. ${USAGE}` };
+  }
+  if (samples !== null && !judge) {
+    return { ok: false, error: `--samples requires --judge. ${USAGE}` };
   }
   if (judge && updateBaseline) {
     return {
@@ -155,6 +183,7 @@ export function parseRedteamArgs(argv: string[]): RedteamParseResult {
       judge,
       judgeModel: judgeModel ?? JUDGE_MODEL,
       holdoutPath,
+      samples,
     },
   };
 }
@@ -522,6 +551,7 @@ async function runJudgeArm(
 
   const judge = await obtainJudge(args, deps);
   if (judge === null) return finish('failed');
+  if (args.samples !== null) return finish(await runJudgeSamples(args, args.samples, judge, holdout, now));
 
   const card = await runRedteamJudge({
     corpus: CORPUS,
@@ -550,6 +580,63 @@ async function runJudgeArm(
   const remedy = remedyLine(state, card);
   if (remedy !== null) process.stdout.write(sanitizeForTerminal(`${remedy}\n`));
   return finish(state);
+}
+
+const STATE_RANK: Record<JudgeArmState, number> = { complete: 0, partial: 1, failed: 2, skipped: 3 };
+
+/**
+ * `--samples <n>` (issue #148): the judge arm n times over the same slices,
+ * each sample's scorecard written as `judge-scorecard-s<k>-<stamp>.json`,
+ * then ADR-0036 D8's gate read over the pooled samples against the n
+ * REQUESTED, ending in the `JUDGE_GATE=` line, printed whenever this runs
+ * (with no sample read it says `incomplete`; a judge that cannot be obtained
+ * never reaches here: `JUDGE_ARM=failed`, exit 2, no gate line). Report-only like the arm (ADR-0036
+ * D4): the gate line never changes the exit; the returned state is the worst
+ * sample's. A sample that is not complete (a call unjudged, an early stop, a
+ * lost scorecard) ends the run: the gate can no longer read `pass`, so the
+ * rest would be spend for a verdict already fixed. Per-sample markdown is
+ * not printed; each sample's scorecard is on disk.
+ */
+async function runJudgeSamples(
+  args: RedteamArgs,
+  samples: number,
+  judge: JudgeCall,
+  holdout: readonly HoldoutCase[],
+  now: () => number,
+): Promise<JudgeArmState> {
+  const cards: RedteamJudgeScorecard[] = [];
+  let state: JudgeArmState = 'complete';
+  for (let k = 1; k <= samples; k += 1) {
+    const card = await runRedteamJudge({
+      corpus: CORPUS,
+      holdout,
+      scan,
+      judge,
+      judgeModel: args.judgeModel,
+      harnessVersion: readPackageVersion(),
+      now,
+      onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(`sample ${k}/${samples}: ${line}`)}\n`),
+    });
+    const written = writeScorecard(card, args.out, now(), `judge-scorecard-s${k}`);
+    // Counted before the write: a lost file does not change what was measured,
+    // and the gate below reads it against the n requested either way.
+    cards.push(card);
+    if (!written.ok) {
+      process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+      state = 'failed';
+      break;
+    }
+    process.stderr.write(`judge sample ${k}/${samples} written to ${written.path}\n`);
+    const sampleState = judgeArmState(card.totals);
+    if (STATE_RANK[sampleState] > STATE_RANK[state]) state = sampleState;
+    const remedy = remedyLine(sampleState, card);
+    if (remedy !== null) process.stdout.write(sanitizeForTerminal(`sample ${k}/${samples}: ${remedy}\n`));
+    if (sampleState !== 'complete') break;
+  }
+  for (const line of formatJudgeSampleSummary(aggregateJudgeSamples(cards, samples))) {
+    process.stdout.write(`${sanitizeForTerminal(line)}\n`);
+  }
+  return state;
 }
 
 /**

@@ -63,7 +63,7 @@ export const JUDGE_MODEL_IDS: readonly string[] = [...new Set(DEFAULT_ROUTING_TA
 export const USAGE =
   `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>]\n` +
   '       agent-harness-ja eval [taskDir] [--challenge] [--max-tasks <n>]\n' +
-  `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${JUDGE_MODEL_IDS.join('|')}>] [--holdout <path>]\n` +
+  `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${JUDGE_MODEL_IDS.join('|')}>] [--holdout <path>] [--samples <n>]\n` +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
   '       agent-harness-ja init [dir]';
 
