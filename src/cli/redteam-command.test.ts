@@ -1033,8 +1033,8 @@ describe('runRedteamCommand --judge --samples (issue #148)', () => {
     expect(readdirSync(args.out).sort()).toEqual([`judge-scorecard-s1-${STAMP}.json`, `judge-scorecard-s2-${STAMP}.json`, HEURISTIC_FILE]);
     expect(stderr).toContain(`judge sample 1/2 written to ${join(args.out, `judge-scorecard-s1-${STAMP}.json`)}\n`);
     expect(columnZeroMatches(stdout, 'JUDGE_GATE=')).toBe(1);
-    expect(stdout).toContain('judge samples: 2 (2 complete); detected at always (worst sample): corpus ');
-    expect(stdout).toMatch(/^JUDGE_GATE=pass false-blocks=0 false-flags=0\/\d+ \(0\.0%, bound 10%\)\nJUDGE_ARM=complete\n$/m);
+    expect(stdout).toContain('judge samples: 2 of 2 requested (2 complete); detected at always (worst sample): corpus ');
+    expect(stdout).toMatch(/^JUDGE_GATE=pass false-blocks=0 false-flags=0\/\d+ \(0\.0% pooled, worst sample 0\.0%, bound 10%\)\nJUDGE_ARM=complete\n$/m);
     expect(stdout.endsWith('JUDGE_ARM=complete\n')).toBe(true);
   });
 
@@ -1064,9 +1064,38 @@ describe('runRedteamCommand --judge --samples (issue #148)', () => {
     expect(code).toBe(2);
     expect(judgeSpy).toHaveBeenCalledTimes(3);
     expect(readdirSync(args.out).filter((f) => f.startsWith('judge-scorecard-'))).toEqual([`judge-scorecard-s1-${STAMP}.json`]);
-    expect(stdout).toContain('judge samples: 1 (0 complete)');
+    expect(stdout).toContain('judge samples: 1 of 5 requested (0 complete, 1 stopped early)');
     expect(stdout).toMatch(/^JUDGE_GATE=incomplete /m);
     expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
+  });
+
+  it('a LOST scorecard at sample 2 of 3 ends the run and the gate reads incomplete, never pass (code and security lenses)', async () => {
+    withFakeKey();
+    const { deps, judgeSpy } = spiedDeps(okJudge('pass'));
+    const args = baseArgs({ judge: true, samples: 3, baselinePath: byteEqualBaseline() });
+    mkdirSync(join(args.out, `judge-scorecard-s2-${STAMP}.json`), { recursive: true });
+    const { code, stdout } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(judgeSpy).toHaveBeenCalledTimes(2 * CORPUS_ATTEMPTED);
+    expect(stdout).toContain('judge samples: 2 of 3 requested (2 complete)');
+    expect(stdout).toMatch(/^JUDGE_GATE=incomplete false-blocks=0 /m);
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
+  });
+
+  it('a PARTIAL sample ends the run too: the gate can no longer pass, so no further spend (security lens)', async () => {
+    withFakeKey();
+    let calls = 0;
+    const halfDead: JudgeCall = async (): Promise<JudgeCallResult> => {
+      calls += 1;
+      return calls === 1 ? { ok: true, verdict: 'pass', costUsd: 0.5 } : { ok: false, errorKind: 'call-failed', costUsd: null };
+    };
+    const { deps, judgeSpy } = spiedDeps(halfDead);
+    const args = baseArgs({ judge: true, samples: 10, baselinePath: byteEqualBaseline() });
+    const { stdout } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(judgeSpy).toHaveBeenCalledTimes(CORPUS_ATTEMPTED);
+    expect(stdout).toContain('judge samples: 1 of 10 requested (0 complete)');
+    expect(stdout).toMatch(/^JUDGE_GATE=incomplete /m);
+    expect(stdout.endsWith('JUDGE_ARM=partial\n')).toBe(true);
   });
 
   it('without --samples the judge arm output is unchanged: one judge scorecard, its markdown, no JUDGE_GATE line', async () => {

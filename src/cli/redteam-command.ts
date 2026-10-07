@@ -83,12 +83,13 @@ type RedteamParseResult =
 
 /**
  * `--out <dir>`, `--update-baseline`, `--baseline <path>`, `--judge`,
- * `--judge-model <id>`, `--holdout <path>`, `--samples <n>`; no positionals.
- * The cross-flag rules run after the loop so flag order never matters:
- * `--judge-model`, `--holdout` and `--samples` each require `--judge`; `--judge` cannot ride with
- * `--update-baseline` (the update path stays keyless and pure); and
- * `--judge-model` must be a router-table id (the rejection names the valid
- * ids, the same list the usage text renders).
+ * `--judge-model <id>`, `--holdout <path>`, `--samples <n>`; no
+ * positionals. The cross-flag rules run after the loop so flag order never
+ * matters: `--judge-model`, `--holdout` and `--samples` each require
+ * `--judge`; `--judge` cannot ride with `--update-baseline` (the update
+ * path stays keyless and pure); and `--judge-model` must be a router-table
+ * id (the rejection names the valid ids, the same list the usage text
+ * renders).
  */
 export function parseRedteamArgs(argv: string[]): RedteamParseResult {
   let out = EVAL_OUT_DIR;
@@ -586,12 +587,14 @@ const STATE_RANK: Record<JudgeArmState, number> = { complete: 0, partial: 1, fai
 /**
  * `--samples <n>` (issue #148): the judge arm n times over the same slices,
  * each sample's scorecard written as `judge-scorecard-s<k>-<stamp>.json`,
- * then ADR-0036 D8's gate read over the pooled samples, ending in the
- * `JUDGE_GATE=` line. Report-only like the arm (ADR-0036 D4): the gate line
- * never changes the exit; the returned state is the worst sample's. A
- * sample that fails (an early stop, or a lost scorecard) ends the run, so a
- * dead key or endpoint is not paid for n times; the samples so far are still
- * summarised, and read `incomplete` at best.
+ * then ADR-0036 D8's gate read over the pooled samples against the n
+ * REQUESTED, ending in the `JUDGE_GATE=` line, which is always printed (with
+ * no sample read it says `incomplete`). Report-only like the arm (ADR-0036
+ * D4): the gate line never changes the exit; the returned state is the worst
+ * sample's. A sample that is not complete (a call unjudged, an early stop, a
+ * lost scorecard) ends the run: the gate can no longer read `pass`, so the
+ * rest would be spend for a verdict already fixed. Per-sample markdown is
+ * not printed; each sample's scorecard is on disk.
  */
 async function runJudgeSamples(
   args: RedteamArgs,
@@ -614,23 +617,23 @@ async function runJudgeSamples(
       onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(`sample ${k}/${samples}: ${line}`)}\n`),
     });
     const written = writeScorecard(card, args.out, now(), `judge-scorecard-s${k}`);
+    // Counted before the write: a lost file does not change what was measured,
+    // and the gate below reads it against the n requested either way.
+    cards.push(card);
     if (!written.ok) {
       process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
       state = 'failed';
       break;
     }
     process.stderr.write(`judge sample ${k}/${samples} written to ${written.path}\n`);
-    cards.push(card);
     const sampleState = judgeArmState(card.totals);
     if (STATE_RANK[sampleState] > STATE_RANK[state]) state = sampleState;
     const remedy = remedyLine(sampleState, card);
     if (remedy !== null) process.stdout.write(sanitizeForTerminal(`sample ${k}/${samples}: ${remedy}\n`));
-    if (sampleState === 'failed') break;
+    if (sampleState !== 'complete') break;
   }
-  if (cards.length > 0) {
-    for (const line of formatJudgeSampleSummary(aggregateJudgeSamples(cards))) {
-      process.stdout.write(`${sanitizeForTerminal(line)}\n`);
-    }
+  for (const line of formatJudgeSampleSummary(aggregateJudgeSamples(cards, samples))) {
+    process.stdout.write(`${sanitizeForTerminal(line)}\n`);
   }
   return state;
 }

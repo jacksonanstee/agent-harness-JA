@@ -58,7 +58,7 @@ node dist/cli.js eval --challenge      # report-only second-pass adversarial cha
 node dist/cli.js eval --max-tasks 250  # lift the pre-flight pack-size limit (see docs/decisions/0017)
 npm run redteam                        # keyless drift gate (see docs/decisions/0019)
 npm run redteam -- --judge             # keyed, report-only judge arm (docs/decisions/0036)
-npm run redteam -- --judge --samples 5 # the same, 5 runs, ending in a JUDGE_GATE= line (#148)
+npm run redteam -- --judge --samples 5 # 5 judge runs, a pooled summary and a JUDGE_GATE= line (#148)
 node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --scrub-prefix to share
 node dist/cli.js init my-agent         # scaffold a starter project
 ```
@@ -177,7 +177,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0037 |
-| Tests | 1989 at the 2026-10-07 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 1998 at the 2026-10-07 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
