@@ -189,7 +189,10 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   capped at **128 KiB before parsing** (`MAX_ADVERSARY_RESPONSE_BYTES =
   131_072`, the `redact()` `MAX_INPUT` precedent) — oversize → `unparseable`;
   the text is trimmed (leading/trailing whitespace only — a ` ```json `
-  fence fails parse, deliberately: strict means strict); then `JSON.parse` →
+  fence fails parse, deliberately: strict means strict; the S-5 judge's parser
+  diverged on 07/10/2026, accepting one exact fenced shape, because there a
+  refused reply silently drops a live tightening, ADR-0036 D3 note, #147);
+  then `JSON.parse` →
   ajv `oneOf` validation → only then are fields read. Prototype-shaped keys
   are inert by construction (`JSON.parse` creates own properties;
   `additionalProperties: false` rejects `__proto__` as an extra field →

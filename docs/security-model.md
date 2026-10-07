@@ -555,7 +555,10 @@ not live values:
   unparseable reply), and with `claude-sonnet-5` 41 of 41 and 12 of 12 with zero
   false-blocks and two benign `ask` flags; the figures, their dates, their limits
   and the held-out slice's hash live in that ADR, outside this document's corpus
-  gate by construction.
+  gate by construction. Those haiku figures date from before 07/10/2026 (#147),
+  when the parser began accepting haiku's fenced replies: re-measured then, the
+  default judge detected 41 of 41 and 12 of 12 but made three judge-caused
+  false-blocks, failing ADR-0036 D8's zero gate (ADR-0036 D8 note).
 <!-- corpus-gate: resume -->
 
 ## 8. ADR index
