@@ -130,3 +130,17 @@ Three design questions:
   the session still passes its four, and `systemPrompt` is not new. The exact-keys
   pin moved to nine in the same change; the session's own `settingSources` is
   issue #140's decision.
+
+  **Added 2026-10-01 (issue #96 PR-B1, ADR-0037):** `QueryOptions` now mirrors
+  ten SDK keys. `abortController` joined, passed by `buildJudge` on every judge
+  request and aborted by the scanner's timer, so the judge call the harness
+  gives up on is no longer merely abandoned; the session's primary query still
+  passes its four and cannot be cancelled through the harness (H-7 stays
+  deferred for the run). `SdkHookMatcher` gains the SDK's per-matcher `timeout`
+  in seconds, set on the two tool matchers only when a judge is configured, to
+  600 s. The exact-keys pin moved to ten and both new keys are mirror-pinned
+  against the SDK's types (`src/session/sdk-types.test.ts`). The hook-timeout
+  limitation above stands: the bundled CLI carries a 600 s literal whose reach
+  over SDK callback hooks is unresolved keylessly, which is why the judge path
+  sets the matcher timeout explicitly rather than inheriting it, and the CLI's
+  fail-open on a hook timeout is recorded in ADR-0037 as a negative.

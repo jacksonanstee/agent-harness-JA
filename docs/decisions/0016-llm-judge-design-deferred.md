@@ -1,6 +1,6 @@
-# ADR-0016: LLM-judge second stage — design locked, implementation deferred (implemented 2026-09, ADR-0036)
+# ADR-0016: LLM-judge second stage — design locked, implementation deferred (implemented 2026-09, ADR-0036; wired 2026-10, ADR-0037)
 
-- **Status:** Accepted (implemented 2026-09-11 by [ADR-0036](./0036-s5-judge-implemented-and-measured.md), ahead of the §6 trigger; not yet wired into the session)
+- **Status:** Accepted (implemented 2026-09-11 by [ADR-0036](./0036-s5-judge-implemented-and-measured.md), ahead of the §6 trigger; wired into the session 2026-10-01 by [ADR-0037](./0037-s5-judge-wired-into-the-session.md), annotate-only, off by default)
 - **Date:** 2026-07-08
 - **Requirements:** S-5 (SHOULD)
 - **Refines:** ADR-0005 (hybrid pipeline), ADR-0012 (heuristic stage + seam)
@@ -33,6 +33,15 @@ fires.
    awaits the injected `InjectionJudge` — exactly the shape ADR-0012 §4
    reserved. Hot-path callers that never enable the judge keep the sync
    primitive and pay zero async cost.
+
+   *(Amended 2026-10-01, ADR-0037 R3: the two signatures this decision locks
+   gain an optional trailing `signal?: AbortSignal`, `InjectionJudge = (text,
+   heuristic, signal?)` in `src/security/injection/types.ts` and
+   `scanWithJudge(text, signal?)` in `src/security/injection/judge.ts`, so the
+   scanner's timer, or the caller, can abort the call it gives up on. Every
+   existing two-parameter judge and every existing call site stays valid; the
+   non-additive effects, `Parameters<InjectionJudge>` and `Parameters<JudgeCall>`
+   now `2 | 3` long and the method's wider signature, are stated in ADR-0037.)*
 
 2. **The judge may only tighten, never loosen.** The composed verdict is the
    *stricter* of heuristic and judge verdicts (`block` > `ask` > `pass`). A
@@ -97,7 +106,7 @@ fires.
 *(Note, 2026-09-11, ADR-0036: the contract below is implemented as `createJudgedScanner`, whose result carries the
 `scanWithJudge` method rather than a module-level export, because no default judge can exist below the composition
 root. Decision 7 holds: the judge is a keyed, report-only arm beside the deterministic gate. The 2026-07-28 note on
-the skill channel is PR-B's decision.)*
+the skill channel is B2's decision: ADR-0037 wired the judge on the two tool hooks only.)*
 
 ### Positive
 
@@ -140,7 +149,7 @@ the skill channel is PR-B's decision.)*
    layer dependency; already resolved in architecture.md toward direct SDK
    injection.
 
-**Note (2026-07-28):** the judge's tighten-only escalation now has enforcement teeth on one channel. Since [ADR-0026](./0026-skill-channel-block-on-flag.md), a `block` on skill content drops the skill from the system prompt, so a judge that escalates `ask`→`block` there would refuse a skill outright rather than merely warn. That widens the false-positive surface and should be a deliberate decision when the judge lands.
+**Note (2026-07-28):** the judge's tighten-only escalation now has enforcement teeth on one channel. Since [ADR-0026](./0026-skill-channel-block-on-flag.md), a `block` on skill content drops the skill from the system prompt, so a judge that escalates `ask`→`block` there would refuse a skill outright rather than merely warn. That widens the false-positive surface and should be a deliberate decision when the judge lands. *(2026-10-01, [ADR-0037](./0037-s5-judge-wired-into-the-session.md): the judge landed on the tool hooks only; the skill-load loop keeps the sync heuristic, so no judge verdict drops a skill today, and this decision passes to B2 with ADR-0026 R2.)*
 
 ## Revisit if
 

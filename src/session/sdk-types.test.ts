@@ -106,8 +106,8 @@ describe('SDK hook-input type parity', () => {
 //   1. The SDK really declares what the rows say it declares. If a future SDK
 //      pin drops `abortController` or `maxBudgetUsd`, or changes the shape of
 //      its retry report, the rows' rationale is stale and typecheck reddens here.
-//   2. The harness seam (`QueryOptions`) still carries exactly the four keys it
-//      carries today. The day H-7 lands, the seam grows a key, this reddens,
+//   2. The harness seam (`QueryOptions`) carries exactly the keys pinned below (ten
+//      since issue #96 PR-B1). The day H-7 lands, the seam grows a key, this reddens,
 //      and the row's "today" sentence is rewritten in the same change. A pin on
 //      an absence is unusual; it exists so a roadmap row cannot silently
 //      outlive the gap it records.
@@ -152,10 +152,10 @@ const _sdkResultHasDurationApiMs: Assignable<'duration_api_ms', keyof SDKResultM
 const _viewReadsNoDurationMs: Assignable<'duration_ms', keyof SdkResultMessage> = false;
 const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMessage> = false;
 
-// Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks}
-// plus the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6):
-// settingSources, strictMcpConfig, tools, skills, persistSession. Nine keys.
-// The SESSION still passes its four; the five are passed by the judge only.
+// Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks},
+// the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6), and
+// since PR-B1 `abortController` (spec D4), used by the judge call only.
+// Ten keys. The SESSION's primary query still passes its four.
 const _seamExact: ExactKeys<
   QueryOptions,
   | 'model'
@@ -167,7 +167,20 @@ const _seamExact: ExactKeys<
   | 'tools'
   | 'skills'
   | 'persistSession'
+  | 'abortController'
 > = true;
+// PR-B1 (spec D4, pin 12): the abort key mirrors the SDK's type, harness -> SDK.
+const _abortMirrorsSdk: Assignable<
+  NonNullable<QueryOptions['abortController']>,
+  NonNullable<Options['abortController']>
+> = true;
+// PR-B1 (spec D5, pin 12): the matcher timeout mirrors the SDK's, harness -> SDK.
+const _matcherTimeoutMirrorsSdk: Assignable<
+  NonNullable<SdkHookMatcher['timeout']>,
+  NonNullable<HookCallbackMatcher['timeout']>
+> = true;
+// H-6 stays deferred: the seam carries no budget key.
+const _seamCarriesNoBudget: Assignable<'maxBudgetUsd', keyof QueryOptions> = false;
 // Each new key is a structural mirror of the SDK's field, pinned one per key
 // in the harness -> SDK direction (a union on the LEFT of Assignable is an
 // AND, so members are written out). The array-typed keys must be MUTABLE as
@@ -202,16 +215,9 @@ const _judgeIsolationLiteral: QueryOptions = {
 // pinned above by `_matcherNoExtra`), so a widening such as
 // `maxTurns?: number | string` reddens here rather than surviving keys-only.
 const _seamScalarsMatchSdk: Assignable<Omit<QueryOptions, 'hooks'>, Options> = true;
-// And a literal carrying the SDK's cancellation key does not type-check
-// against the seam (excess property), the same idiom as `_rejectsOldField`.
-const _seamRejectsAbort: QueryOptions = {
-  maxTurns: 1,
-  // @ts-expect-error abortController is not a key the harness seam carries (H-7 is deferred)
-  abortController: new AbortController(),
-};
 
 describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
-  it('hold at compile time: the SDK declares the channels, the harness seam still carries none', () => {
+  it('hold at compile time: the SDK declares the channels; the seam carries abortController for the judge and no budget', () => {
     expect([
       _sdkDeclaresAbort,
       _sdkAbortIsController,
@@ -228,7 +234,9 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _viewReadsNoDurationApiMs,
       _seamExact,
       _seamScalarsMatchSdk,
-      _seamRejectsAbort,
+      _abortMirrorsSdk,
+      _matcherTimeoutMirrorsSdk,
+      _seamCarriesNoBudget,
       _settingSourcesMirrorsSdk,
       _strictMcpConfigMirrorsSdk,
       _toolsMirrorsSdk,

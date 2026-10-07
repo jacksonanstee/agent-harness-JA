@@ -14,6 +14,14 @@ export {
   createInjectionScanner,
   createJudgedScanner,
   scan,
+  // Issue #96 PR-B1: the judge-wiring values a consumer needs to configure and
+  // read the judge; `hasJudgeKey` is composition plumbing and stays off (ADR-0023).
+  JUDGE_OVERSIZED_RULE_ID,
+  JUDGE_REDACTED_RULE_ID,
+  JUDGE_WORST_CASE_USD_PER_CALL,
+  JudgeSettingsError,
+  MAX_JUDGE_CALLS_PER_RUN,
+  parseJudgeSettings,
   DEFAULT_INJECTION_RULES,
   JUDGE_ERROR_KINDS,
   JUDGE_MODES,
@@ -62,6 +70,7 @@ export type {
   JudgeErrorKind,
   JudgeMode,
   JudgeRunState,
+  JudgeSettings,
   RedTeamCase,
   RuleFamily,
   ScannerOptions,
@@ -90,6 +99,9 @@ export type {
 } from './security/index.js';
 export {
   createTelemetryStore,
+  JUDGE_CALL_ERROR_KINDS,
+  JUDGE_CALL_STATES,
+  JUDGE_CALL_VERDICTS,
   openTelemetryDatabase,
   // Memory's identically-valued DEFAULT_DB_PATH keeps the unprefixed name
   // (shipped via the memory star export above); aliasing is what lets both
@@ -105,6 +117,10 @@ export type {
   Migration,
   HookEventKind,
   HookEventPayload,
+  JudgeCallErrorKind,
+  JudgeCallPayload,
+  JudgeCallState,
+  JudgeCallVerdict,
   RecordResult,
   TelemetryError,
   TelemetryErrorKind,

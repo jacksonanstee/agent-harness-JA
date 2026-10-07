@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from '../session/index.js';
-import { buildAdversary, parseEvalArgs } from './eval-command.js';
+import { createMemoryStore } from '../memory/index.js';
+import { createSession } from '../session/index.js';
+import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
+import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
+import { buildAdversary, makeEvalSessionFactory, parseEvalArgs } from './eval-command.js';
 
 const RESULT: SdkMessage = {
   type: 'result',
@@ -186,6 +189,34 @@ describe('buildAdversary', () => {
       expect('hookSpecificOutput' in out && out.hookSpecificOutput?.permissionDecision).toBe(
         'deny',
       );
+    }
+  });
+});
+
+describe('R5: eval stays heuristic (pin 23)', () => {
+  it('a configured user judge never reaches an eval session: no judge key, no judge query, no matcher timeout', async () => {
+    const seen: SessionDeps[] = [];
+    const fake = fakeQuery([RESULT]);
+    const query: QueryFn = fake.query;
+    const db = openTelemetryDatabase({ path: ':memory:' });
+    try {
+      const factory = makeEvalSessionFactory({
+        query,
+        security: { permissions: { rules: [] }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5 }, warnings: [] },
+        telemetry: createTelemetryStore(db),
+        memory: createMemoryStore(db),
+        create: (deps, config) => {
+          seen.push(deps);
+          return createSession(deps, config);
+        },
+      });
+      await factory({ skillsDir: null, maxTurns: 1 }).run('task');
+      expect(seen).toHaveLength(1);
+      expect('judge' in (seen[0] ?? {})).toBe(false);
+      // No `judgeCalls` assertion: `fakeQuery([RESULT])` fires no tool hook, so it could not fail (plan review P-13).
+      expect(fake.captured[0]?.options?.hooks?.PostToolUse?.[0]).not.toHaveProperty('timeout');
+    } finally {
+      db.close();
     }
   });
 });

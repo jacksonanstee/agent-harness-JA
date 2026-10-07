@@ -515,3 +515,16 @@ describe('security-lens S-2: a JudgeCall outside the closed error-kind union is 
     expect(JSON.stringify(card)).not.toContain('JUDGE_ARM');
   });
 });
+
+describe('PR-B1 spec D4/K-2: the arm recorder forwards the scanner signal (pin 10)', () => {
+  it('every escalated call receives the scanner signal, never undefined', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const judge: JudgeCall = async (_text, signal) => {
+      signals.push(signal);
+      return { ok: true, verdict: 'pass', costUsd: 0.5 };
+    };
+    await runRedteamJudge({ corpus: [], holdout: HOLDOUT, scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS });
+    expect(signals).toHaveLength(HOLDOUT.length);
+    expect(signals.every((s) => s instanceof AbortSignal && !s.aborted)).toBe(true);
+  });
+});

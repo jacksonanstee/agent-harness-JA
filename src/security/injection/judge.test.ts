@@ -135,7 +135,7 @@ describe('pin 3: suspicious mode escalates iff heuristic.suspicious (the flag, n
     const s = createJudgedScanner({ mode: 'suspicious', judge, scanner: scripted(PASS_SUSPICIOUS) });
     const result = await s.scanWithJudge(TEXT);
     expect(judge).toHaveBeenCalledTimes(1);
-    expect(judge.mock.calls[0]).toEqual([TEXT, PASS_SUSPICIOUS]);
+    expect(judge.mock.calls[0]).toEqual([TEXT, PASS_SUSPICIOUS, expect.any(AbortSignal)]);
     expect(result).toEqual({
       verdict: 'ask',
       rule_ids: ['judge-ask'],
@@ -159,7 +159,7 @@ describe('pin 4: always mode escalates pass and ask, never block', () => {
     const s = createJudgedScanner({ mode: 'always', judge, scanner: scripted(PASS) });
     await s.scanWithJudge(TEXT);
     expect(judge).toHaveBeenCalledTimes(1);
-    expect(judge.mock.calls[0]).toEqual([TEXT, PASS]);
+    expect(judge.mock.calls[0]).toEqual([TEXT, PASS, expect.any(AbortSignal)]);
   });
 
   it('escalates ask (even when a caller marked it not suspicious)', async () => {
@@ -462,7 +462,10 @@ describe('pin 11: toInjectionJudge', () => {
     const judge: InjectionJudge = toInjectionJudge(call);
     await expect(judge(TEXT, ASK)).resolves.toBe('ask');
     expect(call).toHaveBeenCalledTimes(1);
-    expect(call.mock.calls[0]).toEqual([TEXT]);
+    // R3 (issue #96 PR-B1): the call now also receives the optional signal,
+    // undefined here; the heuristic is still never passed (the judge is blind).
+    expect(call.mock.calls[0]).toEqual([TEXT, undefined]);
+    expect(call.mock.calls[0]).not.toContain(ASK);
   });
 
   it('rejects on !ok (each error kind), never resolving a verdict', async () => {

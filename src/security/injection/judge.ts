@@ -19,6 +19,18 @@ export const MAX_JUDGE_INPUT_BYTES = 131_072;
 export const JUDGE_RULE_IDS = { block: 'judge-block', ask: 'judge-ask' } as const;
 
 /**
+ * Session-side rule ids (issue #96 PR-B1, spec D3 steps 3a and 3b), declared
+ * BESIDE `JUDGE_RULE_IDS` and deliberately not inside it, so PR-A's measured
+ * scanner and its public tuple keep their shape. `judge-oversized`: an
+ * oversized input under `always` composes as at least `ask` (decision 8).
+ * `judge-redacted`: on the failure hook, a redacted judge input composes as
+ * at least `ask` (decision 15). Each id is added only when its rule caused
+ * the tightening (ADR-0016 decision 3, G-9).
+ */
+export const JUDGE_OVERSIZED_RULE_ID = 'judge-oversized';
+export const JUDGE_REDACTED_RULE_ID = 'judge-redacted';
+
+/**
  * What happened to the judge on one `scanWithJudge` call. `off` and
  * `not-escalated` mean it was never consulted; `oversized` means the input
  * exceeded `MAX_JUDGE_INPUT_BYTES` so the escalation is unresolved;
@@ -47,8 +59,13 @@ export type JudgeCallResult =
   | { ok: true; verdict: Verdict; costUsd: number | null }
   | { ok: false; errorKind: JudgeErrorKind; costUsd: number | null };
 
-/** One blind judge completion over untrusted text (no heuristic input). */
-export type JudgeCall = (text: string) => Promise<JudgeCallResult>;
+/**
+ * One blind judge completion over untrusted text (no heuristic input). The
+ * optional `signal` (issue #96 PR-B1, spec D4) asks the transport to stop the
+ * call; `buildJudge` links it to the SDK's `abortController`. A call that
+ * ignores it is abandoned, not stopped.
+ */
+export type JudgeCall = (text: string, signal?: AbortSignal) => Promise<JudgeCallResult>;
 
 export interface JudgedScannerOptions {
   /** Default `'off'` (ADR-0016 decision 4). */
@@ -62,7 +79,8 @@ export interface JudgedScannerOptions {
 }
 
 export interface JudgedScanner {
-  scanWithJudge(text: string): Promise<JudgedScanResult>;
+  /** `signal` (optional, spec D4): when it aborts, the call is aborted and the scan settles `failed` on the floor. */
+  scanWithJudge(text: string, signal?: AbortSignal): Promise<JudgedScanResult>;
 }
 
 const RANK: Record<Verdict, 0 | 1 | 2> = { pass: 0, ask: 1, block: 2 };
@@ -88,8 +106,8 @@ function isVerdict(value: unknown): value is Verdict {
  * scanner reads as `judge: 'failed'`.
  */
 export function toInjectionJudge(call: JudgeCall): InjectionJudge {
-  return async (text: string): Promise<Verdict> => {
-    const result = await call(text);
+  return async (text: string, _heuristic: ScanResult, signal?: AbortSignal): Promise<Verdict> => {
+    const result = await call(text, signal);
     if (!result.ok) throw new Error(`judge call failed: ${result.errorKind}`);
     return result.verdict;
   };
@@ -113,22 +131,49 @@ type JudgeOutcome = { kind: 'timed-out' } | { kind: 'failed' } | { kind: 'judged
  * non-verdict value are all outcomes, never errors. Both settlement handlers
  * are attached before the timer can fire, so a late settlement after the
  * timeout is consumed and never surfaces as an unhandled rejection.
+ * One AbortController per call (issue #96 PR-B1, spec D4): the timer aborts
+ * it, so the transport can stop a call the scanner has given up on. An
+ * external signal is linked with `AbortSignal.any`, so no listener is ever
+ * added to it by hand (Gm1#2); the one listener here sits on the per-call
+ * combined signal and is removed when the call settles.
  */
 function callUnderTimer(
   judge: InjectionJudge,
   text: string,
   heuristic: ScanResult,
   timeoutMs: number,
+  external?: AbortSignal,
 ): Promise<JudgeOutcome> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ kind: 'timed-out' }), timeoutMs);
-    const settle = (outcome: JudgeOutcome): void => {
-      clearTimeout(timer);
+    const controller = new AbortController();
+    const signal = external === undefined ? controller.signal : AbortSignal.any([external, controller.signal]);
+    // A holder, not `let timer`: `prefer-const` (plan review P-8), and a `const`
+    // declared after the pre-aborted check would hit the temporal dead zone,
+    // because that path calls `settle` before the timer exists.
+    const timers: { id?: ReturnType<typeof setTimeout> } = {};
+    let settled = false;
+    const onAbort = (): void => settle({ kind: 'failed' });
+    function settle(outcome: JudgeOutcome): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timers.id);
+      signal.removeEventListener('abort', onAbort);
       resolve(outcome);
-    };
+    }
+    if (signal.aborted) {
+      settle({ kind: 'failed' });
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    timers.id = setTimeout(() => {
+      // Settle BEFORE aborting, or the abort would reach `onAbort` and read
+      // as an external cancellation.
+      settle({ kind: 'timed-out' });
+      controller.abort();
+    }, timeoutMs);
     let pending: Promise<Verdict>;
     try {
-      pending = Promise.resolve(judge(text, floorCopy(heuristic)));
+      pending = Promise.resolve(judge(text, floorCopy(heuristic), signal));
     } catch {
       settle({ kind: 'failed' });
       return;
@@ -180,7 +225,7 @@ export function createJudgedScanner(opts: JudgedScannerOptions = {}): JudgedScan
   const scanner: InjectionScanner = opts.scanner ?? { scan: defaultScan };
   const timeoutMs = opts.timeoutMs ?? JUDGE_TIMEOUT_MS;
 
-  async function scanWithJudge(text: string): Promise<JudgedScanResult> {
+  async function scanWithJudge(text: string, signal?: AbortSignal): Promise<JudgedScanResult> {
     const heuristic = scanner.scan(text);
     if (mode === 'off' || judge === undefined) return { ...heuristic, judge: 'off' };
     if (heuristic.verdict === 'block') return { ...heuristic, judge: 'not-escalated' };
@@ -193,7 +238,7 @@ export function createJudgedScanner(opts: JudgedScannerOptions = {}): JudgedScan
       // false` would then claim an adjudication that never saw it.
       return { ...heuristic, judge: 'oversized' };
     }
-    const outcome = await callUnderTimer(judge, text, heuristic, timeoutMs);
+    const outcome = await callUnderTimer(judge, text, heuristic, timeoutMs, signal);
     if (outcome.kind === 'judged') return compose(heuristic, outcome.verdict);
     return { ...heuristic, judge: outcome.kind };
   }

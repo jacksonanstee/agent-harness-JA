@@ -12,9 +12,10 @@ import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '
 import { createHookRuntime } from '../hooks/index.js';
 import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
+import type { MemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { createSession } from '../session/index.js';
-import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from '../session/index.js';
+import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
   createPermissionEvaluator,
   createSandbox,
@@ -25,6 +26,7 @@ import {
 } from '../security/index.js';
 import { load as loadSkills } from '../skills/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
+import type { TelemetryStore } from '../telemetry/index.js';
 import {
   apiKeyMissingMessage,
   composeSecurity,
@@ -39,7 +41,7 @@ import {
   WARNING_PREFIX,
   writeScorecard,
 } from './shared.js';
-import type { SecurityComposition } from './shared.js';
+import type { CliSeams, SecurityComposition } from './shared.js';
 
 export interface EvalArgs {
   command: 'eval';
@@ -135,7 +137,67 @@ export const buildAdversary =
     return { text, costUsd };
   };
 
-export async function runEval(args: EvalArgs): Promise<number> {
+export interface EvalSessionFactoryDeps {
+  query: QueryFn;
+  security: SecurityComposition;
+  telemetry: TelemetryStore;
+  memory: MemoryStore;
+  /** Test seam: the session factory (R5 pin). Default `createSession`. */
+  create?: typeof createSession;
+}
+
+/**
+ * One eval task's session (moved out of runEval for the R5 pin, issue #96
+ * PR-B1). Eval stays heuristic: `security.judge` is read (a malformed user
+ * block exits 2 on eval too, G-5) and deliberately never used; the deps carry
+ * no `judge` key (ADR-0037).
+ */
+export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: TaskSessionConfig) => Session {
+  const { query, security, telemetry, memory } = deps;
+  const create = deps.create ?? createSession;
+  return (config) => {
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const hooks = createHookRuntime({
+      onEvent: (record) => {
+        const result = telemetry.record(
+          hookRecordToTelemetryInput(record, { sessionId, turnId }, { redactSecrets: redact }),
+        );
+        if (!result.ok) {
+          process.stderr.write(
+            `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+          );
+        }
+      },
+    });
+    hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+    hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+    return create(
+      {
+        query,
+        hooks,
+        memory,
+        loadSkills,
+        route,
+        telemetry,
+        scanInjection: (text) => scan(text),
+        redactSecrets: (text) => redact(text),
+      },
+      {
+        skillsDir: config.skillsDir,
+        maxTurns: config.maxTurns,
+        ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
+        generateId: () => sessionId,
+        turnId,
+        // No onText: eval's stdout is the scorecard, nothing else.
+        onWarning: (message) =>
+          process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
+      },
+    );
+  };
+}
+
+export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<number> {
   if (!process.env.ANTHROPIC_API_KEY) {
     process.stderr.write(apiKeyMissingMessage('required for eval'));
     return 2;
@@ -144,7 +206,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
   let security: SecurityComposition;
   try {
     security = composeSecurity({
-      userDir: homedir(),
+      userDir: seams.userDir ?? homedir(),
       projectDir: process.cwd(),
     });
   } catch (error: unknown) {
@@ -173,7 +235,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
     throw error;
   }
 
-  const query = await loadSdkQuery();
+  const query = await loadSdkQuery(seams.importSdk);
   if (query === null) return 2;
 
   // Report-only second pass over already-passed tasks (E-4): the adversary is
@@ -202,46 +264,7 @@ export async function runEval(args: EvalArgs): Promise<number> {
     const telemetry = createTelemetryStore(db);
     const memory = createMemoryStore(db);
 
-    const createTaskSession = (config: TaskSessionConfig) => {
-      const sessionId = randomUUID();
-      const turnId = randomUUID();
-      const hooks = createHookRuntime({
-        onEvent: (record) => {
-          const result = telemetry.record(
-            hookRecordToTelemetryInput(record, { sessionId, turnId }, { redactSecrets: redact }),
-          );
-          if (!result.ok) {
-            process.stderr.write(
-              `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
-            );
-          }
-        },
-      });
-      hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
-      hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
-      return createSession(
-        {
-          query,
-          hooks,
-          memory,
-          loadSkills,
-          route,
-          telemetry,
-          scanInjection: (text) => scan(text),
-          redactSecrets: (text) => redact(text),
-        },
-        {
-          skillsDir: config.skillsDir,
-          maxTurns: config.maxTurns,
-          ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
-          generateId: () => sessionId,
-          turnId,
-          // No onText: eval's stdout is the scorecard, nothing else.
-          onWarning: (message) =>
-            process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
-        },
-      );
-    };
+    const createTaskSession = makeEvalSessionFactory({ query, security, telemetry, memory });
 
     const runner = createGoldenRunner({
       createTaskSession,

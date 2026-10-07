@@ -1,4 +1,4 @@
-export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop' | 'tool-rewrite';
+export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop' | 'tool-rewrite' | 'judge-call';
 
 export interface TurnUsage {
   inputTokens: number;
@@ -102,6 +102,52 @@ export interface ToolRewritePayload {
   truncated: boolean;
   outcome: ToolRewriteOutcome;
   reason?: ToolRewriteUnobservedReason;
+}
+
+/**
+ * Structural MIRRORS of the session judge's state union and of security's
+ * verdict and error-kind unions (issue #96 PR-B1, spec D6, A-8). Telemetry is
+ * a leaf and may import neither session nor security, so nothing here derives
+ * from the origins (`JudgeSessionState` in src/session/types.ts, `Verdict`
+ * and `JudgeErrorKind` in src/security); drift tests in
+ * src/session/judged-scan.test.ts prove each equal to its origin. Grow an
+ * origin without its mirror and every row with the new value fails
+ * validation and is lost to one stderr warning.
+ */
+export type JudgeCallState =
+  | 'not-escalated'
+  | 'oversized'
+  | 'judged'
+  | 'timed-out'
+  | 'failed'
+  | 'cap-reached'
+  | 'hook-cancelled'
+  | 'stopped'
+  | 'queue-timed-out';
+export type JudgeCallVerdict = 'pass' | 'ask' | 'block';
+export type JudgeCallErrorKind = 'call-failed' | 'unparseable' | 'unknown-enum';
+
+/**
+ * One tool result that took the judge path (spec D6, K-6). CLOSED: the
+ * validator rejects any key outside this set, so no tool output, excerpt or
+ * reply text can ride on the row (the PR-A CG2 rule, G-4). `redacted` is D6's
+ * one definition, measured on the copy the judge actually received (findings,
+ * failed closed, or truncated). `errorKind` is the recorded call's kind when
+ * `state` is `failed`, else null. `costUsd` is the call's cost as of the row
+ * write; a call that settles after its row stays null here.
+ */
+export interface JudgeCallPayload {
+  tool: string;
+  tool_use_id: string | null;
+  phase: ToolTracePhase;
+  state: JudgeCallState;
+  heuristic: JudgeCallVerdict;
+  judge: JudgeCallVerdict | null;
+  composed: JudgeCallVerdict;
+  errorKind: JudgeCallErrorKind | null;
+  redacted: boolean;
+  costUsd: number | null;
+  durationMs: number;
 }
 
 /**
@@ -399,7 +445,8 @@ export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'tool-trace'; payload: ToolTracePayload })
   | (TelemetryEventBase & { type: 'hook-event'; payload: HookEventPayload })
   | (TelemetryEventBase & { type: 'skill-drop'; payload: SkillDropPayload })
-  | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload });
+  | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
+  | (TelemetryEventBase & { type: 'judge-call'; payload: JudgeCallPayload });
 
 interface TelemetryInputBase {
   sessionId: string;
@@ -414,7 +461,8 @@ export type TelemetryEventInput =
   | (TelemetryInputBase & { type: 'tool-trace'; payload: ToolTracePayload })
   | (TelemetryInputBase & { type: 'hook-event'; payload: HookEventPayload })
   | (TelemetryInputBase & { type: 'skill-drop'; payload: SkillDropPayload })
-  | (TelemetryInputBase & { type: 'tool-rewrite'; payload: ToolRewritePayload });
+  | (TelemetryInputBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
+  | (TelemetryInputBase & { type: 'judge-call'; payload: JudgeCallPayload });
 
 export interface TelemetryFilter {
   sessionId?: string;

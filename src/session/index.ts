@@ -1,11 +1,15 @@
 export { createSession, DEFAULT_DESCRIPTOR } from './session.js';
-// The judge BUILDER only (issue #96, ADR-0036 D2). Its wire internals
+// The judge BUILDER and its fixed model (issue #96, ADR-0036 D2; PR-B1 D1). Its wire internals
 // (buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse, ParsedJudgeWire)
 // stay off every barrel, as the verifier's do (ADR-0023).
-export { buildJudge } from './judge.js';
+export { buildJudge, JUDGE_MODEL } from './judge.js';
+// The judge session-state tuple only (pin 31); the fixed constants stay module exports.
+export { JUDGE_SESSION_STATES } from './judged-scan.js';
 export type {
   DeniedToolCall,
   DroppedSkill,
+  JudgeSessionState,
+  JudgeSummary,
   OutputAnnotation,
   OutputRewrite,
   OutputRewriteOutcome,
@@ -34,6 +38,7 @@ export type {
   Session,
   SessionConfig,
   SessionDeps,
+  SessionJudge,
   SessionRefusal,
   SkillDropReason,
   SessionResult,

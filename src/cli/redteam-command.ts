@@ -29,7 +29,7 @@ import type {
 } from '../eval/index.js';
 import { scan } from '../security/index.js';
 import type { JudgeCall } from '../security/index.js';
-import { buildJudge } from '../session/index.js';
+import { buildJudge, JUDGE_MODEL } from '../session/index.js';
 import type { QueryFn } from '../session/index.js';
 import {
   apiKeyMissingMessage,
@@ -47,16 +47,6 @@ import type { ImportSdk } from './shared.js';
 /** Default location of the committed baseline (design §Update mechanics),
  *  beside `EVAL_OUT_DIR` — both are CLI-owned path constants. */
 export const DEFAULT_BASELINE_PATH = 'eval/redteam/baseline.json';
-
-/**
- * The judge arm's default model (issue #96, ADR-0036 D3): the same literal
- * as `src/router/table.ts` (ADR-0016 names it), deliberately NOT obtained
- * through `route()` (ADR-0016 decision 6: the router is never used for the
- * judge). The CLI is the only place this literal lives; a pin asserts it is
- * present in the router table so a tier bump cannot retire it silently
- * (S-18). `--judge-model` overrides it for the second measurement run.
- */
-export const JUDGE_MODEL = 'claude-haiku-4-5';
 
 export interface RedteamArgs {
   command: 'redteam';

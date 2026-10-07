@@ -41,6 +41,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     droppedSkills: [],
     outputRewrites: [],
     outputAnnotations: [],
+    judge: null,
     ...overrides,
   };
 }

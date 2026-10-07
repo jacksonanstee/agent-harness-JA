@@ -132,8 +132,8 @@ interface Recorder {
 function recorder(judge: JudgeCall): Recorder {
   let recorded: JudgeCallResult | null = null;
   return {
-    judge: async (text: string): Promise<JudgeCallResult> => {
-      const result = await judge(text);
+    judge: async (text: string, signal?: AbortSignal): Promise<JudgeCallResult> => {
+      const result = await judge(text, signal);
       recorded = result;
       return result;
     },

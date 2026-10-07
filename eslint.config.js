@@ -6,7 +6,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'test/**/*.ts'],
     rules: {
       // Sanitizers in hooks/router/skills intentionally match control characters.
       'no-control-regex': 'off',

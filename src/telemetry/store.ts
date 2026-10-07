@@ -6,6 +6,10 @@ import Database from 'better-sqlite3';
 import { MIGRATIONS, runMigrations } from './migrations/index.js';
 import type {
   HookEventPayload,
+  JudgeCallErrorKind,
+  JudgeCallPayload,
+  JudgeCallState,
+  JudgeCallVerdict,
   RecordResult,
   SkillDropPayload,
   SkillDropReason,
@@ -57,6 +61,7 @@ const EVENT_TYPE_PRESENCE: Record<TelemetryEventType, true> = {
   'hook-event': true,
   'skill-drop': true,
   'tool-rewrite': true,
+  'judge-call': true,
 };
 
 export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonly TelemetryEventType[];
@@ -111,6 +116,45 @@ export const TOOL_REWRITE_REASONS = Object.keys(
   TOOL_REWRITE_REASON_PRESENCE,
 ) as readonly ToolRewriteUnobservedReason[];
 const TOOL_REWRITE_REASON_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_REASONS);
+
+// Issue #96 PR-B1 (spec D6, A-8): presence records over the judge-call
+// mirrors, the EVENT_TYPE_PRESENCE idiom, so a member added to a mirror type
+// without its key here is a compile error.
+const JUDGE_CALL_STATE_PRESENCE: Record<JudgeCallState, true> = {
+  'not-escalated': true,
+  oversized: true,
+  judged: true,
+  'timed-out': true,
+  failed: true,
+  'cap-reached': true,
+  'hook-cancelled': true,
+  stopped: true,
+  'queue-timed-out': true,
+};
+export const JUDGE_CALL_STATES = Object.keys(JUDGE_CALL_STATE_PRESENCE) as readonly JudgeCallState[];
+const JUDGE_CALL_STATE_SET: ReadonlySet<string> = new Set(JUDGE_CALL_STATES);
+
+const JUDGE_CALL_VERDICT_PRESENCE: Record<JudgeCallVerdict, true> = { pass: true, ask: true, block: true };
+export const JUDGE_CALL_VERDICTS = Object.keys(JUDGE_CALL_VERDICT_PRESENCE) as readonly JudgeCallVerdict[];
+const JUDGE_CALL_VERDICT_SET: ReadonlySet<string> = new Set(JUDGE_CALL_VERDICTS);
+
+const JUDGE_CALL_ERROR_KIND_PRESENCE: Record<JudgeCallErrorKind, true> = {
+  'call-failed': true,
+  unparseable: true,
+  'unknown-enum': true,
+};
+export const JUDGE_CALL_ERROR_KINDS = Object.keys(JUDGE_CALL_ERROR_KIND_PRESENCE) as readonly JudgeCallErrorKind[];
+const JUDGE_CALL_ERROR_KIND_SET: ReadonlySet<string> = new Set(JUDGE_CALL_ERROR_KINDS);
+
+/**
+ * The closed key set, checked FIRST (G-4). `Object.keys` is the right
+ * mechanism here because the store serialises with `JSON.stringify`, which
+ * reads exactly the own enumerable string keys (lesson 2026-08-30: guard by
+ * the mechanism the consumer reads by).
+ */
+const JUDGE_CALL_KEYS: ReadonlySet<string> = new Set([
+  'tool', 'tool_use_id', 'phase', 'state', 'heuristic', 'judge', 'composed', 'errorKind', 'redacted', 'costUsd', 'durationMs',
+]);
 
 /**
  * Correlation ids are an ALLOWLIST, not a denylist (issue #51). Anchored, so a
@@ -287,6 +331,34 @@ function isToolTracePayload(value: unknown): value is ToolTracePayload {
     isStringOrNull(value.resultSummary) &&
     (value.annotation === undefined ||
       (typeof value.annotation === 'string' && TOOL_ANNOTATION_VERDICT_SET.has(value.annotation)))
+  );
+}
+
+function inSet(set: ReadonlySet<string>, value: unknown): boolean {
+  return typeof value === 'string' && set.has(value);
+}
+
+function isJudgeCallPayload(value: unknown): value is JudgeCallPayload {
+  if (!isObject(value)) return false;
+  if (Object.keys(value).some((key) => !JUDGE_CALL_KEYS.has(key))) return false;
+  return (
+    // `tool` mirrors tool-rewrite exactly: a string here, sanitised on write
+    // (sanitizePayload); tool-rewrite applies no length bound either.
+    typeof value.tool === 'string' &&
+    isStringOrNull(value.tool_use_id) &&
+    inSet(TOOL_TRACE_PHASE_SET, value.phase) &&
+    inSet(JUDGE_CALL_STATE_SET, value.state) &&
+    inSet(JUDGE_CALL_VERDICT_SET, value.heuristic) &&
+    (value.judge === null || inSet(JUDGE_CALL_VERDICT_SET, value.judge)) &&
+    inSet(JUDGE_CALL_VERDICT_SET, value.composed) &&
+    (value.errorKind === null || inSet(JUDGE_CALL_ERROR_KIND_SET, value.errorKind)) &&
+    // N-1: the closed-key check alone would let a text value through here.
+    typeof value.redacted === 'boolean' &&
+    (value.costUsd === null ||
+      (typeof value.costUsd === 'number' && Number.isFinite(value.costUsd) && value.costUsd >= 0)) &&
+    typeof value.durationMs === 'number' &&
+    Number.isInteger(value.durationMs) &&
+    value.durationMs >= 0
   );
 }
 
@@ -572,6 +644,8 @@ function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
       return isSkillDropPayload(payload);
     case 'tool-rewrite':
       return isToolRewritePayload(payload);
+    case 'judge-call':
+      return isJudgeCallPayload(payload);
     default: {
       // `payload` is unknown here, so the old unguarded fall-through gave NO
       // compile-time protection: a fifth type would have been validated
@@ -630,6 +704,16 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       tool: sanitizeText(p.tool),
       // The SDK-supplied id can carry control chars; outcome/reason are
       // validated enums and ride through the spread untouched.
+      tool_use_id: p.tool_use_id === null ? null : sanitizeText(p.tool_use_id),
+    };
+  }
+  if (event.type === 'judge-call') {
+    const p = event.payload;
+    return {
+      ...p,
+      tool: sanitizeText(p.tool),
+      // The enums, the boolean and the numbers are validated above and ride
+      // through the spread untouched; only the two strings are attacker-shaped.
       tool_use_id: p.tool_use_id === null ? null : sanitizeText(p.tool_use_id),
     };
   }

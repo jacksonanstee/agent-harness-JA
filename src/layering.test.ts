@@ -241,3 +241,46 @@ describe('SDK import wall (issue #96 pin 20 / issue #102)', () => {
     expect(stripComments(`const u = 'https://x.invalid/${SDK_PACKAGE}';`)).toContain(SDK_PACKAGE);
   });
 });
+
+// Issue #96 PR-B1, architecture lens A-1 (ADR-0023 decision 3 applied to the
+// CLI): every import from src/cli.ts and src/cli/** into another domain goes
+// through that domain's barrel (index.js), with ONE named exception. The lint
+// config exempts the composition root by design, so this pin holds the rule.
+// A second deep import must be re-homed on a barrel, or added here with its reason.
+
+const DOMAIN_DEEP_IMPORT = /(?:from|import\()\s*(['"])((?:\.\.?\/)+(?:session|security|eval|telemetry|hooks|router|skills|memory)\/[^'"]+)\1/g;
+const ALLOWED_CLI_DEEP_IMPORTS: readonly string[] = [
+  // judgeCapWarning: kept off the root barrel on purpose (a warning text, not API).
+  'cli/run-judge.ts -> ../session/judged-scan.js',
+];
+
+/** Non-test CLI files: src/cli.ts and every non-test .ts under src/cli/. */
+function cliFiles(): string[] {
+  return sourceFilesUnder(SRC).filter((file) => file === join(SRC, 'cli.ts') || file.startsWith(`${join(SRC, 'cli')}/`));
+}
+
+function cliDeepImports(): string[] {
+  const found: string[] = [];
+  for (const file of cliFiles()) {
+    for (const match of stripComments(readFileSync(file, 'utf8')).matchAll(DOMAIN_DEEP_IMPORT)) {
+      const target = match[2] ?? '';
+      if (!target.endsWith('/index.js')) found.push(`${file.slice(SRC.length + 1)} -> ${target}`);
+    }
+  }
+  return found.sort();
+}
+
+describe('CLI barrel rule (issue #96 PR-B1, architecture lens A-1)', () => {
+  it('the only non-barrel import from the CLI into another domain is the pinned judgeCapWarning one', () => {
+    expect(cliDeepImports()).toEqual([...ALLOWED_CLI_DEEP_IMPORTS]);
+  });
+
+  it('the scan sees the CLI root and its subdirectory, and a deep import in either shape (self-check)', () => {
+    const files = cliFiles().map((file) => file.slice(SRC.length + 1));
+    expect(files).toContain('cli.ts');
+    expect(files).toContain('cli/run-judge.ts');
+    expect(files.filter((file) => file.endsWith('.test.ts'))).toEqual([]);
+    const sample = "import { x } from '../session/judged-scan.js';\nconst y = await import('../security/injection/judge.js');\nimport { z } from '../session/index.js';\nimport { w } from \"../session/judge.js\";\nimport { v } from '../../eval/redteam/run.js';\n";
+    expect([...sample.matchAll(DOMAIN_DEEP_IMPORT)].map((m) => m[2])).toEqual(['../session/judged-scan.js', '../security/injection/judge.js', '../session/index.js', '../session/judge.js', '../../eval/redteam/run.js']);
+  });
+});

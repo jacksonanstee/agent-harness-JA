@@ -20,6 +20,7 @@ import type {
   OutputRewriteOutcome,
   SdkAssistantMessage,
   SdkHookCallback,
+  SdkHookOutputFor,
   SdkMessage,
   SdkModelRefusalMessage,
   SdkPostToolUseFailureInput,
@@ -46,6 +47,9 @@ import {
   truncateWellFormed,
 } from '../internal/sanitize.js';
 import { relativeSkillDropPath } from './skill-drop-path.js';
+import { describeError } from './describe-error.js';
+import { createJudgeRun, judgeLeakedByHookTimeoutWarning, validateSessionJudge } from './judged-scan.js';
+import type { InternalSessionJudge, JudgeHook } from './judged-scan.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -279,6 +283,9 @@ const REDACTION_MARKER_RE = /\[REDACTED:[^\]]+\]/g;
  */
 export const OVERSIZED_REDACTION_MARKER = '[REDACTED:oversized-input]';
 
+/** No notice and no tool-trace annotation: the judge path's value until step 6 has decided (spec D3). */
+const NO_NOTICE: { notice: string | null; verdict: 'block' | 'ask' | undefined } = { notice: null, verdict: undefined };
+
 /**
  * Minimum length of a secret span's first line for the verifier to treat it as
  * a leak signal (D4, S-13). Short spans are too collision-prone to key an alarm
@@ -397,25 +404,6 @@ export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
   OUTPUT_REWRITE_OUTCOME_PRESENCE,
 ) as readonly OutputRewriteOutcome[];
 
-
-/**
- * Renders a thrown value or a Result error for a warning or a retained row.
- * Never throws and always returns a string: `message` may be a getter that
- * throws or returns a non-string (found by execution, issue #75), and
- * `sanitizeText` is an untyped replace that would pass a non-string through.
- * Every injected dependency is an arbitrary implementation at the same trust
- * boundary as a hook, so every catch that renders one goes through here.
- * Non-object throws render as 'unknown', the behaviour these sites had.
- */
-function describeError(error: unknown): string {
-  try {
-    if (typeof error !== 'object' || error === null || !('message' in error)) return 'unknown';
-    const rendered: unknown = (error as { message: unknown }).message;
-    return typeof rendered === 'string' ? sanitizeText(rendered) : 'unrepresentable error';
-  } catch {
-    return 'unrepresentable error';
-  }
-}
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;
@@ -769,6 +757,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     config.generateNonce ?? (() => randomBytes(SKILL_NONCE_BYTES).toString('hex'));
   const warn = config.onWarning ?? (() => undefined);
   if (config.turnId !== undefined) assertValidCorrelationId(config.turnId, 'config.turnId');
+  validateSessionJudge(deps);
 
   async function run(prompt: string): Promise<SessionResult> {
     // Step 2: model selection.
@@ -900,6 +889,28 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       resolved: boolean;
     }
     const pendingRewrites: PendingRewrite[] = [];
+
+    // Issue #96 PR-B1 (spec D3, R1): per-run judge state; null with no judge, so that path is today's.
+    const judgeRun = deps.judge === undefined ? null : createJudgeRun({
+      judge: deps.judge as InternalSessionJudge,
+      now,
+      warn,
+      writeRow: (payload) => recordTelemetry({ type: 'judge-call', sessionId: harnessSessionId, turnId, payload }),
+    });
+
+    // Spec D3 step 6: one cancellation listener per judged hook, removed on every path; step 7: the hook is tracked for the drain.
+    function judgedHook<I extends SdkPostToolUseInput | SdkPostToolUseFailureInput>(
+      body: (input: I, toolUseID: string | undefined, jh: JudgeHook | null) => Promise<SdkHookOutputFor<I>>,
+    ): SdkHookCallback<I> {
+      return async (input, toolUseID, context) => {
+        const jh = judgeRun === null ? null : judgeRun.enter(context?.signal, resolveToolUseId(toolUseID, input.tool_use_id));
+        try {
+          return jh === null ? await body(input, toolUseID, null) : await jh.track(body(input, toolUseID, jh));
+        } finally {
+          jh?.dispose();
+        }
+      };
+    }
 
     // Telemetry is observability, never control flow: a failing or throwing
     // recorder downgrades to a warning and the run continues.
@@ -1415,7 +1426,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           p.resolved = true;
           const decided = decideRewriteOutcome(p, rendered);
           if (decided.outcome === 'leaked') {
-            warn(`the ${p.tool} output rewrite LEAKED: a redacted secret survived into the model's copy (#84)`);
+            warn(judgeRun?.hookWasCancelled(p.toolUseId) === true
+              ? judgeLeakedByHookTimeoutWarning(p.tool)
+              : `the ${p.tool} output rewrite LEAKED: a redacted secret survived into the model's copy (#84)`);
           }
           recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, decided.outcome, decided.reason);
         }
@@ -1451,18 +1464,18 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // D8: redacts a FAILED call's error text for the tool-trace row and warns
     // DISTINCTLY that the model already received it unredacted (U-2). Fail-closed
     // to the sentinel, never the raw error.
-    function redactFailureError(tool: string, errorText: string): { redactedRow: string; findings: unknown } {
-      if (deps.redactSecrets === undefined) return { redactedRow: errorText, findings: null };
+    function redactFailureError(tool: string, errorText: string): { redactedRow: string; findings: unknown; redacted: boolean } {
+      if (deps.redactSecrets === undefined) return { redactedRow: errorText, findings: null, redacted: false };
       let result: RedactResult;
       try {
         result = deps.redactSecrets(errorText);
       } catch (error: unknown) {
         warn(`secret redaction failed: ${describeError(error)}`);
-        return { redactedRow: REDACTION_FAILED, findings: null };
+        return { redactedRow: REDACTION_FAILED, findings: null, redacted: true };
       }
       if (typeof result.redacted !== 'string') {
         warn('secret redaction failed: redactor returned a non-string');
-        return { redactedRow: REDACTION_FAILED, findings: null };
+        return { redactedRow: REDACTION_FAILED, findings: null, redacted: true };
       }
       const findings = Array.isArray(result.findings) ? result.findings : [];
       if (findings.length > 0) {
@@ -1472,7 +1485,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
             `— the model received it UNREDACTED (no rewrite channel on a failed call, #84)`,
         );
       }
-      return { redactedRow: result.redacted, findings: result.findings };
+      return { redactedRow: result.redacted, findings: result.findings, redacted: findings.length > 0 || result.redacted.includes(OVERSIZED_REDACTION_MARKER) };
     }
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
@@ -1540,7 +1553,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       return {};
     };
 
-    const postToolCallback: SdkHookCallback<SdkPostToolUseInput> = async (input, toolUseID) => {
+    const postToolCallback: SdkHookCallback<SdkPostToolUseInput> = judgedHook<SdkPostToolUseInput>(async (input, toolUseID, jh) => {
       // The SDK only ever drives this matcher with PostToolUse events; the
       // guard is a runtime backstop for a non-conforming injected `deps.query`.
       // A quiet no-op on the post-tool path is the #83 failure mode, so warn.
@@ -1558,7 +1571,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const scan = runInjectionScan(toolName, toolResponse);
       // D2: a block/ask verdict now ANNOTATES the model's copy (plain notice,
       // no verdict word, no excerpt) and records a structural annotation.
-      const annotation = annotate(scan, toolName, toolUseId, 'post-tool');
+      let annotation = jh === null ? annotate(scan, toolName, toolUseId, 'post-tool') : NO_NOTICE;
 
       // Step 11 (pass 1, telemetry — UNCHANGED, #84 D1): redact BEFORE the
       // telemetry write so a secret never reaches the retained store. On redactor
@@ -1571,17 +1584,20 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const telemetryText = hasOutput
         ? (redaction?.redacted ?? stringifyForScan(toolResponse))
         : null;
-      recordTelemetry({
-        type: 'tool-trace',
-        sessionId: harnessSessionId,
-        turnId,
-        payload: {
-          tool: toolName,
-          phase: 'post-tool',
-          resultSummary: telemetryText === null ? null : truncate(telemetryText),
-          ...(annotation.verdict !== undefined ? { annotation: annotation.verdict } : {}),
-        },
-      });
+      const writeTrace = (verdict: 'block' | 'ask' | undefined): void =>
+        recordTelemetry({
+          type: 'tool-trace',
+          sessionId: harnessSessionId,
+          turnId,
+          payload: {
+            tool: toolName,
+            phase: 'post-tool',
+            resultSummary: telemetryText === null ? null : truncate(telemetryText),
+            ...(verdict !== undefined ? { annotation: verdict } : {}),
+          },
+        });
+      // A-10: judge off, the row lands here as today; judge on, it waits for step 6.
+      if (jh === null) writeTrace(annotation.verdict);
 
       // Pass 2 (D1): the model-facing rewrite. Computed BEFORE the custom hook
       // fires so a throwing hook cannot lose it. The custom hook still receives
@@ -1591,12 +1607,23 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         rewrite = buildModelRewrite(toolName, toolUseId, toolResponse, pass1FindingsCount);
       }
 
+      // Decision 11: the judge sees the model's copy (the #84 rewrite when it applied, else the raw output, T-5).
+      const judged = jh === null ? null : await jh.scan({
+        tool: toolName,
+        phase: 'post-tool',
+        floor: scan,
+        text: stringifyForScan(rewrite === null ? toolResponse : rewrite.value),
+        redacted: rewrite !== null,
+      });
+      // Spec D3 step 4: the custom hook reads the COMPOSED verdict (3a, 3b included); decide is pure, so step 6 re-decides after the hook.
+      const preview = jh === null ? null : jh.decide(judged);
+
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
           tool: toolName,
           result: toolResponse,
-          scan,
+          scan: preview?.scan ?? scan,
           redactions: redaction?.findings ?? null,
         });
         for (const error of fireResult.errors) {
@@ -1604,6 +1631,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         }
       } catch (error: unknown) {
         warn(`post-tool fire failed: ${describeError(error)}`);
+      }
+
+      if (jh !== null) {
+        const decision = jh.decide(judged);
+        annotation = decision === null ? annotate(scan, toolName, toolUseId, 'post-tool')
+          : decision.deliver ? annotate(decision.composed, toolName, toolUseId, 'post-tool') : NO_NOTICE;
+        jh.record(decision);
+        writeTrace(annotation.verdict);
       }
 
       // Assemble the return so at least one key is present when either channel
@@ -1625,7 +1660,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         return { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: notice } };
       }
       return {};
-    };
+    });
 
     // Step 12 (failed calls, D8): the SDK routes a FAILED tool call to
     // PostToolUseFailure, never to PostToolUse (S-1). The model has ALREADY
@@ -1633,7 +1668,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // the harness scans it, redacts it for the telemetry row (DISTINCT warning,
     // U-2), fires the custom hook with `failed: true`, and annotates on a
     // verdict — but NEVER rewrites.
-    const postToolFailureCallback: SdkHookCallback<SdkPostToolUseFailureInput> = async (input, toolUseID) => {
+    const postToolFailureCallback: SdkHookCallback<SdkPostToolUseFailureInput> = judgedHook<SdkPostToolUseFailureInput>(async (input, toolUseID, jh) => {
       if (input.hook_event_name !== 'PostToolUseFailure') {
         warn(`post-tool-failure callback received a non-PostToolUseFailure event (${sanitizeText(String(input.hook_event_name))}); skipped`);
         return {};
@@ -1642,25 +1677,32 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const toolUseId = resolveToolUseId(toolUseID, input.tool_use_id);
       const errorText = typeof input.error === 'string' ? input.error : String(input.error);
       const scan = runInjectionScan(toolName, errorText);
-      const annotation = annotate(scan, toolName, toolUseId, 'post-tool-failure');
-      const { redactedRow, findings } = redactFailureError(toolName, errorText);
-      recordTelemetry({
-        type: 'tool-trace',
-        sessionId: harnessSessionId,
-        turnId,
-        payload: {
-          tool: toolName,
-          phase: 'post-tool-failure',
-          resultSummary: truncate(redactedRow),
-          ...(annotation.verdict !== undefined ? { annotation: annotation.verdict } : {}),
-        },
-      });
+      let annotation = jh === null ? annotate(scan, toolName, toolUseId, 'post-tool-failure') : NO_NOTICE;
+      const { redactedRow, findings, redacted } = redactFailureError(toolName, errorText);
+      const writeTrace = (verdict: 'block' | 'ask' | undefined): void =>
+        recordTelemetry({
+          type: 'tool-trace',
+          sessionId: harnessSessionId,
+          turnId,
+          payload: {
+            tool: toolName,
+            phase: 'post-tool-failure',
+            resultSummary: truncate(redactedRow),
+            ...(verdict !== undefined ? { annotation: verdict } : {}),
+          },
+        });
+      // A-10 (failure hook): judge off, the row lands here as today.
+      if (jh === null) writeTrace(annotation.verdict);
+      // Decision 11 and 15: the judge sees the redacted error, never the raw one.
+      const judged = jh === null ? null : await jh.scan({ tool: toolName, phase: 'post-tool-failure', floor: scan, text: redactedRow, redacted });
+      // Spec D3 step 4 (failure hook): the composed verdict, decision 15's judge-redacted included; step 6 re-decides after the hook.
+      const preview = jh === null ? null : jh.decide(judged);
       try {
         const fireResult = await deps.hooks.fire('post-tool', {
           event: 'post-tool',
           tool: toolName,
           result: errorText,
-          scan,
+          scan: preview?.scan ?? scan,
           redactions: findings ?? null,
           failed: true,
         });
@@ -1670,12 +1712,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       } catch (error: unknown) {
         warn(`post-tool fire failed: ${describeError(error)}`);
       }
+      if (jh !== null) {
+        const decision = jh.decide(judged);
+        annotation = decision === null ? annotate(scan, toolName, toolUseId, 'post-tool-failure')
+          : decision.deliver ? annotate(decision.composed, toolName, toolUseId, 'post-tool-failure') : NO_NOTICE;
+        jh.record(decision);
+        writeTrace(annotation.verdict);
+      }
       // No rewrite channel on a failed call: annotation only.
       if (annotation.notice !== null) {
         return { hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: annotation.notice } };
       }
       return {};
-    };
+    });
 
     // Step 4: session-start fires before the SDK turn begins.
     const startResult = await deps.hooks.fire('session-start', {
@@ -1697,6 +1746,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let streamError: unknown = null;
 
     try {
+      // Spec D5: the explicit hook budget, set only when a judge is on.
+      const judgeTimeout = judgeRun === null ? {} : { timeout: judgeRun.hookTimeoutS };
       // Steps 5-14: the SDK turn.
       const stream = deps.query({
         prompt,
@@ -1706,8 +1757,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           maxTurns: config.maxTurns,
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
-            PostToolUse: [{ hooks: [postToolCallback] }],
-            PostToolUseFailure: [{ hooks: [postToolFailureCallback] }],
+            PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
+            PostToolUseFailure: [{ hooks: [postToolFailureCallback], ...judgeTimeout }],
           },
         },
       });
@@ -1796,6 +1847,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         warn(`stop hook error: ${error.reason}`);
       }
     }
+
+    // Spec D3 step 7: await the judged hooks still running, bounded by JUDGE_DRAIN_MS, then fold the summary (D7).
+    const judge = judgeRun === null ? null : await judgeRun.drain();
 
     const sessionId = sdkSessionId ?? harnessSessionId;
 
@@ -1890,6 +1944,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       droppedSkills,
       outputRewrites,
       outputAnnotations,
+      judge,
     };
   }
 

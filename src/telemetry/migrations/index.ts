@@ -3,6 +3,7 @@ import { m001MemoryBaseline } from './m001-memory-baseline.js';
 import { m002TelemetryEvents } from './m002-telemetry-events.js';
 import { m003SkillDropType } from './m003-skill-drop-type.js';
 import { m004ToolRewriteType } from './m004-tool-rewrite-type.js';
+import { m005JudgeCallType } from './m005-judge-call-type.js';
 
 export { runMigrations, type Migration } from './runner.js';
 
@@ -15,4 +16,5 @@ export const MIGRATIONS: readonly Migration[] = [
   m002TelemetryEvents,
   m003SkillDropType,
   m004ToolRewriteType,
+  m005JudgeCallType,
 ];

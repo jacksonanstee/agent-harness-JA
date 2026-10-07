@@ -3,7 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { RedactResult, ScanResult } from '../security/index.js';
+import type { JudgeCall, RedactResult, ScanResult } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -225,6 +225,13 @@ export type SdkHookCallback<I extends SdkHookInput = SdkHookInput> = (
 
 export interface SdkHookMatcher<I extends SdkHookInput = SdkHookInput> {
   hooks: SdkHookCallback<I>[];
+  /**
+   * Seconds for every hook in this matcher, the SDK's
+   * `HookCallbackMatcher.timeout`. Set on the two tool matchers only when a
+   * judge is configured, to `JUDGE_HOOK_TIMEOUT_S` (issue #96 PR-B1, spec
+   * D5); absent otherwise, so the judge-off matchers are exactly today's.
+   */
+  timeout?: number;
 }
 
 export interface QueryOptions {
@@ -246,6 +253,17 @@ export interface QueryOptions {
   skills?: string[];
   /** `false` writes no transcript under `CLAUDE_CONFIG_DIR`. */
   persistSession?: boolean;
+  /**
+   * The SDK's cancellation channel (issue #96 PR-B1, spec D4), used for the
+   * judge call only: `buildJudge` always passes one, linked to the scanner's
+   * per-call signal. The session's primary query passes none (H-7 for the
+   * whole run stays deferred). A consumer-supplied `QueryFn` must honour it
+   * for the judge's abort to take effect; one that ignores it gets PR-A's
+   * behaviour (the call is abandoned, not stopped), and because a judge slot
+   * is released only when its call settles, four such hung calls stop all
+   * judging for the run (ADR-0037).
+   */
+  abortController?: AbortController;
   // Typed per event so a callback that reads a post-only field (`tool_response`)
   // cannot be registered under `PreToolUse`, and so each callback returns only
   // the outputs valid for its event (D6). `PostToolUseFailure` is the failure
@@ -257,6 +275,13 @@ export interface QueryOptions {
   };
 }
 
+/**
+ * The injected SDK `query` (ADR-0010). The shipped composition passes the
+ * SDK's own `query`. Contract for a consumer-supplied one (issue #96 PR-B1,
+ * spec D4, U-5): it must honour `options.abortController` (stop iterating and
+ * reject when it aborts), or the judge's abort never reaches the call; see
+ * `QueryOptions.abortController` and ADR-0037.
+ */
 export type QueryFn = (args: {
   prompt: string;
   options?: QueryOptions;
@@ -276,7 +301,7 @@ export interface SessionDeps {
    * post-tool hook's `scan` field. On a `block`/`ask` verdict the harness now
    * ANNOTATES the model-facing copy with a plain-language note via the SDK's
    * `additionalContext` channel (issue #84, D2) — nothing is withheld
-   * (withholding is #96). The INPUT side stays observe-and-log (D3). Failures
+   * (withholding is PR-B2's decision; when `judge` is configured the judge also runs on these two hooks and may tighten the verdict, issue #96 PR-B1). The INPUT side stays observe-and-log (D3). Failures
    * warn, never abort, and add no annotation (fail open, ADR-0026 decision 7).
    */
   scanInjection?: (text: string) => ScanResult;
@@ -293,6 +318,18 @@ export interface SessionDeps {
    * never the raw text.
    */
   redactSecrets?: (text: string) => RedactResult;
+  /**
+   * The S-5 judge (issue #96 PR-B1, spec D3, R1): the call and the per-run
+   * cap. When present, every non-block PostToolUse and PostToolUseFailure
+   * result is judged once on the copy the model receives (redacted),
+   * tighten-only and annotate-only; the cap, the four-slot concurrency bound
+   * and the early stop are per `run()`. Requires `scanInjection` and
+   * `redactSecrets`: `createSession` throws a `TypeError` at construction
+   * otherwise. A consumer-supplied `QueryFn` behind `call` must honour
+   * `abortController` (see `QueryOptions.abortController`). Build the
+   * measured judge with `buildJudge(query, JUDGE_MODEL)`.
+   */
+  judge?: SessionJudge;
 }
 
 export interface SessionConfig {
@@ -414,9 +451,15 @@ export interface SessionResult {
   /**
    * Injection-scanner verdicts surfaced to the model as a note (issue #84,
    * D2/D5): `block`/`ask` on a successful call (phase 'post-tool') or a failed
-   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is #96.
+   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized` or `judge-redacted` among its rule ids.
    */
   outputAnnotations: OutputAnnotation[];
+  /**
+   * The judge's run summary (issue #96 PR-B1, spec D7), or null when no
+   * judge was configured. A `run()` that throws loses it (K-8); the
+   * `judge-call` telemetry rows already written are then the record of spend.
+   */
+  judge: JudgeSummary | null;
 }
 
 /** Outcome of a model-facing tool-output rewrite (issue #84, D4/D5). */
@@ -455,6 +498,49 @@ export interface OutputAnnotation {
   phase: 'post-tool' | 'post-tool-failure';
   verdict: 'block' | 'ask';
   ruleIds: string[];
+}
+
+/** The session's judge seam (issue #96 PR-B1, R1): the call, not a scanner, so the cap can live per `run()`. */
+export interface SessionJudge {
+  /** One judge completion; `buildJudge(query, JUDGE_MODEL)` builds the measured one. */
+  call: JudgeCall;
+  /** Model calls attempted per `run()`: an integer from 1 to `MAX_JUDGE_CALLS_PER_RUN` (1000). */
+  maxCallsPerRun: number;
+}
+
+/**
+ * What happened to one tool result on the judge path (spec D6, D7).
+ * `judged` is the only state whose judge verdict was composed in; every
+ * other state ran on the heuristic floor, except `oversized` (at least `ask`,
+ * decision 8). Telemetry mirrors it as `JudgeCallState`.
+ */
+export type JudgeSessionState =
+  | 'not-escalated'
+  | 'oversized'
+  | 'judged'
+  | 'timed-out'
+  | 'failed'
+  | 'cap-reached'
+  | 'hook-cancelled'
+  | 'stopped'
+  | 'queue-timed-out';
+
+/** `SessionResult.judge` (spec D7, K-6). */
+export interface JudgeSummary {
+  cap: number;
+  /** Reserved slots: model calls attempted (a released queue slot never counts). */
+  calls: number;
+  byState: Record<JudgeSessionState, number>;
+  /** Judge-path results whose notice was DELIVERED (composed ask or block, hook not cancelled). */
+  annotated: number;
+  /** Of those, the ones whose composed verdict is stricter than the heuristic's. */
+  tightened: number;
+  /** Sum of known call costs in USD; NOT included in `SessionResult.costUsd`. */
+  costUsd: number;
+  /** Reserved slots whose cost is unknown to the run (timed out, aborted, still pending). */
+  costUnknown: number;
+  /** Judge-path hooks still running when the drain bound ran out (spec D3 step 7). */
+  pendingAtEnd: number;
 }
 
 /** Why a loaded skill did not reach the system prompt. */

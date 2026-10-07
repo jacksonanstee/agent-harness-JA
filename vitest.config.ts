@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Spec D8a, pin 30: the keyless guard runs in every worker.
+    setupFiles: ['./test/sdk-guard.setup.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**'],
