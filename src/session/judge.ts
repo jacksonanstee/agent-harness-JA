@@ -121,23 +121,39 @@ function pairCount(text: string): number {
   return count;
 }
 
-/** Parsed closed: byte cap, then `JSON.parse(text.trim())`, then the exact
- *  schema, then exactly one pair in the raw text (a duplicate `verdict` key
- *  is `unparseable`, never resolved), then enum membership. Counted and
- *  reported, never repaired. */
+/**
+ * The one fenced reply accepted (issue #147): ```` ```json ````, a newline,
+ * ONE line, a newline, ```` ``` ````, on the trimmed reply. Haiku wraps about
+ * a quarter of its live replies in exactly this shape despite the system
+ * prompt; every unparseable reply in the 07/10/2026 replay was it, around a
+ * valid verdict. Only the wrapper is removed: the inner line goes through the
+ * same parse, schema, one-pair and enum checks as a bare reply. Any other
+ * fence (no or another info string, tildes, four backticks, a CR inside it, prose,
+ * two fences) stays `unparseable`. Accepting it cannot loosen a verdict: the
+ * judge only tightens, so a fenced reply moves a result from heuristic-only
+ * to judged.
+ */
+const FENCED_REPLY = /^```json\n([^\r\n]*)\n```$/;
+
+/** Parsed closed: byte cap, then trim, then the one accepted fence is
+ *  unwrapped (`FENCED_REPLY`), then `JSON.parse`, then the exact schema,
+ *  then exactly one pair in the raw text (a duplicate `verdict` key is
+ *  `unparseable`, never resolved), then enum membership. Counted and
+ *  reported, never otherwise repaired. */
 export function parseJudgeResponse(text: string): ParsedJudgeWire {
   if (Buffer.byteLength(text, 'utf8') > MAX_JUDGE_RESPONSE_BYTES) {
     return { ok: false, errorKind: 'unparseable' };
   }
-  const trimmed = text.trim();
+  const reply = text.trim();
+  const wire = FENCED_REPLY.exec(reply)?.[1] ?? reply;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = JSON.parse(wire);
   } catch {
     return { ok: false, errorKind: 'unparseable' };
   }
   if (!validateWire(parsed)) return { ok: false, errorKind: 'unparseable' };
-  if (pairCount(trimmed) !== 1) return { ok: false, errorKind: 'unparseable' };
+  if (pairCount(wire) !== 1) return { ok: false, errorKind: 'unparseable' };
   if (!isVerdict(parsed.verdict)) return { ok: false, errorKind: 'unknown-enum' };
   return { ok: true, verdict: parsed.verdict };
 }
@@ -155,8 +171,8 @@ function costOf(result: SdkResultMessage): number | null {
  * literal as `src/router/table.ts` (ADR-0016 names it), deliberately NOT
  * obtained through `route()` (ADR-0016 decision 6: the router is never used
  * for the judge). It lives here, beside `buildJudge` and the frozen prompt
- * strings, so the measured unit (model, prompt, query keys; ADR-0036 D8) is
- * one module (architect A-9); `run` and `redteam` both import it from the
+ * strings, so the measured unit (model, prompt, query keys, parser;
+ * ADR-0036 D8) is one module (architect A-9); `run` and `redteam` both import it from the
  * session barrel. A pin asserts it is present in the router table so a tier
  * bump cannot retire it silently (S-18). `redteam --judge-model` overrides it
  * for a measurement run; the session takes no model setting (ADR-0036 D8:

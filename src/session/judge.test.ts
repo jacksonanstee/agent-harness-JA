@@ -166,10 +166,58 @@ describe('pin 17: parseJudgeResponse is parsed closed', () => {
     expect(parseJudgeResponse('{ "verdict" : "pass" }')).toEqual({ ok: true, verdict: 'pass' });
   });
 
-  it('a fenced reply and trailing prose -> unparseable (counted, never repaired)', () => {
-    expect(parseJudgeResponse('```json\n{"verdict":"block"}\n```')).toEqual({ ok: false, errorKind: 'unparseable' });
+  it('trailing or leading prose -> unparseable (counted, never repaired)', () => {
     expect(parseJudgeResponse('{"verdict":"block"} because it asks the reader to leak data')).toEqual({ ok: false, errorKind: 'unparseable' });
     expect(parseJudgeResponse('Verdict: {"verdict":"block"}')).toEqual({ ok: false, errorKind: 'unparseable' });
+  });
+
+  // Issue #147: on live traffic haiku wraps about a quarter of its replies in
+  // exactly this fence; every unparseable reply in the 07/10 replay was this
+  // shape around a valid verdict. The judge only tightens, so accepting it can
+  // move a result from heuristic-only to judged and never loosen one.
+  it('the one fenced shape (```json, newline, one line, newline, ```) parses each verdict (#147)', () => {
+    expect(parseJudgeResponse('```json\n{"verdict":"pass"}\n```')).toEqual({ ok: true, verdict: 'pass' });
+    expect(parseJudgeResponse('```json\n{"verdict":"ask"}\n```')).toEqual({ ok: true, verdict: 'ask' });
+    expect(parseJudgeResponse('```json\n{"verdict":"block"}\n```')).toEqual({ ok: true, verdict: 'block' });
+    expect(parseJudgeResponse('\n```json\n{"verdict":"block"}\n```\n')).toEqual({ ok: true, verdict: 'block' });
+  });
+
+  it('the fenced inner line goes through the unchanged pipeline: schema, one-pair and enum (#147)', () => {
+    expect(parseJudgeResponse('```json\n{"verdict":"block","category":"jailbreak"}\n```')).toEqual({ ok: false, errorKind: 'unparseable' });
+    expect(parseJudgeResponse('```json\n{"verdict":"block","verdict":"pass"}\n```')).toEqual({ ok: false, errorKind: 'unparseable' });
+    expect(parseJudgeResponse('```json\n{"verdict":"maybe"}\n```')).toEqual({ ok: false, errorKind: 'unknown-enum' });
+    expect(parseJudgeResponse('```json\n"block"\n```')).toEqual({ ok: false, errorKind: 'unparseable' });
+    expect(parseJudgeResponse('```json\n\n```')).toEqual({ ok: false, errorKind: 'unparseable' });
+  });
+
+  it('every other fenced shape stays unparseable (#147: exactly one shape, nothing else repaired)', () => {
+    for (const reply of [
+      '```\n{"verdict":"block"}\n```', // no info string
+      '```JSON\n{"verdict":"block"}\n```', // other case
+      '```javascript\n{"verdict":"block"}\n```', // other language
+      '````json\n{"verdict":"block"}\n````', // four backticks
+      '~~~json\n{"verdict":"block"}\n~~~', // tilde fence
+      '```json\r\n{"verdict":"block"}\r\n```', // CRLF
+      '```json\n{"verdict":"block"}\r\n```', // CR before the closing fence only (code and security lenses)
+      '```json {"verdict":"block"} ```', // one line
+      '```json\n{"verdict":"block"}', // unclosed
+      '```json\n{"verdict":\n"block"}\n```', // inner spans two lines
+      '```json\n{"verdict":"block"}\n```\n```json\n{"verdict":"pass"}\n```', // two fences
+      'Here is my verdict:\n```json\n{"verdict":"block"}\n```', // prose before
+      '```json\n{"verdict":"block"}\n```\nIt asks the reader to leak data.', // prose after
+      '```json\n```json\n{"verdict":"block"}\n```\n```', // nested fence
+    ]) {
+      expect(parseJudgeResponse(reply), JSON.stringify(reply)).toEqual({ ok: false, errorKind: 'unparseable' });
+    }
+  });
+
+  it('the byte cap still applies to the whole fenced reply, before the fence is read (#147)', () => {
+    const inner = '{"verdict":"pass"}';
+    const fenced = `\`\`\`json\n${inner}\n\`\`\``;
+    const padded = `${' '.repeat(MAX_RESPONSE_BYTES - fenced.length + 1)}${fenced}`;
+    expect(Buffer.byteLength(padded, 'utf8')).toBe(MAX_RESPONSE_BYTES + 1);
+    expect(parseJudgeResponse(padded)).toEqual({ ok: false, errorKind: 'unparseable' });
+    expect(parseJudgeResponse(padded.slice(1))).toEqual({ ok: true, verdict: 'pass' });
   });
 
   it('the wire type is a closed union (compile-time)', () => {
@@ -230,6 +278,11 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
   it('returns { ok: true, verdict, costUsd } from the result message when total_cost_usd is finite', async () => {
     const fake = fakeQuery([resultMessage('{"verdict":"block"}', 0.002)]);
     expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'block', costUsd: 0.002 });
+  });
+
+  it("a reply in haiku's fenced shape is a verdict, not an unparseable failure (#147)", async () => {
+    const fake = fakeQuery([resultMessage('```json\n{"verdict":"block"}\n```', 0.004)]);
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'block', costUsd: 0.004 });
   });
 
   it('costUsd is null when total_cost_usd is absent or not finite', async () => {
