@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
+import { stricterVerdict } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
+import { isProviderRefusal } from './sdk-refusal.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './types.js';
 
 // The S-5 judge BUILDER (issue #96 PR-A, ADR-0036 D2/D3): a blind, isolated,
@@ -161,16 +163,19 @@ export function parseJudgeResponse(text: string): ParsedJudgeWire {
 const defaultRandomHex = (): string => randomBytes(8).toString('hex');
 
 /**
- * A provider usage-policy refusal (issue #148). Two SDK-stream signals, the
- * ADR-0025 pair narrowed to the judge: the `model_refusal_no_fallback` banner
- * (no other model answered) and a result whose `stop_reason` is `refusal`.
- * Neither can be forged by the model's reply text, which only ever arrives in
- * `result.result`. A `model_refusal_fallback` banner is NOT a refusal here:
- * another model answered, and its reply is parsed as usual.
+ * A provider refusal is the judge's `ask` (issue #148, ADR-0038): a provider
+ * saying the text looks hostile, so it tightens like any `ask`, is answered
+ * for the gate, and never counts toward R6's early stop as `call-failed` did.
+ * A fallback banner counts too: another, unmeasured model answered, so its
+ * verdict is not the measured judge's. A parseable verdict beside the signal
+ * is kept when stricter, so a refusal never reads below what the model said.
+ * The charged cost rides on it when a result arrived (the last one wins).
  */
-function isProviderRefusal(message: SdkMessage): boolean {
-  if (message.type === 'system') return (message as { subtype?: unknown }).subtype === 'model_refusal_no_fallback';
-  return message.type === 'result' && (message as SdkResultMessage).stop_reason === 'refusal';
+function refusalResult(result: SdkResultMessage | null): JudgeCallResult {
+  const replied = result !== null && result.subtype === 'success' && typeof result.result === 'string';
+  const parsed = replied ? parseJudgeResponse(result.result as string) : null;
+  const verdict: Verdict = parsed?.ok === true ? stricterVerdict('ask', parsed.verdict) : 'ask';
+  return { ok: true, verdict, costUsd: result === null ? null : costOf(result) };
 }
 
 function costOf(result: SdkResultMessage): number | null {
@@ -207,14 +212,15 @@ export const JUDGE_MODEL = 'claude-sonnet-5';
  * (no memory or telemetry pollution). One call, no harness retries; a
  * stream with no result message, an error-subtype result, or a transport
  * that throws, is one opaque `call-failed` (the model id is checked before
- * the run by the CLI), except a provider refusal, which is `ask`
- * (`isProviderRefusal`, issue #148).
+ * the run by the CLI), except after a provider refusal signal, which is at
+ * least `ask` (`refusalResult`, issue #148).
  * `costUsd` is read from `total_cost_usd` when finite, else null, on both
  * arms: a reply that failed to parse was still charged.
  * Every request carries its own `abortController` (issue #96 PR-B1, spec D4,
  * K-2), linked to the optional incoming signal, so the session and the
  * redteam arm send the same keys; an aborted iteration resolves `call-failed`
- * through the existing catch.
+ * through the existing catch, unless a refusal signal arrived first: then it
+ * is the refusal's `ask` (code lens, #148), which only tightens.
  */
 export function buildJudge(query: QueryFn, model: string, randomHex: () => string = defaultRandomHex): JudgeCall {
   const denyAll: SdkHookCallback = async () => ({
@@ -263,11 +269,7 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
     } finally {
       signal?.removeEventListener('abort', onAbort);
     }
-    // A provider refusal is the judge's `ask` (issue #148): a provider saying
-    // the text looks hostile, so it tightens like any `ask`, is answered for
-    // the gate, and never counts toward R6's early stop as `call-failed` did.
-    // The charged cost rides on it when a result arrived.
-    if (refused) return { ok: true, verdict: 'ask', costUsd: result === null ? null : costOf(result) };
+    if (refused) return refusalResult(result);
     if (result === null) return { ok: false, errorKind: 'call-failed', costUsd: null };
     const costUsd = costOf(result);
     // An error-subtype result (the SDK's `SDKResultError`: no `result` field,

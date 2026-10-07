@@ -410,8 +410,8 @@ before any file is parsed or any session exists (ADR-0017 amendment). Cost
 hygiene, not a security boundary: R-10 already accepts arbitrary in-process
 oracle code from the same pack.
 Judge cost — the economic DoS — is handled by keeping the judge off by
-default, haiku-class, single-call, no-retry (ADR-0016 §5; the class is
-`claude-sonnet-5` since 07/10/2026, issue #148); since ADR-0036 also
+default, on one fixed model (`claude-sonnet-5` since 07/10/2026, ADR-0038),
+single-call, no-retry (ADR-0016 §5); since ADR-0036 also
 by a 128 KiB input cap (over it, the judge is not called), a scanner-owned 60 s
 timer, and the isolation keys on the judge subprocess. Since ADR-0037 a
 timed-out call is aborted through the SDK's `abortController` on the arm and in
@@ -589,6 +589,7 @@ not live values:
 | [0035](./decisions/0035-model-facing-enforcement-via-rewrite-channels.md) | Model-facing enforcement of tool output through the SDK's rewrite channels: on a successful call secrets are redacted from the model's copy (`updatedToolOutput`) and injection verdicts annotate it (`additionalContext`), verified in band in three states; nothing is withheld (that is the judge, issue #96) and a failed call's output cannot be rewritten (R-22) |
 | [0036](./decisions/0036-s5-judge-implemented-and-measured.md) | The S-5 judge implemented to the ADR-0016 contract (tighten-only, off by default, fails closed to the heuristic) with a public hardened builder (blind prompt, six SDK isolation keys, de-fanged, closed parse) and measured through a keyed report-only red-team arm on the corpus and a private held-out slice; wired into the session by ADR-0037, nothing withheld |
 | [0037](./decisions/0037-s5-judge-wired-into-the-session.md) | The S-5 judge wired into the session, annotate-only and off by default: a `judge` block in the user settings file only (a project one is ignored with a warning), `off` or `always` with a required per-run call cap, every non-block tool result judged on the redacted copy the model receives, a verdict that can only add the ADR-0035 note, an abort path through the seam's `abortController` for the judge call, four live calls at most under one 60 s budget, an early stop after three infrastructure failures with nothing judged, a `judge-call` telemetry row per result (m005), and the keyed re-measure and smoke run on 02/10/2026 (gate, bound and all three merge blockers pass); withholding and skills-at-load escalation pass to B2 |
+| [0038](./decisions/0038-judge-on-sonnet-refusal-is-ask.md) | The S-5 judge on `claude-sonnet-5`, chosen over five-sample measurements against a pre-registered rule (haiku made judge-caused false-blocks), and a provider usage-policy refusal read as the judge's `ask` through one refusal detector shared with the session; refusals are not yet distinguishable in telemetry |
 
 ## 9. OWASP Agentic Top 10 mapping
 

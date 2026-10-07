@@ -370,10 +370,31 @@ describe('issue #148: a provider refusal is the judge`s ask', () => {
     expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.003 });
   });
 
-  it('a FALLBACK banner is not a refusal: another model answered, and its reply is parsed', async () => {
+  it('a FALLBACK banner counts too: an unmeasured model answered, so its pass reads ask (architecture lens)', async () => {
     const fallback = { type: 'system', subtype: 'model_refusal_fallback', fallback_model: 'x' } as SdkMessage;
     const fake = fakeQuery([fallback, resultMessage('{"verdict":"pass"}', 0.001)]);
-    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'pass', costUsd: 0.001 });
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.001 });
+  });
+
+  it('a parseable STRICTER verdict beside a refusal signal is kept: block stays block (security F1, architecture nit)', async () => {
+    const fake = fakeQuery([BANNER, resultMessage('{"verdict":"block"}', 0.002)]);
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'block', costUsd: 0.002 });
+  });
+
+  it('a stop_reason carrying an invisible or bidi character is still a refusal (cleaned like the session, ADR-0025)', async () => {
+    const smuggled = { ...resultMessage('API Error', 0.002), stop_reason: 'refusal\u202e' } as unknown as SdkMessage;
+    expect(await buildJudge(fakeQuery([smuggled]).query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.002 });
+  });
+
+  it('an abort AFTER a refusal signal resolves the refusal`s ask, not call-failed (code lens)', async () => {
+    const controller = new AbortController();
+    const query: QueryFn = () =>
+      (async function* () {
+        yield BANNER;
+        controller.abort();
+        throw new Error('aborted');
+      })();
+    expect(await buildJudge(query, MODEL, fixedNonce)(TEXT, controller.signal)).toEqual({ ok: true, verdict: 'ask', costUsd: null });
   });
 
   it('a throw with no refusal signal is still call-failed', async () => {

@@ -331,8 +331,8 @@ describe('README `**Judge.**`: money and time figures re-derive from the code (p
     const ceilingMicro = cap * Math.round(JUDGE_WORST_CASE_USD_PER_CALL * 1_000_000);
     expect(section).toContain(`at most USD ${(ceilingMicro / 1_000_000).toFixed(2)} for ${cap} calls at the 128 KiB input cap`);
     // Typical figures are MEASURED, per sonnet call on short corpus strings
-    // (ADR-0036 D8's #148 note, 07/10/2026): USD 0.0025 and about 3 s.
-    expect(section).toContain(`typically about USD ${((cap * 25) / 10_000).toFixed(2)}`);
+    // (ADR-0036 D8's #148 note, 07/10/2026): USD 0.0026 and about 3 s.
+    expect(section).toContain(`typically about USD ${((cap * 26) / 10_000).toFixed(2)}`);
     expect(section).toContain(`at most ${(cap * JUDGE_TIMEOUT_MS) / 60_000} minutes`);
     expect(section).toContain(`typically about ${(cap * 3) / 60} minutes`);
   });

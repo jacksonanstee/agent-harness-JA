@@ -153,5 +153,5 @@ Withholding must drop or re-own the `pendingRewrites` enrolment made in pass 2 (
 
 - The SDK signals a refused rewrite in band (ADR-0035's revisit): withholding gains the signal it needs.
 - B2 decides withholding or skills-at-load escalation: the extension points above, and decision 16's reply-length bound, are its inputs.
-- A second model is measured (ADR-0036 D8): the session takes no model setting until one is.
+- A second model is measured (ADR-0036 D8): the session takes no model setting until one is. *(Fired 07/10/2026: sonnet was measured over repeated samples and replaced haiku as the fixed model, ADR-0038; the session still takes no model setting.)*
 - D8's re-measure or D9's smoke fails its gate: the result is recorded here, dated, and the spec returns to Jackson before any merge.

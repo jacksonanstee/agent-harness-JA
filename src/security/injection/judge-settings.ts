@@ -77,8 +77,9 @@ export function hasJudgeKey(doc: unknown): boolean {
 }
 
 // ----- The money ceiling (spec D1, threat model T-4, N-4). The cap bounds the
-// NUMBER of calls, not dollars per call: USD 0.0025 per sonnet call (ADR-0036
-// D8's #148 note, 270 calls) is the TYPICAL figure on short corpus strings, while a session input
+// NUMBER of calls, not dollars per call: about USD 0.0026 per sonnet call
+// (ADR-0036 D8's #148 note, 270 calls) is the TYPICAL figure on short corpus
+// strings, while a session input
 // can reach MAX_JUDGE_INPUT_BYTES and the reply has no length bound
 // (decision 16). The ceiling is the cost of one call at the input cap, from
 // the inputs below; pin 33 re-derives it and checks README's figure. The

@@ -36,7 +36,7 @@ interface JudgeRecord {
 }
 export type RecordSnapshot = Readonly<JudgeRecord>;
 
-const REFUSAL: JudgeCallResult = Object.freeze({ ok: false, errorKind: 'call-failed', costUsd: null });
+const DECLINED: JudgeCallResult = Object.freeze({ ok: false, errorKind: 'call-failed', costUsd: null });
 
 type LiveWarning = 'first-failure' | 'early-stop' | 'cap' | 'slots-held' | 'hook-cancelled';
 
@@ -97,18 +97,18 @@ export interface JudgeDecision {
  * The recording wrapper (spec D3 step 1, R4, R6, decision 14). Everything
  * before the first `await` is SYNCHRONOUS, so the stop check, the cap check
  * and the reservation cannot interleave between concurrent hooks (K-4). A
- * refusal is `call-failed` to the scanner; the session reads the RECORD, not
+ * declined call is `call-failed` to the scanner; the session reads the RECORD, not
  * the scanner's state, to say `cap-reached`, `stopped` or `queue-timed-out`.
  */
 function recording(ctx: JudgeRunContext, record: JudgeRecord): JudgeCall {
   return async (text, signal) => {
     if (ctx.stopped) {
       record.outcome = 'stopped';
-      return REFUSAL;
+      return DECLINED;
     }
     if (ctx.reserved >= ctx.cap) {
       record.outcome = 'cap-reached';
-      return REFUSAL;
+      return DECLINED;
     }
     ctx.reserved += 1;
     record.outcome = 'called';
@@ -121,18 +121,18 @@ function recording(ctx: JudgeRunContext, record: JudgeRecord): JudgeCall {
         ctx.warnOnce('slots-held', judgeSlotsHeldWarning(Math.round((ctx.timeoutMs + JUDGE_ABORT_GRACE_MS) / 1000)));
       }
     });
-    if (!admitted) return REFUSAL;
+    if (!admitted) return DECLINED;
     if (signal?.aborted === true) {
       record.outcome = 'queue-timed-out';
       ctx.reserved -= 1;
       ctx.slots.release();
-      return REFUSAL;
+      return DECLINED;
     }
     if (ctx.stopped) {
       record.outcome = 'stopped';
       ctx.reserved -= 1;
       ctx.slots.release();
-      return REFUSAL;
+      return DECLINED;
     }
     const holder = ctx.slots.hold(ctx.now());
     try {
@@ -147,7 +147,7 @@ function recording(ctx: JudgeRunContext, record: JudgeRecord): JudgeCall {
       countAtSettle(ctx, record, isAborted(signal));
       ctx.slots.release(holder);
     }
-    return record.result ?? REFUSAL;
+    return record.result ?? DECLINED;
   };
 }
 
