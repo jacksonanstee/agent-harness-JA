@@ -110,7 +110,7 @@ describe('run path with the judge on (D2, D7; pins 3, 16, 32)', () => {
     const { argv, db } = runArgs();
     const { code, stderr } = await runMain(argv, { judge: { mode: 'always', maxCallsPerRun: 3 } }, undefined, sdk.query);
     expect(code).toBe(0);
-    expect(stderr).toMatch(/^\[harness\] judge: on \(always, cap 3\): each tool result waits for one judge call, typically about 15 s and at most 60 s$/m);
+    expect(stderr).toMatch(/^\[harness\] judge: on \(always, cap 3\): each tool result waits for one judge call, typically about 3 s and at most 60 s$/m);
     expect(stderr).toMatch(/^\[harness\] judge: 1\/3 call\(s\), 1 note\(s\) added by the judge path, cost=\$0\.0021 \(not included in cost= above\)$/m);
     expect(sdk.judge).toHaveLength(1);
     expect(sdk.judge[0]?.abortController).toBeInstanceOf(AbortController);
@@ -213,7 +213,7 @@ describe('the summary and start lines (D7; pins 17, 29)', () => {
 
   it('the start line derives its 60 s from JUDGE_TIMEOUT_MS', () => {
     expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9 })).toBe(
-      '[harness] judge: on (always, cap 9): each tool result waits for one judge call, typically about 15 s and at most 60 s',
+      '[harness] judge: on (always, cap 9): each tool result waits for one judge call, typically about 3 s and at most 60 s',
     );
   });
 });

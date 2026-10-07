@@ -79,14 +79,18 @@ fires.
    - **Judge failure fails closed to the heuristic verdict:** timeout, API
      error, or unparseable output leaves the heuristic verdict standing
      (which, given decision 2, is already the floor). A judge outage can never
-     make the scanner *more* permissive than heuristic-only.
+     make the scanner *more* permissive than heuristic-only. *(Amended
+     07/10/2026 by ADR-0038: a provider usage-policy refusal tightens to at
+     least `ask` instead of leaving the heuristic verdict standing.)*
 
 5. **Cost and layering stance.** Default model is the cheapest Claude tier
    (`judge_model: claude-haiku-4-5` per ADR-0005's config shape); one judge
    call per escalated scan, no retries. The judge calls the SDK directly via
    the injected function — never the harness router — preserving the
    security-below-harness dependency direction (architecture "Open
-   architectural questions" #1, resolved here).
+   architectural questions" #1, resolved here). *(Model clause superseded
+   07/10/2026 by ADR-0038: the judge runs on `claude-sonnet-5`, chosen over
+   repeated samples; the cheapest tier failed the false-block gate.)*
 
 6. **Deferral trigger.** Implement S-5 when the Week-3 red-team corpus (E-2,
    ≥50 cases) shows heuristic-only pass rate < 90%, or when the `suspicious`

@@ -88,8 +88,8 @@ describe('buildJudge carries its own AbortController (spec D4, K-2, pin 10)', ()
 });
 
 describe('JUDGE_MODEL lives beside buildJudge (spec D1, A-9; the S-18 pin moved from redteam-command.test.ts)', () => {
-  it('is the haiku literal and a model id present in the router table', () => {
-    expect(JUDGE_MODEL).toBe('claude-haiku-4-5');
+  it('is the sonnet literal (issue #148) and a model id present in the router table', () => {
+    expect(JUDGE_MODEL).toBe('claude-sonnet-5');
     expect(DEFAULT_ROUTING_TABLE.map((rule) => rule.model)).toContain(JUDGE_MODEL);
   });
 });

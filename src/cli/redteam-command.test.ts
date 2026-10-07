@@ -196,7 +196,7 @@ const columnZeroMatches = (stdout: string, prefix: 'GATE_FAILURE=' | 'JUDGE_ARM=
   (stdout.match(new RegExp(`^${prefix}`, 'gm')) ?? []).length;
 
 describe('parseRedteamArgs', () => {
-  it('defaults to out=EVAL_OUT_DIR, updateBaseline=false, baselinePath=DEFAULT_BASELINE_PATH, judge off, the haiku model, no holdout', () => {
+  it('defaults to out=EVAL_OUT_DIR, updateBaseline=false, baselinePath=DEFAULT_BASELINE_PATH, judge off, the sonnet model, no holdout', () => {
     // judgeModel is pinned by LITERAL (the #88 idiom): a silent default change reddens here.
     expect(parseRedteamArgs([])).toEqual({
       ok: true,
@@ -206,7 +206,7 @@ describe('parseRedteamArgs', () => {
         updateBaseline: false,
         baselinePath: DEFAULT_BASELINE_PATH,
         judge: false,
-        judgeModel: 'claude-haiku-4-5',
+        judgeModel: 'claude-sonnet-5',
         holdoutPath: null,
         samples: null,
       },
@@ -246,7 +246,7 @@ describe('parseRedteamArgs', () => {
           updateBaseline: false,
           baselinePath: DEFAULT_BASELINE_PATH,
           judge: true,
-          judgeModel: 'claude-haiku-4-5',
+          judgeModel: 'claude-sonnet-5',
           holdoutPath: null,
           samples: null,
         },
