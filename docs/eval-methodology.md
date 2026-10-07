@@ -97,6 +97,20 @@ gate line; `skipped` (after a heuristic infrastructure exit) and `failed`
 scorecard) exit 2, and `partial` prints a remedy line with the counts. One
 progress line per call goes to stderr with the case id and status, never text.
 
+`--samples <n>` (1 to 10, issue #148) runs the judge arm n times over the same
+slices, because the judge is a non-deterministic model and one run can pass or
+fail the false-block gate by luck (ADR-0036 D8's 07/10/2026 note). Each sample's
+scorecard is written as `judge-scorecard-s<k>-<stamp>.json`; then a summary
+names every benign case that was not a clean `pass` in some sample, with its
+block, ask, pass and unjudged counts, and a third machine-readable line,
+`JUDGE_GATE=<pass|fail|incomplete>`, comes before `JUDGE_ARM=`. The gate reads
+`fail` on any judge-caused false-block in any sample, or a false-flag rate
+pooled over judged benign samples above 10% (ADR-0037 D8's bound, inclusive);
+`incomplete` when a sample left a call unjudged; otherwise `pass`. Detection is
+reported for the worst sample. It is report-only like the arm: `JUDGE_GATE=`
+never changes the exit, and the arm's state is the worst sample's. A sample
+that fails ends the run, so a dead key is not paid for n times.
+
 <!-- corpus-gate: skip -->
 `--holdout <path>` adds a private held-out slice, a JSON array of `{ id, category,
 text, expected }` kept outside the repository (recommended home

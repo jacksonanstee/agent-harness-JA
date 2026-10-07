@@ -77,6 +77,7 @@ const baseArgs = (overrides: Partial<RedteamArgs> = {}): RedteamArgs => ({
   judge: false,
   judgeModel: JUDGE_MODEL,
   holdoutPath: null,
+  samples: null,
   ...overrides,
 });
 
@@ -191,7 +192,7 @@ function spiedDeps(judge: JudgeCall = okJudge()): { deps: RedteamCommandDeps; ju
   return { deps, judgeSpy, importSdk };
 }
 
-const columnZeroMatches = (stdout: string, prefix: 'GATE_FAILURE=' | 'JUDGE_ARM='): number =>
+const columnZeroMatches = (stdout: string, prefix: 'GATE_FAILURE=' | 'JUDGE_ARM=' | 'JUDGE_GATE='): number =>
   (stdout.match(new RegExp(`^${prefix}`, 'gm')) ?? []).length;
 
 describe('parseRedteamArgs', () => {
@@ -207,6 +208,7 @@ describe('parseRedteamArgs', () => {
         judge: false,
         judgeModel: 'claude-haiku-4-5',
         holdoutPath: null,
+        samples: null,
       },
     });
   });
@@ -246,6 +248,7 @@ describe('parseRedteamArgs', () => {
           judge: true,
           judgeModel: 'claude-haiku-4-5',
           holdoutPath: null,
+          samples: null,
         },
       });
     });
@@ -261,6 +264,7 @@ describe('parseRedteamArgs', () => {
           judge: true,
           judgeModel: 'claude-sonnet-5',
           holdoutPath: '/tmp/redteam-holdout.json',
+          samples: null,
         },
       };
       expect(parseRedteamArgs(['--judge', '--judge-model', 'claude-sonnet-5', '--holdout', '/tmp/redteam-holdout.json'])).toEqual(expected);
@@ -982,5 +986,95 @@ describe('runRedteamCommand --judge: stderr progress and the judge scorecard wri
     expect(card.rows.filter((r) => r.slice === 'holdout').map((r) => r.id)).toEqual(['ho-ben-1', 'ho-mal-1']);
     expect(card.rows).toHaveLength(CORPUS.length + 2);
     expect(stdout).toContain('JUDGE_ARM=complete\n');
+  });
+});
+
+// ---- Issue #148: --samples, ADR-0036 D8's gate over repeated samples --------
+describe('parseRedteamArgs --samples (issue #148)', () => {
+  it('--judge --samples <n> parses n, in either order; absent is null', () => {
+    const ok = (argv: string[]) => parseRedteamArgs(argv);
+    expect(ok(['--judge', '--samples', '3'])).toMatchObject({ ok: true, value: { judge: true, samples: 3 } });
+    expect(ok(['--samples', '10', '--judge'])).toMatchObject({ ok: true, value: { samples: 10 } });
+    expect(ok(['--judge', '--samples', '1'])).toMatchObject({ ok: true, value: { samples: 1 } });
+    expect(ok(['--judge'])).toMatchObject({ ok: true, value: { samples: null } });
+  });
+
+  it('--samples without --judge is a usage error naming --judge', () => {
+    expect(parseRedteamArgs(['--samples', '3'])).toEqual({ ok: false, error: `--samples requires --judge. ${USAGE}` });
+  });
+
+  it('--samples must be a whole number from 1 to 10; the bad value is not echoed', () => {
+    for (const bad of ['0', '11', '2.5', 'abc', '-1', '1e1', ' 3', '03', '']) {
+      expect(parseRedteamArgs(['--judge', '--samples', bad]), JSON.stringify(bad)).toEqual({
+        ok: false,
+        error: `--samples must be a whole number from 1 to 10. ${USAGE}`,
+      });
+    }
+    expect(parseRedteamArgs(['--judge', '--samples'])).toEqual({ ok: false, error: `Missing value for --samples. ${USAGE}` });
+  });
+
+  it('USAGE names the flag', () => {
+    expect(USAGE).toContain('[--samples <n>]');
+  });
+});
+
+describe('runRedteamCommand --judge --samples (issue #148)', () => {
+  /** A corpus benign case the heuristic passes, so the judge is consulted on it. */
+  const BENIGN = CORPUS.find((c) => c.category === 'benign' && scan(c.text).verdict === 'pass');
+  if (BENIGN === undefined) throw new Error('expected a benign corpus case the heuristic passes');
+
+  it('runs the arm n times: n judge scorecards (-s1..-sn), n x the calls, the summary and JUDGE_GATE before JUDGE_ARM, exit from the heuristic gate', async () => {
+    withFakeKey();
+    const { deps, judgeSpy } = spiedDeps(okJudge('pass'));
+    const args = baseArgs({ judge: true, samples: 2, baselinePath: byteEqualBaseline() });
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(0);
+    expect(judgeSpy).toHaveBeenCalledTimes(2 * CORPUS_ATTEMPTED);
+    expect(readdirSync(args.out).sort()).toEqual([`judge-scorecard-s1-${STAMP}.json`, `judge-scorecard-s2-${STAMP}.json`, HEURISTIC_FILE]);
+    expect(stderr).toContain(`judge sample 1/2 written to ${join(args.out, `judge-scorecard-s1-${STAMP}.json`)}\n`);
+    expect(columnZeroMatches(stdout, 'JUDGE_GATE=')).toBe(1);
+    expect(stdout).toContain('judge samples: 2 (2 complete); detected at always (worst sample): corpus ');
+    expect(stdout).toMatch(/^JUDGE_GATE=pass false-blocks=0 false-flags=0\/\d+ \(0\.0%, bound 10%\)\nJUDGE_ARM=complete\n$/m);
+    expect(stdout.endsWith('JUDGE_ARM=complete\n')).toBe(true);
+  });
+
+  it('ONE false-block in ONE sample fails the gate and names the case; the exit stays the heuristic gate exit (report-only, ADR-0036 D4)', async () => {
+    withFakeKey();
+    let calls = 0;
+    const judge: JudgeCall = async (text): Promise<JudgeCallResult> => {
+      calls += 1;
+      const secondSample = calls > CORPUS_ATTEMPTED && calls <= 2 * CORPUS_ATTEMPTED;
+      return { ok: true, verdict: secondSample && text === BENIGN.text ? 'block' : 'pass', costUsd: 0.5 };
+    };
+    const { deps } = spiedDeps(judge);
+    const args = baseArgs({ judge: true, samples: 3, baselinePath: byteEqualBaseline() });
+    const { code, stdout } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(0);
+    expect(stdout).toContain(`  benign ${BENIGN.id} (corpus): block 1, ask 0, pass 2, unjudged 0 of 3\n`);
+    expect(stdout).toMatch(/^JUDGE_GATE=fail false-blocks=1 /m);
+    expect(stdout.endsWith('JUDGE_ARM=complete\n')).toBe(true);
+  });
+
+  it('a sample that stops early ends the run: no further spend, the samples so far summarised as incomplete, JUDGE_ARM=failed, exit 2', async () => {
+    withFakeKey();
+    const failing: JudgeCall = async () => ({ ok: false, errorKind: 'call-failed', costUsd: null });
+    const { deps, judgeSpy } = spiedDeps(failing);
+    const args = baseArgs({ judge: true, samples: 5, baselinePath: byteEqualBaseline() });
+    const { code, stdout } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(judgeSpy).toHaveBeenCalledTimes(3);
+    expect(readdirSync(args.out).filter((f) => f.startsWith('judge-scorecard-'))).toEqual([`judge-scorecard-s1-${STAMP}.json`]);
+    expect(stdout).toContain('judge samples: 1 (0 complete)');
+    expect(stdout).toMatch(/^JUDGE_GATE=incomplete /m);
+    expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
+  });
+
+  it('without --samples the judge arm output is unchanged: one judge scorecard, its markdown, no JUDGE_GATE line', async () => {
+    withFakeKey();
+    const { deps } = spiedDeps(okJudge('pass'));
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const { stdout } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(readdirSync(args.out).sort()).toEqual([JUDGE_FILE, HEURISTIC_FILE]);
+    expect(columnZeroMatches(stdout, 'JUDGE_GATE=')).toBe(0);
   });
 });

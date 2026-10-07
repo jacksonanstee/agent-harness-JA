@@ -70,7 +70,7 @@ describe('USAGE', () => {
     expect(redteamLine).toBeDefined();
     expect(TABLE_MODEL_IDS.length).toBeGreaterThan(1);
     expect(redteamLine).toBe(
-      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${TABLE_MODEL_IDS.join('|')}>] [--holdout <path>]`,
+      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${TABLE_MODEL_IDS.join('|')}>] [--holdout <path>] [--samples <n>]`,
     );
   });
 });
