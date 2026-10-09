@@ -209,8 +209,8 @@ function tightenToAsk(result: ScanResult, ruleId: string): ScanResult {
  * state (the record wins over the scanner's `timed-out` for a queued call),
  * the composed verdict, and whether a notice is delivered. A `refused` state
  * (issue #152) needs no branch: the scanner has already tightened to at
- * least `ask` with `judge-refused`, so step 3b's `judge-redacted` cannot
- * tighten further and is not appended (G-9).
+ * least `ask` (with `judge-refused` where that raised the floor), so step
+ * 3b's `judge-redacted` cannot tighten further and is not appended (G-9).
  */
 export function decideJudgedResult(hook: JudgeHookState, outcome: JudgedScanOutcome | null): JudgeDecision | null {
   if (outcome === null) return null;

@@ -513,7 +513,8 @@ export interface SessionJudge {
  * `judged` is the only state whose judge verdict was composed in; every
  * other state ran on the heuristic floor, except `oversized` and `refused`
  * (at least `ask`: decision 8, and issue #152 for a provider refusal, which
- * is composed as at least `ask` with `judge-refused` and never a judgement).
+ * is composed as at least `ask`, with `judge-refused` only where that raised
+ * the floor, and never a judgement).
  * Telemetry mirrors it as `JudgeCallState`.
  */
 export type JudgeSessionState =

@@ -164,8 +164,9 @@ const defaultRandomHex = (): string => randomBytes(8).toString('hex');
 /**
  * A provider refusal is a distinct `refused` result (issue #152, amending
  * ADR-0038 D2's representation, not its policy): `{ ok: false, errorKind:
- * 'refused', costUsd }`, which the scanner composes as at least `ask` with
- * `judge-refused`, answered for the gate, never toward R6's early stop. The
+ * 'refused', costUsd }`, which the scanner composes as at least `ask`, with
+ * `judge-refused` only where that raised the floor, answered for the gate,
+ * never toward R6's early stop. The
  * reply text is NOT parsed: a refusal's `result` is the provider's error
  * string, not a verdict, and under a fallback banner it is an unmeasured
  * model's verdict, so the refused arm carries no verdict (spec D4; the

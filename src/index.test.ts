@@ -144,6 +144,10 @@ describe('root barrel (src/index.ts)', () => {
     expect(injectionBarrel.JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
     expect(barrel.JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
     expect(barrel.JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
+    // #152 review A2: the one definition of "answered" is public beside the tuple it reads, same reference on both barrels.
+    expect(typeof barrel.isAnsweredResult).toBe('function');
+    expect(barrel.isAnsweredResult).toBe(securityBarrel.isAnsweredResult);
+    expect(barrel.isAnsweredResult({ ok: false, errorKind: 'refused', costUsd: null })).toBe(true);
   });
 
   it('exports the judge type closure its public signatures reference (compile-time; npm run typecheck is the gate)', () => {

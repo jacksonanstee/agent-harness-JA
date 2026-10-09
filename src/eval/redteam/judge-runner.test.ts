@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createJudgedScanner, MAX_JUDGE_INPUT_BYTES, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
+import { createJudgedScanner, isAnsweredResult, JUDGE_ERROR_KINDS, MAX_JUDGE_INPUT_BYTES, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../../security/index.js';
 import { MAX_JUDGE_RESPONSE_BYTES } from '../../session/judge.js';
 import { MAX_ADVERSARY_RESPONSE_BYTES } from '../verifier/index.js';
@@ -101,6 +101,17 @@ describe('response byte-cap parity (MAX_JUDGE_RESPONSE_BYTES mirrors MAX_ADVERSA
   it('the two caps are the same number', () => {
     expect(MAX_JUDGE_RESPONSE_BYTES).toBe(MAX_ADVERSARY_RESPONSE_BYTES);
     expect(MAX_JUDGE_RESPONSE_BYTES).toBe(131_072);
+  });
+});
+
+describe('#152 review A1: the two "answered" predicates agree on every kind', () => {
+  it('isAnsweredStatus(kind) equals isAnsweredResult({ ok: false, errorKind: kind }) for every JudgeErrorKind, and judged pairs with ok: true', () => {
+    for (const kind of JUDGE_ERROR_KINDS) {
+      expect(isAnsweredStatus(kind), kind).toBe(isAnsweredResult({ ok: false, errorKind: kind, costUsd: null }));
+    }
+    expect(isAnsweredStatus('judged')).toBe(isAnsweredResult({ ok: true, verdict: 'pass', costUsd: null }));
+    expect(isAnsweredStatus('judged')).toBe(true);
+    expect(isAnsweredStatus('refused')).toBe(true);
   });
 });
 

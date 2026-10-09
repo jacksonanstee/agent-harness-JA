@@ -40,9 +40,9 @@ export const JUDGE_REFUSED_RULE_ID = 'judge-refused';
  * exceeded `MAX_JUDGE_INPUT_BYTES` so the escalation is unresolved;
  * `timed-out` and `failed` mean it was consulted and the heuristic floor
  * held; `refused` means it was consulted and the provider refused to judge
- * the text, so the result is composed as at least `ask` with `judge-refused`
- * and the escalation is unresolved (issue #152); `judged` means its verdict
- * was composed in.
+ * the text, so the result is composed as at least `ask`, with `judge-refused`
+ * only where that raised the floor, and the escalation is unresolved (issue
+ * #152); `judged` means its verdict was composed in.
  */
 export type JudgeRunState = 'off' | 'not-escalated' | 'oversized' | 'judged' | 'timed-out' | 'failed' | 'refused';
 
