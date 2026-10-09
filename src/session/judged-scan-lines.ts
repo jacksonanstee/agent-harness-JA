@@ -2,8 +2,9 @@ import { describeError } from './describe-error.js';
 import { JUDGE_EARLY_STOP_AFTER, JUDGE_MAX_CONCURRENT } from './judged-scan-constants.js';
 
 // Issue #96 PR-B1: the judge path's live-line texts (spec D7; U-1, U-3, U-4;
-// decision 16). The session's `warn` carries them; the CLI prefixes
-// `warning: `. One source per text.
+// decision 16), plus the refused line (`judgeRefusedWarning`, issue #152
+// D10). The session's `warn` carries them; the CLI prefixes `warning: `.
+// One source per text.
 
 export const JUDGE_HOOK_CANCELLED_WARNING =
   "a tool result reached the model WITHOUT the harness's note or secret redaction, because its hook ran past the SDK's hook timeout.";
@@ -33,6 +34,18 @@ export function judgeSlotsHeldWarning(seconds: number): string {
   return (
     `all ${JUDGE_MAX_CONCURRENT} judge slots are held by calls that have not finished ${seconds} s after starting, ` +
     "so later tool results are going unjudged. A custom QueryFn must honour abortController; the shipped CLI's does."
+  );
+}
+
+/**
+ * Issue #152 D10: once per run, on the first `refused` result the session
+ * records. No tool name: the row carries it, and the first refusal's tool
+ * would be arbitrary for a once-per-run line.
+ */
+export function judgeRefusedWarning(): string {
+  return (
+    'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated ask (rule id judge-refused) and was not judged. ' +
+    'The judge stays on; refusals never count toward its early stop, and the summary line and the judge-call rows count them.'
   );
 }
 

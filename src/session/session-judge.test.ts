@@ -16,6 +16,7 @@ import {
   JUDGE_HOOK_TIMEOUT_S,
   JUDGE_MAX_CONCURRENT,
   judgeLeakedByHookTimeoutWarning,
+  judgeRefusedWarning,
 } from './judged-scan.js';
 import { createSession } from './session.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionConfig, SessionDeps, SessionJudge } from './types.js';
@@ -33,6 +34,8 @@ const BLOCK_SCAN: ScanResult = { verdict: 'block', rule_ids: ['r-block'], excerp
 const fixed = (r: ScanResult) => (): ScanResult => r;
 const OK = (verdict: Verdict): JudgeCallResult => ({ ok: true, verdict, costUsd: 0.002 });
 const CALL_FAILED: JudgeCallResult = { ok: false, errorKind: 'call-failed', costUsd: null };
+/** Issue #152: the live refusal's shape (the charged cost of the 07/10/2026 eb-01 refusal). */
+const REFUSED: JudgeCallResult = { ok: false, errorKind: 'refused', costUsd: 0.002283 };
 
 interface Call {
   id: string | null;
@@ -323,6 +326,39 @@ describe('the custom post-tool hook reads the COMPOSED verdict, 3a and 3b includ
     expect(seen[0]).toMatchObject({ verdict: 'ask', rule_ids: ['judge-redacted'], judge: 'judged' });
     expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool-failure', verdict: 'ask', ruleIds: ['judge-redacted'] });
     expect(seen[0]?.rule_ids).toEqual(result.outputAnnotations[0]?.ruleIds);
+  });
+
+  it('success hook, refusing judge on a heuristic pass (#152, T4a): the note and the hook carry ask with judge-refused; the refused row precedes the tool-trace row and the real validator keeps it', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', output: 'plain notes' }]);
+    const fj = fakeJudge(() => REFUSED);
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: fixed(PASS_SCAN) });
+    const seen = captureHookScan(b);
+    const result = await start(b).run('hi');
+    expect(fj.texts).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ verdict: 'ask', rule_ids: ['judge-refused'], judge: 'refused' });
+    expect(contextOf(fake.outputs.get('toolu_1'))).toContain('judge-refused');
+    expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool', verdict: 'ask', ruleIds: ['judge-refused'] });
+    expect(seen[0]?.rule_ids).toEqual(result.outputAnnotations[0]?.ruleIds);
+    expect(b.events().map((e) => e.type)).toEqual(['judge-call', 'tool-trace', 'turn-cost']);
+    expect(b.judgeRows()[0]).toMatchObject({ state: 'refused', heuristic: 'pass', judge: null, composed: 'ask', errorKind: 'refused', costUsd: 0.002283 });
+    expect(result.judge).toMatchObject({ calls: 1, annotated: 1, tightened: 1 });
+    expect(result.judge?.byState.refused).toBe(1);
+    expectNoLostRows(b);
+  });
+
+  it('failure hook, redacted input, refusing judge (#152, T4b): judge-refused and NOT judge-redacted (already ask; G-9)', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', failError: `Exit 1 ${AWS}` }]);
+    const fj = fakeJudge(() => REFUSED);
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: fixed(PASS_SCAN) });
+    const seen = captureHookScan(b);
+    const result = await start(b).run('hi');
+    expect(fj.texts).toEqual([`Exit 1 ${AWS_MARKER}`]);
+    expect(seen[0]).toMatchObject({ verdict: 'ask', rule_ids: ['judge-refused'], judge: 'refused' });
+    expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool-failure', verdict: 'ask', ruleIds: ['judge-refused'] });
+    expect(result.outputAnnotations[0]?.ruleIds).not.toContain('judge-redacted');
+    expect(b.judgeRows()[0]).toMatchObject({ state: 'refused', composed: 'ask', errorKind: 'refused', redacted: true });
+    expectNoLostRows(b);
   });
 });
 
@@ -740,10 +776,22 @@ describe('the LEAKED join (U-4, A-2; pin 27)', () => {
     settleJudge(OK('pass'));
   });
 
-  it('a judge-off run prints none of the judge live lines', async () => {
+  it('a judge-off run prints none of the judge live lines, the refused line included', async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: 'x y' }]);
     const b = build(fake.query, undefined);
     await start(b).run('hi');
     expect(b.warnings.filter((w) => /judge/.test(w))).toEqual([]);
+    expect(b.warnings).not.toContain(judgeRefusedWarning());
+  });
+
+  it('a judge-on run with TWO refusals prints the refused line exactly once through onWarning (#152 D10, T4c)', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', output: 'x y' }, { id: 'toolu_2', output: 'more notes' }]);
+    const fj = fakeJudge(() => REFUSED);
+    const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5 }, { scanInjection: fixed(PASS_SCAN) });
+    await start(b).run('hi');
+    expect(fj.texts).toHaveLength(2);
+    expect(b.judgeRows().map((r) => r.state)).toEqual(['refused', 'refused']);
+    expect(b.warnings.filter((w) => w === judgeRefusedWarning())).toHaveLength(1);
+    expect(b.warnings.filter((w) => w.startsWith('a judge call'))).toEqual([]);
   });
 });

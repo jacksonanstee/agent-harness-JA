@@ -451,7 +451,7 @@ export interface SessionResult {
   /**
    * Injection-scanner verdicts surfaced to the model as a note (issue #84,
    * D2/D5): `block`/`ask` on a successful call (phase 'post-tool') or a failed
-   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized` or `judge-redacted` among its rule ids.
+   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized`, `judge-redacted` or `judge-refused` (issue #152: the provider refused to judge the result, annotated `ask`, never a judgement) among its rule ids.
    */
   outputAnnotations: OutputAnnotation[];
   /**

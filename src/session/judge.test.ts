@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { toInjectionJudge } from '../security/index.js';
-import type { ScanResult } from '../security/index.js';
+import { createJudgedScanner, toInjectionJudge } from '../security/index.js';
+import type { JudgeCallResult, ScanResult } from '../security/index.js';
 import { buildJudge, buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse } from './judge.js';
 import type { ParsedJudgeWire } from './judge.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from './types.js';
@@ -335,15 +335,17 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
   });
 });
 
-// Issue #148: a provider usage-policy refusal is the judge's `ask`. Live on
-// 07/10/2026, claude-sonnet-5 refused corpus case eb-01 on every call; the SDK
-// emitted a `model_refusal_no_fallback` banner, then a charged result with
-// `stop_reason: 'refusal'`, then THREW. As `call-failed` it counted toward R6's
-// early stop, so text that trips the provider's filter could switch the judge
-// off for the run. A refusal is a provider saying the text looks hostile, so
-// it composes as at least `ask`: tighten-only, never toward R6, and answered
-// for the gate. Both signals come from the SDK stream, never the model's text.
-describe('issue #148: a provider refusal is the judge`s ask', () => {
+// Issue #148 (ADR-0038) read a provider usage-policy refusal as the judge's
+// `ask`; issue #152 makes it a DISTINCT result: `{ ok: false, errorKind:
+// 'refused', costUsd }`, which the scanner composes as at least `ask` with
+// `judge-refused`. Live on 07/10/2026, claude-sonnet-5 refused corpus case
+// eb-01 on every call; the SDK emitted a `model_refusal_no_fallback` banner,
+// then a charged result with `stop_reason: 'refusal'`, then THREW. The policy
+// of ADR-0038 D2 holds (tighten to at least `ask`, never toward R6, answered
+// for the gate); only the representation changes, and the stricter-parsed-
+// verdict clause is dropped (spec D4): the refused arm carries no verdict.
+// Both signals come from the SDK stream, never the model's text.
+describe('issue #152: a provider refusal is a distinct refused result (was the judge`s ask, #148)', () => {
   /** A fake SDK that yields the scripted messages and then THROWS, as the live SDK did. */
   function throwingQuery(messages: SdkMessage[]): QueryFn {
     return () =>
@@ -355,38 +357,41 @@ describe('issue #148: a provider refusal is the judge`s ask', () => {
   const BANNER = { type: 'system', subtype: 'model_refusal_no_fallback', api_refusal_category: 'bio' } as SdkMessage;
   const refusalResult = (cost?: number): SdkMessage =>
     ({ ...resultMessage('API Error: Claude Code is unable to respond to this request', cost), stop_reason: 'refusal', is_error: true }) as unknown as SdkMessage;
+  const REFUSED = (costUsd: number | null): JudgeCallResult => ({ ok: false, errorKind: 'refused', costUsd });
 
-  it('the live shape (banner, charged refusal result, then a throw) -> ask, with the charged cost', async () => {
+  it('the live shape (banner, charged refusal result, then a throw) -> refused, with the charged cost (D13)', async () => {
     const judge = buildJudge(throwingQuery([BANNER, refusalResult(0.002283)]), MODEL, fixedNonce);
-    expect(await judge(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.002283 });
+    expect(await judge(TEXT)).toEqual(REFUSED(0.002283));
   });
 
-  it('the banner alone, then a throw with no result -> ask, cost unknown', async () => {
-    expect(await buildJudge(throwingQuery([BANNER]), MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: null });
+  it('the banner alone, then a throw with no result -> refused, cost unknown', async () => {
+    expect(await buildJudge(throwingQuery([BANNER]), MODEL, fixedNonce)(TEXT)).toEqual(REFUSED(null));
   });
 
-  it('a refusal result with no banner and no throw (an older CLI) -> ask, not unparseable', async () => {
+  it('a refusal result with no banner and no throw (an older CLI) -> refused, not unparseable', async () => {
     const fake = fakeQuery([refusalResult(0.003)]);
-    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.003 });
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual(REFUSED(0.003));
   });
 
-  it('a FALLBACK banner counts too: an unmeasured model answered, so its pass reads ask (architecture lens)', async () => {
+  it('a FALLBACK banner counts too: an unmeasured model answered, so its pass reads refused (architecture lens)', async () => {
     const fallback = { type: 'system', subtype: 'model_refusal_fallback', fallback_model: 'x' } as SdkMessage;
     const fake = fakeQuery([fallback, resultMessage('{"verdict":"pass"}', 0.001)]);
-    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.001 });
+    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual(REFUSED(0.001));
   });
 
-  it('a parseable STRICTER verdict beside a refusal signal is kept: block stays block (security F1, architecture nit)', async () => {
+  it('a parseable verdict beside a refusal signal is NOT kept: the refused arm carries no verdict field (D4, open question 1 ruled)', async () => {
     const fake = fakeQuery([BANNER, resultMessage('{"verdict":"block"}', 0.002)]);
-    expect(await buildJudge(fake.query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'block', costUsd: 0.002 });
+    const result = await buildJudge(fake.query, MODEL, fixedNonce)(TEXT);
+    expect(result).toEqual(REFUSED(0.002));
+    expect(Object.keys(result).sort()).toEqual(['costUsd', 'errorKind', 'ok']);
   });
 
   it('a stop_reason carrying an invisible or bidi character is still a refusal (cleaned like the session, ADR-0025)', async () => {
     const smuggled = { ...resultMessage('API Error', 0.002), stop_reason: 'refusal\u202e' } as unknown as SdkMessage;
-    expect(await buildJudge(fakeQuery([smuggled]).query, MODEL, fixedNonce)(TEXT)).toEqual({ ok: true, verdict: 'ask', costUsd: 0.002 });
+    expect(await buildJudge(fakeQuery([smuggled]).query, MODEL, fixedNonce)(TEXT)).toEqual(REFUSED(0.002));
   });
 
-  it('an abort AFTER a refusal signal resolves the refusal`s ask, not call-failed (code lens)', async () => {
+  it('an abort AFTER a refusal signal resolves refused, not call-failed (code lens)', async () => {
     const controller = new AbortController();
     const query: QueryFn = () =>
       (async function* () {
@@ -394,7 +399,13 @@ describe('issue #148: a provider refusal is the judge`s ask', () => {
         controller.abort();
         throw new Error('aborted');
       })();
-    expect(await buildJudge(query, MODEL, fixedNonce)(TEXT, controller.signal)).toEqual({ ok: true, verdict: 'ask', costUsd: null });
+    expect(await buildJudge(query, MODEL, fixedNonce)(TEXT, controller.signal)).toEqual(REFUSED(null));
+  });
+
+  it('through the shipped adapter and scanner, the live shape composes as ask with judge-refused and judge `refused`', async () => {
+    const judge = toInjectionJudge(buildJudge(throwingQuery([BANNER, refusalResult(0.002283)]), MODEL, fixedNonce));
+    const scanner = createJudgedScanner({ mode: 'always', judge, scanner: { scan: () => PASS_HEURISTIC } });
+    expect(await scanner.scanWithJudge(TEXT)).toEqual({ verdict: 'ask', rule_ids: ['judge-refused'], excerpts: [], suspicious: false, judge: 'refused' });
   });
 
   it('a throw with no refusal signal is still call-failed', async () => {

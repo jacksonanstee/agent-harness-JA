@@ -13,7 +13,15 @@ import { JUDGE_ABORT_GRACE_MS, JUDGE_DRAIN_MS, JUDGE_EARLY_STOP_AFTER, JUDGE_HOO
 import type { InternalSessionJudge } from './judged-scan-constants.js';
 import { foldJudgeSummary } from './judged-scan-fold.js';
 import type { JudgeSummaryEntry } from './judged-scan-fold.js';
-import { JUDGE_HOOK_CANCELLED_WARNING, judgeCapWarning, judgeEarlyStopWarning, judgeFirstFailureWarning, judgeScanFailedWarning, judgeSlotsHeldWarning } from './judged-scan-lines.js';
+import {
+  JUDGE_HOOK_CANCELLED_WARNING,
+  judgeCapWarning,
+  judgeEarlyStopWarning,
+  judgeFirstFailureWarning,
+  judgeRefusedWarning,
+  judgeScanFailedWarning,
+  judgeSlotsHeldWarning,
+} from './judged-scan-lines.js';
 import { JudgeSlots } from './judged-scan-slots.js';
 import { asFloor, normaliseCallResult } from './judged-scan-validate.js';
 
@@ -38,7 +46,7 @@ export type RecordSnapshot = Readonly<JudgeRecord>;
 
 const DECLINED: JudgeCallResult = Object.freeze({ ok: false, errorKind: 'call-failed', costUsd: null });
 
-type LiveWarning = 'first-failure' | 'early-stop' | 'cap' | 'slots-held' | 'hook-cancelled';
+type LiveWarning = 'first-failure' | 'early-stop' | 'cap' | 'slots-held' | 'hook-cancelled' | 'refused';
 
 /** Per-run judge state (spec D3: "let judgeReserved = 0 beside the other per-run counters"). */
 export interface JudgeRunContext {
@@ -198,7 +206,10 @@ function tightenToAsk(result: ScanResult, ruleId: string): ScanResult {
 /**
  * Spec D3 steps 3, 3a, 3b and the step 6 cancellation check: the session
  * state (the record wins over the scanner's `timed-out` for a queued call),
- * the composed verdict, and whether a notice is delivered.
+ * the composed verdict, and whether a notice is delivered. A `refused` state
+ * (issue #152) needs no branch: the scanner has already tightened to at
+ * least `ask` with `judge-refused`, so step 3b's `judge-redacted` cannot
+ * tighten further and is not appended (G-9).
  */
 export function decideJudgedResult(hook: JudgeHookState, outcome: JudgedScanOutcome | null): JudgeDecision | null {
   if (outcome === null) return null;
@@ -230,7 +241,11 @@ function isAborted(signal: AbortSignal | undefined): boolean {
  * knowledge: the call's signal aborted -> timed-out (counts); threw, or
  * `ok: false` with `call-failed` -> failed (counts); `unparseable` or
  * `unknown-enum` -> neutral; `ok: true` -> judged (resets and disarms for the
- * run). A call that never settles is never counted (D7's slots-held line
+ * run); `ok: false` with `refused` -> ANSWERED (issue #152 D6): the endpoint
+ * replied, so it resets and disarms exactly as a judged result does, is not
+ * infrastructure, and emits no first-failure line, which is what ADR-0038 D2
+ * ("never counts toward R6") already meant and what its `ok: true` refusal
+ * did. A call that never settles is never counted (D7's slots-held line
  * covers it); a later `hook-cancelled` state does not undo the count. The
  * classification does not distinguish the timer's abort from the hook's
  * cancellation; the shipped transport resolves `call-failed` on abort, so
@@ -242,7 +257,8 @@ export function countAtSettle(ctx: JudgeRunContext, record: RecordSnapshot, sign
   const r = record.result;
   const infrastructure = signalAborted || record.threw || (r !== null && !r.ok && r.errorKind === 'call-failed');
   if (!infrastructure) {
-    if (r !== null && r.ok) {
+    const answered = r !== null && (r.ok || r.errorKind === 'refused');
+    if (answered) {
       ctx.consecutiveFailures = 0;
       ctx.disarmed = true;
     }
@@ -323,7 +339,10 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       heuristic: floor.verdict,
       judge: snapshot.result?.ok === true ? snapshot.result.verdict : null,
       composed: composed.verdict,
-      errorKind: state === 'failed' && snapshot.result !== null && !snapshot.result.ok ? snapshot.result.errorKind : null,
+      // The recorded call's kind when the state is `failed` or `refused` (issue
+      // #152 D7), else null; a refused row therefore carries `refused` in both
+      // `state` and `errorKind`, and `judge: null` by construction.
+      errorKind: (state === 'failed' || state === 'refused') && snapshot.result !== null && !snapshot.result.ok ? snapshot.result.errorKind : null,
       redacted: input.redacted,
       costUsd,
       durationMs: outcome.durationMs,
@@ -336,6 +355,10 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       ctx.warnOnce('cap', judgeCapWarning(ctx.cap, capReached));
     }
     if (state === 'hook-cancelled') ctx.warnOnce('hook-cancelled', JUDGE_HOOK_CANCELLED_WARNING);
+    // Issue #152 D10: from the RECORD, not `countAtSettle`, because the
+    // hook-cancelled state wins over the scanner's, and a cancelled refusal
+    // records `hook-cancelled`, not `refused`.
+    if (state === 'refused') ctx.warnOnce('refused', judgeRefusedWarning());
   }
 
   function enter(signal: AbortSignal | undefined, toolUseId: string | null): JudgeHook {

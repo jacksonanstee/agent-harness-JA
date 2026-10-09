@@ -17,6 +17,7 @@ import {
   judgeCapWarning,
   judgeEarlyStopWarning,
   judgeFirstFailureWarning,
+  judgeRefusedWarning,
   JudgeSlots,
   judgeSlotsHeldWarning,
   normaliseCallResult,
@@ -36,6 +37,8 @@ const ASK_FLOOR: ScanResult = { verdict: 'ask', rule_ids: ['r-ask'], excerpts: [
 const OK = (verdict: Verdict, costUsd: number | null = 0.001): JudgeCallResult => ({ ok: true, verdict, costUsd });
 const CALL_FAILED: JudgeCallResult = { ok: false, errorKind: 'call-failed', costUsd: null };
 const UNPARSEABLE: JudgeCallResult = { ok: false, errorKind: 'unparseable', costUsd: 0.0005 };
+/** Issue #152: the live refusal's shape (the charged cost of the 07/10/2026 eb-01 refusal). */
+const REFUSED: JudgeCallResult = { ok: false, errorKind: 'refused', costUsd: 0.002283 };
 
 interface FakeJudge {
   call: JudgeCall;
@@ -212,6 +215,8 @@ describe('Review Focus 1 and 2: forged results and malformed floors', () => {
     expect(normaliseCallResult({ ok: true, verdict: 'maybe' })).toEqual(CALL_FAILED);
     expect(normaliseCallResult(null)).toEqual(CALL_FAILED);
     expect(normaliseCallResult('block')).toEqual(CALL_FAILED);
+    // Issue #152 (T3f): `refused` is in the closed union, so it normalises to itself, cost kept.
+    expect(normaliseCallResult({ ok: false, errorKind: 'refused', costUsd: 0.1 })).toEqual({ ok: false, errorKind: 'refused', costUsd: 0.1 });
   });
 
   it('a forged result through the run writes a row the telemetry validator would accept', async () => {
@@ -466,6 +471,28 @@ describe('early stop (R6; pin 28)', () => {
     expect(h.rows.some((r) => r.state === 'stopped')).toBe(false);
   });
 
+  it('a refused result is ANSWERED (#152 D6, T3c): fail, fail, refused, fail, fail, fail never stops; six calls reach the fake', async () => {
+    const script = [CALL_FAILED, CALL_FAILED, REFUSED, CALL_FAILED, CALL_FAILED, CALL_FAILED];
+    const fj = fakeJudge((_t, _s, n) => script[n] ?? CALL_FAILED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 50 });
+    for (let i = 0; i < 6; i += 1) await h.result({ id: `t${i}` });
+    expect(fj.texts).toHaveLength(6);
+    expect(h.rows.map((r) => r.state)).toEqual(['failed', 'failed', 'refused', 'failed', 'failed', 'failed']);
+    expect(h.run.context.stopped).toBe(false);
+    expect(h.run.context.disarmed).toBe(true);
+    expect(count(h.warnings, 'the judge failed')).toBe(0);
+    // Readability half (binds nothing beyond the first under the named mutation): three
+    // refusals are not infrastructure, so no first-failure line, no stop, a fourth call.
+    const only = fakeJudge(() => REFUSED);
+    const r = harness({ call: only.call, maxCallsPerRun: 50 });
+    for (let i = 0; i < 4; i += 1) await r.result({ id: `t${i}` });
+    expect(only.texts).toHaveLength(4);
+    expect(r.rows.every((row) => row.state === 'refused')).toBe(true);
+    expect(r.run.context.stopped).toBe(false);
+    expect(count(r.warnings, 'a judge call')).toBe(0);
+    expect(count(r.warnings, 'the judge failed')).toBe(0);
+  });
+
   it('three unparseable results do NOT stop the judge, and print no first-failure line (A-6)', async () => {
     const fj = fakeJudge(() => UNPARSEABLE);
     const h = harness({ call: fj.call, maxCallsPerRun: 50 });
@@ -537,6 +564,19 @@ describe('live lines (U-1, U-3, A-6, E-3; pin 27)', () => {
     );
   });
 
+  it('two refused results print the refused line exactly once, verbatim, and no failure line (#152 D10, T3d)', async () => {
+    const fj = fakeJudge(() => REFUSED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 5 });
+    await h.result({ id: 'a' });
+    await h.result({ id: 'b' });
+    expect(h.rows.map((r) => r.state)).toEqual(['refused', 'refused']);
+    expect(h.warnings).toEqual([judgeRefusedWarning()]);
+    expect(judgeRefusedWarning()).toBe(
+      'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated ask (rule id judge-refused) and was not judged. ' +
+        'The judge stays on; refusals never count toward its early stop, and the summary line and the judge-call rows count them.',
+    );
+  });
+
   it('a run whose only unjudged results are queue-timed-out prints no first-failure line (E-3, run level; plan review P-13)', async () => {
     vi.useFakeTimers();
     const controllers = [0, 1, 2, 3].map(() => new AbortController());
@@ -589,6 +629,36 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
     await stopped.result();
     const capped = await stopped.result({ phase: 'post-tool-failure', redacted: true });
     expect(capped).toMatchObject({ state: 'cap-reached', composed: { verdict: 'ask', rule_ids: ['judge-redacted'] } });
+  });
+
+  it('refused (#152 D3, D7; T3b): on a pass floor the row says refused/null/ask/refused with the cost, the note carries judge-refused; on an ask floor nothing is appended', async () => {
+    const fj = fakeJudge(() => REFUSED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 5 });
+    const onPass = await h.result({ id: 'p' });
+    expect(onPass).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['judge-refused'] } });
+    expect(onPass?.scan).toMatchObject({ verdict: 'ask', rule_ids: ['judge-refused'], judge: 'refused' });
+    expect(h.rows[0]).toEqual({
+      tool: 'Read',
+      tool_use_id: 'p',
+      phase: 'post-tool',
+      state: 'refused',
+      heuristic: 'pass',
+      judge: null,
+      composed: 'ask',
+      errorKind: 'refused',
+      redacted: false,
+      costUsd: 0.002283,
+      durationMs: expect.any(Number),
+    });
+    const onAsk = await h.result({ id: 'a', floor: ASK_FLOOR });
+    expect(onAsk).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['r-ask'] } });
+    expect(onAsk?.composed.rule_ids).not.toContain('judge-refused');
+    expect(h.rows[1]).toMatchObject({ state: 'refused', heuristic: 'ask', judge: null, composed: 'ask', errorKind: 'refused', costUsd: 0.002283 });
+    expect(fj.texts).toHaveLength(2);
+    const summary = await h.run.drain();
+    expect(summary).toMatchObject({ calls: 2, annotated: 2, tightened: 1, costUnknown: 0 });
+    expect(summary.byState.refused).toBe(2);
+    expect(summary.costUsd).toBeCloseTo(0.004566, 10);
   });
 
   it('a pre-aborted hook signal reserves nothing, calls nothing, and is hook-cancelled with no delivery (K-5)', async () => {

@@ -94,6 +94,18 @@ describe('judge-call rows (spec D6)', () => {
     expectRejected({ ...VALID, durationMs: value });
   });
 
+  it('a refused row (state refused, judge null, composed ask, errorKind refused) is accepted and read back (#152 D7, T5b)', () => {
+    const refused: JudgeCallPayload = { ...VALID, state: 'refused', judge: null, composed: 'ask', errorKind: 'refused', costUsd: 0.002283 };
+    const { result, rows } = write(refused);
+    expect(result.ok).toBe(true);
+    expect(rows.map((r) => r.payload)).toEqual([refused]);
+  });
+
+  it('a refusalCategory key is REJECTED: the key set stays closed, the provider string never reaches the row (#152 D14, T5b)', () => {
+    expectRejected({ ...VALID, state: 'refused', judge: null, composed: 'ask', errorKind: 'refused', refusalCategory: 'bio' });
+    expectRejected({ ...VALID, refusalCategory: null });
+  });
+
   it('a failed row from an unparseable reply carries its errorKind (A-5)', () => {
     const { result, rows } = write({ ...VALID, state: 'failed', judge: null, composed: 'pass', errorKind: 'unparseable' });
     expect(result.ok).toBe(true);
