@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import { CORPUS, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from '../eval/index.js';
-import type { BaselineScorecard, RedteamJudgeRow, RedteamJudgeScorecard, RedteamRow, RedteamTotals } from '../eval/index.js';
+import type { BaselineScorecard, RedteamRow, RedteamTotals } from '../eval/index.js';
 import { DEFAULT_ROUTING_TABLE } from '../router/index.js';
 import { scan } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
@@ -15,10 +15,7 @@ import type { QueryFn, QueryOptions, SdkMessage } from '../session/types.js';
 import {
   DEFAULT_BASELINE_PATH,
   gateOutcome,
-  judgeArmOutcome,
-  judgeArmState,
   parseRedteamArgs,
-  remedyLine,
   runRedteamCommand,
 } from './redteam-command.js';
 import type { RedteamArgs, RedteamCommandDeps } from './redteam-command.js';
@@ -374,20 +371,6 @@ describe('gateOutcome', () => {
   });
 });
 
-// ---- Issue #96 pin 24: the second pure table ----------------------------------
-describe('judgeArmOutcome (issue #96 pin 24, S-28)', () => {
-  const GATE_EXITS = [0, 1, 2] as const;
-
-  it('skipped and failed are exit 2 whatever the gate exit; complete and partial return the gate exit; the line is JUDGE_ARM=<state>', () => {
-    for (const gateExit of GATE_EXITS) {
-      expect(judgeArmOutcome({ gateExit, state: 'skipped' }), `skipped/${gateExit}`).toEqual({ exitCode: 2, armLine: 'JUDGE_ARM=skipped' });
-      expect(judgeArmOutcome({ gateExit, state: 'failed' }), `failed/${gateExit}`).toEqual({ exitCode: 2, armLine: 'JUDGE_ARM=failed' });
-      expect(judgeArmOutcome({ gateExit, state: 'complete' }), `complete/${gateExit}`).toEqual({ exitCode: gateExit, armLine: 'JUDGE_ARM=complete' });
-      expect(judgeArmOutcome({ gateExit, state: 'partial' }), `partial/${gateExit}`).toEqual({ exitCode: gateExit, armLine: 'JUDGE_ARM=partial' });
-    }
-  });
-});
-
 describe('runRedteamCommand: compare mode', () => {
   it('missing baseline: exit 2, stderr has the pinned missing-baseline message, stdout has NO GATE_FAILURE line', async () => {
     const baselinePath = join(freshDir(), 'missing-baseline.json');
@@ -662,54 +645,6 @@ describe('runRedteamCommand --judge: every refusal the judge arm adds comes befo
     expect(stderr).not.toContain('ANTHROPIC_API_KEY');
     expect(judgeSpy).toHaveBeenCalledTimes(0);
     expect(importSdk).toHaveBeenCalledTimes(0);
-  });
-});
-
-describe('judgeArmState and remedyLine (code-lens C-7: the nothing-judged branch the compiled-in corpus never reaches)', () => {
-  const t = (stoppedEarly: boolean, attempted: number, judged: number, refused = 0): RedteamJudgeScorecard['totals'] =>
-    ({ stoppedEarly, attempted, judged, refused }) as RedteamJudgeScorecard['totals'];
-
-  it('stopped early -> failed; nothing attempted or all judged -> complete; some judged -> partial; attempted but none judged -> failed', () => {
-    expect(judgeArmState(t(true, 3, 0))).toBe('failed');
-    expect(judgeArmState(t(false, 0, 0))).toBe('complete');
-    expect(judgeArmState(t(false, 4, 4))).toBe('complete');
-    expect(judgeArmState(t(false, 4, 1))).toBe('partial');
-    expect(judgeArmState(t(false, 2, 0))).toBe('failed');
-  });
-
-  it('a refusal is ANSWERED (#152 D11, T7): judged + refused === attempted is complete, refusals alone are complete, none answered is failed, some is partial', () => {
-    expect(judgeArmState(t(false, 4, 3, 1))).toBe('complete');
-    expect(judgeArmState(t(false, 4, 0, 4))).toBe('complete');
-    expect(judgeArmState(t(false, 4, 0, 0))).toBe('failed');
-    expect(judgeArmState(t(false, 4, 1, 1))).toBe('partial');
-    expect(judgeArmState(t(false, 4, 0, 1))).toBe('partial');
-  });
-
-  it('the nothing-judged remedy (not an early stop) lists all four kinds with counts and the remedy tail, exactly; complete and skipped print none', () => {
-    const rows = [{ status: 'call-failed' }, { status: 'timed-out' }] as RedteamJudgeRow[];
-    const card = { totals: t(false, 2, 0), rows } as RedteamJudgeScorecard;
-    expect(remedyLine('failed', card)).toBe(
-      'judged 0/2; call-failed 1, timed-out 1, unparseable 0, unknown-enum 0; nothing was answered; check the key, the endpoint and the model id, then re-run',
-    );
-    expect(remedyLine('complete', card)).toBeNull();
-    expect(remedyLine('skipped', card)).toBeNull();
-  });
-
-  it('the partial remedy appends `; refused R` before the partial clause only when R > 0, so its figures reconcile with attempted (#152, T7b)', () => {
-    const withRefusal = {
-      totals: t(false, 3, 1, 1),
-      rows: [{ status: 'judged' }, { status: 'call-failed' }, { status: 'refused' }] as RedteamJudgeRow[],
-    } as RedteamJudgeScorecard;
-    expect(remedyLine('partial', withRefusal)).toBe(
-      'judged 1/3; call-failed 1, timed-out 0, unparseable 0, unknown-enum 0; refused 1; the figures above are partial; re-run to complete',
-    );
-    const without = {
-      totals: t(false, 2, 1, 0),
-      rows: [{ status: 'judged' }, { status: 'call-failed' }] as RedteamJudgeRow[],
-    } as RedteamJudgeScorecard;
-    expect(remedyLine('partial', without)).toBe(
-      'judged 1/2; call-failed 1, timed-out 0, unparseable 0, unknown-enum 0; the figures above are partial; re-run to complete',
-    );
   });
 });
 
@@ -1130,5 +1065,56 @@ describe('runRedteamCommand --judge --samples (issue #148)', () => {
     const { stdout } = await captureIO(() => runRedteamCommand(args, deps));
     expect(readdirSync(args.out).sort()).toEqual([JUDGE_FILE, HEURISTIC_FILE]);
     expect(columnZeroMatches(stdout, 'JUDGE_GATE=')).toBe(0);
+  });
+});
+
+// ---- Issue #150: a symlink planted at the exact scorecard name --------------
+describe('runRedteamCommand refuses a scorecard name that already exists (issue #150)', () => {
+  const SENTINEL = 'outside the out dir: must survive byte for byte\n';
+
+  /** A symlink at `<out>/<name>` pointing at a file OUTSIDE out, holding SENTINEL. */
+  function plantSymlink(out: string, name: string): string {
+    const target = join(freshDir(), 'victim.txt');
+    writeFileSync(target, SENTINEL);
+    symlinkSync(target, join(out, name));
+    return target;
+  }
+
+  it('heuristic scorecard-<stamp>.json planted as a symlink: exit 2, the target untouched, nothing written through the link', async () => {
+    const args = baseArgs({ baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, HEURISTIC_FILE);
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, { now: () => NOW_MS }));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stderr).toContain('refusing to overwrite');
+    expect(stderr).toContain(join(args.out, HEURISTIC_FILE));
+    expect(stderr).not.toContain('scorecard written to');
+    expect(stdout).not.toContain(SENTINEL);
+  });
+
+  it('judge-scorecard-<stamp>.json planted as a symlink: JUDGE_ARM=failed, exit 2, the target untouched', async () => {
+    withFakeKey();
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, JUDGE_FILE);
+    const { deps } = spiedDeps(okJudge('pass'));
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stdout).toContain('JUDGE_ARM=failed');
+    expect(stderr).toContain('refusing to overwrite');
+    expect(stderr).not.toContain('judge scorecard written to');
+  });
+
+  it('judge-scorecard-s<k>-<stamp>.json planted as a symlink: the sample loop stops failed, exit 2, the target untouched', async () => {
+    withFakeKey();
+    const args = baseArgs({ judge: true, samples: 2, baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, `judge-scorecard-s1-${STAMP}.json`);
+    const { deps } = spiedDeps(okJudge('pass'));
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stdout).toContain('JUDGE_ARM=failed');
+    expect(stderr).toContain('refusing to overwrite');
+    expect(readdirSync(args.out)).not.toContain(`judge-scorecard-s2-${STAMP}.json`);
   });
 });

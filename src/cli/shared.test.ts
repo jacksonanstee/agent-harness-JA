@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -105,6 +105,90 @@ describe('writeScorecard filename prefix (issue #96 pin 31)', () => {
     expect(heuristic).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z.json') });
     expect(judge).toEqual({ ok: true, path: join(out, 'judge-scorecard-2026-01-02T03-04-05Z.json') });
     expect(readdirSync(out).sort()).toEqual(['judge-scorecard-2026-01-02T03-04-05Z.json', 'scorecard-2026-01-02T03-04-05Z.json']);
+  });
+});
+
+describe('writeScorecard never follows or replaces what is already at the name (issue #150)', () => {
+  const NOW_MS = Date.UTC(2026, 0, 2, 3, 4, 5, 678);
+  const NAME = 'scorecard-2026-01-02T03-04-05Z.json';
+  const card = { rows: [] as { id: string }[] };
+  const dirs: string[] = [];
+  const freshDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'write-scorecard-150-'));
+    dirs.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop();
+      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a symlink planted at the exact name: ok false naming the path, target unchanged', () => {
+    const out = freshDir();
+    const target = join(freshDir(), 'victim.txt');
+    writeFileSync(target, 'keep me');
+    symlinkSync(target, join(out, NAME));
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: false, message: expect.stringContaining(join(out, NAME)) });
+    expect(readFileSync(target, 'utf8')).toBe('keep me');
+  });
+
+  it('a dangling symlink at the name is refused too, and its target is not created', () => {
+    const out = freshDir();
+    const target = join(freshDir(), 'not-yet.txt');
+    symlinkSync(target, join(out, NAME));
+    expect(writeScorecard(card, out, NOW_MS).ok).toBe(false);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('a regular file already at the name (a same-second re-run) is kept, and the new card lands on the next free suffix', () => {
+    const out = freshDir();
+    writeFileSync(join(out, NAME), 'first run');
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: true, path: join(out, 'scorecard-2026-01-02T03-04-05Z-1.json') });
+    expect(readFileSync(join(out, NAME), 'utf8')).toBe('first run');
+    expect(JSON.parse(readFileSync(join(out, 'scorecard-2026-01-02T03-04-05Z-1.json'), 'utf8'))).toEqual(card);
+  });
+
+  it('a symlink at a suffixed name is refused, not followed, even after a regular file took the base name', () => {
+    const out = freshDir();
+    const target = join(freshDir(), 'victim.txt');
+    writeFileSync(target, 'keep me');
+    writeFileSync(join(out, NAME), 'first run');
+    symlinkSync(target, join(out, 'scorecard-2026-01-02T03-04-05Z-1.json'));
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: false, message: expect.stringContaining('scorecard-2026-01-02T03-04-05Z-1.json') });
+    expect(readFileSync(target, 'utf8')).toBe('keep me');
+  });
+
+  it('every suffix taken: ok false, nothing overwritten', () => {
+    const out = freshDir();
+    writeFileSync(join(out, NAME), 'base');
+    for (let k = 1; k <= 9; k += 1) writeFileSync(join(out, `scorecard-2026-01-02T03-04-05Z-${k}.json`), `run ${k}`);
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written).toEqual({ ok: false, message: expect.stringContaining('refusing to overwrite') });
+    expect(readFileSync(join(out, NAME), 'utf8')).toBe('base');
+    expect(readdirSync(out)).toHaveLength(10);
+  });
+
+  it('the refusal message does not echo the symlink target or its contents', () => {
+    const out = freshDir();
+    const target = join(freshDir(), 'secret.txt');
+    writeFileSync(target, 'SECRET-CONTENT');
+    symlinkSync(target, join(out, NAME));
+    const written = writeScorecard(card, out, NOW_MS);
+    expect(written.ok).toBe(false);
+    if (!written.ok) {
+      expect(written.message).not.toContain('SECRET-CONTENT');
+      expect(written.message).not.toContain(target);
+    }
+  });
+
+  it('a non-Error thrown value still maps to a message, never escapes (review LOW)', () => {
+    const written = writeScorecard({ get rows(): never { throw null; } } as unknown as typeof card, freshDir(), NOW_MS);
+    expect(written).toEqual({ ok: false, message: 'null' });
   });
 });
 

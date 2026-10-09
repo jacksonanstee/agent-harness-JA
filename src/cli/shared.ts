@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eval/index.js';
@@ -116,6 +116,14 @@ export function refuseSymlinkedDir(path: string): void {
  * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
  * committed at the output path), EACCES, and ENOSPC all end here too.
  *
+ * The file is created with `wx`, so nothing already at a name is ever
+ * followed or overwritten (issue #150). A symlink, directory or anything
+ * else that is not a regular file at a candidate name is refused with a
+ * message naming it. A regular file there (an earlier
+ * scorecard from the same second: `redteam` and `eval` share the default
+ * out dir and the `scorecard` prefix) is kept, and the new card takes the
+ * next free `-<k>` suffix, up to `MAX_SCORECARD_SUFFIX`.
+ *
  * Generic over any scorecard envelope (golden, redteam, redteam-judge, ...):
  * the same constraint `toCanonicalJson` requires, so every scorecard
  * producer writes through this one helper instead of duplicating it. The
@@ -128,17 +136,45 @@ export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }
   nowMs: number = Date.now(),
   prefix = 'scorecard',
 ): { ok: true; path: string } | { ok: false; message: string } {
+  const base = scorecardFilename(nowMs, prefix);
   try {
     mkdirSync(outDir, { recursive: true });
     // Re-checks only the leaf path (outDir); it narrows the TOCTOU window
     // opened by mkdir but does not close it — an in-process oracle can write
     // anywhere regardless (security-model R-10).
     refuseSymlinkedDir(outDir);
-    const path = join(outDir, scorecardFilename(nowMs, prefix));
-    writeFileSync(path, toCanonicalJson(scorecard));
-    return { ok: true, path };
+    const json = toCanonicalJson(scorecard);
+    for (let k = 0; k <= MAX_SCORECARD_SUFFIX; k += 1) {
+      const path = join(outDir, k === 0 ? base : base.replace(/\.json$/, `-${k}.json`));
+      // `wx` (O_CREAT|O_EXCL) refuses anything already at the exact name, a
+      // symlink included (dangling or not), without following it.
+      if (writeExclusive(path, json)) return { ok: true, path };
+      // Only an earlier scorecard (a regular file) is stepped past; a
+      // symlink, directory or anything else at the name is refused.
+      if (!lstatSync(path).isFile()) {
+        return { ok: false, message: `refusing to overwrite ${path}: something other than a scorecard is at that name; remove it and re-run` };
+      }
+    }
+    return {
+      ok: false,
+      message: `refusing to overwrite ${join(outDir, base)}: it and every suffix to -${MAX_SCORECARD_SUFFIX} exist; move them or re-run in another second`,
+    };
   } catch (error: unknown) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Highest `-<k>` suffix a same-second scorecard may take before the write is refused. */
+export const MAX_SCORECARD_SUFFIX = 9;
+
+/** Create `path` exclusively; false when something already exists there. Other errors throw. */
+function writeExclusive(path: string, data: string): boolean {
+  try {
+    writeFileSync(path, data, { flag: 'wx' });
+    return true;
+  } catch (error: unknown) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
   }
 }
 
