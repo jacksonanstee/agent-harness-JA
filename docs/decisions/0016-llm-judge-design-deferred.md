@@ -62,8 +62,10 @@ fires.
    legal source. *(09/10/2026, #152: beside `judge-oversized` and
    `judge-redacted` (ADR-0037), `judge-refused` is the third id that
    attributes a TIGHTENING that was not a judgement: the provider refused to
-   judge the text and the result composes as at least `ask`. That is the full
-   `judge-*` set a consumer validating `rule_ids` meets.)* `excerpts` pass
+   judge the text and the result composes as at least `ask`, the id added only
+   where that raised the floor. With `judge-ask` and `judge-block`
+   (`JUDGE_RULE_IDS`), those five are the full `judge-*` set a consumer
+   validating `rule_ids` meets.)* `excerpts` pass
    through from the heuristic unchanged (the
    judge returns a verdict, not evidence). `suspicious` is **false** on the
    composed result — it means "escalation is still warranted", and after the

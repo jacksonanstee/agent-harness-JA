@@ -1,6 +1,6 @@
 # ADR-0038: the S-5 judge runs on claude-sonnet-5, and a provider refusal is the judge's `ask`
 
-- **Status:** Accepted. Ships in the #148 PR, which closes #148. Amended by #152 (09/10/2026): a provider refusal is a distinct `refused` result at every layer, composed as at least `ask` with rule id `judge-refused`; decision 2's representation changes, its policy stands, and its stricter-parsed-verdict clause is dropped (the dated notes below).
+- **Status:** Accepted. Ships in the #148 PR, which closes #148. Amended by #152 (09/10/2026): a provider refusal is a distinct `refused` result at every layer, composed as at least `ask`, with rule id `judge-refused` where that raised the floor; decision 2's representation changes, its policy stands, and its stricter-parsed-verdict clause is dropped (the dated notes below).
 - **Date:** 2026-10-07
 - **Requirements:** S-5 (SHOULD: hybrid heuristic plus LLM judge, optional, off by default).
 - **Supersedes:** ADR-0016 decision 5's model clause ("the cheapest Claude tier, `claude-haiku-4-5`"). **Amends:** ADR-0016 decision 4 (a provider refusal now tightens rather than leaving the heuristic verdict standing), ADR-0036 D3 (the default model) and D8 (the gate is read over repeated samples).
