@@ -463,18 +463,21 @@ function runHeuristicArm(args: RedteamArgs, now: () => number): GateExit {
 
 /** State over ATTEMPTED calls (rows the scanner escalated): a lost or
  *  stopped run measured nothing; a mixed run is still worth writing down.
+ *  A refusal is ANSWERED (issue #152 D11): `complete` when judged plus
+ *  refused equals attempted, `failed` when nothing was answered.
  *  Exported for its unit pins: the compiled-in corpus holds far more
  *  non-block cases than the early-stop threshold, so a CLI run always trips
  *  the early stop before the nothing-judged branch (code-lens C-7). */
 export function judgeArmState(totals: RedteamJudgeScorecard['totals']): JudgeArmState {
   if (totals.stoppedEarly) return 'failed';
-  if (totals.attempted === 0 || totals.judged === totals.attempted) return 'complete';
-  if (totals.judged === 0) return 'failed';
+  const answered = totals.judged + totals.refused;
+  if (totals.attempted === 0 || answered === totals.attempted) return 'complete';
+  if (answered === 0) return 'failed';
   return 'partial';
 }
 
-/** The failure kinds in the fixed report order. */
-const FAILURE_STATUSES: readonly Exclude<JudgeStatus, 'judged' | 'not-escalated'>[] = [
+/** The failure kinds in the fixed report order (`refused` is answered, not a failure; issue #152). */
+const FAILURE_STATUSES: readonly Exclude<JudgeStatus, 'judged' | 'not-escalated' | 'refused'>[] = [
   'call-failed',
   'timed-out',
   'unparseable',
@@ -485,9 +488,12 @@ const REMEDY_TAIL = 'check the key, the endpoint and the model id, then re-run';
 
 /**
  * The remedy line beside `JUDGE_ARM=partial` and `JUDGE_ARM=failed` (U-4):
- * `partial` lists all four failure kinds with their counts; the early stop
- * lists only the kinds that occurred. `complete` prints none (a write
- * failure prints `writeScorecard`'s message instead, before this is reached).
+ * `partial` lists all four failure kinds with their counts, then `refused R`
+ * when any call was refused (issue #152), so the figures reconcile with
+ * `attempted`; the early stop lists only the kinds that occurred. `complete`
+ * prints none (a write failure prints `writeScorecard`'s message instead,
+ * before this is reached). The `failed` branches never carry a refusal: a
+ * refusal is answered, so `judgeArmState` never reads `failed` with one.
  * Exported for the same reason as `judgeArmState`.
  */
 export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): string | null {
@@ -497,7 +503,9 @@ export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): s
   const kinds = FAILURE_STATUSES.map((status) => [status, count(status)] as const);
   const allKinds = kinds.map(([status, n]) => `${status} ${n}`).join(', ');
   if (state === 'partial') {
-    return `judged ${totals.judged}/${totals.attempted}; ${allKinds}; the figures above are partial; re-run to complete`;
+    const refused = count('refused');
+    const refusedClause = refused > 0 ? `; refused ${refused}` : '';
+    return `judged ${totals.judged}/${totals.attempted}; ${allKinds}${refusedClause}; the figures above are partial; re-run to complete`;
   }
   if (totals.stoppedEarly) {
     const seen = kinds.filter(([, n]) => n > 0).map(([status, n]) => `${status} ${n}`).join(', ');

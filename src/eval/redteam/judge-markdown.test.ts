@@ -49,6 +49,7 @@ const card: RedteamJudgeScorecard = {
     byFailureKind: { missed: 1, 'false-flag': 0, 'false-block': 0 },
     attempted: 4,
     judged: 3,
+    refused: 0,
     judgeErrors: 1,
     stoppedEarly: false,
     costUsd: 0.0123,
@@ -117,10 +118,27 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
     );
   });
 
+  it('the Calls line prints refused between judged and errors so attempted reconciles (#152 D11, T9d)', () => {
+    expect(lines(toRedteamJudgeMarkdown(card))).toContain('- **Calls:** attempted 4, judged 3, refused 0, errors 1');
+    const refusedRow = row({
+      id: 'h-3', slice: 'holdout', category: 'exfil', heuristic: 'pass', status: 'refused', judge: null,
+      composedAlways: 'ask', composedSuspicious: 'pass', reason: 'provider refused; composed ask',
+    });
+    const withRefusal: RedteamJudgeScorecard = {
+      ...card,
+      rows: [...card.rows, refusedRow],
+      totals: { ...card.totals, total: 5, passed: 4, attempted: 5, judged: 3, refused: 1, judgeErrors: 1 },
+    };
+    const md = toRedteamJudgeMarkdown(withRefusal);
+    expect(lines(md)).toContain('- **Calls:** attempted 5, judged 3, refused 1, errors 1');
+    expect(withRefusal.totals.attempted).toBe(withRefusal.totals.judged + withRefusal.totals.refused + withRefusal.totals.judgeErrors);
+    expect(lineWith(md, '| h-3 |')).toContain('| refused | provider refused; composed ask |');
+  });
+
   it('renders the no-calls cost line exactly when nothing was attempted (code-lens C-14)', () => {
     const idle: RedteamJudgeScorecard = {
       ...card,
-      totals: { ...card.totals, attempted: 0, judged: 0, judgeErrors: 0, costUsd: null, costUnknown: 0 },
+      totals: { ...card.totals, attempted: 0, judged: 0, refused: 0, judgeErrors: 0, costUsd: null, costUnknown: 0 },
     };
     expect(lines(toRedteamJudgeMarkdown(idle))).toContain('- Judge cost: none (no calls attempted)');
   });

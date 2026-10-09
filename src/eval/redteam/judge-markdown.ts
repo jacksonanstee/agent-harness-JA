@@ -68,7 +68,8 @@ export function toRedteamJudgeMarkdown(scorecard: RedteamJudgeScorecard): string
     modeLine('corpus', 'suspicious', totals.bySlice.corpus.suspicious),
     modeLine('holdout', 'always', totals.bySlice.holdout.always),
     modeLine('holdout', 'suspicious', totals.bySlice.holdout.suspicious),
-    `- **Calls:** attempted ${totals.attempted}, judged ${totals.judged}, errors ${totals.judgeErrors}`,
+    // `refused` (issue #152) prints always, so attempted === judged + refused + errors reconciles on the page.
+    `- **Calls:** attempted ${totals.attempted}, judged ${totals.judged}, refused ${totals.refused}, errors ${totals.judgeErrors}`,
     `- ${costLine(totals)}`,
     categoryLine('judgeOnly by category', totals.judgeOnlyByCategory),
     categoryLine('confirmed from ask by category', totals.confirmedFromAskByCategory),
