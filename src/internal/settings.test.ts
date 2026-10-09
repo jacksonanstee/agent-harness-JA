@@ -276,6 +276,24 @@ describe('loadJsonSettings duplicate keys (issue #108)', () => {
     expect(messageFrom('{"a":1,"a":')).toBe('/x.json is not valid JSON');
   });
 
+  it('bounds the message by nesting depth, keeping the key and the last path segments', () => {
+    const depth = 20000;
+    const body = '{"k":'.repeat(depth) + '{"a":1,"a":2}' + '}'.repeat(depth);
+    const message = messageFrom(body);
+    expect(message).toContain("duplicate key 'a'");
+    expect(message).toContain('…');
+    expect(message).toMatch(/\.k\.k\.k \(/);
+    expect(message.length).toBeLessThan(600);
+  });
+
+  it('names a duplicate inside a nested array by index path', () => {
+    expect(messageFrom('{"x":[[{"a":1},{"b":1,"b":2}]]}')).toMatch(/duplicate key 'b' in x\[0\]\[1\]/);
+  });
+
+  it('treats a surrogate-pair key spelled raw and escaped as the same key', () => {
+    expect(messageFrom('{"\u{1F600}":1,"\\ud83d\\ude00":2}')).toMatch(/duplicate key/);
+  });
+
   it('stays linear on a large document', () => {
     const body = JSON.stringify({ list: Array.from({ length: 20000 }, (_, i) => ({ k: i, v: 'x' })) });
     const start = Date.now();

@@ -145,11 +145,19 @@ function endOfString(body: string, start: number): number {
   return i + 1;
 }
 
+/** Path segments kept at each end of a duplicate-key message path. */
+const PATH_EDGE_SEGMENTS = 4;
+
 function pathOf(stack: readonly ScanFrame[]): string {
-  const joined = stack
-    .map((frame) => frame.segment)
-    .join('')
-    .replace(/^\./, '');
+  const segments = stack.map((frame) => frame.segment);
+  // Depth is attacker-controlled (the 1 MB cap allows ~200k levels), and each
+  // segment is already capped by boundEcho, so cap the COUNT: first and last
+  // PATH_EDGE_SEGMENTS with an ellipsis between keeps the message fixed-size.
+  const shown =
+    segments.length > 2 * PATH_EDGE_SEGMENTS
+      ? [...segments.slice(0, PATH_EDGE_SEGMENTS), '…', ...segments.slice(-PATH_EDGE_SEGMENTS)]
+      : segments;
+  const joined = shown.join('').replace(/^\./, '');
   return joined === '' ? 'the top-level object' : joined;
 }
 
