@@ -1005,7 +1005,7 @@ describe('runRedteamCommand --judge: stderr progress and the judge scorecard wri
       meta: { armLabel: string; judgeModel: string; corpusSize: number; holdoutSize: number; createdAt: string };
       rows: { id: string; slice: string }[];
     };
-    expect(card.schemaVersion).toBe(1);
+    expect(card.schemaVersion).toBe(2);
     expect(card.producer).toBe('redteam-judge');
     expect(card.meta).toMatchObject({ armLabel: 'judge', judgeModel: 'claude-sonnet-5', corpusSize: CORPUS.length, holdoutSize: 2, createdAt: new Date(NOW_MS).toISOString() });
     expect(card.rows.filter((r) => r.slice === 'holdout').map((r) => r.id)).toEqual(['ho-ben-1', 'ho-mal-1']);

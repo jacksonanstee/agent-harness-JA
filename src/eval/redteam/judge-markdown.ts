@@ -24,7 +24,7 @@ function modeLine(slice: Slice, mode: 'always' | 'suspicious', m: ModeTotals): s
   return (
     `- **${slice} / ${mode}:** detected ${m.detected}/${m.malicious} malicious; ` +
     `blocked ${m.blocked} / flagged-only ${m.flaggedOnly}; missed ${m.missed}; ` +
-    `benign judged ${m.benignJudged}; false-blocks ${m.falseBlockCount}; false-flags ${m.falseFlagCount}`
+    `benign answered ${m.benignAnswered}; false-blocks ${m.falseBlockCount}; false-flags ${m.falseFlagCount}`
   );
 }
 

@@ -60,7 +60,7 @@ export interface ModeTotals {
   flaggedOnly: number;
   missed: number;
   /** Benign cases the judge ANSWERED, judged or refused (issue #152 D12): the FP policy's denominator (S-6). */
-  benignJudged: number;
+  benignAnswered: number;
   /** THE FP-policy field PR-B reads (D8). */
   falseBlockCount: number;
   falseFlagCount: number;
@@ -93,9 +93,15 @@ export interface RedteamJudgeMeta {
   holdoutSize: number;
 }
 
-/** Its own envelope: the public `Producer` union is not widened (S-16). */
+/**
+ * Its own envelope: the public `Producer` union is not widened (S-16).
+ * `schemaVersion` 2 since issue #152 (review M2): `totals` gained `refused`,
+ * `ModeTotals.benignJudged` became `benignAnswered` (judged or refused), and
+ * the row status union gained `refused`. A reader of a version-1 card finds
+ * neither field.
+ */
 export interface RedteamJudgeScorecard {
-  schemaVersion: 1;
+  schemaVersion: 2;
   producer: 'redteam-judge';
   meta: RedteamJudgeMeta;
   rows: RedteamJudgeRow[];
@@ -258,7 +264,7 @@ function modeTotals(rows: readonly RedteamJudgeRow[], composed: (r: RedteamJudge
     blocked: detected.filter((r) => composed(r) === 'block').length,
     flaggedOnly: detected.filter((r) => composed(r) === 'ask').length,
     missed: malicious.length - detected.length,
-    benignJudged: benign.filter((r) => isAnsweredStatus(r.status)).length,
+    benignAnswered: benign.filter((r) => isAnsweredStatus(r.status)).length,
     falseBlockCount: benign.filter((r) => composed(r) === 'block').length,
     falseFlagCount: benign.filter((r) => composed(r) === 'ask').length,
   };
@@ -374,7 +380,7 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     ),
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     producer: 'redteam-judge',
     meta: {
       createdAt: new Date(now()).toISOString(),

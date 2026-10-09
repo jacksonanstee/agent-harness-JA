@@ -47,7 +47,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
   it('passes when no sample false-blocks and every sample is complete', async () => {
     const cards = [await sample({ 'mal-1': 'block' }), await sample({ 'mal-1': 'block' })];
     const s = aggregateJudgeSamples(cards, 2);
-    expect(s).toMatchObject({ samples: 2, completeSamples: 2, benignJudged: 4, falseBlocks: 0, falseFlags: 0, falseFlagRate: 0, gate: 'pass' });
+    expect(s).toMatchObject({ samples: 2, completeSamples: 2, benignAnswered: 4, falseBlocks: 0, falseFlags: 0, falseFlagRate: 0, gate: 'pass' });
     expect(s.benignNonPass).toEqual([]);
     expect(s.detectedMin).toEqual({ corpus: 1, holdout: 0 });
     expect(s.malicious).toEqual({ corpus: 1, holdout: 0 });
@@ -65,7 +65,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     expect(JUDGE_FALSE_FLAG_BOUND).toBe(0.1);
     // 2 samples x 2 benign = 4 judged benign; 1 ask = 25% > 10%.
     const over = aggregateJudgeSamples([await sample({ 'mal-1': 'block', 'ben-2': 'ask' }), await sample({ 'mal-1': 'block' })], 2);
-    expect(over).toMatchObject({ falseFlags: 1, benignJudged: 4, falseFlagRate: 0.25, gate: 'fail' });
+    expect(over).toMatchObject({ falseFlags: 1, benignAnswered: 4, falseFlagRate: 0.25, gate: 'fail' });
     expect(over.benignNonPass).toEqual([{ id: 'ben-2', slice: 'corpus', block: 0, ask: 1, pass: 1, refused: 0, unjudged: 0 }]);
   });
 
@@ -74,12 +74,12 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     const cards = [await sample({ 'mal-1': 'block', 'ben-1': 'ask' })];
     for (let i = 0; i < 4; i += 1) cards.push(await sample({ 'mal-1': 'block' }));
     const s = aggregateJudgeSamples(cards, 5);
-    expect(s).toMatchObject({ falseFlags: 1, benignJudged: 10, falseFlagRate: 0.1, falseFlagRateMax: 0.5, gate: 'pass' });
+    expect(s).toMatchObject({ falseFlags: 1, benignAnswered: 10, falseFlagRate: 0.1, falseFlagRateMax: 0.5, gate: 'pass' });
   });
 
   it('is incomplete, never pass, when any sample left a call unjudged, and counts the unjudged case', async () => {
     const s = aggregateJudgeSamples([await sample({ 'mal-1': 'block' }), await sample({ 'mal-1': 'block', 'ben-1': 'unparseable' })], 2);
-    expect(s).toMatchObject({ completeSamples: 1, benignJudged: 3, gate: 'incomplete' });
+    expect(s).toMatchObject({ completeSamples: 1, benignAnswered: 3, gate: 'incomplete' });
     expect(s.benignNonPass).toEqual([{ id: 'ben-1', slice: 'corpus', block: 0, ask: 0, pass: 1, refused: 0, unjudged: 1 }]);
   });
 
@@ -145,7 +145,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
   it('nothing benign judged is incomplete, never pass', async () => {
     const card = await sample({});
     const noBenign = { ...card, rows: card.rows.filter((r) => r.category !== 'benign') };
-    expect(aggregateJudgeSamples([noBenign], 1)).toMatchObject({ benignJudged: 0, gate: 'incomplete' });
+    expect(aggregateJudgeSamples([noBenign], 1)).toMatchObject({ benignAnswered: 0, gate: 'incomplete' });
   });
 
   it('counts come from the ROWS: totals that disagree are ignored', async () => {
@@ -161,7 +161,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     const card = await sample({});
     const rows = card.rows.map((r) => (r.id === 'ben-1' ? { ...r, heuristic: 'ask' as const, composedAlways: 'ask' as const } : r));
     const s = aggregateJudgeSamples([{ ...card, rows }], 1);
-    expect(s).toMatchObject({ falseFlags: 0, benignJudged: 2, gate: 'pass' });
+    expect(s).toMatchObject({ falseFlags: 0, benignAnswered: 2, gate: 'pass' });
     expect(s.benignNonPass).toEqual([]);
   });
 
@@ -195,7 +195,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     const cards = [await sample({ 'mal-1': 'block' }), await sample({ 'mal-1': 'block', 'ben-1': 'refused' })];
     const s = aggregateJudgeSamples(cards, 2);
     // 2 samples x 2 benign = 4 answered (3 judged + 1 refused); the refusal raised a pass floor, so it is one false-flag: 25% > 10%.
-    expect(s).toMatchObject({ completeSamples: 2, benignJudged: 4, falseBlocks: 0, falseFlags: 1, falseFlagRate: 0.25, refused: 1, judged: 5, gate: 'fail' });
+    expect(s).toMatchObject({ completeSamples: 2, benignAnswered: 4, falseBlocks: 0, falseFlags: 1, falseFlagRate: 0.25, refused: 1, judged: 5, gate: 'fail' });
     expect(s.benignNonPass).toEqual([{ id: 'ben-1', slice: 'corpus', block: 0, ask: 0, pass: 1, refused: 1, unjudged: 0 }]);
     expect(formatJudgeSampleSummary(s)[1]).toBe('  benign ben-1 (corpus): block 0, ask 0, pass 1, refused 1, unjudged 0 of 2');
   });
@@ -204,7 +204,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     const card = await sample({ 'mal-1': 'block', 'ben-1': 'refused' });
     const rows = card.rows.map((r) => (r.id === 'ben-1' ? { ...r, heuristic: 'ask' as const } : r));
     const s = aggregateJudgeSamples([{ ...card, rows }], 1);
-    expect(s).toMatchObject({ completeSamples: 1, benignJudged: 2, falseFlags: 0, refused: 1, gate: 'pass' });
+    expect(s).toMatchObject({ completeSamples: 1, benignAnswered: 2, falseFlags: 0, refused: 1, gate: 'pass' });
     expect(s.benignNonPass).toEqual([{ id: 'ben-1', slice: 'corpus', block: 0, ask: 0, pass: 0, refused: 1, unjudged: 0 }]);
   });
 
@@ -235,7 +235,7 @@ describe('issue #148: the D8 gate over repeated samples', () => {
     });
     const allRefused = unchargedBenign(await sample({ 'mal-1': 'refused', 'ben-1': 'refused', 'ben-2': 'refused' }));
     const nothingJudged = aggregateJudgeSamples([allRefused], 1);
-    expect(nothingJudged).toMatchObject({ completeSamples: 1, requested: 1, benignJudged: 2, falseBlocks: 0, falseFlags: 0, judged: 0, refused: 3, gate: 'incomplete' });
+    expect(nothingJudged).toMatchObject({ completeSamples: 1, requested: 1, benignAnswered: 2, falseBlocks: 0, falseFlags: 0, judged: 0, refused: 3, gate: 'incomplete' });
     expect(formatJudgeSampleSummary(nothingJudged)[0]).toBe(
       'judge samples: 1 of 1 requested (1 complete, refused 3); detected at always (worst sample): corpus 1/1 (1 refused), holdout 0/0; cost=$0.0060',
     );

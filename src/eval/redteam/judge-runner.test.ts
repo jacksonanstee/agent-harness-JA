@@ -238,7 +238,7 @@ describe('pin 27: runRedteamJudge', () => {
     expect(byId.get('di-05')?.status).toBe('judged');
   });
 
-  it('a refused row (#152 D11, T8a): status refused, the fixed reason, judge null, composedAlways ask, judgeOnly false, benignJudged counts the benign one', async () => {
+  it('a refused row (#152 D11, T8a): status refused, the fixed reason, judge null, composedAlways ask, judgeOnly false, benignAnswered counts the benign one', async () => {
     const { card, progress } = await allStatusRun();
     const byId = new Map(card.rows.map((r) => [r.id, r]));
     const benign = byId.get('benign-05');
@@ -253,20 +253,20 @@ describe('pin 27: runRedteamJudge', () => {
     });
     expect(progress.filter((line) => line.endsWith(': refused'))).toHaveLength(2);
     expect(progress).toContain(`judge ${progress.findIndex((l) => l.includes(' benign-05: ')) + 1}/30 benign-05: refused`);
-    // The benign refusal is ANSWERED: in the denominator (benignJudged) and, over a pass floor, in the false-flag count.
+    // The benign refusal is ANSWERED: in the denominator (benignAnswered) and, over a pass floor, in the false-flag count.
     const corpus = card.totals.bySlice.corpus.always;
     const benignRows = card.rows.filter((r) => r.category === 'benign');
-    expect(corpus.benignJudged).toBe(benignRows.filter((r) => r.status === 'judged' || r.status === 'refused').length);
-    expect(corpus.benignJudged).toBe(benignRows.filter((r) => r.status === 'judged').length + 1);
+    expect(corpus.benignAnswered).toBe(benignRows.filter((r) => r.status === 'judged' || r.status === 'refused').length);
+    expect(corpus.benignAnswered).toBe(benignRows.filter((r) => r.status === 'judged').length + 1);
     expect(corpus.falseFlagCount).toBe(benignRows.filter((r) => r.composedAlways === 'ask').length);
     // Not a reading of the text: refused rows join neither judgeOnly nor confirmed-from-ask.
     expect(card.totals.judgeOnlyByCategory.benign).toBe(0);
     expect(card.totals.confirmedFromAskByCategory.direct).toBe(1);
   });
 
-  it('envelope: schemaVersion 1, producer redteam-judge, exact meta, rows sorted by id', async () => {
+  it('envelope: schemaVersion 2 (#152 review M2: benignJudged became benignAnswered), producer redteam-judge, exact meta, rows sorted by id', async () => {
     const { card } = await allStatusRun();
-    expect(card.schemaVersion).toBe(1);
+    expect(card.schemaVersion).toBe(2);
     expect(card.producer).toBe('redteam-judge');
     expect(card.meta).toEqual({
       createdAt: new Date(NOW_MS).toISOString(),
@@ -399,7 +399,7 @@ describe('pin 27: runRedteamJudge', () => {
           blocked: detected.filter((r) => composed(r) === 'block').length,
           flaggedOnly: detected.filter((r) => composed(r) === 'ask').length,
           missed: malicious.length - detected.length,
-          benignJudged: benign.filter((r) => r.status === 'judged' || r.status === 'refused').length,
+          benignAnswered: benign.filter((r) => r.status === 'judged' || r.status === 'refused').length,
           falseBlockCount: benign.filter((r) => composed(r) === 'block').length,
           falseFlagCount: benign.filter((r) => composed(r) === 'ask').length,
         });

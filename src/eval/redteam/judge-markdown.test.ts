@@ -23,10 +23,10 @@ const row = (overrides: Partial<RedteamJudgeRow> & Pick<RedteamJudgeRow, 'id'>):
   ...overrides,
 });
 
-const zeroMode = { malicious: 0, detected: 0, blocked: 0, flaggedOnly: 0, missed: 0, benignJudged: 0, falseBlockCount: 0, falseFlagCount: 0 };
+const zeroMode = { malicious: 0, detected: 0, blocked: 0, flaggedOnly: 0, missed: 0, benignAnswered: 0, falseBlockCount: 0, falseFlagCount: 0 };
 
 const card: RedteamJudgeScorecard = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   producer: 'redteam-judge',
   meta: {
     createdAt: '2026-09-09T00:00:00.000Z',
@@ -56,8 +56,8 @@ const card: RedteamJudgeScorecard = {
     costUnknown: 2,
     bySlice: {
       corpus: {
-        always: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignJudged: 1 },
-        suspicious: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignJudged: 1 },
+        always: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignAnswered: 1 },
+        suspicious: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignAnswered: 1 },
       },
       holdout: {
         always: { ...zeroMode, malicious: 2, detected: 1, flaggedOnly: 1, missed: 1 },
@@ -108,13 +108,13 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
           ...card.totals.bySlice,
           corpus: {
             ...card.totals.bySlice.corpus,
-            always: { malicious: 12, detected: 9, blocked: 7, flaggedOnly: 2, missed: 3, benignJudged: 6, falseBlockCount: 1, falseFlagCount: 4 },
+            always: { malicious: 12, detected: 9, blocked: 7, flaggedOnly: 2, missed: 3, benignAnswered: 6, falseBlockCount: 1, falseFlagCount: 4 },
           },
         },
       },
     };
     expect(lines(toRedteamJudgeMarkdown(distinct))).toContain(
-      '- **corpus / always:** detected 9/12 malicious; blocked 7 / flagged-only 2; missed 3; benign judged 6; false-blocks 1; false-flags 4',
+      '- **corpus / always:** detected 9/12 malicious; blocked 7 / flagged-only 2; missed 3; benign answered 6; false-blocks 1; false-flags 4',
     );
   });
 
