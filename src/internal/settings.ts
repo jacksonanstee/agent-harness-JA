@@ -113,6 +113,10 @@ export function loadJsonSettings<T>(
   } catch {
     throw new errorClass(`${path} is not valid JSON`);
   }
+  const duplicate = findDuplicateKey(body);
+  if (duplicate !== null) {
+    throw new errorClass(`${path}: ${duplicate}`);
+  }
   try {
     return parse(doc);
   } catch (error: unknown) {
@@ -121,4 +125,82 @@ export function loadJsonSettings<T>(
     }
     throw error;
   }
+}
+
+/** One open container during the duplicate-key scan. */
+interface ScanFrame {
+  /** How this container is reached from its parent: `.key` or `[index]`. */
+  readonly segment: string;
+  /** Present for an object; absent for an array. */
+  readonly keys: Set<string> | null;
+  expectKey: boolean;
+  currentKey: string;
+  index: number;
+}
+
+/** Index just past the string token that opens at `start` (a `"`). */
+function endOfString(body: string, start: number): number {
+  let i = start + 1;
+  while (i < body.length && body[i] !== '"') i += body[i] === '\\' ? 2 : 1;
+  return i + 1;
+}
+
+function pathOf(stack: readonly ScanFrame[]): string {
+  const joined = stack
+    .map((frame) => frame.segment)
+    .join('')
+    .replace(/^\./, '');
+  return joined === '' ? 'the top-level object' : joined;
+}
+
+function openFrame(stack: ScanFrame[], isObject: boolean): void {
+  const parent = stack[stack.length - 1];
+  let segment = '';
+  if (parent !== undefined) {
+    segment = parent.keys === null ? `[${parent.index}]` : `.${boundEcho(parent.currentKey)}`;
+  }
+  stack.push({ segment, keys: isObject ? new Set() : null, expectKey: isObject, currentKey: '', index: 0 });
+}
+
+/**
+ * Issue #108: `JSON.parse` keeps the LAST of duplicate keys, so a doubled
+ * `"defaultDecision"` turns `deny` into `allow` before any parser sees the
+ * document. This scans the RAW text of a body that ALREADY parsed as JSON
+ * (so the grammar is known good and the scan cannot trip on malformed input)
+ * and returns a message naming the first duplicate's object path and key, or
+ * `null`. Keys compare by their DECODED value (`"a"` is `"a"`), one set
+ * per object, so the same key at different levels or in sibling objects is
+ * legal. One pass, linear in the body, which MAX_SETTINGS_BYTES bounds. The
+ * message never carries a value; the key and path are attacker-authored and
+ * go through `boundEcho`.
+ */
+export function findDuplicateKey(body: string): string | null {
+  const stack: ScanFrame[] = [];
+  let i = 0;
+  while (i < body.length) {
+    const ch = body[i];
+    const top = stack[stack.length - 1];
+    if (ch === '"') {
+      const end = endOfString(body, i);
+      if (top !== undefined && top.keys !== null && top.expectKey) {
+        const key = JSON.parse(body.slice(i, end)) as string;
+        if (top.keys.has(key)) {
+          return `duplicate key '${boundEcho(key)}' in ${pathOf(stack)} (JSON keeps only the last of a repeated key; remove one)`;
+        }
+        top.keys.add(key);
+        top.currentKey = key;
+        top.expectKey = false;
+      }
+      i = end;
+      continue;
+    }
+    if (ch === '{' || ch === '[') openFrame(stack, ch === '{');
+    else if (ch === '}' || ch === ']') stack.pop();
+    else if (ch === ',' && top !== undefined) {
+      if (top.keys === null) top.index += 1;
+      else top.expectKey = true;
+    }
+    i += 1;
+  }
+  return null;
 }

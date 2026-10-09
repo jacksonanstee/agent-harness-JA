@@ -201,8 +201,10 @@ commit one, and a host user who can `ln` the target can already read it); it doe
 file that grows between the `fstat` and the read (a concurrent host writer, outside the model);
 it does not bound anything the parsers do after the read beyond what `MAX_RULES` and
 `MAX_ALLOW_ENTRIES` already bound; a duplicated JSON key keeps its LAST value inside `JSON.parse`
-before any parser sees the document, so `"defaultDecision": "deny"` followed by `"allow"` is
-`allow` with no signal (found by the security lens; issue #108 scans the raw body); the rewrite
+before any parser sees the document, so `"defaultDecision": "deny"` followed by `"allow"` was
+`allow` with no signal (found by the security lens; amended 09/10/2026: issue #108 closed this, and
+`loadJsonSettings` now scans the raw body after `JSON.parse` succeeds and fails loud on a key
+repeated within one object, naming the object path and the key, never a value); the rewrite
 character set is an enumeration at bash and zsh (R-13's shape one gate over); a trailing `/.` or
 `/..` on a path-shaped argv[0] (`/bin/sh/.`) passes the parser and the gate, because the basename
 the blocklist keys on is `.`, and is inert: `execve` of a regular file through `/.` is ENOTDIR in
