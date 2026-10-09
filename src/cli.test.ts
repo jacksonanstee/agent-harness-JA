@@ -1271,6 +1271,25 @@ describe('composeSecurity', () => {
     expect(result.warnings[1]).toContain('always denied');
   });
 
+  it.each(['exec', 'eval', 'command', 'builtin', 'source', '.'])(
+    'warns at load when the shell builtin %s is allowlisted (issue #133)',
+    (builtin) => {
+      const result = composeSecurity({
+        readFile: filesystem({
+          [settingsPath('/proj')]: JSON.stringify({
+            sandbox: { commands: { allow: ['git', builtin] } },
+          }),
+        }),
+        userDir: '/home/u',
+        projectDir: '/proj',
+      });
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain(`includes ${builtin} `);
+      expect(result.warnings[0]).toContain('builtins');
+      expect(result.warnings[0]).toContain('always denied');
+    },
+  );
+
   it('merges layers with S-3/S-4 semantics: sticky deny + sandbox intersection', () => {
     const result = composeSecurity({
       readFile: filesystem({

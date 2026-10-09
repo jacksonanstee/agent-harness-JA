@@ -325,14 +325,14 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       "settings contain 'ask' permissions but no prompter is configured; 'ask' will deny (ADR-0014 §4)",
     );
   }
-  // Shell runners and argv-passthrough exec wrappers are DENIED by the sandbox
+  // Shell runners, argv-passthrough exec wrappers and shell builtins are DENIED by the sandbox
   // regardless of the allowlist; surface the conflict at startup. Uses the same
   // predicate the gate enforces with, so the warning never drifts from the
   // blocklist (ADR-0015 §3).
   const blocked = (sandbox.commands?.allow ?? []).filter((entry) => isBlockedFirstToken(entry));
   if (blocked.length > 0) {
     warnings.push(
-      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners and exec wrappers defeat first-token enforcement and are always denied (ADR-0015 §3)`,
+      `sandbox command allowlist includes ${blocked.join(', ')} — shell runners, exec wrappers and shell builtins (exec, eval, command, builtin, source, .) defeat first-token enforcement and are always denied (ADR-0015 §3)`,
     );
   }
   return { permissions, sandbox, judge: user.judge, warnings };

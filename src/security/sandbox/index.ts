@@ -5,6 +5,7 @@ export {
   mergeSandboxLayers,
   sandboxHook,
   SandboxViolation,
+  SHELL_BUILTIN_COMMANDS,
   SHELL_RUNNER_BINARIES,
 } from './sandbox.js';
 export {
