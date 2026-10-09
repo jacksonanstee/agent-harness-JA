@@ -92,6 +92,20 @@ export const EXEC_WRAPPER_BINARIES: readonly string[] = [
   'stdbuf', 'flock', // stream / lock wrappers
 ];
 
+/**
+ * Shell builtins that run a program or evaluate a string: `exec /bin/sh`,
+ * `eval`, `command exec ...`, `builtin exec ...`, `source` and `.` defeat
+ * first-token enforcement exactly as a shell does, but they have no binary
+ * basename for the runner list to key on, so they get their own set (issue
+ * #133). Blocked on the same terms: denied at the gate and warned at load.
+ * `builtin` and `command` are themselves listed, so a chain such as
+ * `builtin exec x` dies on its first token. Residual R-13 still applies to
+ * builtins nobody has enumerated.
+ */
+export const SHELL_BUILTIN_COMMANDS: readonly string[] = [
+  'exec', 'eval', 'command', 'builtin', 'source', '.',
+];
+
 // Every basename that ends the allowlist's authority over argv[0]. Typed
 // ReadonlySet via `as` (a safe upcast) rather than a `: ReadonlySet` annotation
 // purely so the identifier does not trip a keyword-anchored secret scanner on
@@ -99,6 +113,7 @@ export const EXEC_WRAPPER_BINARIES: readonly string[] = [
 const BLOCKED_FIRST_TOKENS = new Set<string>([
   ...SHELL_RUNNER_BINARIES,
   ...EXEC_WRAPPER_BINARIES,
+  ...SHELL_BUILTIN_COMMANDS,
 ]) as ReadonlySet<string>;
 
 /**

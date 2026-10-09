@@ -270,8 +270,14 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(sandbox.allowCommand('  git status\n')).toBe(true);
     expect(section).toContain('a newline or a carriage return');
     expect(section).toContain('after leading and trailing whitespace is trimmed');
-    // The residual the section must state: builtins are not on the blocklist.
-    expect(section).toContain('are not on that blocklist');
+    // Issue #133: the section says the builtins are denied, and the gate agrees.
+    expect(section).toContain('`exec`, `eval`, `command`, `builtin`, `source` and `.`');
+    expect(section).not.toContain('are not on that blocklist');
+    for (const builtin of ['exec', 'eval', 'command', 'builtin', 'source', '.']) {
+      expect(createSandbox({ commands: { allow: [builtin] } }).allowCommand(`${builtin} x`)).toBe(
+        false,
+      );
+    }
   });
 
   it('a `match` pattern and its target are canonicalised on both sides (ADR-0014 §1), the pattern side too', () => {

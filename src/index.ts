@@ -58,6 +58,7 @@ export {
   sandboxHook,
   SandboxSettingsError,
   SandboxViolation,
+  SHELL_BUILTIN_COMMANDS,
   SHELL_RUNNER_BINARIES,
   createSecretRedactor,
   redact,

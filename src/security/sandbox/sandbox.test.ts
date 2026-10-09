@@ -380,6 +380,32 @@ describe('isBlockedFirstToken (the shared brain of enforcement AND the CLI warni
   });
 });
 
+describe('shell builtins are blocklisted too (issue #133)', () => {
+  const BUILTINS = ['exec', 'eval', 'command', 'builtin', 'source', '.'] as const;
+
+  it.each(BUILTINS)('%s is denied by the gate even when the allowlist names it', (builtin) => {
+    const sandbox = createSandbox({ commands: { allow: [builtin, 'git'] } });
+    expect(sandbox.allowCommand(`${builtin} /bin/sh`)).toBe(false);
+    expect(sandbox.allowCommand(builtin)).toBe(false);
+    expect(isBlockedFirstToken(builtin)).toBe(true);
+  });
+
+  it('builtin chains are caught on the first token once builtin and command are denied', () => {
+    const sandbox = createSandbox({
+      commands: { allow: ['builtin', 'command', 'exec', 'git'] },
+    });
+    expect(sandbox.allowCommand('builtin exec /bin/sh')).toBe(false);
+    expect(sandbox.allowCommand('command exec /bin/sh')).toBe(false);
+    expect(sandbox.allowCommand('command -v git')).toBe(false);
+  });
+
+  it('listing every builtin beside git still allows git', () => {
+    const sandbox = createSandbox({ commands: { allow: [...BUILTINS, 'git'] } });
+    expect(sandbox.allowCommand('git status')).toBe(true);
+    expect(sandbox.allowCommand('ls')).toBe(false);
+  });
+});
+
 describe('path gate folds Unicode form (V11, gate level)', () => {
   it('an NFC deny/allow decision matches an NFD tool call for the same file', () => {
     // Rule stored NFC, tool call arrives NFD (or vice versa): same file, so the
