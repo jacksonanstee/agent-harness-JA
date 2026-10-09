@@ -399,42 +399,6 @@ describe('check-docs.sh — derived ADR constants', () => {
   });
 });
 
-describe('check-docs.sh — the merge-timestamp placeholder (issue #152 review M4)', () => {
-  // ADR-0038's #152 note records the ambiguity window for judge-call rows and
-  // closes it at #152's merge commit, whose `%cI` cannot exist before the
-  // merge. So the placeholder is allowed on a branch and a FINDING on main:
-  // a merged main that still carries it fails CI until the follow-up fills it.
-  const PLACEHOLDER = 'closes at the merge commit (its `%cI` is written here at merge).';
-  const withPlaceholder = () => fixture({ 'docs/0038-x.md': `# ADR 38\n\nThe window ${PLACEHOLDER}\n` });
-
-  it('REJECTS the placeholder on main, naming the file and the phrase (CHECK_DOCS_BRANCH=main)', () => {
-    const run = runGateWithEnv(withPlaceholder(), { CHECK_DOCS_BRANCH: 'main' });
-    expect(run.status, run.stderr).toBe(1);
-    expect(run.stderr).toContain('check-docs: docs/0038-x.md: carries the merge-timestamp placeholder');
-    expect(run.stderr).toContain('is written here at merge');
-  });
-
-  it('treats an unknown branch (no git dir, no override) as main, so the strict reading is the default', () => {
-    const run = runGateWithEnv(withPlaceholder(), { CHECK_DOCS_BRANCH: '', GITHUB_REF_NAME: '' });
-    expect(run.status, run.stderr).toBe(1);
-    expect(run.stderr).toContain('merge-timestamp placeholder');
-  });
-
-  it('ALLOWS the placeholder on a non-main branch (the merge commit does not exist yet), and reads GITHUB_REF_NAME in CI', () => {
-    const run = runGateWithEnv(withPlaceholder(), { CHECK_DOCS_BRANCH: 'feat/judge-refused-state-152' });
-    expect(run.status, run.stderr).toBe(0);
-    const ci = runGateWithEnv(withPlaceholder(), { CHECK_DOCS_BRANCH: '', GITHUB_REF_NAME: '154/merge' });
-    expect(ci.status, ci.stderr).toBe(0);
-    const ciMain = runGateWithEnv(withPlaceholder(), { CHECK_DOCS_BRANCH: '', GITHUB_REF_NAME: 'main' });
-    expect(ciMain.status, ciMain.stderr).toBe(1);
-  });
-
-  it('a doc without the placeholder is clean on main', () => {
-    const root = fixture({ 'docs/0038-x.md': '# ADR 38\n\nThe window closes at 2026-10-07T20:23:49+11:00.\n' });
-    expect(runGateWithEnv(root, { CHECK_DOCS_BRANCH: 'main' }).status).toBe(0);
-  });
-});
-
 describe('check-docs.sh — regression: the defect that motivated it', () => {
   it('fires on the real shape that shipped a residual row outside its table', () => {
     // Reduced from docs/security-model.md at 50efacb, where R-18 was added

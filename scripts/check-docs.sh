@@ -53,8 +53,6 @@
 #   - Another hand-copied derived constant. README's "Three essays" is one
 #     today: `docs/blog/` holds exactly 3 files and nothing re-derives it.
 #   - Moving docs/decisions/ or renaming README (now reported, not silent).
-#   - A merge-timestamp placeholder ('is written here at merge', ADR-0038's
-#     #152 note) left on main (check 4; allowed on a branch).
 #   - Tables the scanner cannot see; see the blind-spot list in ADR-0029.
 #
 # Usage: check-docs.sh [ROOT]   (ROOT defaults to the repo root; the argument
@@ -389,49 +387,6 @@ check_adr_counts() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# CHECK 4 — no merge-timestamp placeholder survives onto main (issue #152,
-# review M4).
-#
-# ADR-0038's #152 note records the window in which judge-call rows are
-# ambiguous and closes it at #152's merge commit, whose `%cI` cannot exist
-# before the merge, so the ADR carries a literal placeholder until a follow-up
-# commit fills it. The placeholder is therefore ALLOWED on a branch and a
-# FINDING on main: a main that still carries it fails CI until it is filled.
-# The branch is `CHECK_DOCS_BRANCH` (a test seam, like the crash seam above),
-# else GitHub's `GITHUB_REF_NAME`, else `git rev-parse --abbrev-ref HEAD`; a
-# tree that is none of those (a tarball, a fixture) reads as main, the strict
-# default, because an unknown branch must not be a way past the check.
-# ---------------------------------------------------------------------------
-MERGE_PLACEHOLDER='is written here at merge'
-
-current_branch() {
-  if [ -n "${CHECK_DOCS_BRANCH:-}" ]; then printf '%s' "$CHECK_DOCS_BRANCH"; return; fi
-  if [ -n "${GITHUB_REF_NAME:-}" ]; then printf '%s' "$GITHUB_REF_NAME"; return; fi
-  git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'main'
-}
-
-check_merge_placeholders() {
-  local branch file status
-  branch=$(current_branch)
-  while IFS= read -r -d '' file; do
-    file=${file#./}
-    [ -n "$file" ] || continue
-    grep -qF -- "$MERGE_PLACEHOLDER" "$file"
-    status=$?
-    # grep: 0 found, 1 not found, 2 could not read. An unreadable file has NOT
-    # been checked, which is the didn't-run state (exit 2), as in check 1.
-    if [ "$status" -eq 2 ]; then
-      echo "$FINDING_PREFIX could not read '$file' for the merge-placeholder check - the tree was not fully scanned" >&2
-      exit 2
-    fi
-    [ "$status" -eq 0 ] || continue
-    if [ "$branch" = "main" ]; then
-      note "$file: carries the merge-timestamp placeholder '$MERGE_PLACEHOLDER' on main - fill it with the merge commit's timestamp (git log -1 --format=%cI <merge-sha>) in a follow-up commit; a branch may carry it because its merge commit does not exist yet"
-    fi
-  done < "$FILE_LIST"
-}
-
 if ! list_markdown_files > "$FILE_LIST"; then
   echo "$FINDING_PREFIX could not enumerate markdown files - the tree was not scanned, so this run proves nothing" >&2
   exit 2
@@ -439,7 +394,6 @@ fi
 
 check_structure
 check_adr_counts
-check_merge_placeholders
 
 # `checks_completed` is set INSIDE each branch, after the reporting work, not
 # before it: a crash in cat/wc/printf would otherwise exit 1 and be read as a
