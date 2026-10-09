@@ -74,7 +74,7 @@ export function toRedteamJudgeMarkdown(scorecard: RedteamJudgeScorecard): string
     categoryLine('judgeOnly by category', totals.judgeOnlyByCategory),
     categoryLine('confirmed from ask by category', totals.confirmedFromAskByCategory),
     ...(totals.stoppedEarly
-      ? [`- **Run stopped early:** ${totals.attempted} consecutive judge failures with nothing judged; the rows below are the calls attempted`]
+      ? [`- **Run stopped early:** ${totals.attempted} consecutive judge failures with nothing answered; the rows below are the calls attempted`]
       : []),
     '',
     '| id | slice | category | expected | heuristic | judge | always | suspicious | status | reason |',

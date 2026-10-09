@@ -18,7 +18,7 @@ export function judgeFirstFailureWarning(kind: 'failed' | 'timed out'): string {
 
 export function judgeEarlyStopWarning(): string {
   return (
-    `the judge failed ${JUDGE_EARLY_STOP_AFTER} times in a row with nothing judged, so it is off for the rest of this run; ` +
+    `the judge failed ${JUDGE_EARLY_STOP_AFTER} times in a row with nothing answered, so it is off for the rest of this run; ` +
     `results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result's content may have slowed the judge.`
   );
 }
@@ -44,7 +44,7 @@ export function judgeSlotsHeldWarning(seconds: number): string {
  */
 export function judgeRefusedWarning(): string {
   return (
-    'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated ask (rule id judge-refused) and was not judged. ' +
+    'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated at least ask (rule id judge-refused where that tightened it) and was not judged. ' +
     'The judge stays on; refusals never count toward its early stop, and the summary line and the judge-call rows count them.'
   );
 }

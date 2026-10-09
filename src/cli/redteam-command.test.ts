@@ -689,7 +689,7 @@ describe('judgeArmState and remedyLine (code-lens C-7: the nothing-judged branch
     const rows = [{ status: 'call-failed' }, { status: 'timed-out' }] as RedteamJudgeRow[];
     const card = { totals: t(false, 2, 0), rows } as RedteamJudgeScorecard;
     expect(remedyLine('failed', card)).toBe(
-      'judged 0/2; call-failed 1, timed-out 1, unparseable 0, unknown-enum 0; nothing was judged; check the key, the endpoint and the model id, then re-run',
+      'judged 0/2; call-failed 1, timed-out 1, unparseable 0, unknown-enum 0; nothing was answered; check the key, the endpoint and the model id, then re-run',
     );
     expect(remedyLine('complete', card)).toBeNull();
     expect(remedyLine('skipped', card)).toBeNull();
@@ -859,7 +859,7 @@ describe('runRedteamCommand --judge: judgeArmOutcome drives the exit (pin 24)', 
     // T19: the remedy line prints BEFORE the arm line, so the arm line is always the last line of stdout.
     expect(stdout.endsWith('JUDGE_ARM=failed\n')).toBe(true);
     expect(stdout).toMatch(
-      /^judge stopped after 3 consecutive failures with nothing judged \(call-failed 2, unparseable 1\); check the key, the endpoint and the model id, then re-run$/m,
+      /^judge stopped after 3 consecutive failures with nothing answered \(call-failed 2, unparseable 1\); check the key, the endpoint and the model id, then re-run$/m,
     );
     expect(stdout).not.toContain('the figures above are partial');
     expect(readdirSync(args.out).sort()).toEqual([JUDGE_FILE, HEURISTIC_FILE].sort());

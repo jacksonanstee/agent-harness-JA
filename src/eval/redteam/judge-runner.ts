@@ -113,7 +113,7 @@ export interface RedteamJudgeDeps {
   timeoutMs?: number;
   /** One line per attempted call: `judge <n>/<attempted> <id>: <status>`. */
   onProgress?: (line: string) => void;
-  /** Stop after this many consecutive failures with nothing judged (U-1). Default 3. */
+  /** Stop after this many consecutive failures with nothing answered (judged or refused; U-1, #152). Default 3. */
   earlyStopAfter?: number;
 }
 
@@ -181,7 +181,14 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
     case 'refused':
       return 'refused';
     case 'failed':
-      return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) ? recorded.errorKind : 'call-failed';
+      // A `failed` scan never reads `refused` from its record (#152 review
+      // SL2): the brand is the only route to `refused`, and `toInjectionJudge`
+      // throws it for exactly that kind, so this branch is unreachable with a
+      // refused record; the guard keeps the row honest if a caller's wrapper
+      // ever swallows the brand.
+      return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) && recorded.errorKind !== 'refused'
+        ? recorded.errorKind
+        : 'call-failed';
     case 'off':
     case 'oversized':
       // Unreachable by construction: the arm runs in `always` mode and

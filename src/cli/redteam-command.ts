@@ -520,11 +520,11 @@ export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): s
   }
   if (totals.stoppedEarly) {
     const seen = kinds.filter(([, n]) => n > 0).map(([status, n]) => `${status} ${n}`).join(', ');
-    return `judge stopped after ${totals.attempted} consecutive failures with nothing judged (${seen}); ${REMEDY_TAIL}`;
+    return `judge stopped after ${totals.attempted} consecutive failures with nothing answered (${seen}); ${REMEDY_TAIL}`;
   }
   // Every attempted call failed, but too few were attempted to trip the
   // early stop: nothing was measured.
-  return `judged 0/${totals.attempted}; ${allKinds}; nothing was judged; ${REMEDY_TAIL}`;
+  return `judged 0/${totals.attempted}; ${allKinds}; nothing was answered; ${REMEDY_TAIL}`;
 }
 
 /**

@@ -137,8 +137,18 @@ class RefusedSignal extends Error {
   }
 }
 
-function isRefusedSignal(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && (value as { [REFUSED_BRAND]?: unknown })[REFUSED_BRAND] === true;
+/**
+ * The brand check, hardened against a hostile rejection value (#152 review
+ * SL1): a Proxy whose property getter throws would otherwise throw inside the
+ * rejection handler, leaving the scan unsettled until its timer and surfacing
+ * an unhandled rejection. Anything that cannot be read is not a refusal.
+ */
+function isRefusedSignal(value: unknown): value is RefusedSignal {
+  try {
+    return typeof value === 'object' && value !== null && (value as { [REFUSED_BRAND]?: unknown })[REFUSED_BRAND] === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -149,7 +159,9 @@ function isRefusedSignal(value: unknown): boolean {
  * scanner reads as `judge: 'failed'`, except `errorKind: 'refused'` (issue
  * #152, spec D2), which rejects with the module-private branded signal and
  * reads `judge: 'refused'`. A caller who writes a raw `InjectionJudge` cannot
- * signal a refusal; one who builds a `JudgeCall` gets it through here.
+ * signal a refusal; one who builds a `JudgeCall` gets it through here. A
+ * wrapper around the returned `InjectionJudge` must rethrow the SAME object it
+ * caught: a new `Error`, however worded, carries no brand and reads `failed`.
  */
 export function toInjectionJudge(call: JudgeCall): InjectionJudge {
   return async (text: string, _heuristic: ScanResult, signal?: AbortSignal): Promise<Verdict> => {

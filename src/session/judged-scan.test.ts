@@ -23,7 +23,7 @@ import {
   normaliseCallResult,
   validateSessionJudge,
 } from './judged-scan.js';
-import type { InternalSessionJudge, JudgeDecision, JudgeSummaryEntry } from './judged-scan.js';
+import type { InternalSessionJudge, JudgeDecision, JudgedScanOutcome, JudgeSummaryEntry } from './judged-scan.js';
 import type { SessionDeps } from './types.js';
 
 // Issue #96 PR-B1 spec D3 (steps 0-7), R4, R6, decisions 12 and 14-17. The
@@ -554,7 +554,7 @@ describe('live lines (U-1, U-3, A-6, E-3; pin 27)', () => {
       'a judge call failed; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY and the network (a tool result\'s content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.',
     );
     expect(judgeEarlyStopWarning()).toBe(
-      'the judge failed 3 times in a row with nothing judged, so it is off for the rest of this run; results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result\'s content may have slowed the judge.',
+      'the judge failed 3 times in a row with nothing answered, so it is off for the rest of this run; results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result\'s content may have slowed the judge.',
     );
     expect(judgeCapWarning(200, 7)).toBe(
       'the judge call cap (200) was reached; 7 tool result(s) ran on the heuristic only. Raise judge.maxCallsPerRun in ~/.harness/settings.json to judge more.',
@@ -572,7 +572,7 @@ describe('live lines (U-1, U-3, A-6, E-3; pin 27)', () => {
     expect(h.rows.map((r) => r.state)).toEqual(['refused', 'refused']);
     expect(h.warnings).toEqual([judgeRefusedWarning()]);
     expect(judgeRefusedWarning()).toBe(
-      'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated ask (rule id judge-refused) and was not judged. ' +
+      'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated at least ask (rule id judge-refused where that tightened it) and was not judged. ' +
         'The judge stays on; refusals never count toward its early stop, and the summary line and the judge-call rows count them.',
     );
   });
@@ -659,6 +659,29 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
     expect(summary).toMatchObject({ calls: 2, annotated: 2, tightened: 1, costUnknown: 0 });
     expect(summary.byState.refused).toBe(2);
     expect(summary.costUsd).toBeCloseTo(0.004566, 10);
+  });
+
+  it('a FAILED scan whose record carries a refused result (the abort-after-refusal race) writes errorKind null, never refused; the failure kinds still ride on failed (#152 review SL2)', () => {
+    const h = harness({ call: async () => REFUSED, maxCallsPerRun: 5 });
+    const rowFor = (scanJudge: 'failed' | 'refused', result: JudgeCallResult): JudgeCallPayload | undefined => {
+      const hook = h.run.enter(undefined, `t-${scanJudge}-${result.ok ? 'ok' : result.errorKind}`);
+      const outcome: JudgedScanOutcome = {
+        input: { tool: 'Read', phase: 'post-tool', floor: PASS_FLOOR, text: 'tool text', redacted: false },
+        floor: PASS_FLOOR,
+        scan: { ...PASS_FLOOR, verdict: scanJudge === 'refused' ? 'ask' : 'pass', judge: scanJudge },
+        snapshot: { outcome: 'called', result, threw: false },
+        durationMs: 1,
+      };
+      hook.record(hook.decide(outcome));
+      hook.dispose();
+      return h.rows.at(-1);
+    };
+    expect(rowFor('failed', REFUSED)).toMatchObject({ state: 'failed', judge: null, composed: 'pass', errorKind: null, costUsd: 0.002283 });
+    expect(rowFor('failed', CALL_FAILED)).toMatchObject({ state: 'failed', errorKind: 'call-failed' });
+    expect(rowFor('failed', UNPARSEABLE)).toMatchObject({ state: 'failed', errorKind: 'unparseable' });
+    expect(rowFor('refused', REFUSED)).toMatchObject({ state: 'refused', errorKind: 'refused', composed: 'ask' });
+    // A refused state with a non-refused record cannot arise from the scanner (the brand is the only route to `refused`); the rule still writes nothing misleading.
+    expect(rowFor('refused', CALL_FAILED)).toMatchObject({ state: 'refused', errorKind: null });
   });
 
   it('a pre-aborted hook signal reserves nothing, calls nothing, and is hook-cancelled with no delivery (K-5)', async () => {

@@ -203,9 +203,11 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
     expect(md).not.toContain('JUDGE_ARM=');
   });
 
-  it('reports an early stop when totals.stoppedEarly is set', () => {
+  it('reports an early stop when totals.stoppedEarly is set, as "nothing answered" (a refusal would have disarmed it; #152 review)', () => {
     const stopped: RedteamJudgeScorecard = { ...card, totals: { ...card.totals, stoppedEarly: true } };
-    expect(lineWith(toRedteamJudgeMarkdown(stopped), 'stopped early')).toBeDefined();
+    expect(lines(toRedteamJudgeMarkdown(stopped))).toContain(
+      '- **Run stopped early:** 4 consecutive judge failures with nothing answered; the rows below are the calls attempted',
+    );
     expect(lineWith(toRedteamJudgeMarkdown(card), 'stopped early')).toBeUndefined();
   });
 });

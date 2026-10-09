@@ -588,6 +588,46 @@ describe('pin 11: toInjectionJudge', () => {
     };
     expect(await createJudgedScanner({ mode: 'always', judge: named, scanner: scripted(PASS) }).scanWithJudge(TEXT)).toEqual({ ...PASS, judge: 'failed' });
   });
+
+  it("a judge rejecting with a hostile Proxy whose property getter THROWS reads 'failed' at once, before the timer, with no unhandledRejection (#152 review SL1)", async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const hostile = new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error('getter trap');
+          },
+          has: () => {
+            throw new Error('has trap');
+          },
+        },
+      );
+      const judge: InjectionJudge = () => Promise.reject(hostile);
+      const s = createJudgedScanner({ mode: 'always', judge, scanner: scripted(PASS), timeoutMs: 1_000 });
+      const call = s.scanWithJudge(TEXT);
+      let settled = false;
+      void call.then(() => {
+        settled = true;
+      });
+      // Microtasks only: the brand check must have classified the rejection without the timer.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(await call).toEqual({ ...PASS, judge: 'failed' });
+      vi.useRealTimers();
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('pin 12: construction', () => {

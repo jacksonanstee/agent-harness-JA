@@ -276,6 +276,13 @@ export function countAtSettle(ctx: JudgeRunContext, record: RecordSnapshot, sign
   }
 }
 
+function rowErrorKind(state: JudgeSessionState, result: JudgeCallResult | null): JudgeCallPayload['errorKind'] {
+  if (result === null || result.ok) return null;
+  if (state === 'refused') return result.errorKind === 'refused' ? 'refused' : null;
+  if (state === 'failed') return result.errorKind === 'refused' ? null : result.errorKind;
+  return null;
+}
+
 export interface JudgeRunOptions {
   judge: InternalSessionJudge;
   now: () => number;
@@ -341,8 +348,11 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       composed: composed.verdict,
       // The recorded call's kind when the state is `failed` or `refused` (issue
       // #152 D7), else null; a refused row therefore carries `refused` in both
-      // `state` and `errorKind`, and `judge: null` by construction.
-      errorKind: (state === 'failed' || state === 'refused') && snapshot.result !== null && !snapshot.result.ok ? snapshot.result.errorKind : null,
+      // `state` and `errorKind`, and `judge: null` by construction. The two
+      // never cross (#152 review SL2): a `failed` row never carries `refused`
+      // (a refusal recorded after the scanner had already settled `failed`, the
+      // abort-after-refusal race) and a `refused` row carries nothing else.
+      errorKind: rowErrorKind(state, snapshot.result),
       redacted: input.redacted,
       costUsd,
       durationMs: outcome.durationMs,
