@@ -770,7 +770,8 @@ the table decision 4 already owns.
 
 1. **Sixth event type, `judge-call`.** One row per tool result that entered
    the session's judge path, whatever happened to it: `not-escalated`,
-   `oversized`, `judged`, `timed-out`, `failed`, `cap-reached`,
+   `oversized`, `judged`, `timed-out`, `failed`, `refused` (added 09/10/2026
+   by #152: the provider refused to judge the result), `cap-reached`,
    `hook-cancelled`, `stopped` or `queue-timed-out`. Payload `{ tool,
    tool_use_id, phase, state, heuristic, judge, composed, errorKind, redacted,
    costUsd, durationMs }` (`src/telemetry/types.ts`), written at the capture
@@ -791,7 +792,10 @@ the table decision 4 already owns.
    output, excerpt or judge reply can ride on the row; `state`, the three
    verdict fields and `errorKind` are checked against telemetry-side mirrors
    (`JUDGE_CALL_STATES`, `JUDGE_CALL_VERDICTS`, `JUDGE_CALL_ERROR_KINDS`) whose
-   drift against their session and security origins is pinned; `redacted` must
+   drift against their session and security origins is pinned (09/10/2026,
+   #152: both the state and the error-kind mirrors gain `refused`; no m006,
+   because the CHECK constrains `type`, not the payload, so the widened
+   mirrors are the whole change and old rows stay valid); `redacted` must
    be a boolean, because the closed-key check alone would let a text value
    through under that key; `costUsd` is finite and non-negative or null;
    `durationMs` is a non-negative integer. The two strings, `tool` and

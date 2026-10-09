@@ -59,7 +59,12 @@ fires.
    judge ids are namespaced `judge-*` and are not members of
    `DEFAULT_INJECTION_RULES`; eval/telemetry consumers validating `rule_ids`
    against the rule table must treat the `judge-*` namespace as a distinct,
-   legal source. `excerpts` pass through from the heuristic unchanged (the
+   legal source. *(09/10/2026, #152: beside `judge-oversized` and
+   `judge-redacted` (ADR-0037), `judge-refused` is the third id that
+   attributes a TIGHTENING that was not a judgement: the provider refused to
+   judge the text and the result composes as at least `ask`. That is the full
+   `judge-*` set a consumer validating `rule_ids` meets.)* `excerpts` pass
+   through from the heuristic unchanged (the
    judge returns a verdict, not evidence). `suspicious` is **false** on the
    composed result — it means "escalation is still warranted", and after the
    judge has run, it isn't.
