@@ -451,7 +451,7 @@ export interface SessionResult {
   /**
    * Injection-scanner verdicts surfaced to the model as a note (issue #84,
    * D2/D5): `block`/`ask` on a successful call (phase 'post-tool') or a failed
-   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized` or `judge-redacted` among its rule ids.
+   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized`, `judge-redacted` or `judge-refused` (issue #152: the provider refused to judge the result, annotated `ask`, never a judgement) among its rule ids.
    */
   outputAnnotations: OutputAnnotation[];
   /**
@@ -511,8 +511,11 @@ export interface SessionJudge {
 /**
  * What happened to one tool result on the judge path (spec D6, D7).
  * `judged` is the only state whose judge verdict was composed in; every
- * other state ran on the heuristic floor, except `oversized` (at least `ask`,
- * decision 8). Telemetry mirrors it as `JudgeCallState`.
+ * other state ran on the heuristic floor, except `oversized` and `refused`
+ * (at least `ask`: decision 8, and issue #152 for a provider refusal, which
+ * is composed as at least `ask`, with `judge-refused` only where that raised
+ * the floor, and never a judgement).
+ * Telemetry mirrors it as `JudgeCallState`.
  */
 export type JudgeSessionState =
   | 'not-escalated'
@@ -520,6 +523,7 @@ export type JudgeSessionState =
   | 'judged'
   | 'timed-out'
   | 'failed'
+  | 'refused'
   | 'cap-reached'
   | 'hook-cancelled'
   | 'stopped'

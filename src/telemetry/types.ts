@@ -120,12 +120,13 @@ export type JudgeCallState =
   | 'judged'
   | 'timed-out'
   | 'failed'
+  | 'refused'
   | 'cap-reached'
   | 'hook-cancelled'
   | 'stopped'
   | 'queue-timed-out';
 export type JudgeCallVerdict = 'pass' | 'ask' | 'block';
-export type JudgeCallErrorKind = 'call-failed' | 'unparseable' | 'unknown-enum';
+export type JudgeCallErrorKind = 'call-failed' | 'unparseable' | 'unknown-enum' | 'refused';
 
 /**
  * One tool result that took the judge path (spec D6, K-6). CLOSED: the
@@ -133,8 +134,11 @@ export type JudgeCallErrorKind = 'call-failed' | 'unparseable' | 'unknown-enum';
  * reply text can ride on the row (the PR-A CG2 rule, G-4). `redacted` is D6's
  * one definition, measured on the copy the judge actually received (findings,
  * failed closed, or truncated). `errorKind` is the recorded call's kind when
- * `state` is `failed`, else null. `costUsd` is the call's cost as of the row
- * write; a call that settles after its row stays null here.
+ * `state` is `failed` or `refused`, else null (issue #152: a refused row
+ * carries `state: 'refused'`, `judge: null`, `errorKind: 'refused'` and a
+ * `composed` of at least `ask`; no verdict was given). `costUsd` is the
+ * call's cost as of the row write; a call that settles after its row stays
+ * null here.
  */
 export interface JudgeCallPayload {
   tool: string;

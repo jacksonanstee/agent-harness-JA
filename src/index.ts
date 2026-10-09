@@ -16,8 +16,10 @@ export {
   scan,
   // Issue #96 PR-B1: the judge-wiring values a consumer needs to configure and
   // read the judge; `hasJudgeKey` is composition plumbing and stays off (ADR-0023).
+  // Issue #152: `JUDGE_REFUSED_RULE_ID` joins the two session-side ids (spec D15).
   JUDGE_OVERSIZED_RULE_ID,
   JUDGE_REDACTED_RULE_ID,
+  JUDGE_REFUSED_RULE_ID,
   JUDGE_WORST_CASE_USD_PER_CALL,
   JudgeSettingsError,
   MAX_JUDGE_CALLS_PER_RUN,
@@ -30,6 +32,10 @@ export {
   MAX_JUDGE_INPUT_BYTES,
   STARTER_CORPUS,
   toInjectionJudge,
+  // #152 review A2: the one definition of "answered" (a verdict or a refusal),
+  // public beside JUDGE_ERROR_KINDS so a consumer reading JudgeCallResult
+  // never spells it by hand.
+  isAnsweredResult,
   // The judge's values a consumer needs to compose, configure or validate it
   // are public: the tuples behind JudgeMode and JudgeErrorKind (a consumer
   // who builds a JudgeCall narrows errorKind against the latter), the rule

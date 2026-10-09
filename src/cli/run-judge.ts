@@ -22,8 +22,8 @@ export function judgeStartLine(settings: JudgeSettings): string {
   );
 }
 
-/** The unjudged clause's order (spec D7). Not derivable from JUDGE_SESSION_STATES (D7 puts oversized third); run-judge.test.ts pins it complete against that tuple. */
-const UNJUDGED: readonly JudgeSessionState[] = ['timed-out', 'failed', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out'];
+/** The unjudged clause's order (spec D7; issue #152 D9 puts `refused` after `failed`: the judge did not read it, and it was tightened like `oversized`). Not derivable from JUDGE_SESSION_STATES (D7 puts oversized fourth); run-judge.test.ts pins it complete against that tuple. */
+const UNJUDGED: readonly JudgeSessionState[] = ['timed-out', 'failed', 'refused', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out'];
 
 /**
  * The summary line (spec D7, U-8, B-2) and, when the cap was reached, the

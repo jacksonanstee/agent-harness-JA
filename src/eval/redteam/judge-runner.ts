@@ -1,5 +1,5 @@
 import { createJudgedScanner, JUDGE_ERROR_KINDS, MAX_JUDGE_INPUT_BYTES, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
-import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, ScanResult, Verdict } from '../../security/index.js';
+import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, JudgeRunState, ScanResult, Verdict } from '../../security/index.js';
 import { computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type { ScorecardRowCore, ScorecardTotalsCore } from '../scorecard/index.js';
 import { CORPUS_ID_RE, REDTEAM_FAILURE_KINDS } from './runner.js';
@@ -15,7 +15,25 @@ import type { Category, CorpusCase } from './types.js';
 // case text (CG2).
 
 export type Slice = 'corpus' | 'holdout';
-export type JudgeStatus = 'judged' | 'not-escalated' | 'timed-out' | 'call-failed' | 'unparseable' | 'unknown-enum';
+/**
+ * A row's judge outcome, DERIVED from the scanner's run state and the closed
+ * error kinds rather than spelled by hand (#152 review M1): the states the arm
+ * can see (`off` and `oversized` are unreachable in `always` mode over the
+ * loader's byte cap, and `failed` is replaced by the recorded kind) plus every
+ * `JudgeErrorKind`. `refused` (issue #152): the provider refused to judge the
+ * case; composed as `ask`, answered for the gate, never a judgement.
+ */
+export type JudgeStatus = Exclude<JudgeRunState, 'off' | 'oversized' | 'failed'> | JudgeErrorKind;
+
+/** The one source for "answered" over a row status (#152 review M1): mirrors `isAnsweredResult` on the result. */
+export function isAnsweredStatus(status: JudgeStatus): boolean {
+  return status === 'judged' || status === 'refused';
+}
+
+/** `judged + refused` over a card's totals, the completeness arithmetic (#152 D11), in one place. */
+export function answeredCalls(totals: Pick<RedteamJudgeTotals, 'judged' | 'refused'>): number {
+  return totals.judged + totals.refused;
+}
 
 /** `pass` / `failureKind` on the core are the `always`-mode outcome, so
  *  `computeByFailureKind` re-use holds. */
@@ -41,8 +59,8 @@ export interface ModeTotals {
   blocked: number;
   flaggedOnly: number;
   missed: number;
-  /** Benign cases the judge actually JUDGED: the FP policy's denominator (S-6). */
-  benignJudged: number;
+  /** Benign cases the judge ANSWERED, judged or refused (issue #152 D12): the FP policy's denominator (S-6). */
+  benignAnswered: number;
   /** THE FP-policy field PR-B reads (D8). */
   falseBlockCount: number;
   falseFlagCount: number;
@@ -51,6 +69,9 @@ export interface ModeTotals {
 export interface RedteamJudgeTotals extends ScorecardTotalsCore<RedteamFailureKind> {
   attempted: number;
   judged: number;
+  /** Attempted calls the provider refused (issue #152): answered, composed `ask`, never a judgement. */
+  refused: number;
+  /** `attempted - judged - refused`: the calls that measured nothing. */
   judgeErrors: number;
   stoppedEarly: boolean;
   /** Sum of every attempted call's reported cost; null when none reported one. */
@@ -72,9 +93,15 @@ export interface RedteamJudgeMeta {
   holdoutSize: number;
 }
 
-/** Its own envelope: the public `Producer` union is not widened (S-16). */
+/**
+ * Its own envelope: the public `Producer` union is not widened (S-16).
+ * `schemaVersion` 2 since issue #152 (review M2): `totals` gained `refused`,
+ * `ModeTotals.benignJudged` became `benignAnswered` (judged or refused), and
+ * the row status union gained `refused`. A reader of a version-1 card finds
+ * neither field.
+ */
 export interface RedteamJudgeScorecard {
-  schemaVersion: 1;
+  schemaVersion: 2;
   producer: 'redteam-judge';
   meta: RedteamJudgeMeta;
   rows: RedteamJudgeRow[];
@@ -92,7 +119,7 @@ export interface RedteamJudgeDeps {
   timeoutMs?: number;
   /** One line per attempted call: `judge <n>/<attempted> <id>: <status>`. */
   onProgress?: (line: string) => void;
-  /** Stop after this many consecutive failures with nothing judged (U-1). Default 3. */
+  /** Stop after this many consecutive failures with nothing answered (judged or refused; U-1, #152). Default 3. */
   earlyStopAfter?: number;
 }
 
@@ -106,6 +133,8 @@ const REASON = {
   notConsulted: 'heuristic block; judge not consulted',
   failed: 'judge failed; floor held',
   timedOut: 'judge timed out; floor held',
+  /** Issue #152: fixed text, never case text; the composition is the scanner's `composeRefused`. */
+  refused: 'provider refused; composed ask',
 } as const;
 
 /** The red-team scoring rule over a composed verdict (runner.ts's `scoreCase`
@@ -155,8 +184,17 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
       return 'judged';
     case 'timed-out':
       return 'timed-out';
+    case 'refused':
+      return 'refused';
     case 'failed':
-      return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) ? recorded.errorKind : 'call-failed';
+      // A `failed` scan never reads `refused` from its record (#152 review
+      // SL2): the brand is the only route to `refused`, and `toInjectionJudge`
+      // throws it for exactly that kind, so this branch is unreachable with a
+      // refused record; the guard keeps the row honest if a caller's wrapper
+      // ever swallows the brand.
+      return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) && recorded.errorKind !== 'refused'
+        ? recorded.errorKind
+        : 'call-failed';
     case 'off':
     case 'oversized':
       // Unreachable by construction: the arm runs in `always` mode and
@@ -169,6 +207,7 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
 function reasonOf(status: JudgeStatus, heuristic: Verdict, judge: Verdict | null, composed: Verdict): string {
   if (status === 'not-escalated') return REASON.notConsulted;
   if (status === 'timed-out') return REASON.timedOut;
+  if (status === 'refused') return REASON.refused;
   if (status !== 'judged') return REASON.failed;
   if (verdictRank(composed) > verdictRank(heuristic)) {
     return composed === 'block' ? REASON.escalatedBlock : REASON.escalatedAsk;
@@ -176,16 +215,24 @@ function reasonOf(status: JudgeStatus, heuristic: Verdict, judge: Verdict | null
   return judge === heuristic ? REASON.agreed : REASON.looser;
 }
 
+function composeSuspicious(heuristic: ScanResult, status: JudgeStatus, judge: Verdict | null): Verdict {
+  if (!heuristic.suspicious) return heuristic.verdict;
+  if (status === 'judged' && judge !== null) return stricterVerdict(heuristic.verdict, judge);
+  if (status === 'refused') return stricterVerdict(heuristic.verdict, 'ask');
+  return heuristic.verdict;
+}
+
 function buildRow(c: CorpusCase, slice: Slice, heuristic: ScanResult, judged: JudgedScanResult, recorded: JudgeCallResult | null): RedteamJudgeRow {
   const status = statusOf(judged.judge, recorded, c.id);
   const judge: Verdict | null = status === 'judged' && recorded !== null && recorded.ok ? recorded.verdict : null;
   const composedAlways = judged.verdict;
   // The `suspicious`-mode rule re-applied OFFLINE to the same recorded answer
-  // (S-25); pin 28 keeps this derivation honest against a direct call.
-  const composedSuspicious =
-    heuristic.suspicious && status === 'judged' && judge !== null
-      ? stricterVerdict(heuristic.verdict, judge)
-      : heuristic.verdict;
+  // (S-25); pin 28 keeps this derivation honest against a direct call. A
+  // refused row over a suspicious floor composes `stricterVerdict(heuristic,
+  // 'ask')`, what a direct `suspicious`-mode call produces (issue #152 D11);
+  // bound by a scripted `pass`-plus-suspicious scanner, since over CORPUS
+  // every suspicious floor is already `ask`.
+  const composedSuspicious = composeSuspicious(heuristic, status, judge);
   const { pass, failureKind } = outcomeOf(c.category, composedAlways);
   return {
     id: c.id,
@@ -217,7 +264,7 @@ function modeTotals(rows: readonly RedteamJudgeRow[], composed: (r: RedteamJudge
     blocked: detected.filter((r) => composed(r) === 'block').length,
     flaggedOnly: detected.filter((r) => composed(r) === 'ask').length,
     missed: malicious.length - detected.length,
-    benignJudged: benign.filter((r) => r.status === 'judged').length,
+    benignAnswered: benign.filter((r) => isAnsweredStatus(r.status)).length,
     falseBlockCount: benign.filter((r) => composed(r) === 'block').length,
     falseFlagCount: benign.filter((r) => composed(r) === 'ask').length,
   };
@@ -242,8 +289,9 @@ function byCategory(rows: readonly RedteamJudgeRow[], pick: (r: RedteamJudgeRow)
  * a fresh `createJudgedScanner({ mode: 'always' })` over the SHIPPED
  * composition (the timer, the byte cap, the stricter-of rule and the
  * attribution are D1's code, not a second copy). Stops early after
- * `earlyStopAfter` consecutive failures with nothing judged; the rows so far
- * are the rows written.
+ * `earlyStopAfter` consecutive failures with nothing yet ANSWERED (judged or
+ * refused, issue #152 D11: a refusal proves the endpoint answered, the
+ * session's R6 rule); the rows so far are the rows written.
  */
 export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJudgeScorecard> {
   const now = deps.now ?? Date.now;
@@ -275,6 +323,7 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
   const costs: (number | null)[] = [];
   let attempted = 0;
   let judgedCount = 0;
+  let refusedCount = 0;
   let consecutiveFailures = 0;
   let stoppedEarly = false;
 
@@ -296,12 +345,13 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     attempted += 1;
     costs.push(rec.result()?.costUsd ?? null);
     deps.onProgress?.(`judge ${attempted}/${attemptedTotal} ${row.id}: ${row.status}`);
-    if (row.status === 'judged') {
-      judgedCount += 1;
+    if (isAnsweredStatus(row.status)) {
+      if (row.status === 'judged') judgedCount += 1;
+      else refusedCount += 1;
       consecutiveFailures = 0;
     } else {
       consecutiveFailures += 1;
-      if (judgedCount === 0 && consecutiveFailures >= earlyStopAfter) {
+      if (judgedCount + refusedCount === 0 && consecutiveFailures >= earlyStopAfter) {
         stoppedEarly = true;
         break;
       }
@@ -317,7 +367,8 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     byFailureKind: computeByFailureKind(sorted, REDTEAM_FAILURE_KINDS),
     attempted,
     judged: judgedCount,
-    judgeErrors: attempted - judgedCount,
+    refused: refusedCount,
+    judgeErrors: attempted - judgedCount - refusedCount,
     stoppedEarly,
     costUsd: priced.length === 0 ? null : priced.reduce((sum, cost) => sum + cost, 0),
     costUnknown: costs.length - priced.length,
@@ -329,7 +380,7 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     ),
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     producer: 'redteam-judge',
     meta: {
       createdAt: new Date(now()).toISOString(),

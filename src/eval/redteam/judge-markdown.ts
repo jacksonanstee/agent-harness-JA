@@ -24,7 +24,7 @@ function modeLine(slice: Slice, mode: 'always' | 'suspicious', m: ModeTotals): s
   return (
     `- **${slice} / ${mode}:** detected ${m.detected}/${m.malicious} malicious; ` +
     `blocked ${m.blocked} / flagged-only ${m.flaggedOnly}; missed ${m.missed}; ` +
-    `benign judged ${m.benignJudged}; false-blocks ${m.falseBlockCount}; false-flags ${m.falseFlagCount}`
+    `benign answered ${m.benignAnswered}; false-blocks ${m.falseBlockCount}; false-flags ${m.falseFlagCount}`
   );
 }
 
@@ -68,12 +68,13 @@ export function toRedteamJudgeMarkdown(scorecard: RedteamJudgeScorecard): string
     modeLine('corpus', 'suspicious', totals.bySlice.corpus.suspicious),
     modeLine('holdout', 'always', totals.bySlice.holdout.always),
     modeLine('holdout', 'suspicious', totals.bySlice.holdout.suspicious),
-    `- **Calls:** attempted ${totals.attempted}, judged ${totals.judged}, errors ${totals.judgeErrors}`,
+    // `refused` (issue #152) prints always, so attempted === judged + refused + errors reconciles on the page.
+    `- **Calls:** attempted ${totals.attempted}, judged ${totals.judged}, refused ${totals.refused}, errors ${totals.judgeErrors}`,
     `- ${costLine(totals)}`,
     categoryLine('judgeOnly by category', totals.judgeOnlyByCategory),
     categoryLine('confirmed from ask by category', totals.confirmedFromAskByCategory),
     ...(totals.stoppedEarly
-      ? [`- **Run stopped early:** ${totals.attempted} consecutive judge failures with nothing judged; the rows below are the calls attempted`]
+      ? [`- **Run stopped early:** ${totals.attempted} consecutive judge failures with nothing answered; the rows below are the calls attempted`]
       : []),
     '',
     '| id | slice | category | expected | heuristic | judge | always | suspicious | status | reason |',

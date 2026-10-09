@@ -6,6 +6,7 @@ import {
   createJudgedScanner,
   JUDGE_OVERSIZED_RULE_ID,
   JUDGE_REDACTED_RULE_ID,
+  JUDGE_REFUSED_RULE_ID,
   JUDGE_RULE_IDS,
   JUDGE_TIMEOUT_MS,
   toInjectionJudge,
@@ -122,10 +123,44 @@ describe('callUnderTimer owns one AbortController per call (spec D4, pins 9 and 
   });
 });
 
-describe('the session rule ids sit beside JUDGE_RULE_IDS, not inside it (spec D3 steps 3a and 3b)', () => {
-  it('names the two ids and leaves the measured tuple untouched', () => {
+describe('the session rule ids sit beside JUDGE_RULE_IDS, not inside it (spec D3 steps 3a and 3b; #152 D3)', () => {
+  it('names the three ids and leaves the measured tuple untouched', () => {
     expect(JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
     expect(JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
+    expect(JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
     expect(JUDGE_RULE_IDS).toEqual({ block: 'judge-block', ask: 'judge-ask' });
+  });
+
+  it('a branded refusal arriving AFTER the timer fired leaves the result timed-out and fires no unhandledRejection (#152, T1f)', async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let refuseLate!: (result: JudgeCallResult) => void;
+      const pending = new Promise<JudgeCallResult>((resolve) => {
+        refuseLate = resolve;
+      });
+      // The refusal crosses the seam through the shipped adapter, so the late
+      // rejection IS the module's branded signal, not a plain Error.
+      const judge = toInjectionJudge(() => pending);
+      const scanner = createJudgedScanner({ mode: 'always', scanner: floor, judge, timeoutMs: 1_000 });
+      const call = scanner.scanWithJudge('text');
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await call;
+      expect(result).toEqual({ ...PASS, judge: 'timed-out' });
+
+      vi.useRealTimers();
+      refuseLate({ ok: false, errorKind: 'refused', costUsd: 0.002 });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(result).toEqual({ ...PASS, judge: 'timed-out' });
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      vi.useRealTimers();
+    }
   });
 });

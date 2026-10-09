@@ -1,10 +1,12 @@
 export { createInjectionScanner, scan } from './scan.js';
 export {
   createJudgedScanner,
+  isAnsweredResult,
   JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_OVERSIZED_RULE_ID,
   JUDGE_REDACTED_RULE_ID,
+  JUDGE_REFUSED_RULE_ID,
   JUDGE_RULE_IDS,
   JUDGE_TIMEOUT_MS,
   MAX_JUDGE_INPUT_BYTES,

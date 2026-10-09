@@ -22,8 +22,20 @@ describe('session public doc comments (U-9)', () => {
     expect(source).toMatch(/A consumer-supplied `QueryFn` must honour it/);
   });
 
+  it('the outputAnnotations doc comment names judge-refused beside the other four judge-path ids (#152, T11)', () => {
+    const at = source.indexOf('outputAnnotations: OutputAnnotation[];');
+    expect(at).toBeGreaterThan(0);
+    const before = source.slice(0, at);
+    const comment = before.slice(before.lastIndexOf('/**'));
+    for (const id of ['judge-ask', 'judge-block', 'judge-oversized', 'judge-redacted', 'judge-refused']) {
+      expect(comment, id).toContain(`\`${id}\``);
+    }
+  });
+
   it('the judge types are in the public closure (compile-time; npm run typecheck is the gate)', () => {
     const state: JudgeSessionState = 'queue-timed-out';
+    const refused: JudgeSessionState = 'refused';
+    expect(refused).toBe('refused');
     const judge: SessionJudge = { call: async () => ({ ok: true, verdict: 'pass', costUsd: null }), maxCallsPerRun: 1 };
     const pick = (r: SessionResult): JudgeSummary | null => r.judge;
     expect([state, typeof judge.call, typeof pick]).toEqual(['queue-timed-out', 'function', 'function']);

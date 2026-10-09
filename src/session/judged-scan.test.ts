@@ -17,12 +17,13 @@ import {
   judgeCapWarning,
   judgeEarlyStopWarning,
   judgeFirstFailureWarning,
+  judgeRefusedWarning,
   JudgeSlots,
   judgeSlotsHeldWarning,
   normaliseCallResult,
   validateSessionJudge,
 } from './judged-scan.js';
-import type { InternalSessionJudge, JudgeDecision, JudgeSummaryEntry } from './judged-scan.js';
+import type { InternalSessionJudge, JudgeDecision, JudgedScanOutcome, JudgeSummaryEntry } from './judged-scan.js';
 import type { SessionDeps } from './types.js';
 
 // Issue #96 PR-B1 spec D3 (steps 0-7), R4, R6, decisions 12 and 14-17. The
@@ -36,6 +37,8 @@ const ASK_FLOOR: ScanResult = { verdict: 'ask', rule_ids: ['r-ask'], excerpts: [
 const OK = (verdict: Verdict, costUsd: number | null = 0.001): JudgeCallResult => ({ ok: true, verdict, costUsd });
 const CALL_FAILED: JudgeCallResult = { ok: false, errorKind: 'call-failed', costUsd: null };
 const UNPARSEABLE: JudgeCallResult = { ok: false, errorKind: 'unparseable', costUsd: 0.0005 };
+/** Issue #152: the live refusal's shape (the charged cost of the 07/10/2026 eb-01 refusal). */
+const REFUSED: JudgeCallResult = { ok: false, errorKind: 'refused', costUsd: 0.002283 };
 
 interface FakeJudge {
   call: JudgeCall;
@@ -120,10 +123,12 @@ describe('constants and states (spec D3, D5; pin 13)', () => {
     expect(JUDGE_HOOK_TIMEOUT_S * 1000).toBeGreaterThan(JUDGE_TIMEOUT_MS);
   });
 
-  it('the telemetry mirrors equal their origins (drift, A-8)', () => {
+  it('the telemetry mirrors equal their origins (drift, A-8); ten states and four kinds since #152', () => {
     expect([...JUDGE_CALL_STATES].sort()).toEqual([...JUDGE_SESSION_STATES].sort());
-    expect(JUDGE_SESSION_STATES).toHaveLength(9);
+    expect(JUDGE_SESSION_STATES).toHaveLength(10);
+    expect(JUDGE_SESSION_STATES).toContain('refused');
     expect([...JUDGE_CALL_ERROR_KINDS].sort()).toEqual([...JUDGE_ERROR_KINDS].sort());
+    expect(JUDGE_ERROR_KINDS).toHaveLength(4);
     const verdicts: Record<Verdict, true> = { pass: true, ask: true, block: true };
     expect([...JUDGE_CALL_VERDICTS].sort()).toEqual(Object.keys(verdicts).sort());
   });
@@ -210,6 +215,8 @@ describe('Review Focus 1 and 2: forged results and malformed floors', () => {
     expect(normaliseCallResult({ ok: true, verdict: 'maybe' })).toEqual(CALL_FAILED);
     expect(normaliseCallResult(null)).toEqual(CALL_FAILED);
     expect(normaliseCallResult('block')).toEqual(CALL_FAILED);
+    // Issue #152 (T3f): `refused` is in the closed union, so it normalises to itself, cost kept.
+    expect(normaliseCallResult({ ok: false, errorKind: 'refused', costUsd: 0.1 })).toEqual({ ok: false, errorKind: 'refused', costUsd: 0.1 });
   });
 
   it('a forged result through the run writes a row the telemetry validator would accept', async () => {
@@ -464,6 +471,28 @@ describe('early stop (R6; pin 28)', () => {
     expect(h.rows.some((r) => r.state === 'stopped')).toBe(false);
   });
 
+  it('a refused result is ANSWERED (#152 D6, T3c): fail, fail, refused, fail, fail, fail never stops; six calls reach the fake', async () => {
+    const script = [CALL_FAILED, CALL_FAILED, REFUSED, CALL_FAILED, CALL_FAILED, CALL_FAILED];
+    const fj = fakeJudge((_t, _s, n) => script[n] ?? CALL_FAILED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 50 });
+    for (let i = 0; i < 6; i += 1) await h.result({ id: `t${i}` });
+    expect(fj.texts).toHaveLength(6);
+    expect(h.rows.map((r) => r.state)).toEqual(['failed', 'failed', 'refused', 'failed', 'failed', 'failed']);
+    expect(h.run.context.stopped).toBe(false);
+    expect(h.run.context.disarmed).toBe(true);
+    expect(count(h.warnings, 'the judge failed')).toBe(0);
+    // Readability half (binds nothing beyond the first under the named mutation): three
+    // refusals are not infrastructure, so no first-failure line, no stop, a fourth call.
+    const only = fakeJudge(() => REFUSED);
+    const r = harness({ call: only.call, maxCallsPerRun: 50 });
+    for (let i = 0; i < 4; i += 1) await r.result({ id: `t${i}` });
+    expect(only.texts).toHaveLength(4);
+    expect(r.rows.every((row) => row.state === 'refused')).toBe(true);
+    expect(r.run.context.stopped).toBe(false);
+    expect(count(r.warnings, 'a judge call')).toBe(0);
+    expect(count(r.warnings, 'the judge failed')).toBe(0);
+  });
+
   it('three unparseable results do NOT stop the judge, and print no first-failure line (A-6)', async () => {
     const fj = fakeJudge(() => UNPARSEABLE);
     const h = harness({ call: fj.call, maxCallsPerRun: 50 });
@@ -525,13 +554,26 @@ describe('live lines (U-1, U-3, A-6, E-3; pin 27)', () => {
       'a judge call failed; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY and the network (a tool result\'s content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.',
     );
     expect(judgeEarlyStopWarning()).toBe(
-      'the judge failed 3 times in a row with nothing judged, so it is off for the rest of this run; results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result\'s content may have slowed the judge.',
+      'the judge failed 3 times in a row with nothing answered, so it is off for the rest of this run; results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result\'s content may have slowed the judge.',
     );
     expect(judgeCapWarning(200, 7)).toBe(
       'the judge call cap (200) was reached; 7 tool result(s) ran on the heuristic only. Raise judge.maxCallsPerRun in ~/.harness/settings.json to judge more.',
     );
     expect(judgeSlotsHeldWarning(70)).toBe(
       'all 4 judge slots are held by calls that have not finished 70 s after starting, so later tool results are going unjudged. A custom QueryFn must honour abortController; the shipped CLI\'s does.',
+    );
+  });
+
+  it('two refused results print the refused line exactly once, verbatim, and no failure line (#152 D10, T3d)', async () => {
+    const fj = fakeJudge(() => REFUSED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 5 });
+    await h.result({ id: 'a' });
+    await h.result({ id: 'b' });
+    expect(h.rows.map((r) => r.state)).toEqual(['refused', 'refused']);
+    expect(h.warnings).toEqual([judgeRefusedWarning()]);
+    expect(judgeRefusedWarning()).toBe(
+      'the provider refused to judge a tool result (its usage-policy filter), so that result is annotated at least ask (rule id judge-refused where that tightened it) and was not judged. ' +
+        'The judge stays on; refusals never count toward its early stop, and the summary line and the judge-call rows count them.',
     );
   });
 
@@ -589,6 +631,59 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
     expect(capped).toMatchObject({ state: 'cap-reached', composed: { verdict: 'ask', rule_ids: ['judge-redacted'] } });
   });
 
+  it('refused (#152 D3, D7; T3b): on a pass floor the row says refused/null/ask/refused with the cost, the note carries judge-refused; on an ask floor nothing is appended', async () => {
+    const fj = fakeJudge(() => REFUSED);
+    const h = harness({ call: fj.call, maxCallsPerRun: 5 });
+    const onPass = await h.result({ id: 'p' });
+    expect(onPass).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['judge-refused'] } });
+    expect(onPass?.scan).toMatchObject({ verdict: 'ask', rule_ids: ['judge-refused'], judge: 'refused' });
+    expect(h.rows[0]).toEqual({
+      tool: 'Read',
+      tool_use_id: 'p',
+      phase: 'post-tool',
+      state: 'refused',
+      heuristic: 'pass',
+      judge: null,
+      composed: 'ask',
+      errorKind: 'refused',
+      redacted: false,
+      costUsd: 0.002283,
+      durationMs: expect.any(Number),
+    });
+    const onAsk = await h.result({ id: 'a', floor: ASK_FLOOR });
+    expect(onAsk).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['r-ask'] } });
+    expect(onAsk?.composed.rule_ids).not.toContain('judge-refused');
+    expect(h.rows[1]).toMatchObject({ state: 'refused', heuristic: 'ask', judge: null, composed: 'ask', errorKind: 'refused', costUsd: 0.002283 });
+    expect(fj.texts).toHaveLength(2);
+    const summary = await h.run.drain();
+    expect(summary).toMatchObject({ calls: 2, annotated: 2, tightened: 1, costUnknown: 0 });
+    expect(summary.byState.refused).toBe(2);
+    expect(summary.costUsd).toBeCloseTo(0.004566, 10);
+  });
+
+  it('a FAILED scan whose record carries a refused result (the abort-after-refusal race) writes errorKind null, never refused; the failure kinds still ride on failed (#152 review SL2)', () => {
+    const h = harness({ call: async () => REFUSED, maxCallsPerRun: 5 });
+    const rowFor = (scanJudge: 'failed' | 'refused', result: JudgeCallResult): JudgeCallPayload | undefined => {
+      const hook = h.run.enter(undefined, `t-${scanJudge}-${result.ok ? 'ok' : result.errorKind}`);
+      const outcome: JudgedScanOutcome = {
+        input: { tool: 'Read', phase: 'post-tool', floor: PASS_FLOOR, text: 'tool text', redacted: false },
+        floor: PASS_FLOOR,
+        scan: { ...PASS_FLOOR, verdict: scanJudge === 'refused' ? 'ask' : 'pass', judge: scanJudge },
+        snapshot: { outcome: 'called', result, threw: false },
+        durationMs: 1,
+      };
+      hook.record(hook.decide(outcome));
+      hook.dispose();
+      return h.rows.at(-1);
+    };
+    expect(rowFor('failed', REFUSED)).toMatchObject({ state: 'failed', judge: null, composed: 'pass', errorKind: null, costUsd: 0.002283 });
+    expect(rowFor('failed', CALL_FAILED)).toMatchObject({ state: 'failed', errorKind: 'call-failed' });
+    expect(rowFor('failed', UNPARSEABLE)).toMatchObject({ state: 'failed', errorKind: 'unparseable' });
+    expect(rowFor('refused', REFUSED)).toMatchObject({ state: 'refused', errorKind: 'refused', composed: 'ask' });
+    // A refused state with a non-refused record cannot arise from the scanner (the brand is the only route to `refused`); the rule still writes nothing misleading.
+    expect(rowFor('refused', CALL_FAILED)).toMatchObject({ state: 'refused', errorKind: null });
+  });
+
   it('a pre-aborted hook signal reserves nothing, calls nothing, and is hook-cancelled with no delivery (K-5)', async () => {
     const fj = fakeJudge(() => OK('block'));
     const h = harness({ call: fj.call, maxCallsPerRun: 5 });
@@ -617,8 +712,11 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
   const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false): JudgeSummaryEntry =>
     ({ state, called, costUsd, delivered, tightened });
 
-  it('costUnknown counts reserved slots with no known cost only; unreserved states never count', () => {
-    const s = foldJudgeSummary(10, 4, [
+  it('costUnknown counts reserved slots with no known cost only; unreserved states never count; refused entries fold like oversized (#152, T3e)', () => {
+    // Two refused entries (#152): a pass-floor one, tightened to ask with its charged
+    // cost, and an ask-floor one, delivered but not tightened. Both were CALLED with a
+    // known cost, so costUnknown is unchanged by them.
+    const s = foldJudgeSummary(10, 6, [
       entry('judged', true, 0.002, true, true),
       entry('timed-out', true, null),
       entry('failed', true, 0.001),
@@ -627,17 +725,19 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
       entry('not-escalated', false, null, true),
       entry('stopped', false, null),
       entry('queue-timed-out', false, null),
+      entry('refused', true, 0.002283, true, true),
+      entry('refused', true, 0.001, true, false),
     ], 1);
     expect(s).toEqual({
       cap: 10,
-      calls: 4,
+      calls: 6,
       byState: {
-        'not-escalated': 1, oversized: 1, judged: 1, 'timed-out': 1, failed: 1,
+        'not-escalated': 1, oversized: 1, judged: 1, 'timed-out': 1, failed: 1, refused: 2,
         'cap-reached': 1, 'hook-cancelled': 0, stopped: 1, 'queue-timed-out': 1,
       },
-      annotated: 3,
-      tightened: 2,
-      costUsd: 0.003,
+      annotated: 5,
+      tightened: 3,
+      costUsd: expect.closeTo(0.006283, 10),
       costUnknown: 2,
       pendingAtEnd: 1,
     });

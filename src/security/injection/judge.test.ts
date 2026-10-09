@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as injectionBarrel from './index.js';
 import {
   createJudgedScanner,
+  isAnsweredResult,
+  JUDGE_ERROR_KINDS,
   JUDGE_MODES,
+  JUDGE_REFUSED_RULE_ID,
   JUDGE_RULE_IDS,
   JUDGE_TIMEOUT_MS,
   MAX_JUDGE_INPUT_BYTES,
@@ -64,15 +67,29 @@ afterEach(() => {
 });
 
 describe('module constants (D1)', () => {
-  it('pins the mode tuple, the timeout, the input cap and the two attribution ids', () => {
+  it('pins the mode tuple, the timeout, the input cap, the two attribution ids, the 4 error kinds and the refused id (#152)', () => {
     expect(JUDGE_MODES).toEqual(['off', 'suspicious', 'always']);
     expect(JUDGE_TIMEOUT_MS).toBe(60_000);
     expect(MAX_JUDGE_INPUT_BYTES).toBe(131_072);
     expect(JUDGE_RULE_IDS).toEqual({ block: 'judge-block', ask: 'judge-ask' });
+    // Issue #152 (spec D1, D3): `refused` is the fourth kind, the one that is
+    // not a failure; its rule id sits BESIDE the measured tuple, never inside it.
+    expect(JUDGE_ERROR_KINDS).toEqual(['call-failed', 'unparseable', 'unknown-enum', 'refused']);
+    expect(JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
     // The types compile against the tuple (a fourth mode is a compile error here).
     const mode: JudgeMode = 'suspicious';
     const state: JudgeRunState = 'not-escalated';
-    expect([mode, state]).toEqual(['suspicious', 'not-escalated']);
+    const refused: JudgeRunState = 'refused';
+    expect([mode, state, refused]).toEqual(['suspicious', 'not-escalated', 'refused']);
+  });
+
+  it('isAnsweredResult is the one source for "answered": every ok result and the refused kind, never the three failure kinds (#152 review M1)', () => {
+    for (const verdict of VERDICTS) expect(isAnsweredResult({ ok: true, verdict, costUsd: null }), verdict).toBe(true);
+    expect(isAnsweredResult({ ok: false, errorKind: 'refused', costUsd: 0.002 })).toBe(true);
+    for (const errorKind of ['call-failed', 'unparseable', 'unknown-enum'] as const) {
+      expect(isAnsweredResult({ ok: false, errorKind, costUsd: null }), errorKind).toBe(false);
+    }
+    expect(typeof injectionBarrel.isAnsweredResult).toBe('function');
   });
 
   it('is exported from the injection barrel by name (values and the two verdict helpers)', () => {
@@ -84,6 +101,7 @@ describe('module constants (D1)', () => {
     expect(injectionBarrel.JUDGE_TIMEOUT_MS).toBe(60_000);
     expect(injectionBarrel.MAX_JUDGE_INPUT_BYTES).toBe(131_072);
     expect(injectionBarrel.JUDGE_RULE_IDS).toEqual({ block: 'judge-block', ask: 'judge-ask' });
+    expect(injectionBarrel.JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
   });
 });
 
@@ -214,6 +232,47 @@ describe('pin 5: composition when the judge tightens', () => {
       suspicious: false,
       judge: 'judged',
     });
+  });
+});
+
+// Issue #152 (spec D2, D3): a provider refusal is a distinct outcome, never a
+// judgement. It crosses the locked seam as a branded rejection from
+// `toInjectionJudge`, and `scanWithJudge` composes it as at least `ask` with
+// `judge-refused` only where that tightened the floor. Escalation stays
+// UNRESOLVED (`suspicious` as the floor had it, the `oversized` precedent).
+describe('issue #152: a refused call composes as at least ask with judge-refused (T1b, T1c)', () => {
+  const refusing: JudgeCall = async () => ({ ok: false, errorKind: 'refused', costUsd: 0.002283 });
+
+  it("on a pass floor: ask, 'judge-refused' appended, fresh arrays, suspicious as the floor, judge 'refused'; the frozen floor is untouched", async () => {
+    const heuristic = frozen(PASS);
+    const s = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(refusing), scanner: scripted(heuristic) });
+    const result = await s.scanWithJudge(TEXT);
+    expect(result).toEqual({ verdict: 'ask', rule_ids: ['judge-refused'], excerpts: [], suspicious: false, judge: 'refused' });
+    expect(result.rule_ids).not.toBe(heuristic.rule_ids);
+    expect(result.excerpts).not.toBe(heuristic.excerpts);
+    expect(heuristic).toEqual({ verdict: 'pass', rule_ids: [], excerpts: [], suspicious: false });
+  });
+
+  it('on a suspicious pass floor: ask with judge-refused, and suspicious STAYS true (escalation unresolved, unlike judged)', async () => {
+    const s = createJudgedScanner({ mode: 'suspicious', judge: toInjectionJudge(refusing), scanner: scripted(frozen(PASS_SUSPICIOUS)) });
+    expect(await s.scanWithJudge(TEXT)).toEqual({ verdict: 'ask', rule_ids: ['judge-refused'], excerpts: [], suspicious: true, judge: 'refused' });
+  });
+
+  it('on an ask floor: ask, NO judge-refused (the refusal caused nothing), ids and excerpts equal in content and fresh', async () => {
+    const heuristic = frozen(ASK);
+    const s = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(refusing), scanner: scripted(heuristic) });
+    const result = await s.scanWithJudge(TEXT);
+    expect(result).toEqual({ ...ASK, judge: 'refused' });
+    expect(result.rule_ids).not.toContain(JUDGE_REFUSED_RULE_ID);
+    expect(result.rule_ids).not.toBe(heuristic.rule_ids);
+    expect(result.excerpts).not.toBe(heuristic.excerpts);
+  });
+
+  it('a heuristic block never reaches the refusal: not-escalated, the call is not made', async () => {
+    const call = vi.fn(refusing);
+    const s = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(call), scanner: scripted(BLOCK) });
+    expect(await s.scanWithJudge(TEXT)).toEqual({ ...BLOCK, judge: 'not-escalated' });
+    expect(call).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -426,6 +485,20 @@ describe('pin 10: immutability', () => {
     expect(askFrozen).toEqual(askPristine);
   });
 
+  it('the refused path leaves the frozen heuristic untouched on both a pass and an ask floor (#152, T1g)', async () => {
+    const refusing: JudgeCall = async () => ({ ok: false, errorKind: 'refused', costUsd: null });
+    const passFrozen = frozen(PASS);
+    const askFrozen = frozen(ASK);
+    const passPristine: ScanResult = { ...PASS, rule_ids: [...PASS.rule_ids], excerpts: [...PASS.excerpts] };
+    const askPristine: ScanResult = { ...ASK, rule_ids: [...ASK.rule_ids], excerpts: [...ASK.excerpts] };
+    const onPass = await createJudgedScanner({ mode: 'always', judge: toInjectionJudge(refusing), scanner: scripted(passFrozen) }).scanWithJudge(TEXT);
+    const onAsk = await createJudgedScanner({ mode: 'always', judge: toInjectionJudge(refusing), scanner: scripted(askFrozen) }).scanWithJudge(TEXT);
+    expect(onPass.judge).toBe('refused');
+    expect(onAsk.judge).toBe('refused');
+    expect(passFrozen).toEqual(passPristine);
+    expect(askFrozen).toEqual(askPristine);
+  });
+
   it('does not mutate the options object it was given', () => {
     const judge = judgeOf('pass');
     const opts = Object.freeze({ mode: 'always' as const, judge, scanner: scripted(PASS) });
@@ -468,8 +541,8 @@ describe('pin 11: toInjectionJudge', () => {
     expect(call.mock.calls[0]).not.toContain(ASK);
   });
 
-  it('rejects on !ok (each error kind), never resolving a verdict', async () => {
-    for (const errorKind of ['call-failed', 'unparseable', 'unknown-enum'] as const) {
+  it('rejects on !ok (each error kind, refused included), never resolving a verdict', async () => {
+    for (const errorKind of JUDGE_ERROR_KINDS) {
       const call: JudgeCall = async () => ({ ok: false, errorKind, costUsd: null });
       await expect(toInjectionJudge(call)(TEXT, PASS)).rejects.toThrow();
     }
@@ -486,6 +559,74 @@ describe('pin 11: toInjectionJudge', () => {
     const call: JudgeCall = async () => ({ ok: false, errorKind: 'unparseable', costUsd: 0.002 });
     const s = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(call), scanner: scripted(PASS) });
     expect(await s.scanWithJudge(TEXT)).toEqual({ ...PASS, judge: 'failed' });
+  });
+
+  it("errorKind 'refused' rejects with the branded signal, which the composed scanner reads as 'refused'; the three failure kinds still read 'failed' (#152, T1d)", async () => {
+    const refusing: JudgeCall = async () => ({ ok: false, errorKind: 'refused', costUsd: 0.002 });
+    await expect(toInjectionJudge(refusing)(TEXT, PASS)).rejects.toThrow();
+    const s = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(refusing), scanner: scripted(PASS) });
+    expect((await s.scanWithJudge(TEXT)).judge).toBe('refused');
+    for (const errorKind of ['call-failed', 'unparseable', 'unknown-enum'] as const) {
+      const call: JudgeCall = async () => ({ ok: false, errorKind, costUsd: null });
+      const failed = createJudgedScanner({ mode: 'always', judge: toInjectionJudge(call), scanner: scripted(PASS) });
+      expect(await failed.scanWithJudge(TEXT), errorKind).toEqual({ ...PASS, judge: 'failed' });
+    }
+  });
+
+  it("a judge rejecting with an Error whose TEXT says refused (no brand) reads 'failed', not 'refused' (#152, T1e)", async () => {
+    for (const message of ['refused', 'judge call failed: refused', 'RefusedSignal']) {
+      const judge: InjectionJudge = async () => {
+        throw new Error(message);
+      };
+      const s = createJudgedScanner({ mode: 'always', judge, scanner: scripted(PASS) });
+      expect(await s.scanWithJudge(TEXT), message).toEqual({ ...PASS, judge: 'failed' });
+    }
+    const named: InjectionJudge = async () => {
+      const error = new Error('refused');
+      error.name = 'RefusedSignal';
+      throw error;
+    };
+    expect(await createJudgedScanner({ mode: 'always', judge: named, scanner: scripted(PASS) }).scanWithJudge(TEXT)).toEqual({ ...PASS, judge: 'failed' });
+  });
+
+  it("a judge rejecting with a hostile Proxy whose property getter THROWS reads 'failed' at once, before the timer, with no unhandledRejection (#152 review SL1)", async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const hostile = new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error('getter trap');
+          },
+          has: () => {
+            throw new Error('has trap');
+          },
+        },
+      );
+      const judge: InjectionJudge = () => Promise.reject(hostile);
+      const s = createJudgedScanner({ mode: 'always', judge, scanner: scripted(PASS), timeoutMs: 1_000 });
+      const call = s.scanWithJudge(TEXT);
+      let settled = false;
+      void call.then(() => {
+        settled = true;
+      });
+      // Microtasks only: the brand check must have classified the rejection without the timer.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(await call).toEqual({ ...PASS, judge: 'failed' });
+      vi.useRealTimers();
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      vi.useRealTimers();
+    }
   });
 });
 

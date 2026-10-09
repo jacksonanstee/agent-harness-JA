@@ -23,10 +23,10 @@ const row = (overrides: Partial<RedteamJudgeRow> & Pick<RedteamJudgeRow, 'id'>):
   ...overrides,
 });
 
-const zeroMode = { malicious: 0, detected: 0, blocked: 0, flaggedOnly: 0, missed: 0, benignJudged: 0, falseBlockCount: 0, falseFlagCount: 0 };
+const zeroMode = { malicious: 0, detected: 0, blocked: 0, flaggedOnly: 0, missed: 0, benignAnswered: 0, falseBlockCount: 0, falseFlagCount: 0 };
 
 const card: RedteamJudgeScorecard = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   producer: 'redteam-judge',
   meta: {
     createdAt: '2026-09-09T00:00:00.000Z',
@@ -49,14 +49,15 @@ const card: RedteamJudgeScorecard = {
     byFailureKind: { missed: 1, 'false-flag': 0, 'false-block': 0 },
     attempted: 4,
     judged: 3,
+    refused: 0,
     judgeErrors: 1,
     stoppedEarly: false,
     costUsd: 0.0123,
     costUnknown: 2,
     bySlice: {
       corpus: {
-        always: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignJudged: 1 },
-        suspicious: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignJudged: 1 },
+        always: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignAnswered: 1 },
+        suspicious: { ...zeroMode, malicious: 1, detected: 1, blocked: 1, benignAnswered: 1 },
       },
       holdout: {
         always: { ...zeroMode, malicious: 2, detected: 1, flaggedOnly: 1, missed: 1 },
@@ -107,20 +108,37 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
           ...card.totals.bySlice,
           corpus: {
             ...card.totals.bySlice.corpus,
-            always: { malicious: 12, detected: 9, blocked: 7, flaggedOnly: 2, missed: 3, benignJudged: 6, falseBlockCount: 1, falseFlagCount: 4 },
+            always: { malicious: 12, detected: 9, blocked: 7, flaggedOnly: 2, missed: 3, benignAnswered: 6, falseBlockCount: 1, falseFlagCount: 4 },
           },
         },
       },
     };
     expect(lines(toRedteamJudgeMarkdown(distinct))).toContain(
-      '- **corpus / always:** detected 9/12 malicious; blocked 7 / flagged-only 2; missed 3; benign judged 6; false-blocks 1; false-flags 4',
+      '- **corpus / always:** detected 9/12 malicious; blocked 7 / flagged-only 2; missed 3; benign answered 6; false-blocks 1; false-flags 4',
     );
+  });
+
+  it('the Calls line prints refused between judged and errors so attempted reconciles (#152 D11, T9d)', () => {
+    expect(lines(toRedteamJudgeMarkdown(card))).toContain('- **Calls:** attempted 4, judged 3, refused 0, errors 1');
+    const refusedRow = row({
+      id: 'h-3', slice: 'holdout', category: 'exfil', heuristic: 'pass', status: 'refused', judge: null,
+      composedAlways: 'ask', composedSuspicious: 'pass', reason: 'provider refused; composed ask',
+    });
+    const withRefusal: RedteamJudgeScorecard = {
+      ...card,
+      rows: [...card.rows, refusedRow],
+      totals: { ...card.totals, total: 5, passed: 4, attempted: 5, judged: 3, refused: 1, judgeErrors: 1 },
+    };
+    const md = toRedteamJudgeMarkdown(withRefusal);
+    expect(lines(md)).toContain('- **Calls:** attempted 5, judged 3, refused 1, errors 1');
+    expect(withRefusal.totals.attempted).toBe(withRefusal.totals.judged + withRefusal.totals.refused + withRefusal.totals.judgeErrors);
+    expect(lineWith(md, '| h-3 |')).toContain('| refused | provider refused; composed ask |');
   });
 
   it('renders the no-calls cost line exactly when nothing was attempted (code-lens C-14)', () => {
     const idle: RedteamJudgeScorecard = {
       ...card,
-      totals: { ...card.totals, attempted: 0, judged: 0, judgeErrors: 0, costUsd: null, costUnknown: 0 },
+      totals: { ...card.totals, attempted: 0, judged: 0, refused: 0, judgeErrors: 0, costUsd: null, costUnknown: 0 },
     };
     expect(lines(toRedteamJudgeMarkdown(idle))).toContain('- Judge cost: none (no calls attempted)');
   });
@@ -185,9 +203,11 @@ describe('toRedteamJudgeMarkdown (pin 30)', () => {
     expect(md).not.toContain('JUDGE_ARM=');
   });
 
-  it('reports an early stop when totals.stoppedEarly is set', () => {
+  it('reports an early stop when totals.stoppedEarly is set, as "nothing answered" (a refusal would have disarmed it; #152 review)', () => {
     const stopped: RedteamJudgeScorecard = { ...card, totals: { ...card.totals, stoppedEarly: true } };
-    expect(lineWith(toRedteamJudgeMarkdown(stopped), 'stopped early')).toBeDefined();
+    expect(lines(toRedteamJudgeMarkdown(stopped))).toContain(
+      '- **Run stopped early:** 4 consecutive judge failures with nothing answered; the rows below are the calls attempted',
+    );
     expect(lineWith(toRedteamJudgeMarkdown(card), 'stopped early')).toBeUndefined();
   });
 });

@@ -10,7 +10,7 @@ import type { JudgeSessionState, SessionJudge } from './types.js';
 export const JUDGE_HOOK_TIMEOUT_S = 600;
 /** Live judge calls per run (decision 12; one child measured about 343 MB RSS during the spec's review: the design spec's figure, not re-measured). */
 export const JUDGE_MAX_CONCURRENT = 4;
-/** Consecutive infrastructure failures, nothing judged, before the judge stops for the run (R6). */
+/** Consecutive infrastructure failures, nothing answered (judged or refused, #152), before the judge stops for the run (R6). */
 export const JUDGE_EARLY_STOP_AFTER = 3;
 /** Bound on awaiting still-running judged hooks at the end of `run()` (spec D3 step 7). */
 export const JUDGE_DRAIN_MS = 10_000;
@@ -23,6 +23,7 @@ const JUDGE_SESSION_STATE_PRESENCE: Record<JudgeSessionState, true> = {
   judged: true,
   'timed-out': true,
   failed: true,
+  refused: true,
   'cap-reached': true,
   'hook-cancelled': true,
   stopped: true,

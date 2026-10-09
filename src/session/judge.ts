@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
-import { stricterVerdict } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
 import { isProviderRefusal } from './sdk-refusal.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './types.js';
@@ -163,19 +162,20 @@ export function parseJudgeResponse(text: string): ParsedJudgeWire {
 const defaultRandomHex = (): string => randomBytes(8).toString('hex');
 
 /**
- * A provider refusal is the judge's `ask` (issue #148, ADR-0038): a provider
- * saying the text looks hostile, so it tightens like any `ask`, is answered
- * for the gate, and never counts toward R6's early stop as `call-failed` did.
- * A fallback banner counts too: another, unmeasured model answered, so its
- * verdict is not the measured judge's. A parseable verdict beside the signal
- * is kept when stricter, so a refusal never reads below what the model said.
- * The charged cost rides on it when a result arrived (the last one wins).
+ * A provider refusal is a distinct `refused` result (issue #152, amending
+ * ADR-0038 D2's representation, not its policy): `{ ok: false, errorKind:
+ * 'refused', costUsd }`, which the scanner composes as at least `ask`, with
+ * `judge-refused` only where that raised the floor, answered for the gate,
+ * never toward R6's early stop. The
+ * reply text is NOT parsed: a refusal's `result` is the provider's error
+ * string, not a verdict, and under a fallback banner it is an unmeasured
+ * model's verdict, so the refused arm carries no verdict (spec D4; the
+ * stricter-parsed-verdict clause of ADR-0038 is dropped). A fallback banner
+ * counts as a refusal too: another, unmeasured model answered. The charged
+ * cost rides on it when a result arrived (the last one wins; D13).
  */
 function refusalResult(result: SdkResultMessage | null): JudgeCallResult {
-  const replied = result !== null && result.subtype === 'success' && typeof result.result === 'string';
-  const parsed = replied ? parseJudgeResponse(result.result as string) : null;
-  const verdict: Verdict = parsed?.ok === true ? stricterVerdict('ask', parsed.verdict) : 'ask';
-  return { ok: true, verdict, costUsd: result === null ? null : costOf(result) };
+  return { ok: false, errorKind: 'refused', costUsd: result === null ? null : costOf(result) };
 }
 
 function costOf(result: SdkResultMessage): number | null {
@@ -212,15 +212,16 @@ export const JUDGE_MODEL = 'claude-sonnet-5';
  * (no memory or telemetry pollution). One call, no harness retries; a
  * stream with no result message, an error-subtype result, or a transport
  * that throws, is one opaque `call-failed` (the model id is checked before
- * the run by the CLI), except after a provider refusal signal, which is at
- * least `ask` (`refusalResult`, issue #148).
+ * the run by the CLI), except after a provider refusal signal, which is
+ * `refused` (`refusalResult`, issue #148 as amended by #152), which the
+ * scanner composes as at least `ask`.
  * `costUsd` is read from `total_cost_usd` when finite, else null, on both
  * arms: a reply that failed to parse was still charged.
  * Every request carries its own `abortController` (issue #96 PR-B1, spec D4,
  * K-2), linked to the optional incoming signal, so the session and the
  * redteam arm send the same keys; an aborted iteration resolves `call-failed`
  * through the existing catch, unless a refusal signal arrived first: then it
- * is the refusal's `ask` (code lens, #148), which only tightens.
+ * is `refused` (code lens, #148; #152), which only tightens.
  */
 export function buildJudge(query: QueryFn, model: string, randomHex: () => string = defaultRandomHex): JudgeCall {
   const denyAll: SdkHookCallback = async () => ({

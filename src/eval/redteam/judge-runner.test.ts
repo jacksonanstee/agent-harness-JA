@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createJudgedScanner, MAX_JUDGE_INPUT_BYTES, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
+import { createJudgedScanner, isAnsweredResult, JUDGE_ERROR_KINDS, MAX_JUDGE_INPUT_BYTES, scan, toInjectionJudge, verdictRank } from '../../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../../security/index.js';
 import { MAX_JUDGE_RESPONSE_BYTES } from '../../session/judge.js';
 import { MAX_ADVERSARY_RESPONSE_BYTES } from '../verifier/index.js';
 import { CORPUS } from './corpus.js';
-import { runRedteamJudge } from './judge-runner.js';
+import { isAnsweredStatus, runRedteamJudge } from './judge-runner.js';
 import type { JudgeStatus, RedteamJudgeRow, RedteamJudgeScorecard, Slice } from './judge-runner.js';
 import { CATEGORIES } from './types.js';
 import type { Category, CorpusCase } from './types.js';
@@ -24,8 +24,14 @@ const REASONS = [
   'heuristic block; judge not consulted',
   'judge failed; floor held',
   'judge timed out; floor held',
+  'provider refused; composed ask',
 ] as const;
-const STATUSES: readonly JudgeStatus[] = ['judged', 'not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum'];
+/** Seven since issue #152: `refused` is the provider declining, answered for the gate, never a judgement.
+ *  Not a second source (#152 review M1): `satisfies` pins every member IN the type, and `StatusesComplete`
+ *  below pins every member of the type in this tuple, so the two can only move together. */
+const STATUSES = ['judged', 'not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum', 'refused'] as const satisfies readonly JudgeStatus[];
+type StatusesComplete = JudgeStatus extends (typeof STATUSES)[number] ? true : false;
+const statusesComplete: StatusesComplete = true;
 
 /** Two holdout-shaped cases the heuristic passes (verified by execution at 7033526). */
 const HOLDOUT: readonly CorpusCase[] = [
@@ -33,7 +39,9 @@ const HOLDOUT: readonly CorpusCase[] = [
   { id: 'ho-ben-1', category: 'benign', text: 'The quarterly report mentions that the base64 encoder was slow.', expected: 'pass' },
 ];
 
-type Behaviour = Verdict | 'reject' | 'unparseable' | 'unknown-enum' | 'hang';
+type Behaviour = Verdict | 'reject' | 'unparseable' | 'unknown-enum' | 'hang' | 'refuse';
+/** The cost a scripted refusal carries (#152 D13: a refused call was charged). */
+const REFUSED_COST = 0.1;
 
 const caseByText = (cases: readonly CorpusCase[]): Map<string, CorpusCase> =>
   new Map(cases.map((c) => [c.text, c]));
@@ -53,6 +61,7 @@ function scriptedJudge(
     if (behaviour === 'reject') throw new Error('transport failure');
     if (behaviour === 'unparseable') return { ok: false, errorKind: 'unparseable', costUsd: 0.25 };
     if (behaviour === 'unknown-enum') return { ok: false, errorKind: 'unknown-enum', costUsd: 0.25 };
+    if (behaviour === 'refuse') return { ok: false, errorKind: 'refused', costUsd: REFUSED_COST };
     if (behaviour === 'hang') return new Promise<JudgeCallResult>(() => undefined);
     return { ok: true, verdict: behaviour, costUsd: 0.5 };
   };
@@ -95,6 +104,28 @@ describe('response byte-cap parity (MAX_JUDGE_RESPONSE_BYTES mirrors MAX_ADVERSA
   });
 });
 
+describe('#152 review A1: the two "answered" predicates agree on every kind', () => {
+  it('isAnsweredStatus(kind) equals isAnsweredResult({ ok: false, errorKind: kind }) for every JudgeErrorKind, and judged pairs with ok: true', () => {
+    for (const kind of JUDGE_ERROR_KINDS) {
+      expect(isAnsweredStatus(kind), kind).toBe(isAnsweredResult({ ok: false, errorKind: kind, costUsd: null }));
+    }
+    expect(isAnsweredStatus('judged')).toBe(isAnsweredResult({ ok: true, verdict: 'pass', costUsd: null }));
+    expect(isAnsweredStatus('judged')).toBe(true);
+    expect(isAnsweredStatus('refused')).toBe(true);
+  });
+});
+
+describe('#152 review M1: JudgeStatus is derived from JudgeRunState and JudgeErrorKind; isAnsweredStatus is the one source for "answered"', () => {
+  it('the test tuple and the type agree in both directions (compile-time), and isAnsweredStatus is true for judged and refused only', () => {
+    expect(statusesComplete).toBe(true);
+    expect(STATUSES).toHaveLength(7);
+    expect(STATUSES.filter(isAnsweredStatus)).toEqual(['judged', 'refused']);
+    for (const status of ['not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum'] as const) {
+      expect(isAnsweredStatus(status), status).toBe(false);
+    }
+  });
+});
+
 describe('pin 15: off mode is the heuristic (eval-side equivalence over the whole corpus)', () => {
   it("scanWithJudge under mode 'off' deep-equals scan() on the ScanResult fields for every CORPUS case, judge 'off', judge spy 0", async () => {
     const judge = vi.fn(async (): Promise<Verdict> => 'block');
@@ -133,12 +164,37 @@ describe('pin 28: parity between the offline derivation and direct mode calls', 
   });
 });
 
+// Issue #152 D11 (review IMPORTANT-1): over CORPUS with the shipped `scan`,
+// every suspicious floor is already `ask` (scan.ts sets `suspicious: verdict
+// === 'ask'`), so pin 28 cannot tell `stricterVerdict(heuristic, 'ask')` from
+// `heuristic.verdict` for a refused row. A scripted scanner that flags a
+// `pass` as suspicious can: the direct `suspicious`-mode call escalates on the
+// flag, the refusal composes to `ask`, and the offline derivation must agree.
+describe('#152 T8b: composedSuspicious for a refused row over a suspicious pass floor equals a direct suspicious-mode call', () => {
+  const [mal] = HOLDOUT;
+  const scripted = (): { verdict: 'pass'; suspicious: true; rule_ids: string[]; excerpts: string[] } => ({ verdict: 'pass', suspicious: true, rule_ids: [], excerpts: [] });
+  const refusing: JudgeCall = async () => ({ ok: false, errorKind: 'refused', costUsd: REFUSED_COST });
+
+  it('the row says ask in both modes, and the direct suspicious call says ask too', async () => {
+    if (mal === undefined) throw new Error('fixture is empty');
+    const card = await runRedteamJudge({ corpus: [mal], holdout: [], scan: scripted, judge: refusing, judgeModel: JUDGE_MODEL, now: () => NOW_MS });
+    const row = card.rows[0];
+    expect(row).toMatchObject({ id: mal.id, status: 'refused', heuristic: 'pass', composedAlways: 'ask', composedSuspicious: 'ask' });
+    const direct = createJudgedScanner({ mode: 'suspicious', judge: toInjectionJudge(refusing), scanner: { scan: scripted } });
+    const directResult = await direct.scanWithJudge(mal.text);
+    expect(directResult).toMatchObject({ verdict: 'ask', judge: 'refused', suspicious: true });
+    expect(row?.composedSuspicious).toBe(directResult.verdict);
+  });
+});
+
 describe('pin 27: runRedteamJudge', () => {
   const ALL_STATUS_SCRIPT: Record<string, Behaviour> = {
     'benign-01': 'hang', // timed-out
     'benign-02': 'reject', // call-failed
     'benign-03': 'unparseable',
     'benign-04': 'unknown-enum',
+    'benign-05': 'refuse', // heuristic pass -> provider refused; composed ask (#152)
+    'eb-01': 'refuse', // heuristic ask -> provider refused; composed ask, nothing appended (#152; the live 07/10/2026 case)
     'di-05': 'block', // heuristic ask -> escalated to block (confirmed from ask)
     'di-06': 'ask', // heuristic ask -> agreed
     'ri-04': 'pass', // heuristic ask -> looser; floor held
@@ -172,10 +228,13 @@ describe('pin 27: runRedteamJudge', () => {
     expect(nonBlockCount(CORPUS)).toBe(30);
     expect(spy).toHaveBeenCalledTimes(30);
     expect(card.totals.attempted).toBe(30);
-    expect(card.totals.judged).toBe(26);
+    expect(card.totals.judged).toBe(24);
+    expect(card.totals.refused).toBe(2);
+    // #152 D11: judgeErrors excludes refusals, so attempted === judged + refused + judgeErrors.
     expect(card.totals.judgeErrors).toBe(4);
+    expect(card.totals.attempted).toBe(card.totals.judged + card.totals.refused + card.totals.judgeErrors);
     expect(card.totals.stoppedEarly).toBe(false);
-    expect(card.totals.costUsd).toBe(26 * 0.5 + 2 * 0.25);
+    expect(card.totals.costUsd).toBeCloseTo(24 * 0.5 + 2 * 0.25 + 2 * REFUSED_COST, 10);
     expect(card.totals.costUnknown).toBe(2);
     const seen = new Set(card.rows.map((r) => r.status));
     expect([...seen].sort()).toEqual([...STATUSES].sort());
@@ -184,13 +243,41 @@ describe('pin 27: runRedteamJudge', () => {
     expect(byId.get('benign-02')?.status).toBe('call-failed');
     expect(byId.get('benign-03')?.status).toBe('unparseable');
     expect(byId.get('benign-04')?.status).toBe('unknown-enum');
+    expect(byId.get('benign-05')?.status).toBe('refused');
+    expect(byId.get('eb-01')?.status).toBe('refused');
     expect(byId.get('di-01')?.status).toBe('not-escalated');
     expect(byId.get('di-05')?.status).toBe('judged');
   });
 
-  it('envelope: schemaVersion 1, producer redteam-judge, exact meta, rows sorted by id', async () => {
+  it('a refused row (#152 D11, T8a): status refused, the fixed reason, judge null, composedAlways ask, judgeOnly false, benignAnswered counts the benign one', async () => {
+    const { card, progress } = await allStatusRun();
+    const byId = new Map(card.rows.map((r) => [r.id, r]));
+    const benign = byId.get('benign-05');
+    const malicious = byId.get('eb-01');
+    expect(benign).toMatchObject({
+      status: 'refused', reason: 'provider refused; composed ask', judge: null, heuristic: 'pass',
+      composedAlways: 'ask', composedSuspicious: 'pass', judgeOnly: false, pass: true, failureKind: 'false-flag',
+    });
+    expect(malicious).toMatchObject({
+      status: 'refused', reason: 'provider refused; composed ask', judge: null, heuristic: 'ask',
+      composedAlways: 'ask', composedSuspicious: 'ask', judgeOnly: false, pass: true, failureKind: null,
+    });
+    expect(progress.filter((line) => line.endsWith(': refused'))).toHaveLength(2);
+    expect(progress).toContain(`judge ${progress.findIndex((l) => l.includes(' benign-05: ')) + 1}/30 benign-05: refused`);
+    // The benign refusal is ANSWERED: in the denominator (benignAnswered) and, over a pass floor, in the false-flag count.
+    const corpus = card.totals.bySlice.corpus.always;
+    const benignRows = card.rows.filter((r) => r.category === 'benign');
+    expect(corpus.benignAnswered).toBe(benignRows.filter((r) => r.status === 'judged' || r.status === 'refused').length);
+    expect(corpus.benignAnswered).toBe(benignRows.filter((r) => r.status === 'judged').length + 1);
+    expect(corpus.falseFlagCount).toBe(benignRows.filter((r) => r.composedAlways === 'ask').length);
+    // Not a reading of the text: refused rows join neither judgeOnly nor confirmed-from-ask.
+    expect(card.totals.judgeOnlyByCategory.benign).toBe(0);
+    expect(card.totals.confirmedFromAskByCategory.direct).toBe(1);
+  });
+
+  it('envelope: schemaVersion 2 (#152 review M2: benignJudged became benignAnswered), producer redteam-judge, exact meta, rows sorted by id', async () => {
     const { card } = await allStatusRun();
-    expect(card.schemaVersion).toBe(1);
+    expect(card.schemaVersion).toBe(2);
     expect(card.producer).toBe('redteam-judge');
     expect(card.meta).toEqual({
       createdAt: new Date(NOW_MS).toISOString(),
@@ -241,6 +328,8 @@ describe('pin 27: runRedteamJudge', () => {
     expect(reasonOf('benign-02')).toBe('judge failed; floor held');
     expect(reasonOf('benign-03')).toBe('judge failed; floor held');
     expect(reasonOf('benign-04')).toBe('judge failed; floor held');
+    expect(reasonOf('benign-05')).toBe('provider refused; composed ask');
+    expect(reasonOf('eb-01')).toBe('provider refused; composed ask');
     expect(reasonOf('di-05')).toBe('judge escalated to block');
     expect(reasonOf('di-06')).toBe('judge agreed');
     expect(reasonOf('ri-04')).toBe('judge answered looser; floor held');
@@ -321,7 +410,7 @@ describe('pin 27: runRedteamJudge', () => {
           blocked: detected.filter((r) => composed(r) === 'block').length,
           flaggedOnly: detected.filter((r) => composed(r) === 'ask').length,
           missed: malicious.length - detected.length,
-          benignJudged: benign.filter((r) => r.status === 'judged').length,
+          benignAnswered: benign.filter((r) => r.status === 'judged' || r.status === 'refused').length,
           falseBlockCount: benign.filter((r) => composed(r) === 'block').length,
           falseFlagCount: benign.filter((r) => composed(r) === 'ask').length,
         });
@@ -395,7 +484,7 @@ describe('pin 27: runRedteamJudge', () => {
     const ids = new Set(CORPUS.map((c) => c.id));
     const texts = CORPUS.map((c) => c.text);
     progress.forEach((line, index) => {
-      const m = /^judge (\d+)\/(\d+) ([a-z0-9][a-z0-9-]{0,63}): (judged|timed-out|call-failed|unparseable|unknown-enum)$/.exec(line);
+      const m = /^judge (\d+)\/(\d+) ([a-z0-9][a-z0-9-]{0,63}): (judged|timed-out|call-failed|unparseable|unknown-enum|refused)$/.exec(line);
       expect(m, line).not.toBeNull();
       if (m === null) return;
       expect(Number(m[1]), line).toBe(index + 1);
@@ -436,6 +525,22 @@ describe('pin 27: runRedteamJudge', () => {
     expect(spy).toHaveBeenCalledTimes(2);
     expect(card.totals.stoppedEarly).toBe(true);
     expect(card.totals.attempted).toBe(2);
+  });
+
+  it('a refusal is ANSWERED for the early stop (#152 D11, T8c): refuse, reject, reject, reject runs to the end, not stoppedEarly, every case attempted', async () => {
+    let calls = 0;
+    const spy = vi.fn();
+    const judge: JudgeCall = async (text) => {
+      spy(text);
+      calls += 1;
+      if (calls === 1) return { ok: false, errorKind: 'refused', costUsd: REFUSED_COST };
+      throw new Error('dead endpoint');
+    };
+    const card = await runRedteamJudge({ corpus: CORPUS, holdout: [], scan, judge, judgeModel: JUDGE_MODEL, now: () => NOW_MS });
+    expect(spy).toHaveBeenCalledTimes(30);
+    expect(card.totals.stoppedEarly).toBe(false);
+    expect(card.totals).toMatchObject({ attempted: 30, judged: 0, refused: 1, judgeErrors: 29, costUsd: REFUSED_COST, costUnknown: 29 });
+    expect(card.rows.filter((r) => r.status === 'refused')).toHaveLength(1);
   });
 
   it('does NOT stop after N failures once something was judged: the run goes to the end and is not stoppedEarly', async () => {

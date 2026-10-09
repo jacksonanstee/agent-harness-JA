@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   aggregateJudgeSamples,
+  answeredCalls,
   BaselineError,
   CORPUS,
   classifyDrift,
@@ -463,31 +464,47 @@ function runHeuristicArm(args: RedteamArgs, now: () => number): GateExit {
 
 /** State over ATTEMPTED calls (rows the scanner escalated): a lost or
  *  stopped run measured nothing; a mixed run is still worth writing down.
+ *  A refusal is ANSWERED (issue #152 D11): `complete` when judged plus
+ *  refused equals attempted, `failed` when nothing was answered.
  *  Exported for its unit pins: the compiled-in corpus holds far more
  *  non-block cases than the early-stop threshold, so a CLI run always trips
  *  the early stop before the nothing-judged branch (code-lens C-7). */
 export function judgeArmState(totals: RedteamJudgeScorecard['totals']): JudgeArmState {
   if (totals.stoppedEarly) return 'failed';
-  if (totals.attempted === 0 || totals.judged === totals.attempted) return 'complete';
-  if (totals.judged === 0) return 'failed';
+  const answered = answeredCalls(totals);
+  if (totals.attempted === 0 || answered === totals.attempted) return 'complete';
+  if (answered === 0) return 'failed';
   return 'partial';
 }
 
-/** The failure kinds in the fixed report order. */
-const FAILURE_STATUSES: readonly Exclude<JudgeStatus, 'judged' | 'not-escalated'>[] = [
-  'call-failed',
-  'timed-out',
-  'unparseable',
-  'unknown-enum',
-];
+/** A status the remedy line reports as a failure: everything that is neither answered nor the heuristic's own block. */
+type FailureStatus = Exclude<JudgeStatus, 'judged' | 'not-escalated' | 'refused'>;
+
+/**
+ * The failure kinds in the fixed report order, as a presence record (the
+ * `store.ts` EVENT_TYPE_PRESENCE idiom; #152 review M3): a new `JudgeStatus`
+ * that is not answered must be added here or the record stops compiling, so
+ * the remedy line can never silently omit a kind. `Object.keys` keeps the
+ * insertion order, which is the report order.
+ */
+const FAILURE_STATUS_PRESENCE: Record<FailureStatus, true> = {
+  'call-failed': true,
+  'timed-out': true,
+  unparseable: true,
+  'unknown-enum': true,
+};
+const FAILURE_STATUSES = Object.keys(FAILURE_STATUS_PRESENCE) as readonly FailureStatus[];
 
 const REMEDY_TAIL = 'check the key, the endpoint and the model id, then re-run';
 
 /**
  * The remedy line beside `JUDGE_ARM=partial` and `JUDGE_ARM=failed` (U-4):
- * `partial` lists all four failure kinds with their counts; the early stop
- * lists only the kinds that occurred. `complete` prints none (a write
- * failure prints `writeScorecard`'s message instead, before this is reached).
+ * `partial` lists all four failure kinds with their counts, then `refused R`
+ * when any call was refused (issue #152), so the figures reconcile with
+ * `attempted`; the early stop lists only the kinds that occurred. `complete`
+ * prints none (a write failure prints `writeScorecard`'s message instead,
+ * before this is reached). The `failed` branches never carry a refusal: a
+ * refusal is answered, so `judgeArmState` never reads `failed` with one.
  * Exported for the same reason as `judgeArmState`.
  */
 export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): string | null {
@@ -497,15 +514,17 @@ export function remedyLine(state: JudgeArmState, card: RedteamJudgeScorecard): s
   const kinds = FAILURE_STATUSES.map((status) => [status, count(status)] as const);
   const allKinds = kinds.map(([status, n]) => `${status} ${n}`).join(', ');
   if (state === 'partial') {
-    return `judged ${totals.judged}/${totals.attempted}; ${allKinds}; the figures above are partial; re-run to complete`;
+    const refused = count('refused');
+    const refusedClause = refused > 0 ? `; refused ${refused}` : '';
+    return `judged ${totals.judged}/${totals.attempted}; ${allKinds}${refusedClause}; the figures above are partial; re-run to complete`;
   }
   if (totals.stoppedEarly) {
     const seen = kinds.filter(([, n]) => n > 0).map(([status, n]) => `${status} ${n}`).join(', ');
-    return `judge stopped after ${totals.attempted} consecutive failures with nothing judged (${seen}); ${REMEDY_TAIL}`;
+    return `judge stopped after ${totals.attempted} consecutive failures with nothing answered (${seen}); ${REMEDY_TAIL}`;
   }
   // Every attempted call failed, but too few were attempted to trip the
   // early stop: nothing was measured.
-  return `judged 0/${totals.attempted}; ${allKinds}; nothing was judged; ${REMEDY_TAIL}`;
+  return `judged 0/${totals.attempted}; ${allKinds}; nothing was answered; ${REMEDY_TAIL}`;
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import * as barrel from './index.js';
 import * as securityBarrel from './security/index.js';
+import * as injectionBarrel from './security/injection/index.js';
 import * as sessionBarrel from './session/index.js';
 import type * as Root from './index.js';
 import type {
@@ -133,9 +134,20 @@ describe('root barrel (src/index.ts)', () => {
     expect(rootNames).not.toContain('verdictRank');
     expect(rootNames).not.toContain('stricterVerdict');
     // The closed errorKind union's tuple (security-lens S-2) is on the root beside JUDGE_MODES: a consumer
-    // who builds a JudgeCall narrows against it as the eval arm does (architecture lens A-4).
-    expect(securityBarrel.JUDGE_ERROR_KINDS).toEqual(['call-failed', 'unparseable', 'unknown-enum']);
+    // who builds a JudgeCall narrows against it as the eval arm does (architecture lens A-4). Four since
+    // issue #152: `refused`, the one kind that is not a failure.
+    expect(securityBarrel.JUDGE_ERROR_KINDS).toEqual(['call-failed', 'unparseable', 'unknown-enum', 'refused']);
     expect(barrel.JUDGE_ERROR_KINDS).toBe(securityBarrel.JUDGE_ERROR_KINDS);
+    // Issue #152 (spec D15): the third session-side rule id joins the two on every barrel.
+    expect(barrel.JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
+    expect(securityBarrel.JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
+    expect(injectionBarrel.JUDGE_REFUSED_RULE_ID).toBe('judge-refused');
+    expect(barrel.JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
+    expect(barrel.JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
+    // #152 review A2: the one definition of "answered" is public beside the tuple it reads, same reference on both barrels.
+    expect(typeof barrel.isAnsweredResult).toBe('function');
+    expect(barrel.isAnsweredResult).toBe(securityBarrel.isAnsweredResult);
+    expect(barrel.isAnsweredResult({ ok: false, errorKind: 'refused', costUsd: null })).toBe(true);
   });
 
   it('exports the judge type closure its public signatures reference (compile-time; npm run typecheck is the gate)', () => {
@@ -163,12 +175,13 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.JUDGE_OVERSIZED_RULE_ID).toBe('judge-oversized');
     expect(barrel.JUDGE_REDACTED_RULE_ID).toBe('judge-redacted');
     expect(barrel.MAX_JUDGE_CALLS_PER_RUN).toBe(1000);
-    expect(barrel.JUDGE_SESSION_STATES).toHaveLength(9);
+    // Ten states and four kinds since issue #152 (`refused` at every layer).
+    expect(barrel.JUDGE_SESSION_STATES).toHaveLength(10);
     expect(typeof barrel.parseJudgeSettings).toBe('function');
     expect(new barrel.JudgeSettingsError('x')).toBeInstanceOf(Error);
-    expect(barrel.JUDGE_CALL_STATES).toHaveLength(9);
+    expect(barrel.JUDGE_CALL_STATES).toHaveLength(10);
     expect(barrel.JUDGE_CALL_VERDICTS).toHaveLength(3);
-    expect(barrel.JUDGE_CALL_ERROR_KINDS).toHaveLength(3);
+    expect(barrel.JUDGE_CALL_ERROR_KINDS).toHaveLength(4);
     const rootNames = Object.keys(barrel);
     for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey']) {
       expect(rootNames, `root barrel must not export ${fixed}`).not.toContain(fixed);
