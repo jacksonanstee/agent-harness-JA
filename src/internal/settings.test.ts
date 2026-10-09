@@ -192,3 +192,112 @@ describe('unknownKeys', () => {
     expect(unknownKeys(doc, ['rules'])).toEqual(['__proto__']);
   });
 });
+
+// ---- Issue #108: a duplicated JSON key fails loud instead of last-wins ----
+
+const loadRaw = (body: string): unknown => loadJsonSettings('/x.json', parseEcho, null, wrap, () => body);
+const messageFrom = (body: string): string => {
+  try {
+    loadRaw(body);
+  } catch (error: unknown) {
+    return error instanceof FakeSettingsError ? error.message : `WRONG TYPE: ${String(error)}`;
+  }
+  return 'NO THROW';
+};
+
+describe('loadJsonSettings duplicate keys (issue #108)', () => {
+  it('refuses a duplicated dimension key, naming the object path and the key', () => {
+    const message = messageFrom(
+      '{"permissions":{"defaultDecision":"deny","defaultDecision":"allow","rules":[]}}',
+    );
+    expect(message).toMatch(/^\/x\.json: /);
+    expect(message).toContain("duplicate key 'defaultDecision'");
+    expect(message).toContain('permissions');
+    expect(message).not.toContain('allow');
+  });
+
+  it('refuses a duplicated key inside a rule, naming the array index', () => {
+    const message = messageFrom(
+      '{"permissions":{"rules":[{"tool":"Bash","match":"a","decision":"deny","decision":"allow"}]}}',
+    );
+    expect(message).toContain("duplicate key 'decision'");
+    expect(message).toContain('permissions.rules[0]');
+  });
+
+  it('refuses a duplicated allowlist and sandbox key', () => {
+    expect(messageFrom('{"sandbox":{"paths":{"allow":["/a"],"allow":["/"]}}}')).toMatch(
+      /duplicate key 'allow'.*sandbox\.paths/,
+    );
+    expect(messageFrom('{"sandbox":{"paths":{},"paths":{}}}')).toMatch(/duplicate key 'paths'.*sandbox/);
+  });
+
+  it('refuses a duplicated key in the judge block', () => {
+    expect(messageFrom('{"judge":{"model":"a","model":"b"}}')).toMatch(/duplicate key 'model'.*judge/);
+  });
+
+  it('refuses a duplicate at the top level', () => {
+    expect(messageFrom('{"a":1,"a":2}')).toMatch(/duplicate key 'a'.*top-level/);
+  });
+
+  it('compares keys by their decoded value: an escaped spelling is the same key', () => {
+    const escaped = '{"permissions":{"defaultDecision":"deny","\\u0064efaultDecision":"allow"}}';
+    expect(messageFrom(escaped)).toMatch(/duplicate key 'defaultDecision'/);
+    expect(messageFrom('{"a\\"b":1,"a\\u0022b":2}')).toMatch(/duplicate key/);
+  });
+
+  it('allows the same key at different levels and in sibling objects', () => {
+    expect(loadRaw('{"a":{"a":{"a":1}},"b":{"a":1},"c":[{"a":1},{"a":2}]}')).toEqual({
+      a: { a: { a: 1 } },
+      b: { a: 1 },
+      c: [{ a: 1 }, { a: 2 }],
+    });
+  });
+
+  it('is not confused by quotes, braces, colons and commas inside string values or keys', () => {
+    const body =
+      '{"a":"x\\"y\\\\","b":"{\\"a\\":1,\\"a\\":2}","c\\"{":1,"d":["}",",","\\\\"],"e":1}';
+    expect(loadRaw(body)).toEqual(JSON.parse(body));
+  });
+
+  it('a value equal to an earlier key is not a key', () => {
+    expect(loadRaw('{"a":"a","b":"a","c":["a","a"]}')).toEqual({ a: 'a', b: 'a', c: ['a', 'a'] });
+  });
+
+  it('echoes a hostile key bounded and single-line, and never a value', () => {
+    const key = 'k\\n' + 'z'.repeat(200);
+    const message = messageFrom(`{"${key}":"SECRET_VALUE","${key}":2}`);
+    expect(message).toContain('duplicate key');
+    expect(message).not.toContain('\n');
+    expect(message).not.toContain('SECRET_VALUE');
+    expect(message.length).toBeLessThan(250);
+  });
+
+  it('leaves invalid JSON to the existing not-valid-JSON path', () => {
+    expect(messageFrom('{"a":1,"a":')).toBe('/x.json is not valid JSON');
+  });
+
+  it('bounds the message by nesting depth, keeping the key and the last path segments', () => {
+    const depth = 20000;
+    const body = '{"k":'.repeat(depth) + '{"a":1,"a":2}' + '}'.repeat(depth);
+    const message = messageFrom(body);
+    expect(message).toContain("duplicate key 'a'");
+    expect(message).toContain('…');
+    expect(message).toMatch(/\.k\.k\.k \(/);
+    expect(message.length).toBeLessThan(600);
+  });
+
+  it('names a duplicate inside a nested array by index path', () => {
+    expect(messageFrom('{"x":[[{"a":1},{"b":1,"b":2}]]}')).toMatch(/duplicate key 'b' in x\[0\]\[1\]/);
+  });
+
+  it('treats a surrogate-pair key spelled raw and escaped as the same key', () => {
+    expect(messageFrom('{"\u{1F600}":1,"\\ud83d\\ude00":2}')).toMatch(/duplicate key/);
+  });
+
+  it('stays linear on a large document', () => {
+    const body = JSON.stringify({ list: Array.from({ length: 20000 }, (_, i) => ({ k: i, v: 'x' })) });
+    const start = Date.now();
+    loadRaw(body);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+});

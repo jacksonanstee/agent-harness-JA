@@ -1704,6 +1704,21 @@ describe('main() runs the guarded settings reader (the wiring pin, ADR-0034 deci
     expect(stderr).toContain(settings);
   });
 
+  it('run exits 2 on a project settings file with a duplicated key, naming the key (issue #108)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-dupkey-project-'));
+    tmp.push(dir);
+    mkdirSync(join(dir, '.harness'));
+    const settings = join(dir, '.harness', 'settings.json');
+    writeFileSync(
+      settings,
+      '{"permissions":{"defaultDecision":"deny","defaultDecision":"allow","rules":[]}}',
+    );
+    const { code, stderr } = await stderrOf(['run', 'hello'], dir);
+    expect(code).toBe(2);
+    expect(stderr).toContain(settings);
+    expect(stderr).toMatch(/duplicate key 'defaultDecision'/);
+  });
+
   it('eval exits 2 on the same file (the second production caller)', async () => {
     const { dir, settings } = hostileProject();
     const { code, stderr } = await stderrOf(['eval', './tasks'], dir);
