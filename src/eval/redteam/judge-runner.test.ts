@@ -5,7 +5,7 @@ import type { JudgeCall, JudgeCallResult, Verdict } from '../../security/index.j
 import { MAX_JUDGE_RESPONSE_BYTES } from '../../session/judge.js';
 import { MAX_ADVERSARY_RESPONSE_BYTES } from '../verifier/index.js';
 import { CORPUS } from './corpus.js';
-import { runRedteamJudge } from './judge-runner.js';
+import { isAnsweredStatus, runRedteamJudge } from './judge-runner.js';
 import type { JudgeStatus, RedteamJudgeRow, RedteamJudgeScorecard, Slice } from './judge-runner.js';
 import { CATEGORIES } from './types.js';
 import type { Category, CorpusCase } from './types.js';
@@ -26,8 +26,12 @@ const REASONS = [
   'judge timed out; floor held',
   'provider refused; composed ask',
 ] as const;
-/** Seven since issue #152: `refused` is the provider declining, answered for the gate, never a judgement. */
-const STATUSES: readonly JudgeStatus[] = ['judged', 'not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum', 'refused'];
+/** Seven since issue #152: `refused` is the provider declining, answered for the gate, never a judgement.
+ *  Not a second source (#152 review M1): `satisfies` pins every member IN the type, and `StatusesComplete`
+ *  below pins every member of the type in this tuple, so the two can only move together. */
+const STATUSES = ['judged', 'not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum', 'refused'] as const satisfies readonly JudgeStatus[];
+type StatusesComplete = JudgeStatus extends (typeof STATUSES)[number] ? true : false;
+const statusesComplete: StatusesComplete = true;
 
 /** Two holdout-shaped cases the heuristic passes (verified by execution at 7033526). */
 const HOLDOUT: readonly CorpusCase[] = [
@@ -97,6 +101,17 @@ describe('response byte-cap parity (MAX_JUDGE_RESPONSE_BYTES mirrors MAX_ADVERSA
   it('the two caps are the same number', () => {
     expect(MAX_JUDGE_RESPONSE_BYTES).toBe(MAX_ADVERSARY_RESPONSE_BYTES);
     expect(MAX_JUDGE_RESPONSE_BYTES).toBe(131_072);
+  });
+});
+
+describe('#152 review M1: JudgeStatus is derived from JudgeRunState and JudgeErrorKind; isAnsweredStatus is the one source for "answered"', () => {
+  it('the test tuple and the type agree in both directions (compile-time), and isAnsweredStatus is true for judged and refused only', () => {
+    expect(statusesComplete).toBe(true);
+    expect(STATUSES).toHaveLength(7);
+    expect(STATUSES.filter(isAnsweredStatus)).toEqual(['judged', 'refused']);
+    for (const status of ['not-escalated', 'timed-out', 'call-failed', 'unparseable', 'unknown-enum'] as const) {
+      expect(isAnsweredStatus(status), status).toBe(false);
+    }
   });
 });
 

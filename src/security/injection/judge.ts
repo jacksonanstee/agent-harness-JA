@@ -61,6 +61,16 @@ export const JUDGE_ERROR_KINDS = ['call-failed', 'unparseable', 'unknown-enum', 
 export type JudgeErrorKind = (typeof JUDGE_ERROR_KINDS)[number];
 
 /**
+ * The one definition of ANSWERED (issue #152 review M1): the endpoint replied
+ * with a verdict or with a refusal. Every consumer that resets an early stop,
+ * counts a denominator or reads a call as complete derives from here, so
+ * "answered" is never spelled by hand twice.
+ */
+export function isAnsweredResult(result: JudgeCallResult): boolean {
+  return result.ok || result.errorKind === 'refused';
+}
+
+/**
  * The rich result of one judge completion: the verdict, or a closed error
  * kind, plus the cost the call incurred when the transport reported one. A
  * failed parse was still charged, so `costUsd` rides on both arms. The `!ok`

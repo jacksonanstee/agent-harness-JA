@@ -1,5 +1,6 @@
 import {
   createJudgedScanner,
+  isAnsweredResult,
   JUDGE_OVERSIZED_RULE_ID,
   JUDGE_REDACTED_RULE_ID,
   JUDGE_TIMEOUT_MS,
@@ -257,8 +258,7 @@ export function countAtSettle(ctx: JudgeRunContext, record: RecordSnapshot, sign
   const r = record.result;
   const infrastructure = signalAborted || record.threw || (r !== null && !r.ok && r.errorKind === 'call-failed');
   if (!infrastructure) {
-    const answered = r !== null && (r.ok || r.errorKind === 'refused');
-    if (answered) {
+    if (r !== null && isAnsweredResult(r)) {
       ctx.consecutiveFailures = 0;
       ctx.disarmed = true;
     }

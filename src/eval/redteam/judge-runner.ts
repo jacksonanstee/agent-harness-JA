@@ -1,5 +1,5 @@
 import { createJudgedScanner, JUDGE_ERROR_KINDS, MAX_JUDGE_INPUT_BYTES, stricterVerdict, toInjectionJudge, verdictRank } from '../../security/index.js';
-import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, ScanResult, Verdict } from '../../security/index.js';
+import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeErrorKind, JudgeRunState, ScanResult, Verdict } from '../../security/index.js';
 import { computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type { ScorecardRowCore, ScorecardTotalsCore } from '../scorecard/index.js';
 import { CORPUS_ID_RE, REDTEAM_FAILURE_KINDS } from './runner.js';
@@ -15,8 +15,25 @@ import type { Category, CorpusCase } from './types.js';
 // case text (CG2).
 
 export type Slice = 'corpus' | 'holdout';
-/** A row's judge outcome. `refused` (issue #152): the provider refused to judge the case; composed as `ask`, answered for the gate, never a judgement. */
-export type JudgeStatus = 'judged' | 'not-escalated' | 'timed-out' | 'call-failed' | 'unparseable' | 'unknown-enum' | 'refused';
+/**
+ * A row's judge outcome, DERIVED from the scanner's run state and the closed
+ * error kinds rather than spelled by hand (#152 review M1): the states the arm
+ * can see (`off` and `oversized` are unreachable in `always` mode over the
+ * loader's byte cap, and `failed` is replaced by the recorded kind) plus every
+ * `JudgeErrorKind`. `refused` (issue #152): the provider refused to judge the
+ * case; composed as `ask`, answered for the gate, never a judgement.
+ */
+export type JudgeStatus = Exclude<JudgeRunState, 'off' | 'oversized' | 'failed'> | JudgeErrorKind;
+
+/** The one source for "answered" over a row status (#152 review M1): mirrors `isAnsweredResult` on the result. */
+export function isAnsweredStatus(status: JudgeStatus): boolean {
+  return status === 'judged' || status === 'refused';
+}
+
+/** `judged + refused` over a card's totals, the completeness arithmetic (#152 D11), in one place. */
+export function answeredCalls(totals: Pick<RedteamJudgeTotals, 'judged' | 'refused'>): number {
+  return totals.judged + totals.refused;
+}
 
 /** `pass` / `failureKind` on the core are the `always`-mode outcome, so
  *  `computeByFailureKind` re-use holds. */
@@ -234,7 +251,7 @@ function modeTotals(rows: readonly RedteamJudgeRow[], composed: (r: RedteamJudge
     blocked: detected.filter((r) => composed(r) === 'block').length,
     flaggedOnly: detected.filter((r) => composed(r) === 'ask').length,
     missed: malicious.length - detected.length,
-    benignJudged: benign.filter((r) => r.status === 'judged' || r.status === 'refused').length,
+    benignJudged: benign.filter((r) => isAnsweredStatus(r.status)).length,
     falseBlockCount: benign.filter((r) => composed(r) === 'block').length,
     falseFlagCount: benign.filter((r) => composed(r) === 'ask').length,
   };
@@ -315,7 +332,7 @@ export async function runRedteamJudge(deps: RedteamJudgeDeps): Promise<RedteamJu
     attempted += 1;
     costs.push(rec.result()?.costUsd ?? null);
     deps.onProgress?.(`judge ${attempted}/${attemptedTotal} ${row.id}: ${row.status}`);
-    if (row.status === 'judged' || row.status === 'refused') {
+    if (isAnsweredStatus(row.status)) {
       if (row.status === 'judged') judgedCount += 1;
       else refusedCount += 1;
       consecutiveFailures = 0;

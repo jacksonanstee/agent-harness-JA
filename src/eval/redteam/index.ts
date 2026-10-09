@@ -7,7 +7,7 @@ export type {
   RedteamTotals,
 } from './runner.js';
 // The measured judge arm (issue #96, ADR-0036 D5/D6).
-export { DEFAULT_EARLY_STOP_AFTER, runRedteamJudge } from './judge-runner.js';
+export { answeredCalls, DEFAULT_EARLY_STOP_AFTER, isAnsweredStatus, runRedteamJudge } from './judge-runner.js';
 export type {
   JudgeStatus,
   ModeTotals,

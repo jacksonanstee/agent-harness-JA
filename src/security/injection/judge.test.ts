@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as injectionBarrel from './index.js';
 import {
   createJudgedScanner,
+  isAnsweredResult,
   JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_REFUSED_RULE_ID,
@@ -80,6 +81,15 @@ describe('module constants (D1)', () => {
     const state: JudgeRunState = 'not-escalated';
     const refused: JudgeRunState = 'refused';
     expect([mode, state, refused]).toEqual(['suspicious', 'not-escalated', 'refused']);
+  });
+
+  it('isAnsweredResult is the one source for "answered": every ok result and the refused kind, never the three failure kinds (#152 review M1)', () => {
+    for (const verdict of VERDICTS) expect(isAnsweredResult({ ok: true, verdict, costUsd: null }), verdict).toBe(true);
+    expect(isAnsweredResult({ ok: false, errorKind: 'refused', costUsd: 0.002 })).toBe(true);
+    for (const errorKind of ['call-failed', 'unparseable', 'unknown-enum'] as const) {
+      expect(isAnsweredResult({ ok: false, errorKind, costUsd: null }), errorKind).toBe(false);
+    }
+    expect(typeof injectionBarrel.isAnsweredResult).toBe('function');
   });
 
   it('is exported from the injection barrel by name (values and the two verdict helpers)', () => {

@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   aggregateJudgeSamples,
+  answeredCalls,
   BaselineError,
   CORPUS,
   classifyDrift,
@@ -470,19 +471,29 @@ function runHeuristicArm(args: RedteamArgs, now: () => number): GateExit {
  *  the early stop before the nothing-judged branch (code-lens C-7). */
 export function judgeArmState(totals: RedteamJudgeScorecard['totals']): JudgeArmState {
   if (totals.stoppedEarly) return 'failed';
-  const answered = totals.judged + totals.refused;
+  const answered = answeredCalls(totals);
   if (totals.attempted === 0 || answered === totals.attempted) return 'complete';
   if (answered === 0) return 'failed';
   return 'partial';
 }
 
-/** The failure kinds in the fixed report order (`refused` is answered, not a failure; issue #152). */
-const FAILURE_STATUSES: readonly Exclude<JudgeStatus, 'judged' | 'not-escalated' | 'refused'>[] = [
-  'call-failed',
-  'timed-out',
-  'unparseable',
-  'unknown-enum',
-];
+/** A status the remedy line reports as a failure: everything that is neither answered nor the heuristic's own block. */
+type FailureStatus = Exclude<JudgeStatus, 'judged' | 'not-escalated' | 'refused'>;
+
+/**
+ * The failure kinds in the fixed report order, as a presence record (the
+ * `store.ts` EVENT_TYPE_PRESENCE idiom; #152 review M3): a new `JudgeStatus`
+ * that is not answered must be added here or the record stops compiling, so
+ * the remedy line can never silently omit a kind. `Object.keys` keeps the
+ * insertion order, which is the report order.
+ */
+const FAILURE_STATUS_PRESENCE: Record<FailureStatus, true> = {
+  'call-failed': true,
+  'timed-out': true,
+  unparseable: true,
+  'unknown-enum': true,
+};
+const FAILURE_STATUSES = Object.keys(FAILURE_STATUS_PRESENCE) as readonly FailureStatus[];
 
 const REMEDY_TAIL = 'check the key, the endpoint and the model id, then re-run';
 

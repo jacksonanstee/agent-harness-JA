@@ -76,6 +76,7 @@ export type {
 } from './verifier/index.js';
 export {
   aggregateJudgeSamples,
+  answeredCalls,
   BaselineError,
   CATEGORIES,
   classifyDrift,
@@ -83,6 +84,7 @@ export {
   DEFAULT_EARLY_STOP_AFTER,
   formatJudgeSampleSummary,
   HoldoutError,
+  isAnsweredStatus,
   JUDGE_FALSE_FLAG_BOUND,
   loadBaseline,
   loadHoldout,

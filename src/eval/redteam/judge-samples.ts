@@ -1,3 +1,4 @@
+import { answeredCalls, isAnsweredStatus } from './judge-runner.js';
 import type { RedteamJudgeRow, RedteamJudgeScorecard, Slice } from './judge-runner.js';
 import { CORPUS_ID_RE } from './runner.js';
 
@@ -105,7 +106,7 @@ function counts(card: RedteamJudgeScorecard): { judged: number; block: number; a
   const rows = card.rows.filter(benignEscalated);
   const outcomes = rows.map((row) => ({ outcome: benignOutcome(row), heuristic: row.heuristic }));
   return {
-    judged: outcomes.filter((o) => o.outcome !== 'unjudged').length,
+    judged: rows.filter((row) => isAnsweredStatus(row.status)).length,
     block: outcomes.filter((o) => o.outcome === 'block').length,
     ask: outcomes.filter((o) => o.outcome === 'ask' || (o.outcome === 'refused' && o.heuristic === 'pass')).length,
   };
@@ -115,7 +116,7 @@ function counts(card: RedteamJudgeScorecard): { judged: number; block: number; a
  *  stop needs nothing answered and at least `earlyStopAfter` attempts, so it
  *  can never read complete here. */
 function isComplete(card: RedteamJudgeScorecard): boolean {
-  return card.totals.judged + card.totals.refused === card.totals.attempted;
+  return answeredCalls(card.totals) === card.totals.attempted;
 }
 
 function tallyBenign(cards: readonly RedteamJudgeScorecard[]): BenignSampleTally[] {
