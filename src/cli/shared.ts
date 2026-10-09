@@ -116,6 +116,10 @@ export function refuseSymlinkedDir(path: string): void {
  * least one row failed". Not just symlink refusals: ENOTDIR (a regular file
  * committed at the output path), EACCES, and ENOSPC all end here too.
  *
+ * The file is created with `wx`, so a path that already exists (a planted
+ * symlink or an earlier same-second scorecard) is refused with a message
+ * naming it, never followed and never overwritten (issue #150).
+ *
  * Generic over any scorecard envelope (golden, redteam, redteam-judge, ...):
  * the same constraint `toCanonicalJson` requires, so every scorecard
  * producer writes through this one helper instead of duplicating it. The
@@ -128,16 +132,26 @@ export function writeScorecard<T extends { rows: ReadonlyArray<{ id: string }> }
   nowMs: number = Date.now(),
   prefix = 'scorecard',
 ): { ok: true; path: string } | { ok: false; message: string } {
+  const path = join(outDir, scorecardFilename(nowMs, prefix));
   try {
     mkdirSync(outDir, { recursive: true });
     // Re-checks only the leaf path (outDir); it narrows the TOCTOU window
     // opened by mkdir but does not close it — an in-process oracle can write
     // anywhere regardless (security-model R-10).
     refuseSymlinkedDir(outDir);
-    const path = join(outDir, scorecardFilename(nowMs, prefix));
-    writeFileSync(path, toCanonicalJson(scorecard));
+    // `wx` (O_CREAT|O_EXCL) refuses anything already at the exact name, a
+    // symlink included (dangling or not), without following it, so a link
+    // planted at the output name cannot redirect the write and a same-stamp
+    // re-run cannot silently overwrite an earlier scorecard (issue #150).
+    writeFileSync(path, toCanonicalJson(scorecard), { flag: 'wx' });
     return { ok: true, path };
   } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return {
+        ok: false,
+        message: `refusing to overwrite ${path}: a file or symlink already exists at that name; move it or re-run in another second`,
+      };
+    }
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 }

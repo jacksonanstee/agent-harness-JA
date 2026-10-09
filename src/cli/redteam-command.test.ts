@@ -1132,3 +1132,54 @@ describe('runRedteamCommand --judge --samples (issue #148)', () => {
     expect(columnZeroMatches(stdout, 'JUDGE_GATE=')).toBe(0);
   });
 });
+
+// ---- Issue #150: a symlink planted at the exact scorecard name --------------
+describe('runRedteamCommand refuses a scorecard name that already exists (issue #150)', () => {
+  const SENTINEL = 'outside the out dir: must survive byte for byte\n';
+
+  /** A symlink at `<out>/<name>` pointing at a file OUTSIDE out, holding SENTINEL. */
+  function plantSymlink(out: string, name: string): string {
+    const target = join(freshDir(), 'victim.txt');
+    writeFileSync(target, SENTINEL);
+    symlinkSync(target, join(out, name));
+    return target;
+  }
+
+  it('heuristic scorecard-<stamp>.json planted as a symlink: exit 2, the target untouched, nothing written through the link', async () => {
+    const args = baseArgs({ baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, HEURISTIC_FILE);
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, { now: () => NOW_MS }));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stderr).toContain('refusing to overwrite');
+    expect(stderr).toContain(join(args.out, HEURISTIC_FILE));
+    expect(stderr).not.toContain('scorecard written to');
+    expect(stdout).not.toContain(SENTINEL);
+  });
+
+  it('judge-scorecard-<stamp>.json planted as a symlink: JUDGE_ARM=failed, exit 2, the target untouched', async () => {
+    withFakeKey();
+    const args = baseArgs({ judge: true, baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, JUDGE_FILE);
+    const { deps } = spiedDeps(okJudge('pass'));
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stdout).toContain('JUDGE_ARM=failed');
+    expect(stderr).toContain('refusing to overwrite');
+    expect(stderr).not.toContain('judge scorecard written to');
+  });
+
+  it('judge-scorecard-s<k>-<stamp>.json planted as a symlink: the sample loop stops failed, exit 2, the target untouched', async () => {
+    withFakeKey();
+    const args = baseArgs({ judge: true, samples: 2, baselinePath: byteEqualBaseline() });
+    const target = plantSymlink(args.out, `judge-scorecard-s1-${STAMP}.json`);
+    const { deps } = spiedDeps(okJudge('pass'));
+    const { code, stdout, stderr } = await captureIO(() => runRedteamCommand(args, deps));
+    expect(code).toBe(2);
+    expect(readFileSync(target, 'utf8')).toBe(SENTINEL);
+    expect(stdout).toContain('JUDGE_ARM=failed');
+    expect(stderr).toContain('refusing to overwrite');
+    expect(readdirSync(args.out)).not.toContain(`judge-scorecard-s2-${STAMP}.json`);
+  });
+});
