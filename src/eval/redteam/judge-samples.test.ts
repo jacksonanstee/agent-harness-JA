@@ -211,10 +211,25 @@ describe('issue #148: the D8 gate over repeated samples', () => {
   it('a refused MALICIOUS case is detected at ask without the judge reading it: the first line says so, `corpus 1/1 (1 refused)` (D11, T9a)', async () => {
     const s = aggregateJudgeSamples([await sample({ 'mal-1': 'refused' }), await sample({ 'mal-1': 'block' })], 2);
     expect(s.detectedMin).toEqual({ corpus: 1, holdout: 0 });
-    expect(s.refusedMax).toEqual({ corpus: 1, holdout: 0 });
+    expect(s.refusedInWorst).toEqual({ corpus: 1, holdout: 0 });
     expect(formatJudgeSampleSummary(s)[0]).toBe(
       'judge samples: 2 of 2 requested (2 complete, refused 1); detected at always (worst sample): corpus 1/1 (1 refused), holdout 0/0; cost=$0.0120',
     );
+  });
+
+  it('the detection pair is ONE sample: the refused count comes from the min-detected sample, not the sample that refused the most (#152 review M5)', async () => {
+    // Sample A detects 1/1 with mal-1 refused; sample B detects 0/1 with mal-1 judged pass. The worst sample is B, which refused nothing.
+    const s = aggregateJudgeSamples([await sample({ 'mal-1': 'refused' }), await sample({ 'mal-1': 'pass' })], 2);
+    expect(s.detectedMin).toEqual({ corpus: 0, holdout: 0 });
+    expect(s.refusedInWorst).toEqual({ corpus: 0, holdout: 0 });
+    expect(s.refused).toBe(1);
+    expect(formatJudgeSampleSummary(s)[0]).toBe(
+      'judge samples: 2 of 2 requested (2 complete, refused 1); detected at always (worst sample): corpus 0/1, holdout 0/0; cost=$0.0120',
+    );
+    // Ties on detection: the first worst sample read is the one printed, its refusals with it.
+    const tie = aggregateJudgeSamples([await sample({ 'mal-1': 'refused' }), await sample({ 'mal-1': 'block' })], 2);
+    expect(tie.detectedMin.corpus).toBe(1);
+    expect(tie.refusedInWorst.corpus).toBe(1);
   });
 
   it('the first summary line carries `, refused N` after the complete count only when N > 0 (D11, T9b); the gate line format is unchanged', async () => {
