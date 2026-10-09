@@ -511,8 +511,10 @@ export interface SessionJudge {
 /**
  * What happened to one tool result on the judge path (spec D6, D7).
  * `judged` is the only state whose judge verdict was composed in; every
- * other state ran on the heuristic floor, except `oversized` (at least `ask`,
- * decision 8). Telemetry mirrors it as `JudgeCallState`.
+ * other state ran on the heuristic floor, except `oversized` and `refused`
+ * (at least `ask`: decision 8, and issue #152 for a provider refusal, which
+ * is composed as at least `ask` with `judge-refused` and never a judgement).
+ * Telemetry mirrors it as `JudgeCallState`.
  */
 export type JudgeSessionState =
   | 'not-escalated'
@@ -520,6 +522,7 @@ export type JudgeSessionState =
   | 'judged'
   | 'timed-out'
   | 'failed'
+  | 'refused'
   | 'cap-reached'
   | 'hook-cancelled'
   | 'stopped'

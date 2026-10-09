@@ -16,8 +16,10 @@ export {
   scan,
   // Issue #96 PR-B1: the judge-wiring values a consumer needs to configure and
   // read the judge; `hasJudgeKey` is composition plumbing and stays off (ADR-0023).
+  // Issue #152: `JUDGE_REFUSED_RULE_ID` joins the two session-side ids (spec D15).
   JUDGE_OVERSIZED_RULE_ID,
   JUDGE_REDACTED_RULE_ID,
+  JUDGE_REFUSED_RULE_ID,
   JUDGE_WORST_CASE_USD_PER_CALL,
   JudgeSettingsError,
   MAX_JUDGE_CALLS_PER_RUN,

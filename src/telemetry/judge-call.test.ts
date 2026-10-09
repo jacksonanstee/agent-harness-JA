@@ -106,11 +106,11 @@ describe('judge-call rows (spec D6)', () => {
     expect(rows[0]?.payload).toMatchObject({ tool: 'Re ad', tool_use_id: 'id 1' });
   });
 
-  it('the mirrors carry exactly their members', () => {
+  it('the mirrors carry exactly their members: ten states and four kinds (#152 adds refused to both)', () => {
     expect([...JUDGE_CALL_STATES].sort()).toEqual(
-      ['cap-reached', 'failed', 'hook-cancelled', 'judged', 'not-escalated', 'oversized', 'queue-timed-out', 'stopped', 'timed-out'],
+      ['cap-reached', 'failed', 'hook-cancelled', 'judged', 'not-escalated', 'oversized', 'queue-timed-out', 'refused', 'stopped', 'timed-out'],
     );
     expect([...JUDGE_CALL_VERDICTS].sort()).toEqual(['ask', 'block', 'pass']);
-    expect([...JUDGE_CALL_ERROR_KINDS].sort()).toEqual(['call-failed', 'unknown-enum', 'unparseable']);
+    expect([...JUDGE_CALL_ERROR_KINDS].sort()).toEqual(['call-failed', 'refused', 'unknown-enum', 'unparseable']);
   });
 });

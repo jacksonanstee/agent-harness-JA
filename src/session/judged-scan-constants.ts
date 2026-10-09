@@ -23,6 +23,7 @@ const JUDGE_SESSION_STATE_PRESENCE: Record<JudgeSessionState, true> = {
   judged: true,
   'timed-out': true,
   failed: true,
+  refused: true,
   'cap-reached': true,
   'hook-cancelled': true,
   stopped: true,

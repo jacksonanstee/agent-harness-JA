@@ -120,10 +120,12 @@ describe('constants and states (spec D3, D5; pin 13)', () => {
     expect(JUDGE_HOOK_TIMEOUT_S * 1000).toBeGreaterThan(JUDGE_TIMEOUT_MS);
   });
 
-  it('the telemetry mirrors equal their origins (drift, A-8)', () => {
+  it('the telemetry mirrors equal their origins (drift, A-8); ten states and four kinds since #152', () => {
     expect([...JUDGE_CALL_STATES].sort()).toEqual([...JUDGE_SESSION_STATES].sort());
-    expect(JUDGE_SESSION_STATES).toHaveLength(9);
+    expect(JUDGE_SESSION_STATES).toHaveLength(10);
+    expect(JUDGE_SESSION_STATES).toContain('refused');
     expect([...JUDGE_CALL_ERROR_KINDS].sort()).toEqual([...JUDGE_ERROR_KINDS].sort());
+    expect(JUDGE_ERROR_KINDS).toHaveLength(4);
     const verdicts: Record<Verdict, true> = { pass: true, ask: true, block: true };
     expect([...JUDGE_CALL_VERDICTS].sort()).toEqual(Object.keys(verdicts).sort());
   });
@@ -617,8 +619,11 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
   const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false): JudgeSummaryEntry =>
     ({ state, called, costUsd, delivered, tightened });
 
-  it('costUnknown counts reserved slots with no known cost only; unreserved states never count', () => {
-    const s = foldJudgeSummary(10, 4, [
+  it('costUnknown counts reserved slots with no known cost only; unreserved states never count; refused entries fold like oversized (#152, T3e)', () => {
+    // Two refused entries (#152): a pass-floor one, tightened to ask with its charged
+    // cost, and an ask-floor one, delivered but not tightened. Both were CALLED with a
+    // known cost, so costUnknown is unchanged by them.
+    const s = foldJudgeSummary(10, 6, [
       entry('judged', true, 0.002, true, true),
       entry('timed-out', true, null),
       entry('failed', true, 0.001),
@@ -627,17 +632,19 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
       entry('not-escalated', false, null, true),
       entry('stopped', false, null),
       entry('queue-timed-out', false, null),
+      entry('refused', true, 0.002283, true, true),
+      entry('refused', true, 0.001, true, false),
     ], 1);
     expect(s).toEqual({
       cap: 10,
-      calls: 4,
+      calls: 6,
       byState: {
-        'not-escalated': 1, oversized: 1, judged: 1, 'timed-out': 1, failed: 1,
+        'not-escalated': 1, oversized: 1, judged: 1, 'timed-out': 1, failed: 1, refused: 2,
         'cap-reached': 1, 'hook-cancelled': 0, stopped: 1, 'queue-timed-out': 1,
       },
-      annotated: 3,
-      tightened: 2,
-      costUsd: 0.003,
+      annotated: 5,
+      tightened: 3,
+      costUsd: expect.closeTo(0.006283, 10),
       costUnknown: 2,
       pendingAtEnd: 1,
     });

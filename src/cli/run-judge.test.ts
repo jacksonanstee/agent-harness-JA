@@ -196,14 +196,19 @@ describe('the summary and start lines (D7; pins 17, 29)', () => {
     expect(capWarning).toBe('the judge call cap (4) was reached; 2 tool result(s) ran on the heuristic only. Raise judge.maxCallsPerRun in ~/.harness/settings.json to judge more.');
   });
 
-  it('every state but not-escalated and judged is printed in the unjudged clause, in the D7 order (architecture lens A-2)', () => {
+  it('every state but not-escalated and judged is printed in the unjudged clause, in the D7 order, refused third (architecture lens A-2; #152 D9)', () => {
     const byState = Object.fromEntries(JUDGE_SESSION_STATES.map((s) => [s, 1])) as JudgeSummary['byState'];
     const { summary } = judgeSummaryLines(summaryOf({ byState }));
     const clause = /unjudged: (.*?), cost=/.exec(summary)?.[1] ?? '';
     const printed = clause.split(', ').map((part) => part.replace(/^1 /, ''));
-    expect(printed).toEqual(['timed-out', 'failed', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out']);
-    // Completeness against the source tuple: a tenth state drops out of the line only by a red test, never silently.
+    expect(printed).toEqual(['timed-out', 'failed', 'refused', 'oversized', 'cap-reached', 'hook-cancelled', 'stopped', 'queue-timed-out']);
+    // Completeness against the source tuple: an eleventh state drops out of the line only by a red test, never silently.
     expect([...printed, 'not-escalated', 'judged'].sort()).toEqual([...JUDGE_SESSION_STATES].sort());
+  });
+
+  it('a refused result IS unjudged (the judge did not read it) and prints as `unjudged: 1 refused` (#152 D9, T6)', () => {
+    const { summary } = judgeSummaryLines(summaryOf({ byState: { ...summaryOf({}).byState, refused: 1 }, calls: 1, tightened: 1, costUsd: 0.0023 }));
+    expect(summary).toBe('[harness] judge: 1/200 call(s), 1 note(s) added by the judge path, unjudged: 1 refused, cost=$0.0023 (not included in cost= above)');
   });
 
   it('pending at end appears exactly when pendingAtEnd > 0 (B-2)', () => {

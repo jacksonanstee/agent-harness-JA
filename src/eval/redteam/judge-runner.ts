@@ -15,7 +15,8 @@ import type { Category, CorpusCase } from './types.js';
 // case text (CG2).
 
 export type Slice = 'corpus' | 'holdout';
-export type JudgeStatus = 'judged' | 'not-escalated' | 'timed-out' | 'call-failed' | 'unparseable' | 'unknown-enum';
+/** A row's judge outcome. `refused` (issue #152): the provider refused to judge the case; composed as `ask`, answered for the gate, never a judgement. */
+export type JudgeStatus = 'judged' | 'not-escalated' | 'timed-out' | 'call-failed' | 'unparseable' | 'unknown-enum' | 'refused';
 
 /** `pass` / `failureKind` on the core are the `always`-mode outcome, so
  *  `computeByFailureKind` re-use holds. */
@@ -155,6 +156,8 @@ function statusOf(state: JudgedScanResult['judge'], recorded: JudgeCallResult | 
       return 'judged';
     case 'timed-out':
       return 'timed-out';
+    case 'refused':
+      return 'refused';
     case 'failed':
       return recorded !== null && !recorded.ok && isJudgeErrorKind(recorded.errorKind) ? recorded.errorKind : 'call-failed';
     case 'off':

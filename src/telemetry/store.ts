@@ -126,6 +126,7 @@ const JUDGE_CALL_STATE_PRESENCE: Record<JudgeCallState, true> = {
   judged: true,
   'timed-out': true,
   failed: true,
+  refused: true,
   'cap-reached': true,
   'hook-cancelled': true,
   stopped: true,
@@ -142,6 +143,7 @@ const JUDGE_CALL_ERROR_KIND_PRESENCE: Record<JudgeCallErrorKind, true> = {
   'call-failed': true,
   unparseable: true,
   'unknown-enum': true,
+  refused: true,
 };
 export const JUDGE_CALL_ERROR_KINDS = Object.keys(JUDGE_CALL_ERROR_KIND_PRESENCE) as readonly JudgeCallErrorKind[];
 const JUDGE_CALL_ERROR_KIND_SET: ReadonlySet<string> = new Set(JUDGE_CALL_ERROR_KINDS);

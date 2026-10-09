@@ -19,25 +19,32 @@ export const MAX_JUDGE_INPUT_BYTES = 131_072;
 export const JUDGE_RULE_IDS = { block: 'judge-block', ask: 'judge-ask' } as const;
 
 /**
- * Session-side rule ids (issue #96 PR-B1, spec D3 steps 3a and 3b), declared
- * BESIDE `JUDGE_RULE_IDS` and deliberately not inside it, so PR-A's measured
- * scanner and its public tuple keep their shape. `judge-oversized`: an
- * oversized input under `always` composes as at least `ask` (decision 8).
+ * Rule ids that attribute a TIGHTENING that was not a judgement (issue #96
+ * PR-B1, spec D3 steps 3a and 3b; issue #152, spec D3), declared BESIDE
+ * `JUDGE_RULE_IDS` and deliberately not inside it, so PR-A's measured
+ * scanner and its public tuple keep their shape. Three ids. `judge-oversized`:
+ * an oversized input under `always` composes as at least `ask` (decision 8).
  * `judge-redacted`: on the failure hook, a redacted judge input composes as
- * at least `ask` (decision 15). Each id is added only when its rule caused
- * the tightening (ADR-0016 decision 3, G-9).
+ * at least `ask` (decision 15). `judge-refused`: the provider refused to
+ * judge the text, so `scanWithJudge` composes it as at least `ask` (#152, a
+ * refusal is a distinct outcome, never a judgement). Each id is added only
+ * when its rule caused the tightening (ADR-0016 decision 3, G-9).
  */
 export const JUDGE_OVERSIZED_RULE_ID = 'judge-oversized';
 export const JUDGE_REDACTED_RULE_ID = 'judge-redacted';
+export const JUDGE_REFUSED_RULE_ID = 'judge-refused';
 
 /**
  * What happened to the judge on one `scanWithJudge` call. `off` and
  * `not-escalated` mean it was never consulted; `oversized` means the input
  * exceeded `MAX_JUDGE_INPUT_BYTES` so the escalation is unresolved;
  * `timed-out` and `failed` mean it was consulted and the heuristic floor
- * held; `judged` means its verdict was composed in.
+ * held; `refused` means it was consulted and the provider refused to judge
+ * the text, so the result is composed as at least `ask` with `judge-refused`
+ * and the escalation is unresolved (issue #152); `judged` means its verdict
+ * was composed in.
  */
-export type JudgeRunState = 'off' | 'not-escalated' | 'oversized' | 'judged' | 'timed-out' | 'failed';
+export type JudgeRunState = 'off' | 'not-escalated' | 'oversized' | 'judged' | 'timed-out' | 'failed' | 'refused';
 
 /** A `ScanResult` plus the judge's run state. Assignable to `ScanResult`. */
 export interface JudgedScanResult extends ScanResult {
@@ -46,14 +53,19 @@ export interface JudgedScanResult extends ScanResult {
 
 /** The closed error kinds a `JudgeCall` may report. The eval arm narrows a
  *  recorded kind against this list before it becomes a row status, exactly
- *  as the `ok` arm's verdict is narrowed by `isVerdict`. */
-export const JUDGE_ERROR_KINDS = ['call-failed', 'unparseable', 'unknown-enum'] as const;
+ *  as the `ok` arm's verdict is narrowed by `isVerdict`. `refused` (issue
+ *  #152) is the one kind that is not a failure: the provider answered by
+ *  refusing, so it is composed as at least `ask`, counts as answered and
+ *  never toward an early stop. */
+export const JUDGE_ERROR_KINDS = ['call-failed', 'unparseable', 'unknown-enum', 'refused'] as const;
 export type JudgeErrorKind = (typeof JUDGE_ERROR_KINDS)[number];
 
 /**
  * The rich result of one judge completion: the verdict, or a closed error
  * kind, plus the cost the call incurred when the transport reported one. A
- * failed parse was still charged, so `costUsd` rides on both arms.
+ * failed parse was still charged, so `costUsd` rides on both arms. The `!ok`
+ * arm carries `'refused'` with the charged cost when the provider refused
+ * (issue #152, spec D1): same shape, one more kind.
  */
 export type JudgeCallResult =
   | { ok: true; verdict: Verdict; costUsd: number | null }
@@ -99,16 +111,43 @@ function isVerdict(value: unknown): value is Verdict {
 }
 
 /**
+ * The module-private brand a provider refusal carries across the locked
+ * `InjectionJudge` seam (issue #152, spec D2). A symbol, checked by the
+ * predicate below and never by message text or `name`, so no caller-supplied
+ * judge can forge a refusal by throwing an `Error` that SAYS refused: that
+ * still reads `failed`. The signal never leaves `callUnderTimer`.
+ */
+const REFUSED_BRAND: unique symbol = Symbol('agent-harness-ja.judge.refused');
+
+class RefusedSignal extends Error {
+  readonly [REFUSED_BRAND] = true as const;
+  constructor() {
+    super('judge call refused by the provider');
+    this.name = 'RefusedSignal';
+  }
+}
+
+function isRefusedSignal(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as { [REFUSED_BRAND]?: unknown })[REFUSED_BRAND] === true;
+}
+
+/**
  * Adapts the rich call to the locked `InjectionJudge` seam. The seam's
  * `heuristic` argument is DISCARDED: the judge is blind by construction, so
  * the same text reaches the transport byte-identically whatever the floor
  * said (ADR-0036 D3). A `!ok` result becomes a rejection, which the composed
- * scanner reads as `judge: 'failed'`.
+ * scanner reads as `judge: 'failed'`, except `errorKind: 'refused'` (issue
+ * #152, spec D2), which rejects with the module-private branded signal and
+ * reads `judge: 'refused'`. A caller who writes a raw `InjectionJudge` cannot
+ * signal a refusal; one who builds a `JudgeCall` gets it through here.
  */
 export function toInjectionJudge(call: JudgeCall): InjectionJudge {
   return async (text: string, _heuristic: ScanResult, signal?: AbortSignal): Promise<Verdict> => {
     const result = await call(text, signal);
-    if (!result.ok) throw new Error(`judge call failed: ${result.errorKind}`);
+    if (!result.ok) {
+      if (result.errorKind === 'refused') throw new RefusedSignal();
+      throw new Error(`judge call failed: ${result.errorKind}`);
+    }
     return result.verdict;
   };
 }
@@ -123,12 +162,16 @@ function floorCopy(heuristic: ScanResult): ScanResult {
   return { ...heuristic, rule_ids: [...heuristic.rule_ids], excerpts: [...heuristic.excerpts] };
 }
 
-type JudgeOutcome = { kind: 'timed-out' } | { kind: 'failed' } | { kind: 'judged'; verdict: Verdict };
+type JudgeOutcome = { kind: 'timed-out' } | { kind: 'failed' } | { kind: 'refused' } | { kind: 'judged'; verdict: Verdict };
 
 /**
  * Awaits the judge under a scanner-owned timer (the verifier.ts shape). Every
  * path resolves: the timer firing, a rejection, a synchronous throw and a
- * non-verdict value are all outcomes, never errors. Both settlement handlers
+ * non-verdict value are all outcomes, never errors. A rejection or a
+ * synchronous throw of the branded refusal signal is `refused` (issue #152,
+ * spec D2); every other rejection, throw, abort and resolved non-verdict is
+ * `failed`, and a branded signal arriving after the timer fired is consumed
+ * by the `settled` guard like any late settlement. Both settlement handlers
  * are attached before the timer can fire, so a late settlement after the
  * timeout is consumed and never surfaces as an unhandled rejection.
  * One AbortController per call (issue #96 PR-B1, spec D4): the timer aborts
@@ -171,17 +214,15 @@ function callUnderTimer(
       settle({ kind: 'timed-out' });
       controller.abort();
     }, timeoutMs);
+    const onRejected = (error: unknown): void => settle(isRefusedSignal(error) ? { kind: 'refused' } : { kind: 'failed' });
     let pending: Promise<Verdict>;
     try {
       pending = Promise.resolve(judge(text, floorCopy(heuristic), signal));
-    } catch {
-      settle({ kind: 'failed' });
+    } catch (error: unknown) {
+      onRejected(error);
       return;
     }
-    pending.then(
-      (value) => settle(isVerdict(value) ? { kind: 'judged', verdict: value } : { kind: 'failed' }),
-      () => settle({ kind: 'failed' }),
-    );
+    pending.then((value) => settle(isVerdict(value) ? { kind: 'judged', verdict: value } : { kind: 'failed' }), onRejected);
   });
 }
 
@@ -207,6 +248,27 @@ function compose(heuristic: ScanResult, judged: Verdict): JudgedScanResult {
   // The judge agreed or answered looser: the floor holds, escalation is no
   // longer warranted, and nothing is attributed because nothing was caused.
   return { ...heuristic, suspicious: false, judge: 'judged' };
+}
+
+/**
+ * Composes a provider refusal onto the heuristic floor (issue #152, spec D3):
+ * tighten to at least `ask`, append `JUDGE_REFUSED_RULE_ID` only when that
+ * raised the verdict (ADR-0016 decision 3, G-9), fresh arrays, and
+ * `suspicious` as the floor set it, because the escalation is UNRESOLVED (the
+ * `oversized` precedent), unlike `judged` where it is false. No verdict is
+ * carried: a refusal is the provider declining, not a judgement (ADR-0038 D2
+ * as amended by #152).
+ */
+function composeRefused(heuristic: ScanResult): JudgedScanResult {
+  const composed = stricterVerdict(heuristic.verdict, 'ask');
+  const tightened = verdictRank(composed) > verdictRank(heuristic.verdict);
+  return {
+    verdict: composed,
+    rule_ids: tightened ? [...heuristic.rule_ids, JUDGE_REFUSED_RULE_ID] : [...heuristic.rule_ids],
+    excerpts: [...heuristic.excerpts],
+    suspicious: heuristic.suspicious,
+    judge: 'refused',
+  };
 }
 
 /**
@@ -240,6 +302,7 @@ export function createJudgedScanner(opts: JudgedScannerOptions = {}): JudgedScan
     }
     const outcome = await callUnderTimer(judge, text, heuristic, timeoutMs, signal);
     if (outcome.kind === 'judged') return compose(heuristic, outcome.verdict);
+    if (outcome.kind === 'refused') return composeRefused(heuristic);
     return { ...heuristic, judge: outcome.kind };
   }
 
