@@ -93,7 +93,7 @@ did not block, through the shipped `createJudgedScanner`, and derives both modes
 baseline, and its markdown opens with "report-only; not the gate". A second
 machine-readable line, `JUDGE_ARM=<skipped|complete|partial|failed>`, follows the
 gate line; `skipped` (after a heuristic infrastructure exit) and `failed`
-(nothing judged, an early stop after three consecutive failures, or a lost
+(nothing answered, an early stop after three consecutive failures, or a lost
 scorecard) exit 2, and `partial` prints a remedy line with the counts. One
 progress line per call goes to stderr with the case id and status, never text.
 

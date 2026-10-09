@@ -417,14 +417,14 @@ timer, and the isolation keys on the judge subprocess. Since ADR-0037 a
 timed-out call is aborted through the SDK's `abortController` on the arm and in
 the session alike (`buildJudge` passes one on every request); the keyed judge
 arm bounds its calls by the corpus size, a cap of one hundred held-out cases and an early
-stop after three consecutive failures with nothing judged. In the session
+stop after three consecutive failures with nothing answered (judged or, since #152, refused). In the session
 (ADR-0037, 2026-10-01): a per-run cap, `judge.maxCallsPerRun` (1 to 1000,
 required when the judge is on), bounds the NUMBER of calls; at most
 `JUDGE_MAX_CONCURRENT` = 4 judge subprocesses are live at once (one child
 measured about 343 MB RSS during the spec's review, so 1,372 MB for four: the
 design spec's figure, not re-measured), and a call waiting for a slot
 spends that wait inside the same 60 s; the same early stop, three consecutive
-infrastructure failures with nothing judged, switches the judge off for the
+infrastructure failures with nothing answered, switches the judge off for the
 rest of the run. The cap bounds calls, not dollars per call: one call at the
 128 KiB input cap is `JUDGE_WORST_CASE_USD_PER_CALL` and the reply has no
 length bound, so a tool result's content can run a call to its timer (decision
