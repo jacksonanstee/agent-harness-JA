@@ -14,6 +14,9 @@ export type InitParseResult =
   | { ok: false; error: string };
 
 export function parseInitArgs(argv: string[]): InitParseResult {
+  // Hand-written on purpose, not a parser library: no flags at all, only one
+  // optional positional, so any `--` argument is rejected. Revisit if it gains
+  // a flag, and apply the 10-flag rule used by the other parsers.
   let dir: string | null = null;
   for (const arg of argv) {
     if (arg.startsWith('--')) {
