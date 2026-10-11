@@ -104,6 +104,33 @@ describe('eslint layering rules', () => {
     expect(violations.length).toBeGreaterThan(0);
   });
 
+  it('blocks a non-test session file importing the SDK package (ADR-0010 decision 2, issue #102)', async () => {
+    const violations = await lintViolations(
+      'src/session/bad-sdk-import.ts',
+      "import { query } from '@anthropic-ai/claude-agent-sdk';\nquery;\n",
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('allows a session TEST file importing the SDK package (the type-parity pins need it)', async () => {
+    const violations = await lintViolations(
+      'src/session/good-sdk-import.test.ts',
+      "import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';\nexport type M = SDKMessage;\n",
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('still blocks a session test file importing eval or the CLI (the test override must restate the bans; flat-config no-restricted-imports overrides, never merges)', async () => {
+    for (const [name, statement] of [
+      ['eval', "import { createGoldenRunner } from '../eval/golden/runner.js';\ncreateGoldenRunner;\n"],
+      ['cli', "import { main } from '../cli.js';\nmain;\n"],
+      ['cli dir', "import { USAGE } from '../cli/shared.js';\nUSAGE;\n"],
+    ] as const) {
+      const violations = await lintViolations('src/session/bad-import.test.ts', statement);
+      expect(violations.length, `a session test importing ${name} must be blocked`).toBeGreaterThan(0);
+    }
+  });
+
   it('blocks security importing eval via a nested path', async () => {
     const violations = await lintViolations(
       'src/security/injection/bad-import.ts',
