@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eval/index.js';
 import type { HookEventRecord } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
-import { loadJsonSettings } from '../internal/settings.js';
+import { boundEcho, loadJsonSettings } from '../internal/settings.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
+  hasGlobCharacter,
   hasJudgeKey,
   JudgeSettingsError,
   mergeLayers,
@@ -359,7 +360,35 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
       `sandbox command allowlist includes ${blocked.join(', ')} — shell runners, exec wrappers and shell builtins (exec, eval, command, builtin, source, .) defeat first-token enforcement and are always denied (ADR-0015 §3)`,
     );
   }
+  // Path entries are prefix-matched, so a glob-shaped one is matched
+  // literally: it allows only a directory with that exact name (usually none
+  // exists), and everything under the intended prefix is denied with no signal (issue #107, ADR-0034 decision 2). Warn
+  // only; the entry still parses and still denies. Each layer is checked
+  // BEFORE the intersection merge, which would drop an entry the other layer
+  // lacks, and the warning names the file so the author knows where to edit.
+  warnings.push(
+    ...globPathWarnings(user.sandbox, userPath),
+    ...globPathWarnings(project.sandbox, projectPath),
+  );
   return { permissions, sandbox, judge: user.judge, warnings };
+}
+
+/**
+ * The fixed form of a glob-shaped path entry, only when it is exact: a
+ * trailing `/*` or `/**` stripped to a remainder that is itself glob-free and
+ * non-empty. Anything else (`/x/a?b`, `/*`, `/x/*\/y`) gets no suggestion.
+ */
+function prefixFixFor(entry: string): string | null {
+  const stripped = entry.replace(/\/\*{1,2}$/, '');
+  return stripped !== entry && stripped !== '' && !hasGlobCharacter(stripped) ? stripped : null;
+}
+
+function globPathWarnings(sandbox: SandboxConfig, settingsPath: string): string[] {
+  return (sandbox.paths?.allow ?? []).filter(hasGlobCharacter).map((entry) => {
+    const fix = prefixFixFor(entry);
+    const hint = fix === null ? '' : `; write '${boundEcho(fix)}' to allow that directory and everything under it`;
+    return `sandbox path entry '${boundEcho(entry)}' in ${boundEcho(settingsPath)} contains a glob character, but the path allowlist is prefix-based and matches the entry literally, so it allows only a directory with that exact name, not what the pattern suggests${hint} (ADR-0015 §2)`;
+  });
 }
 
 /**

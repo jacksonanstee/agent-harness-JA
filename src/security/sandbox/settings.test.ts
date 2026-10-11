@@ -118,8 +118,9 @@ describe('parseSandboxSettings', () => {
   });
 
   it('still accepts the same strings as PATH entries (prefix semantics; a glob there is inert, not open)', () => {
-    // Pins the scope of ADR-0034 decision 2 so a later warning or rejection on
-    // the path dimension is a visible change, not a drift.
+    // Pins the scope of ADR-0034 decision 2: path entries still parse. Issue
+    // #107 added a startup WARNING for them (composeSecurity, src/cli/shared.ts),
+    // never a refusal, so this pin stays true.
     const parsed = parseSandboxSettings({
       sandbox: { paths: { allow: ['/usr/local/bin/*', '/bin/s?'] } },
     });

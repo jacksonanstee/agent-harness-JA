@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSandbox,
+  GLOB_CHARACTERS,
+  hasGlobCharacter,
   hasShellRewriteCharacter,
   isBlockedFirstToken,
   mergeSandboxLayers,
@@ -548,5 +550,35 @@ describe('hasShellRewriteCharacter (the shared brain of the parser refusal AND t
 
   it.each(['git', '/bin/git', 'sh', ']', '~/bin/git', '~root/bin/x', ''])('%s -> false', (word) => {
     expect(hasShellRewriteCharacter(word)).toBe(false);
+  });
+});
+
+describe('hasGlobCharacter (the glob-only subset of the rewrite set, issue #107)', () => {
+  it.each(['*', '?', '[', '/x/*', '/x/**', '/x/a?b', '/x/[ab]'])('%s -> true', (word) => {
+    expect(hasGlobCharacter(word)).toBe(true);
+  });
+
+  it.each(['/x', '/x/y', '', ']', '^', '#', '"', "'", '=', '~/x', '/x/a#b^c'])('%s -> false', (word) => {
+    expect(hasGlobCharacter(word)).toBe(false);
+  });
+
+  it('is a subset of the shell-rewrite set, so the two cannot drift', () => {
+    for (const ch of GLOB_CHARACTERS) {
+      expect(hasShellRewriteCharacter(ch)).toBe(true);
+    }
+  });
+});
+
+describe('a glob-shaped path entry is matched literally (issue #107: warned at startup, behaviour unchanged)', () => {
+  it('denies everything under the intended prefix when no directory has that literal name', () => {
+    const sandbox = createSandbox({ paths: { allow: ['/tmp/proj/*'] } });
+    expect(sandbox.allowPath('/tmp/proj/file')).toBe(false);
+    expect(sandbox.allowPath('/tmp/proj')).toBe(false);
+  });
+
+  it('allows a path under a directory literally named with the glob character', () => {
+    // Why the warning says "only a directory with that exact name", not "nothing".
+    const sandbox = createSandbox({ paths: { allow: ['/tmp/proj/*'] } });
+    expect(sandbox.allowPath('/tmp/proj/*/sub/file')).toBe(true);
   });
 });

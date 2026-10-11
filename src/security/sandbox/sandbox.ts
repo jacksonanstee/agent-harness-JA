@@ -38,6 +38,25 @@ const SHELL_METACHARACTERS = [
 ];
 
 /**
+ * The glob characters bash and zsh both expand without any option set. The
+ * PATH dimension (issue #107) uses only this subset: path entries are never
+ * handed to a shell, they are prefix-matched literally (ADR-0015 §2), so the
+ * quote, `=` and NUL members of the rewrite set mean nothing there, and `^`
+ * and `#` are glob operators only under zsh `extendedglob`, which no shell
+ * ever sees for a path entry; both are ordinary characters in a directory name.
+ * `*`, `?` and `[` are the ones an operator reaches for expecting a pattern
+ * (`/x/*`), and the ones that make the entry a literal name that, unless
+ * a directory really has that name, nothing sits under. Defined first and spread into SHELL_REWRITE_CHARACTERS so the
+ * command-side set contains it by construction and cannot drift (ADR-0034
+ * decision 2).
+ */
+export const GLOB_CHARACTERS: readonly string[] = ['*', '?', '['];
+
+export function hasGlobCharacter(word: string): boolean {
+  return GLOB_CHARACTERS.some((ch) => word.includes(ch));
+}
+
+/**
  * Characters the executing shell rewrites in a word before exec, or that
  * make the word not a program name at all. In argv[0] any of them means the
  * string names one program and another starts: glob (`*`, `?`, `[`; bash
@@ -54,7 +73,10 @@ const SHELL_METACHARACTERS = [
  * prefix, never the basename the blocklist keys on. Arguments are untouched:
  * `git commit -m "x"` and `git add *` expand inside the allowed program.
  */
-export const SHELL_REWRITE_CHARACTERS: readonly string[] = ['*', '?', '[', '^', '#', '"', "'", '=', '\0'];
+export const SHELL_REWRITE_CHARACTERS: readonly string[] = [
+  ...GLOB_CHARACTERS,
+  '^', '#', '"', "'", '=', '\0',
+];
 
 export function hasShellRewriteCharacter(word: string): boolean {
   return SHELL_REWRITE_CHARACTERS.some((ch) => word.includes(ch));

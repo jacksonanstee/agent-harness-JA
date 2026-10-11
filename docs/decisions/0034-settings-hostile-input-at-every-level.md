@@ -287,7 +287,16 @@ and is recorded as residual R-19.
   opt-out for the user layer's symlink refusal, never an environment-keyed or silent one, and
   keep the byte cap and the no-snippet parse error unconditional.
 - Issue #107 (path-dimension globs) lands: fold its decision into decision 2's shape (one
-  predicate, parser and gate) or record why paths differ. Issue #108 (duplicate JSON keys) lands:
+  predicate, parser and gate) or record why paths differ. **Resolved 2026-10-11:** path entries are
+  warned about, not refused. `composeSecurity` warns at startup, per layer and naming the file, on
+  any path entry containing a glob character, says the path dimension is prefix-based and suggests
+  the fixed form only when exact (`/x/*` and `/x/**` become `/x`). The predicate is
+  `hasGlobCharacter` over `GLOB_CHARACTERS` (`*`, `?`, `[`), the glob-only head of
+  `SHELL_REWRITE_CHARACTERS` (spread into it, so the command side contains it by construction).
+  `^` and `#` are not counted for paths: they are glob operators only under zsh `extendedglob`, and
+  a path entry is never handed to a shell, so they are ordinary directory-name characters. The
+  entry still parses and still denies; rejection would add no security (fail closed) and could
+  break a working config. Issue #108 (duplicate JSON keys) lands:
   move the duplicate-key sentence from the residuals above into decision 1 and R-19.
 - A shell rewrite outside the enumerated set is demonstrated at bash or zsh, or a third shell is
   pinned as the executor: extend `SHELL_REWRITE_CHARACTERS` and its truth table, and say which

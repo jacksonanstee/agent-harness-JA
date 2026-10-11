@@ -1290,6 +1290,72 @@ describe('composeSecurity', () => {
     },
   );
 
+  describe('glob-shaped sandbox path entries (issue #107)', () => {
+    const globWarnings = (files: Record<string, string>): string[] =>
+      composeSecurity({ readFile: filesystem(files), userDir: '/home/u', projectDir: '/proj' }).warnings.filter(
+        (w) => w.includes('glob'),
+      );
+    const userWith = (allow: string[]): Record<string, string> => ({
+      [settingsPath('/home/u')]: JSON.stringify({ sandbox: { paths: { allow } } }),
+    });
+
+    it('warns once, naming the entry, the layer and the prefix rule, and suggests the exact fix', () => {
+      const warnings = globWarnings(userWith(['/tmp/proj/*']));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("'/tmp/proj/*'");
+      expect(warnings[0]).toContain(settingsPath('/home/u'));
+      expect(warnings[0]).toContain('prefix');
+      expect(warnings[0]).toContain("'/tmp/proj'");
+    });
+
+    it('does not warn on a plain prefix', () => {
+      expect(globWarnings(userWith(['/tmp/proj']))).toEqual([]);
+    });
+
+    it.each(['/tmp/pro?', '/tmp/[ab]'])('warns on %s without inventing a fix', (entry) => {
+      const warnings = globWarnings(userWith([entry]));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(entry);
+      expect(warnings[0]).not.toContain('write ');
+    });
+
+    it('warns on a project-layer entry and names that layer', () => {
+      const warnings = globWarnings({
+        [settingsPath('/proj')]: JSON.stringify({ sandbox: { paths: { allow: ['/tmp/**'] } } }),
+      });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(settingsPath('/proj'));
+      expect(warnings[0]).toContain("'/tmp'");
+    });
+
+    it('does not warn on a glob in a command entry: that is refused at parse instead', () => {
+      expect(() =>
+        composeSecurity({
+          readFile: filesystem({
+            [settingsPath('/home/u')]: JSON.stringify({ sandbox: { commands: { allow: ['/bin/s?'] } } }),
+          }),
+          userDir: '/home/u',
+          projectDir: '/proj',
+        }),
+      ).toThrow(/rewrites/);
+    });
+
+    it('echoes a hostile entry cleaned: no ESC, no bidi override, no newline', () => {
+      const warnings = globWarnings(userWith(['/tmp/\u001b[31m*\u202e\nforged']));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).not.toMatch(/[\u001b\u202e\n]/);
+    });
+
+    it('leaves the entry parsed and in force: the glob entry still denies a file under the prefix', () => {
+      const result = composeSecurity({
+        readFile: filesystem(userWith(['/tmp/proj/*'])),
+        userDir: '/home/u',
+        projectDir: '/proj',
+      });
+      expect(result.sandbox.paths?.allow).toEqual(['/tmp/proj/*']);
+    });
+  });
+
   it('merges layers with S-3/S-4 semantics: sticky deny + sandbox intersection', () => {
     const result = composeSecurity({
       readFile: filesystem({
