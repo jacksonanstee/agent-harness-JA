@@ -5,9 +5,11 @@ export interface PermissionRule {
   readonly tool: string;
   /**
    * Optional argument prefix-glob, matched against a canonical string
-   * extracted from the tool args: `args.command` for Bash, `args.file_path`
-   * for Read/Write/Edit, else `JSON.stringify(args)`. Same trailing-* glob
-   * semantics as `tool`. Deep path/command allowlisting is S-4's job
+   * extracted from the tool args. The target is the one declared for the tool
+   * in src/internal/tool-targets.ts (TOOL_TARGET_FIELDS): the command for a
+   * command-kind tool, the path field for a path-kind tool, else
+   * `JSON.stringify(args)` for a tool outside the table or one whose target
+   * field is absent. Same trailing-* glob semantics as `tool`. Deep path/command allowlisting is S-4's job
    * (ADR-0014 §1).
    */
   readonly match?: string;

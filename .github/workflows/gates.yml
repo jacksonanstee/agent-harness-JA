@@ -47,7 +47,7 @@ jobs:
     # included). Each recogniser is linear and every line is capped, but a
     # gate that is somehow slow must fail this job, not hold the runner for
     # the 360-minute default and every PR queued behind it (issue #89).
-    # build-test, which runs the PR's own code, has no timeout yet: #121.
+    # build-test, which runs the PR's own code, carries its own bound below.
     timeout-minutes: 10
     steps:
       # Actions pinned by full commit SHA (supply-chain hardening): a moved tag
@@ -79,6 +79,16 @@ jobs:
 
   build-test:
     runs-on: ubuntu-latest
+    # This job runs the PR's own code (npm ci, build, the suite, the red-team
+    # gate) across the Node matrix, so a hang in any of it must fail the job
+    # rather than hold the runner for the 360-minute default and every PR
+    # queued behind it (issue #121). The bound is per matrix leg. Across the
+    # last 40 green CI runs a leg took 104 to 299 s on Node 20 and 37 to 476 s
+    # on Node 22 (p95 229 s and 182 s), so 15 minutes is about twice the
+    # slowest leg seen and about four times the p95: slack for a cold npm
+    # cache or a slow runner, not for a hang. Raise it with a measurement, not
+    # a guess (ADR-0022, amendment 2026-10-11).
+    timeout-minutes: 15
     strategy:
       matrix:
         node-version: ${{ fromJSON(inputs.node-versions) }}

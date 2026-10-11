@@ -108,6 +108,12 @@ It also pins the V20 security topology, which until now lived only in workflow c
 
 Because it extracts commands from YAML by line matching rather than by parsing — there is no YAML parser in the dependency tree, and adding one for a test would put supply-chain surface into a repo whose publish story is supply-chain discipline — the extractor asserts anchors and throws when it cannot find its target, so a restructured workflow fails the suite instead of silently matching nothing and reading green. Two specific traps were found in review and closed: the job-boundary scan has to skip comment lines (`#` is non-whitespace and would otherwise read as the next job key, truncating a body early), and index comparisons have to assert presence first, because `indexOf` returning `-1` is less than any real index and would pass an ordering check for a gate that had been deleted.
 
+## Amendment (2026-10-11, issue #121): the `build-test` job now has a timeout
+
+The shared `gates.yml` gave `docs-links` a `timeout-minutes: 10` (added with the #89 fix, PR #122) and left `build-test`, the job that runs the PR's own code, on the 360-minute default: a PR that hung `npm test` held a runner for six hours and every PR queued behind it. `build-test` now carries `timeout-minutes: 15`, applied per matrix leg.
+
+The value comes from the Actions history, not a guess: over the last 40 green `ci.yml` runs a `build-test` leg took 104 to 299 s on Node 20 (median about 142 s, p95 229 s) and 37 to 476 s on Node 22 (median 61 s, p95 182 s). Fifteen minutes (900 s) is about twice the slowest leg seen and about four times the slower p95, which leaves room for a cold `npm ci` cache or a slow runner and none for a hang. The publish path calls the same job, so it inherits the bound. `src/ci-drift.test.ts` now pins that every job in `gates.yml` declares a `timeout-minutes`, so a job added later cannot quietly take the default. Revisit the number if a leg's slowest run approaches half the bound.
+
 ## Revisit if
 
 - **R1:** the first release completes: verify the provenance badge renders on npm, that the provenance statement names `publish.yml` (confirming the trusted-publisher binding survived the 2026-07-28 gate extraction), and that `npx agent-harness-ja init` works from a clean machine.

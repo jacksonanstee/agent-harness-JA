@@ -10,6 +10,7 @@ import {
   parseSandboxSettings,
   SandboxSettingsError,
 } from './settings.js';
+import { SHELL_REWRITE_CHARACTERS } from './sandbox.js';
 
 describe('parseSandboxSettings', () => {
   it('parses a valid sandbox document', () => {
@@ -78,10 +79,31 @@ describe('parseSandboxSettings', () => {
         message = error instanceof Error ? error.message : String(error);
       }
       expect(message).toMatch(/sandbox\.commands\.allow\[0\]/);
-      expect(message).toMatch(/glob/);
+      expect(message).toMatch(/one of/);
       expect(message).toContain(entry);
     },
   );
+
+  it('names every refused rewrite character in the rejection message, NUL spelled out', () => {
+    // The message is built from the same set the predicate tests, so it cannot
+    // drift (issue #132: it named four of nine). The entry is echoed in the
+    // message and always holds a refused character, so look only at the text
+    // after the echo, where the class is described.
+    expect(SHELL_REWRITE_CHARACTERS).toHaveLength(9);
+    for (const ch of SHELL_REWRITE_CHARACTERS) {
+      let message = '';
+      try {
+        parseSandboxSettings({ sandbox: { commands: { allow: [`x${ch}`] } } });
+      } catch (error: unknown) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      const described = message.slice(message.indexOf('contains a character'));
+      expect(message).not.toBe('');
+      const shown = ch === '\0' ? 'NUL' : ch;
+      expect(described, `character ${JSON.stringify(ch)}`).toContain(` ${shown}`);
+      expect(described).not.toContain('\u0000');
+    }
+  });
 
   it('refuses a command entry carrying NUL and does not echo the NUL', () => {
     const doc = { sandbox: { commands: { allow: ['sh\u0000'] } } };
