@@ -6,7 +6,7 @@ import {
   unknownKeys,
 } from '../../internal/settings.js';
 import type { ReadFile } from '../../internal/settings.js';
-import { hasShellRewriteCharacter } from './sandbox.js';
+import { describeShellRewriteCharacters, hasShellRewriteCharacter } from './sandbox.js';
 import type { SandboxAllowlist, SandboxConfig } from './types.js';
 
 /** Same fail-loud contract as PermissionSettingsError (ADR-0014 §6). */
@@ -70,7 +70,7 @@ function parseAllowlist(value: unknown, key: string): SandboxAllowlist {
     // refused here.
     if (key === 'commands' && hasShellRewriteCharacter(entry)) {
       throw new SandboxSettingsError(
-        `sandbox.commands.allow[${index}] '${boundEcho(entry)}' contains a character the shell rewrites before exec (glob, quote, equals or NUL), so the program that starts is not the one the entry names (ADR-0034)`,
+        `sandbox.commands.allow[${index}] '${boundEcho(entry)}' contains a character the shell rewrites before exec (one of ${describeShellRewriteCharacters()}), so the program that starts is not the one the entry names (ADR-0034)`,
       );
     }
     return entry;

@@ -54,10 +54,19 @@ const SHELL_METACHARACTERS = [
  * prefix, never the basename the blocklist keys on. Arguments are untouched:
  * `git commit -m "x"` and `git add *` expand inside the allowed program.
  */
-const SHELL_REWRITE_CHARACTERS: readonly string[] = ['*', '?', '[', '^', '#', '"', "'", '=', '\0'];
+export const SHELL_REWRITE_CHARACTERS: readonly string[] = ['*', '?', '[', '^', '#', '"', "'", '=', '\0'];
 
 export function hasShellRewriteCharacter(word: string): boolean {
   return SHELL_REWRITE_CHARACTERS.some((ch) => word.includes(ch));
+}
+
+/**
+ * The refused set as operator-readable text, derived from the same array the
+ * predicate tests so a rejection message cannot name fewer characters than
+ * the predicate refuses (issue #132). NUL is spelled out: it has no glyph.
+ */
+export function describeShellRewriteCharacters(): string {
+  return SHELL_REWRITE_CHARACTERS.map((ch) => (ch === '\0' ? 'NUL' : ch)).join(' ');
 }
 
 /**
