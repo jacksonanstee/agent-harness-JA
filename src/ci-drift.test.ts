@@ -245,6 +245,26 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
     expect(indexOfGate('test')).toBeLessThan(indexOfGate('check-testcount'));
   });
 
+  it('every job in gates.yml declares a timeout-minutes (issue #121; a hang must not hold a runner for the 360-minute default)', () => {
+    const jobsSection = stripComments(gatesYaml).split(/^jobs:\s*$/m)[1] ?? '';
+    // Job ids sit at two-space indent under `jobs:`; split on them and drop the
+    // text before the first.
+    const blocks = jobsSection.split(/^ {2}([A-Za-z][\w-]*):\s*$/m).slice(1);
+    const jobs: Array<[string, string]> = [];
+    for (let i = 0; i + 1 < blocks.length; i += 2) {
+      jobs.push([blocks[i] as string, blocks[i + 1] as string]);
+    }
+    expect(
+      jobs.map(([id]) => id),
+      'extractor lost the gates.yml jobs: the file changed shape, update this test',
+    ).toEqual(['docs-links', 'build-test']);
+    for (const [id, body] of jobs) {
+      expect(body, `gates.yml job ${id} has no job-level timeout-minutes`).toMatch(
+        /^ {4}timeout-minutes:\s*[1-9]\d*\s*$/m,
+      );
+    }
+  });
+
   it('both CI and the publish path delegate to the one shared definition', () => {
     expect(extractUses(ciYaml, 'test')).toContain(SHARED_WORKFLOW);
     expect(extractUses(publishYaml, 'gates')).toContain(SHARED_WORKFLOW);
