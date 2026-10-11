@@ -110,9 +110,9 @@ Because it extracts commands from YAML by line matching rather than by parsing â
 
 ## Amendment (2026-10-11, issue #121): the `build-test` job now has a timeout
 
-The shared `gates.yml` gave `docs-links` a `timeout-minutes: 10` (issue #89) and left `build-test`, the job that runs the PR's own code, on the 360-minute default: a PR that hung `npm test` held a runner for six hours and every PR queued behind it. `build-test` now carries `timeout-minutes: 15`, applied per matrix leg.
+The shared `gates.yml` gave `docs-links` a `timeout-minutes: 10` (added with the #89 fix, PR #122) and left `build-test`, the job that runs the PR's own code, on the 360-minute default: a PR that hung `npm test` held a runner for six hours and every PR queued behind it. `build-test` now carries `timeout-minutes: 15`, applied per matrix leg.
 
-The value comes from the Actions history, not a guess: over the last 40 green `ci.yml` runs a `build-test` leg took 104 to 299 s on Node 20 (median 143 s, p95 229 s) and 37 to 476 s on Node 22 (median 61 s, p95 182 s). Fifteen minutes (900 s) is about twice the slowest leg seen and about four times the slower p95, which leaves room for a cold `npm ci` cache or a slow runner and none for a hang. The publish path calls the same job, so it inherits the bound. `src/ci-drift.test.ts` now pins that every job in `gates.yml` declares a `timeout-minutes`, so a job added later cannot quietly take the default. Revisit the number if a leg's slowest run approaches half the bound.
+The value comes from the Actions history, not a guess: over the last 40 green `ci.yml` runs a `build-test` leg took 104 to 299 s on Node 20 (median about 142 s, p95 229 s) and 37 to 476 s on Node 22 (median 61 s, p95 182 s). Fifteen minutes (900 s) is about twice the slowest leg seen and about four times the slower p95, which leaves room for a cold `npm ci` cache or a slow runner and none for a hang. The publish path calls the same job, so it inherits the bound. `src/ci-drift.test.ts` now pins that every job in `gates.yml` declares a `timeout-minutes`, so a job added later cannot quietly take the default. Revisit the number if a leg's slowest run approaches half the bound.
 
 ## Revisit if
 
