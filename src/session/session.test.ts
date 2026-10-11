@@ -943,6 +943,40 @@ describe('createSession', () => {
     expect(parsed.denied[0]?.reason.endsWith('…')).toBe(true);
   });
 
+  it('memory summary text never splits a surrogate pair at the bound (issue #82)', async () => {
+    // 199 ASCII units then an astral char: its high surrogate is unit 199, the
+    // last unit a 200-unit cut would keep. A bare slice stored it alone (lone
+    // surrogate, U+FFFD after encoding); truncateWellFormed drops it, so the
+    // content is 199 units plus the ellipsis. Covers all three truncate() sites.
+    const straddle = `${'a'.repeat(199)}\u{1F600}tail`;
+    const fake = fakeQuery([INIT, { ...RESULT, result: straddle }], [
+      { tool: 'Bash', input: { command: 'go' }, output: 'never' },
+    ]);
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', (payload) => {
+      if (payload.tool === 'Bash') {
+        throw new HookDenial(straddle);
+      }
+    });
+    const session = createSession(makeDeps(fake, { hooks, memory }), { skillsDir: '/nowhere' });
+    await session.run(straddle);
+
+    const parsed = JSON.parse(memory.read({})[0]?.content ?? '{}') as {
+      prompt: string;
+      resultText: string;
+      denied: Array<{ reason: string }>;
+    };
+    const expected = `${'a'.repeat(199)}\u2026`;
+    expect(parsed.prompt).toBe(expected);
+    expect(parsed.resultText).toBe(expected);
+    expect(parsed.denied).toHaveLength(1);
+    expect(parsed.denied[0]?.reason).toBe(expected);
+    for (const text of [parsed.prompt, parsed.resultText, parsed.denied[0]?.reason ?? '']) {
+      expect(text).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+    }
+  });
+
   it('the fire-failed hook-error row passes redact-then-bound before the telemetry write (issue #75, third writer)', async () => {
     // fire() rejecting is the runtime's own failure path, but the verify pass
     // showed a registered handler can drive attacker-chosen text into it

@@ -409,7 +409,7 @@ export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
 function truncate(value: string | null): string | null {
   if (value === null) return null;
   const clean = sanitizeText(value);
-  return clean.length > SUMMARY_TEXT_LIMIT ? `${clean.slice(0, SUMMARY_TEXT_LIMIT)}…` : clean;
+  return truncateWellFormed(clean, SUMMARY_TEXT_LIMIT);
 }
 
 /**
