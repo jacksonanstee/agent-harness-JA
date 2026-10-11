@@ -407,8 +407,10 @@ describe('shell builtins are blocklisted too (issue #133)', () => {
 });
 
 describe('argv[0] is split on the shell word separators only (issue #159)', () => {
-  // JS \s (and String.prototype.trim) also treat these as whitespace; bash
-  // does not, so it reads `git<sep>x` as ONE word and runs that program.
+  // Bash reads `git<sep>x` as ONE word and runs that program. JS \s (and
+  // String.prototype.trim) treat every row but NEL as whitespace, which was
+  // the bug; NEL is not JS whitespace and is pinned because bash keeps it
+  // inside a word too.
   // Escapes, not literal characters, so an editor cannot normalise a row
   // into a plain space or drop it (a dropped BOM would still be refused,
   // passing vacuously).
@@ -480,7 +482,7 @@ describe('a newline or CR at either end is still a metacharacter (issue #160)', 
 
   it('a CR inside argv[0] is refused', () => {
     const sandbox = createSandbox({ commands: { allow: ['git'] } });
-    expect(sandbox.allowCommand('git\r')).toBe(false);
+    expect(sandbox.allowCommand('gi\rt status')).toBe(false);
   });
 
   it('leading and trailing spaces and tabs are still trimmed', () => {

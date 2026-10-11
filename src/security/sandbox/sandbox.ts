@@ -120,7 +120,7 @@ const BLOCKED_FIRST_TOKENS = new Set<string>([
  * argv[0] as the shell reads it: leading separators skipped, then everything
  * up to the next one. Bash's parser splits words on blanks (space, tab) and
  * newline whatever IFS says (IFS governs splitting of expansions only); JS
- * `\s` and `trim()` also eat NBSP, NEL, U+2028, VT, FF and the other Unicode
+ * `\s` and `trim()` also eat NBSP, U+2028, VT, FF and the other Unicode
  * spaces, so `git<NBSP>x` would be checked as `git` while bash runs the
  * program named `git<NBSP>x` (issue #159).
  */
