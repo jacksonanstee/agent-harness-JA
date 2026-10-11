@@ -117,14 +117,26 @@ const BLOCKED_FIRST_TOKENS = new Set<string>([
 ]) as ReadonlySet<string>;
 
 /**
- * The basename identity used to test the blocklist: first whitespace token,
+ * argv[0] as the shell reads it: leading separators skipped, then everything
+ * up to the next one. Bash's parser splits words on blanks (space, tab) and
+ * newline whatever IFS says (IFS governs splitting of expansions only); JS
+ * `\s` and `trim()` also eat NBSP, U+2028, VT, FF and the other Unicode
+ * spaces, so `git<NBSP>x` would be checked as `git` while bash runs the
+ * program named `git<NBSP>x` (issue #159).
+ */
+function firstShellWord(command: string): string {
+  return command.replace(/^[ \t\n]+/, '').split(/[ \t\n]/, 1)[0] ?? '';
+}
+
+/**
+ * The basename identity used to test the blocklist: first shell word,
  * POSIX basename, case-folded on case-insensitive platforms — the same
  * normalization `allowCommand` applies to argv[0]. Accepts a full command or a
  * bare allowlist entry so enforcement and the CLI's startup warning check
  * exactly the same thing (no drift).
  */
 export function isBlockedFirstToken(commandOrEntry: string): boolean {
-  const argv0 = commandOrEntry.trim().split(/\s+/, 1)[0] ?? '';
+  const argv0 = firstShellWord(commandOrEntry);
   const name = CASE_INSENSITIVE_PLATFORM ? basename(argv0).toLowerCase() : basename(argv0);
   return BLOCKED_FIRST_TOKENS.has(name);
 }
@@ -165,10 +177,13 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
     allowCommand(cmd: string): boolean {
       if (commandEntries === undefined) return true;
       if (typeof cmd !== 'string') return false;
-      const trimmed = cmd.trim();
+      // Only blanks are trimmed. JS trim() also strips a trailing newline or
+      // CR, which hid a second command from the metacharacter check
+      // (`git status\n<NBSP>` ran a program named NBSP; issue #160).
+      const trimmed = cmd.replace(/^[ \t]+|[ \t]+$/g, '');
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
-      const argv0 = trimmed.split(/\s+/, 1)[0] ?? '';
+      const argv0 = firstShellWord(trimmed);
       // A rewrite character in argv[0] means the string names one program
       // and the shell starts another; refused before the allowlist is
       // consulted, so an entry that matches it exactly cannot rescue it

@@ -406,6 +406,91 @@ describe('shell builtins are blocklisted too (issue #133)', () => {
   });
 });
 
+describe('argv[0] is split on the shell word separators only (issue #159)', () => {
+  // Bash reads `git<sep>x` as ONE word and runs that program. JS \s (and
+  // String.prototype.trim) treat every row but NEL as whitespace, which was
+  // the bug; NEL is not JS whitespace and is pinned because bash keeps it
+  // inside a word too.
+  // Escapes, not literal characters, so an editor cannot normalise a row
+  // into a plain space or drop it (a dropped BOM would still be refused,
+  // passing vacuously).
+  const NON_IFS_SPACES = [
+    ['NBSP', '\u00a0'],
+    ['NEL', '\u0085'],
+    ['LINE SEPARATOR', '\u2028'],
+    ['PARAGRAPH SEPARATOR', '\u2029'],
+    ['VT', '\v'],
+    ['FF', '\f'],
+    ['IDEOGRAPHIC SPACE', '\u3000'],
+    ['BOM', '\ufeff'],
+  ] as const;
+
+  it('the table holds what its names say (guards the escapes)', () => {
+    expect(NON_IFS_SPACES.map(([, ch]) => ch.codePointAt(0))).toEqual([
+      0xa0, 0x85, 0x2028, 0x2029, 0x0b, 0x0c, 0x3000, 0xfeff,
+    ]);
+  });
+
+  it.each(NON_IFS_SPACES)('%s between an allowlisted name and a suffix is refused', (_, ch) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(`git${ch}x status`)).toBe(false);
+  });
+
+  it.each(NON_IFS_SPACES)('%s before an allowlisted name is not trimmed away', (_, ch) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(`${ch}git status`)).toBe(false);
+  });
+
+  it.each(NON_IFS_SPACES)('%s does not end argv[0] for the blocklist either', (_, ch) => {
+    // The shell runs `sudo<sep>x`, not sudo, so the predicate agrees with it;
+    // allowCommand still refuses the command because no entry names that word.
+    expect(isBlockedFirstToken(`sudo${ch}x git push`)).toBe(false);
+    expect(isBlockedFirstToken(`sudo\tgit push`)).toBe(true);
+  });
+
+  it('ordinary spaces and tabs still separate and trim', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand('git status')).toBe(true);
+    expect(sandbox.allowCommand('git\tstatus')).toBe(true);
+    expect(sandbox.allowCommand(' \tgit  status \t')).toBe(true);
+    expect(sandbox.allowCommand(' \t ')).toBe(false);
+  });
+
+  it('a separator-only command is refused even if an entry is the empty string', () => {
+    const sandbox = createSandbox({ commands: { allow: [''] } });
+    expect(sandbox.allowCommand('')).toBe(false);
+    expect(sandbox.allowCommand(' \t ')).toBe(false);
+  });
+});
+
+describe('a newline or CR at either end is still a metacharacter (issue #160)', () => {
+  // ADR-0015 section 3: a newline or carriage return anywhere denies. JS
+  // trim() used to strip them from the ends first, so `git status\n<NBSP>`
+  // passed and bash then ran a second program named NBSP.
+  it.each([
+    ['newline then space', 'git status\n '],
+    ['newline then NBSP', 'git status\n\u00a0'],
+    ['CRLF then ideographic space', 'git status\r\n\u3000'],
+    ['bare trailing newline', 'git status\n'],
+    ['bare trailing CR', 'git status\r'],
+    ['leading newline', '\ngit status'],
+    ['leading CR', '\rgit status'],
+  ])('%s is refused', (_, cmd) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(cmd)).toBe(false);
+  });
+
+  it('a CR inside argv[0] is refused', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand('gi\rt status')).toBe(false);
+  });
+
+  it('leading and trailing spaces and tabs are still trimmed', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(' \tgit status \t')).toBe(true);
+  });
+});
+
 describe('path gate folds Unicode form (V11, gate level)', () => {
   it('an NFC deny/allow decision matches an NFD tool call for the same file', () => {
     // Rule stored NFC, tool call arrives NFD (or vice versa): same file, so the
