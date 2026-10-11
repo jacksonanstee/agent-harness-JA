@@ -406,6 +406,51 @@ describe('shell builtins are blocklisted too (issue #133)', () => {
   });
 });
 
+describe('argv[0] is split on the shell word separators only (issue #159)', () => {
+  // JS \s (and String.prototype.trim) also treat these as whitespace; bash
+  // does not, so it reads `git<sep>x` as ONE word and runs that program.
+  const NON_IFS_SPACES = [
+    ['NBSP', ' '],
+    ['LINE SEPARATOR', ' '],
+    ['PARAGRAPH SEPARATOR', ' '],
+    ['VT', '\v'],
+    ['FF', '\f'],
+    ['IDEOGRAPHIC SPACE', '　'],
+    ['BOM', '﻿'],
+  ] as const;
+
+  it.each(NON_IFS_SPACES)('%s between an allowlisted name and a suffix is refused', (_, ch) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(`git${ch}x status`)).toBe(false);
+  });
+
+  it.each(NON_IFS_SPACES)('%s before an allowlisted name is not trimmed away', (_, ch) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(`${ch}git status`)).toBe(false);
+  });
+
+  it.each(NON_IFS_SPACES)('%s does not end argv[0] for the blocklist either', (_, ch) => {
+    // The shell runs `sudo<sep>x`, not sudo, so the predicate agrees with it;
+    // allowCommand still refuses the command because no entry names that word.
+    expect(isBlockedFirstToken(`sudo${ch}x git push`)).toBe(false);
+    expect(isBlockedFirstToken(`sudo\tgit push`)).toBe(true);
+  });
+
+  it('ordinary spaces and tabs still separate and trim', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand('git status')).toBe(true);
+    expect(sandbox.allowCommand('git\tstatus')).toBe(true);
+    expect(sandbox.allowCommand(' \tgit  status \t')).toBe(true);
+    expect(sandbox.allowCommand(' \t ')).toBe(false);
+  });
+
+  it('a separator-only command is refused even if an entry is the empty string', () => {
+    const sandbox = createSandbox({ commands: { allow: [''] } });
+    expect(sandbox.allowCommand('')).toBe(false);
+    expect(sandbox.allowCommand(' \t ')).toBe(false);
+  });
+});
+
 describe('path gate folds Unicode form (V11, gate level)', () => {
   it('an NFC deny/allow decision matches an NFD tool call for the same file', () => {
     // Rule stored NFC, tool call arrives NFD (or vice versa): same file, so the
