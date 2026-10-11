@@ -40,6 +40,10 @@ the list because denying `Write` alone is not a boundary: an agent asked to
 create a file will happily route around it with `echo > file` (observed live
 while building this example — the same lesson as the harness's own
 dual-table incident, where tools missing from one gate's table bypassed it).
+`MultiEdit` is on the list as a defensive extra: the pinned SDK (0.3.201) declares
+no such tool, so today the rule fires on nothing, but it costs nothing and starts
+working if a later SDK declares one (a deny rule matches on the tool name alone,
+so it needs no entry in the tool table).
 Ask the agent to do something that needs a denied tool:
 
 ```bash
