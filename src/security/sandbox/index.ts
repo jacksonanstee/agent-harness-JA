@@ -16,5 +16,3 @@ export {
   SandboxSettingsError,
 } from './settings.js';
 export type { Sandbox, SandboxAllowlist, SandboxConfig } from './types.js';
-// Aliased: permissions exports a structurally identical PreToolLike under the bare name.
-export type { PreToolLike as SandboxPreToolLike } from './sandbox.js';

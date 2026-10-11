@@ -5,6 +5,7 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import type { PreToolLike } from '../pre-tool-like.js';
 import { firstShellWord, trimBlanks } from '../shell-words.js';
 import type { Sandbox, SandboxAllowlist, SandboxConfig } from './types.js';
 
@@ -265,12 +266,6 @@ export function mergeSandboxLayers(user: SandboxConfig, project: SandboxConfig):
     ...(paths === undefined ? {} : { paths }),
     ...(commands === undefined ? {} : { commands }),
   };
-}
-
-/** Structural subset of the hooks PreToolPayload (peer-leaf rule, no hooks import). */
-export interface PreToolLike {
-  readonly tool: string;
-  readonly args: unknown;
 }
 
 /**

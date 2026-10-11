@@ -98,7 +98,6 @@ export type {
   Sandbox,
   SandboxAllowlist,
   SandboxConfig,
-  SandboxPreToolLike,
   RedactResult,
   RedactorOptions,
   SecretFinding,

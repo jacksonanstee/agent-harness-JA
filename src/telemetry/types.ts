@@ -422,6 +422,7 @@ export interface SkillDropPayloadFields {
  */
 export const TELEMETRY_ID_MAX = 128;
 
+/** Base shape, do not extend or construct directly; use the TelemetryEvent / TelemetryEventInput unions. */
 export interface TelemetryEventBase {
   id: string;
   /**
@@ -452,6 +453,7 @@ export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
   | (TelemetryEventBase & { type: 'judge-call'; payload: JudgeCallPayload });
 
+/** Base shape, do not extend or construct directly; use the TelemetryEvent / TelemetryEventInput unions. */
 export interface TelemetryInputBase {
   sessionId: string;
   turnId: string;

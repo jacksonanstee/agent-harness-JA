@@ -18,22 +18,45 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const distRoot = resolve(packageRoot, 'dist') + sep;
 const entry = resolve(packageRoot, 'dist/index.d.ts');
 
-const loadProgram = (): ts.Program =>
-  ts.createProgram([entry], {
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    skipLibCheck: true,
-    noEmit: true,
-    types: ['node'],
-  });
+const compilerOptions: ts.CompilerOptions = {
+  target: ts.ScriptTarget.ES2022,
+  module: ts.ModuleKind.NodeNext,
+  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  skipLibCheck: true,
+  noEmit: true,
+  types: ['node'],
+};
+
+/** Programs over in-memory files: lets the walk be proven against a fixture without touching disk. */
+const loadVirtualProgram = (files: Readonly<Record<string, string>>, root: string): ts.Program => {
+  const host = ts.createCompilerHost(compilerOptions);
+  const { getSourceFile, fileExists, readFile } = host;
+  host.fileExists = (name) => name in files || fileExists.call(host, name);
+  host.readFile = (name) => files[name] ?? readFile.call(host, name);
+  host.getSourceFile = (name, ...rest) => {
+    const text = files[name];
+    return text === undefined
+      ? getSourceFile.call(host, name, ...rest)
+      : ts.createSourceFile(name, text, ts.ScriptTarget.ES2022, true);
+  };
+  return ts.createProgram([root], { ...compilerOptions, types: [] }, host);
+};
 
 const resolveAlias = (checker: ts.TypeChecker, symbol: ts.Symbol): ts.Symbol =>
   symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 
-const isDistModuleLevel = (declaration: ts.Declaration): boolean =>
-  ts.isSourceFile(declaration.parent) &&
-  declaration.getSourceFile().fileName.startsWith(distRoot.split(sep).join('/'));
+// A module-level declaration is a direct child of the SourceFile (interface, type,
+// class, function) or a `const`/`let`/`var` inside a top-level VariableStatement
+// (`typeof X` can name the latter). Nested members and parameters are not.
+const isModuleLevel = (declaration: ts.Declaration): boolean => {
+  const { parent } = declaration;
+  return (
+    ts.isSourceFile(parent) ||
+    (ts.isVariableDeclarationList(parent) &&
+      ts.isVariableStatement(parent.parent) &&
+      ts.isSourceFile(parent.parent.parent))
+  );
+};
 
 interface Walk {
   /** Root-exported symbols visited. */
@@ -44,13 +67,16 @@ interface Walk {
   readonly unreachable: string[];
 }
 
-const walkRootSurface = (): Walk => {
-  const program = loadProgram();
+const walkSurface = (program: ts.Program, rootPath: string, distDir: string): Walk => {
   const checker = program.getTypeChecker();
-  const rootFile = program.getSourceFile(entry);
-  if (rootFile === undefined) throw new Error('dist/index.d.ts is not in the program');
+  const rootFile = program.getSourceFile(rootPath);
+  if (rootFile === undefined) throw new Error(`${rootPath} is not in the program`);
   const rootSymbol = checker.getSymbolAtLocation(rootFile);
-  if (rootSymbol === undefined) throw new Error('dist/index.d.ts has no module symbol');
+  if (rootSymbol === undefined) throw new Error(`${rootPath} has no module symbol`);
+
+  const isDistModuleLevel = (declaration: ts.Declaration): boolean =>
+    isModuleLevel(declaration) &&
+    declaration.getSourceFile().fileName.startsWith(distDir.split(sep).join('/'));
 
   const exported = checker.getExportsOfModule(rootSymbol).map((s) => resolveAlias(checker, s));
   const reachable = new Set<ts.Declaration>(exported.flatMap((s) => s.declarations ?? []));
@@ -66,7 +92,7 @@ const walkRootSurface = (): Walk => {
         target !== undefined && declarations.length > 0 && declarations.every(isDistModuleLevel);
       if (inDist) resolvedCount += 1;
       if (inDist && !declarations.some((d) => reachable.has(d))) {
-        const file = declarations[0]?.getSourceFile().fileName.slice(distRoot.length);
+        const file = declarations[0]?.getSourceFile().fileName.slice(distDir.length);
         missing.add(`${target?.getName() ?? '?'} (${file})`);
       }
     }
@@ -78,6 +104,17 @@ const walkRootSurface = (): Walk => {
   return { exportedCount: exported.length, resolvedCount, unreachable: [...missing].sort() };
 };
 
+const walkRootSurface = (): Walk =>
+  walkSurface(ts.createProgram([entry], compilerOptions), entry, distRoot);
+
+// Vacuity floors (exclusive lower bounds): about 80% of the counts measured on
+// 2026-10-12 (332 root exports, 725 resolved dist references; 0.8 x 332 = 265,
+// 0.8 x 725 = 580). They only prove the walk visited the real surface, not pin it
+// exactly. Re-derive them (measure, then take ~80%) whenever the surface shrinks
+// on purpose; growth never trips them.
+const EXPORT_FLOOR = 265;
+const RESOLVED_FLOOR = 580;
+
 describe('root barrel type closure (ADR-0023, issue #144)', () => {
   it('has a built dist to walk', () => {
     expect(
@@ -88,11 +125,47 @@ describe('root barrel type closure (ADR-0023, issue #144)', () => {
 
   it('actually walks the surface (a no-op walk would pass the next test vacuously)', () => {
     const walk = walkRootSurface();
-    expect(walk.exportedCount).toBeGreaterThan(200);
-    expect(walk.resolvedCount).toBeGreaterThan(500);
+    expect(walk.exportedCount).toBeGreaterThan(EXPORT_FLOOR);
+    expect(walk.resolvedCount).toBeGreaterThan(RESOLVED_FLOOR);
   });
 
   it('exports every dist type that a root-exported signature references', () => {
-    expect(walkRootSurface().unreachable).toEqual([]);
+    const { unreachable } = walkRootSurface();
+    expect(
+      unreachable,
+      'Re-export each name listed here from src/index.ts (or narrow the public signature that ' +
+        'references it): every type a root signature mentions must be reachable from the root ' +
+        '(ADR-0023, issue #144).',
+    ).toEqual([]);
+  });
+});
+
+describe('walkSurface detection (fixture, no disk)', () => {
+  const dist = '/virtual/dist/';
+  const detect = (files: Record<string, string>): Walk => {
+    const root = `${dist}index.d.ts`;
+    return walkSurface(loadVirtualProgram({ [root]: files['index'] ?? '', ...files }, root), root, dist);
+  };
+
+  it('flags an unexported interface referenced by an exported signature', () => {
+    const walk = detect({
+      index: 'interface Hidden { a: 1 }\nexport declare function f(): Hidden;\nexport {};',
+    });
+    expect(walk.unreachable).toEqual(['Hidden (index.d.ts)']);
+  });
+
+  it('flags a typeof reference to an unexported module-level const', () => {
+    const walk = detect({
+      index: 'declare const hidden: { a: 1 };\nexport declare const x: typeof hidden;\nexport {};',
+    });
+    expect(walk.unreachable).toEqual(['hidden (index.d.ts)']);
+  });
+
+  it('passes when the referenced name is exported', () => {
+    const walk = detect({
+      index: 'export interface Shown { a: 1 }\nexport declare function f(): Shown;',
+    });
+    expect(walk.unreachable).toEqual([]);
+    expect(walk.resolvedCount).toBeGreaterThan(0);
   });
 });
