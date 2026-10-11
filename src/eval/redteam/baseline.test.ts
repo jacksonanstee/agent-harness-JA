@@ -273,10 +273,10 @@ describe('loadBaseline', () => {
 });
 
 /**
- * Local fixture helper mirroring runner.ts's private `scoreCase` derivation
+ * Local fixture helper mirroring runner.ts's `scoreCase` derivation
  * (design §Gate rule 6 tests): keeps synthetic rows internally consistent
  * (pass/failureKind/reason follow from category+verdict) without importing
- * runner's private scoring function or reusing production code under test.
+ * runner's scoring function or reusing production code under test.
  */
 function makeRow(
   id: string,

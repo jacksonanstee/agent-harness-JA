@@ -3,6 +3,7 @@ export {
   createJudgedScanner,
   hasJudgeKey,
   isAnsweredResult,
+  isVerdict,
   JUDGE_WORST_CASE_USD_PER_CALL,
   JudgeSettingsError,
   MAX_JUDGE_CALLS_PER_RUN,
@@ -20,6 +21,7 @@ export {
   STARTER_CORPUS,
   stricterVerdict,
   toInjectionJudge,
+  VERDICTS,
   verdictRank,
 } from './injection/index.js';
 export type {

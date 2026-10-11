@@ -1,7 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
 import { GuardedReadError, readFileGuarded } from '../../internal/guarded-read.js';
-import { MAX_JUDGE_INPUT_BYTES } from '../../security/index.js';
+import { MAX_JUDGE_INPUT_BYTES, VERDICTS } from '../../security/index.js';
 import type { ScanResult, Verdict } from '../../security/index.js';
 import { CORPUS } from './corpus.js';
 import { CORPUS_ID_RE } from './runner.js';
@@ -32,8 +32,6 @@ export const MAX_HOLDOUT_CASES = 100;
 const RECOMMENDED_HOME = '~/.harness/redteam-holdout.json';
 const ANCESTOR_REMEDY =
   "pass --holdout the link's target path, or move the file out of the symlinked directory";
-
-const VERDICTS: readonly Verdict[] = ['pass', 'ask', 'block'];
 
 /** A holdout case as loaded: the corpus shape without `source` (YAGNI 4). */
 export type HoldoutCase = Pick<CorpusCase, 'id' | 'category' | 'text' | 'expected'>;
@@ -132,15 +130,8 @@ function checkShape(c: HoldoutCase, verdict: Verdict): void {
   }
 }
 
-/**
- * Loads the held-out slice: guarded read (symlink refusal at the file and
- * its parent, byte cap, O_NOFOLLOW), ENOENT mapped by name, a non-echoing
- * JSON parse, the exact ajv allowlist, then the ordered rules: per case
- * (`checkCase`), the case cap, non-empty, no duplicate ids, no id present in
- * the committed corpus, and finally the scanner shape rules over every case.
- * Returns the parsed cases unchanged so the CLI hands them to the runner.
- */
-export function loadHoldout(path: string, scan: (text: string) => ScanResult): HoldoutCase[] {
+/** Reads the file through the guarded envelope and maps every refusal onto the holdout's own messages. */
+function readHoldoutText(path: string): string {
   // Two refusals that name their cause instead of a misleading downstream
   // message (code-lens fold, C-10): a `~` the shell did not expand (a quoted
   // path) would otherwise be told to use the notation that just failed.
@@ -166,6 +157,11 @@ export function loadHoldout(path: string, scan: (text: string) => ScanResult): H
   if (raw.charCodeAt(0) === 0xfeff) {
     throw new HoldoutError(`holdout ${path} starts with a UTF-8 byte-order mark; save the file without a BOM`);
   }
+  return raw;
+}
+
+/** A non-echoing JSON parse, then the exact ajv allowlist. */
+function parseHoldoutCases(path: string, raw: string): HoldoutCase[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -180,9 +176,11 @@ export function loadHoldout(path: string, scan: (text: string) => ScanResult): H
       `holdout ${path} is invalid at ${caseLabel(parsed, errors[0]?.instancePath)}: ${ajv.errorsText(errors)}`,
     );
   }
-  const cases = parsed as unknown as HoldoutCase[];
+  return parsed as unknown as HoldoutCase[];
+}
 
-  for (const c of cases) checkCase(c);
+/** The set-level rules, in order: the case cap, non-empty, no duplicate ids, no committed-corpus id. */
+function checkSet(path: string, cases: readonly HoldoutCase[]): void {
   if (cases.length > MAX_HOLDOUT_CASES) {
     throw new HoldoutError(`holdout ${path} has ${cases.length} cases; at most ${MAX_HOLDOUT_CASES} are accepted`);
   }
@@ -202,6 +200,20 @@ export function loadHoldout(path: string, scan: (text: string) => ScanResult): H
       );
     }
   }
+}
+
+/**
+ * Loads the held-out slice: guarded read (symlink refusal at the file and
+ * its parent, byte cap, O_NOFOLLOW), ENOENT mapped by name, a non-echoing
+ * JSON parse, the exact ajv allowlist, then the ordered rules: per case
+ * (`checkCase`), the case cap, non-empty, no duplicate ids, no id present in
+ * the committed corpus, and finally the scanner shape rules over every case.
+ * Returns the parsed cases unchanged so the CLI hands them to the runner.
+ */
+export function loadHoldout(path: string, scan: (text: string) => ScanResult): HoldoutCase[] {
+  const cases = parseHoldoutCases(path, readHoldoutText(path));
+  for (const c of cases) checkCase(c);
+  checkSet(path, cases);
   for (const c of cases) checkShape(c, scan(c.text).verdict);
   return cases;
 }

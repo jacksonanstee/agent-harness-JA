@@ -6,6 +6,7 @@ import {
   refuseAncestorSymlinks as guardedRefuseAncestorSymlinks,
   refuseSymlink as guardedRefuseSymlink,
 } from '../../internal/guarded-read.js';
+import { VERDICTS } from '../../security/index.js';
 import { diffRows, toCanonicalJson } from '../scorecard/index.js';
 import type { ScorecardEnvelope } from '../scorecard/index.js';
 import { REDTEAM_FAILURE_KINDS } from './runner.js';
@@ -85,8 +86,6 @@ export class BaselineError extends Error {
 
 /** Mirrors src/internal/frontmatter.ts MAX_FILE_BYTES (design CG4). */
 export const MAX_BASELINE_BYTES = 1_000_000;
-
-const VERDICTS = ['pass', 'ask', 'block'] as const;
 
 const baselineSchema = {
   type: 'object',

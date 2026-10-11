@@ -1,5 +1,5 @@
-import { JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS, MAX_JUDGE_CALLS_PER_RUN } from '../security/index.js';
-import type { JudgeCallResult, JudgeErrorKind, ScanResult, Verdict } from '../security/index.js';
+import { isVerdict, JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS, MAX_JUDGE_CALLS_PER_RUN } from '../security/index.js';
+import type { JudgeCallResult, JudgeErrorKind, ScanResult } from '../security/index.js';
 import { JUDGE_HOOK_TIMEOUT_S } from './judged-scan-constants.js';
 import type { InternalSessionJudge } from './judged-scan-constants.js';
 import type { SessionDeps } from './types.js';
@@ -42,7 +42,6 @@ export function validateSessionJudge(deps: SessionDeps): void {
   }
 }
 
-const isVerdict = (value: unknown): value is Verdict => value === 'pass' || value === 'ask' || value === 'block';
 const isErrorKind = (value: unknown): value is JudgeErrorKind =>
   typeof value === 'string' && (JUDGE_ERROR_KINDS as readonly string[]).includes(value);
 

@@ -1,17 +1,14 @@
+import { formatUsd } from '../../internal/money.js';
 import { escapeCell } from '../scorecard/index.js';
 import { GOLDEN_FAILURE_KINDS } from './scorecard-shape.js';
 import type { GoldenRow, GoldenScorecard } from './scorecard-shape.js';
 import type { ChallengeFinding } from '../verifier/types.js';
 
-function money(value: number): string {
-  return `$${value.toFixed(4)}`;
-}
-
 function rowLine(row: GoldenRow): string {
   const result = row.pass ? 'pass' : 'FAIL';
   const kind = row.failureKind ?? '—';
   const reason = row.reason === null ? '—' : escapeCell(row.reason);
-  const cost = row.volatile.costUsd === null ? 'n/a' : money(row.volatile.costUsd);
+  const cost = row.volatile.costUsd === null ? 'n/a' : formatUsd(row.volatile.costUsd);
   const turns = row.volatile.numTurns === null ? 'n/a' : String(row.volatile.numTurns);
   const duration =
     row.volatile.durationMs === null
@@ -47,7 +44,7 @@ function verificationLines(scorecard: GoldenScorecard): string[] {
     '## Adversarial challenge (report-only — never affects pass/fail or exit codes)',
     '',
     `Adversary: ${escapeCell(verification.adversaryModelId)} · challenged ${vt.challenged} / agreed ${vt.agreed} / errors ${vt.verifierErrors} / no-output ${vt.noOutput}, of ${totals.passed} passed tasks`,
-    `Challenge cost: ${money(verification.totalCostUsd)} (${verification.unpricedChallenges} unpriced)`,
+    `Challenge cost: ${formatUsd(verification.totalCostUsd)} (${verification.unpricedChallenges} unpriced)`,
   ];
   const nonAgreed = verification.findings.filter((f) => f.status !== 'agreed');
   if (nonAgreed.length > 0) {
@@ -67,8 +64,8 @@ export function toMarkdown(scorecard: GoldenScorecard): string {
   const pct = (totals.passRate * 100).toFixed(1);
   const cost =
     totals.unpricedTasks === 0
-      ? money(totals.totalCostUsd)
-      : `≥ ${money(totals.totalCostUsd)} (${totals.unpricedTasks} task${
+      ? formatUsd(totals.totalCostUsd)
+      : `≥ ${formatUsd(totals.totalCostUsd)} (${totals.unpricedTasks} task${
           totals.unpricedTasks === 1 ? '' : 's'
         } unpriced)`;
   const lines = [

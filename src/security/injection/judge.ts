@@ -116,7 +116,11 @@ export function stricterVerdict(a: Verdict, b: Verdict): Verdict {
   return verdictRank(a) >= verdictRank(b) ? a : b;
 }
 
-function isVerdict(value: unknown): value is Verdict {
+/** The closed verdict tuple, in rank order (issue #143: the one home; eval schemas and tests read it). */
+export const VERDICTS: readonly Verdict[] = ['pass', 'ask', 'block'];
+
+/** Narrows an untrusted value to a `Verdict` (issue #143: the one home for the session, eval and security callers). */
+export function isVerdict(value: unknown): value is Verdict {
   return value === 'pass' || value === 'ask' || value === 'block';
 }
 

@@ -1,3 +1,4 @@
+import { formatUsd } from '../internal/money.js';
 import { JUDGE_TIMEOUT_MS } from '../security/index.js';
 import type { JudgeSettings } from '../security/index.js';
 import { buildJudge, JUDGE_MODEL } from '../session/index.js';
@@ -38,7 +39,7 @@ export function judgeSummaryLines(s: JudgeSummary): { summary: string; capWarnin
   const parts = [`[harness] judge: ${s.calls}/${s.cap} call(s)`, `${s.tightened} note(s) added by the judge path`];
   if (unjudged.length > 0) parts.push(`unjudged: ${unjudged.join(', ')}`);
   const unknown = s.costUnknown > 0 ? `; ${s.costUnknown} call(s) of unknown cost` : '';
-  parts.push(`cost=$${s.costUsd.toFixed(4)} (not included in cost= above${unknown})`);
+  parts.push(`cost=${formatUsd(s.costUsd)} (not included in cost= above${unknown})`);
   const capped = s.byState['cap-reached'];
   return { summary: parts.join(', '), capWarning: capped > 0 ? judgeCapWarning(s.cap, capped) : null };
 }

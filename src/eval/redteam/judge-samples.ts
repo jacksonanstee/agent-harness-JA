@@ -1,3 +1,4 @@
+import { formatUsd } from '../../internal/money.js';
 import { answeredCalls, isAnsweredStatus } from './judge-runner.js';
 import type { RedteamJudgeRow, RedteamJudgeScorecard, Slice } from './judge-runner.js';
 import { CORPUS_ID_RE } from './runner.js';
@@ -242,7 +243,7 @@ const ofSlice = (detected: number | null, malicious: number | null, refused: num
  * did before issue #152; the `JUDGE_GATE=` line's format is unchanged.
  */
 export function formatJudgeSampleSummary(s: JudgeSampleSummary): string[] {
-  const cost = s.costUsd === null ? 'unknown' : `$${s.costUsd.toFixed(4)}`;
+  const cost = s.costUsd === null ? 'unknown' : formatUsd(s.costUsd);
   const refused = s.refused > 0 ? `, refused ${s.refused}` : '';
   const stopped = s.stoppedEarly > 0 ? `, ${s.stoppedEarly} stopped early` : '';
   return [

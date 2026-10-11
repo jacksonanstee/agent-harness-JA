@@ -74,6 +74,61 @@ type RedteamParseResult =
   | { ok: true; value: RedteamArgs }
   | { ok: false; error: string };
 
+const VALUE_FLAGS = ['--out', '--baseline', '--judge-model', '--holdout', '--samples'];
+
+/** The parse loop's accumulator; `judgeModel` stays null until supplied so the cross-flag rules can tell. */
+interface RedteamDraft {
+  out: string;
+  updateBaseline: boolean;
+  baselinePath: string;
+  judge: boolean;
+  judgeModel: string | null;
+  holdoutPath: string | null;
+  samples: number | null;
+}
+
+/** Stores one value-taking flag's value; returns an error message, or null when accepted. */
+function applyValueFlag(draft: RedteamDraft, flag: string, value: string): string | null {
+  switch (flag) {
+    case '--out':
+      draft.out = value;
+      return null;
+    case '--baseline':
+      draft.baselinePath = value;
+      return null;
+    case '--judge-model':
+      draft.judgeModel = value;
+      return null;
+    case '--holdout':
+      draft.holdoutPath = value;
+      return null;
+    default:
+      // Each sample is a full keyed run, so the range bounds the spend; the
+      // value is not echoed (the range says everything the operator needs).
+      if (!WHOLE_NUMBER_RE.test(value) || Number(value) > MAX_JUDGE_SAMPLES) {
+        return `--samples must be a whole number from 1 to ${MAX_JUDGE_SAMPLES}. ${USAGE}`;
+      }
+      draft.samples = Number(value);
+      return null;
+  }
+}
+
+/** The cross-flag rules, run after the loop so flag order never matters; returns the first violation or null. */
+function crossFlagRules(d: RedteamDraft): string | null {
+  if (d.judgeModel !== null && !d.judge) return `--judge-model requires --judge. ${USAGE}`;
+  if (d.holdoutPath !== null && !d.judge) return `--holdout requires --judge. ${USAGE}`;
+  if (d.samples !== null && !d.judge) return `--samples requires --judge. ${USAGE}`;
+  if (d.judge && d.updateBaseline) {
+    return `--judge cannot be combined with --update-baseline (the baseline update stays keyless and heuristic-only). ${USAGE}`;
+  }
+  if (d.judgeModel !== null && !JUDGE_MODEL_IDS.includes(d.judgeModel)) {
+    // The supplied value is not echoed: it is operator argv, but the valid
+    // list says everything the operator needs.
+    return `--judge-model must be a router-table model id (${JUDGE_MODEL_IDS.join('|')}). ${USAGE}`;
+  }
+  return null;
+}
+
 /**
  * `--out <dir>`, `--update-baseline`, `--baseline <path>`, `--judge`,
  * `--judge-model <id>`, `--holdout <path>`, `--samples <n>`; no
@@ -85,98 +140,45 @@ type RedteamParseResult =
  * renders).
  */
 export function parseRedteamArgs(argv: string[]): RedteamParseResult {
-  let out = EVAL_OUT_DIR;
-  let updateBaseline = false;
-  let baselinePath = DEFAULT_BASELINE_PATH;
-  let judge = false;
-  let judgeModel: string | null = null;
-  let holdoutPath: string | null = null;
-  let samples: number | null = null;
+  const draft: RedteamDraft = {
+    out: EVAL_OUT_DIR,
+    updateBaseline: false,
+    baselinePath: DEFAULT_BASELINE_PATH,
+    judge: false,
+    judgeModel: null,
+    holdoutPath: null,
+    samples: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === undefined) break;
-    if (arg === '--out') {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --out. ${USAGE}` };
-      }
-      out = value;
-      i += 1;
-    } else if (arg === '--update-baseline') {
-      updateBaseline = true;
-    } else if (arg === '--baseline') {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --baseline. ${USAGE}` };
-      }
-      baselinePath = value;
-      i += 1;
+    if (arg === '--update-baseline') {
+      draft.updateBaseline = true;
     } else if (arg === '--judge') {
-      judge = true;
-    } else if (arg === '--judge-model') {
+      draft.judge = true;
+    } else if (VALUE_FLAGS.includes(arg)) {
       const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --judge-model. ${USAGE}` };
-      }
-      judgeModel = value;
-      i += 1;
-    } else if (arg === '--holdout') {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --holdout. ${USAGE}` };
-      }
-      holdoutPath = value;
-      i += 1;
-    } else if (arg === '--samples') {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        return { ok: false, error: `Missing value for --samples. ${USAGE}` };
-      }
-      // Each sample is a full keyed run, so the range bounds the spend; the
-      // value is not echoed (the range says everything the operator needs).
-      if (!WHOLE_NUMBER_RE.test(value) || Number(value) > MAX_JUDGE_SAMPLES) {
-        return { ok: false, error: `--samples must be a whole number from 1 to ${MAX_JUDGE_SAMPLES}. ${USAGE}` };
-      }
-      samples = Number(value);
+      if (value === undefined) return { ok: false, error: `Missing value for ${arg}. ${USAGE}` };
+      const error = applyValueFlag(draft, arg, value);
+      if (error !== null) return { ok: false, error };
       i += 1;
     } else {
       return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
     }
   }
-  if (judgeModel !== null && !judge) {
-    return { ok: false, error: `--judge-model requires --judge. ${USAGE}` };
-  }
-  if (holdoutPath !== null && !judge) {
-    return { ok: false, error: `--holdout requires --judge. ${USAGE}` };
-  }
-  if (samples !== null && !judge) {
-    return { ok: false, error: `--samples requires --judge. ${USAGE}` };
-  }
-  if (judge && updateBaseline) {
-    return {
-      ok: false,
-      error: `--judge cannot be combined with --update-baseline (the baseline update stays keyless and heuristic-only). ${USAGE}`,
-    };
-  }
-  if (judgeModel !== null && !JUDGE_MODEL_IDS.includes(judgeModel)) {
-    // The supplied value is not echoed: it is operator argv, but the valid
-    // list says everything the operator needs.
-    return {
-      ok: false,
-      error: `--judge-model must be a router-table model id (${JUDGE_MODEL_IDS.join('|')}). ${USAGE}`,
-    };
-  }
+  const crossFlagError = crossFlagRules(draft);
+  if (crossFlagError !== null) return { ok: false, error: crossFlagError };
   return {
     ok: true,
     value: {
       command: 'redteam',
-      out,
-      updateBaseline,
-      baselinePath,
-      judge,
-      judgeModel: judgeModel ?? JUDGE_MODEL,
-      holdoutPath,
-      samples,
+      out: draft.out,
+      updateBaseline: draft.updateBaseline,
+      baselinePath: draft.baselinePath,
+      judge: draft.judge,
+      judgeModel: draft.judgeModel ?? JUDGE_MODEL,
+      holdoutPath: draft.holdoutPath,
+      samples: draft.samples,
     },
   };
 }

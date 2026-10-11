@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
+import { isVerdict } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
 import { isProviderRefusal } from './sdk-refusal.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './types.js';
@@ -94,10 +95,6 @@ const WIRE_SCHEMA = {
 
 const ajv = new Ajv2020({ allErrors: false });
 const validateWire = ajv.compile<{ verdict: string }>(WIRE_SCHEMA as object);
-
-function isVerdict(value: string): value is Verdict {
-  return value === 'pass' || value === 'ask' || value === 'block';
-}
 
 /**
  * Key-value pairs in the raw JSON text: one colon outside a string per pair.

@@ -1,3 +1,4 @@
+import { formatUsd } from '../../internal/money.js';
 import { escapeCell } from '../scorecard/index.js';
 import type { ModeTotals, RedteamJudgeRow, RedteamJudgeScorecard, Slice } from './judge-runner.js';
 import { CATEGORIES } from './types.js';
@@ -10,14 +11,12 @@ import type { Category } from './types.js';
 // renderer reads `bySlice` (YAGNI 1). Ends with exactly one newline so the
 // machine-readable line the CLI prints after it starts at column 0 (U-3).
 
-const money = (value: number): string => `$${value.toFixed(4)}`;
-
 function costLine(totals: RedteamJudgeScorecard['totals']): string {
   if (totals.attempted === 0) return 'Judge cost: none (no calls attempted)';
   const unpriced = `${totals.costUnknown} call${totals.costUnknown === 1 ? '' : 's'} unpriced`;
   if (totals.costUsd === null) return `Judge cost: unknown (${unpriced})`;
   // Golden's floor form: unpriced calls were still made, so the sum is a floor.
-  return totals.costUnknown === 0 ? `Judge cost: ${money(totals.costUsd)}` : `Judge cost: ≥ ${money(totals.costUsd)} (${unpriced})`;
+  return totals.costUnknown === 0 ? `Judge cost: ${formatUsd(totals.costUsd)}` : `Judge cost: ≥ ${formatUsd(totals.costUsd)} (${unpriced})`;
 }
 
 function modeLine(slice: Slice, mode: 'always' | 'suspicious', m: ModeTotals): string {
