@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from 'node:
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { INIT_FILES, INIT_TARGET_PATHS } from './init-templates.js';
-import { sanitizeDiagnostic, sanitizeForTerminal, USAGE } from './shared.js';
+import { sanitizeDiagnostic, USAGE } from './shared.js';
 
 export interface InitArgs {
   command: 'init';
@@ -126,7 +126,7 @@ function findSymlinkedComponents(dir: string): string[] {
  * anything is written; any collision or symlinked path component refuses the
  * whole operation (exit 2, the repo-wide "refused, nothing produced" class)
  * with zero writes. An unexpected fs failure mid-write propagates to
- * main()'s catch-all (exit 1). All printed paths pass sanitizeDiagnostic (stderr) or sanitizeForTerminal (stdout):
+ * main()'s catch-all (exit 1). All printed paths pass sanitizeDiagnostic (the success output echoes the dir inside a copy-pasteable command):
  * the dir name is operator-supplied and may carry terminal escapes.
  */
 export function runInit(
@@ -179,7 +179,7 @@ export function runInit(
   }
 
   streams.stdout(
-    sanitizeForTerminal(buildOutput(dir, invocation, Boolean(env.ANTHROPIC_API_KEY))),
+    sanitizeDiagnostic(buildOutput(dir, invocation, Boolean(env.ANTHROPIC_API_KEY))),
   );
   return 0;
 }

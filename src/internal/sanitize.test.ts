@@ -300,3 +300,16 @@ describe('escapeJsonText', () => {
     }
   });
 });
+
+describe('stripInvisibles never joins surrogates across a deleted invisible (#127/#135 review LOW-1)', () => {
+  it('replaces lone surrogates before deleting, so DB40 ZWSP DC01 cannot become the tag char U+E0001', () => {
+    const out = stripInvisibles('abc\uDB40\u200B\uDC01');
+    expect(out).toBe('abc\uFFFD\uFFFD');
+    expect(out.includes('\u{E0001}')).toBe(false);
+  });
+
+  it('leaves a valid surrogate pair (an emoji) intact', () => {
+    expect(stripInvisibles('ok \u{1F600} done')).toBe('ok \u{1F600} done');
+    expect(stripInvisibles('\u{1F468}\u200D\u{1F469}')).toBe('\u{1F468}\u{1F469}');
+  });
+});

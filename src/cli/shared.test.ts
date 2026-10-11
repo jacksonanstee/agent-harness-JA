@@ -282,3 +282,15 @@ describe('sanitizeDiagnostic vs sanitizeForTerminal: the pinned split (#127)', (
     expect(survivors).toEqual([]);
   });
 });
+
+describe('sanitizeDiagnostic surrogate handling (#127 review LOW-1)', () => {
+  it('does not rebuild a tag character from a lone surrogate pair split by a ZWSP', () => {
+    const out = sanitizeDiagnostic('\uDB40\u200B\uDC01');
+    expect(out).toBe('\uFFFD\uFFFD');
+    expect(out.includes('\u{E0001}')).toBe(false);
+  });
+
+  it('keeps a valid emoji', () => {
+    expect(sanitizeDiagnostic('x\u{1F600}y')).toBe('x\u{1F600}y');
+  });
+});

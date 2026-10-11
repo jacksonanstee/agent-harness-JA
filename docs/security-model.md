@@ -268,8 +268,13 @@ sweep test pins that no code point of either survives. The stdout prose sinks
 (model text via `onText`, the rendered scorecards and drift reports) deliberately
 stay on plain `sanitizeForTerminal`: ZWJ in emoji sequences, ZWNJ in Persian and
 Indic text, VS16 and LRM/RLM in right-to-left prose are legitimate there, so
-bidi stripping remains opt-in per sink. Residual: a stdout sink that echoes a
-path (the `init` success output, the rendered reports) keeps those code points.
+bidi stripping remains opt-in per sink. The `init` success output also goes
+through `sanitizeDiagnostic`, because it echoes the operator-named directory inside a
+copy-pasteable command, where a visibly mangled command beats a bidi-spoofed one.
+`stripInvisibles` now replaces lone surrogates with U+FFFD first, so deleting an
+invisible between a lone high and a lone low surrogate cannot join them into a new
+astral code point. Residual: the rendered stdout reports may echo a path and keep
+those code points.
 
 As of 2026-07-14 (ADR-0006 amendment) the same treatment covers full skill
 **bodies**, which now enter the system prompt whole — the body is the skill's

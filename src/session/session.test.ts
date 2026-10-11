@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { escapePathUnsafe } from '../internal/sanitize.js';
+import { cleanSdkToken } from './sdk-refusal.js';
 
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import type { HookRuntime } from '../hooks/index.js';
@@ -2682,6 +2683,30 @@ describe('createSession', () => {
       const run = await createSession(deps, { skillsDir: null, generateId: () => 'harness-fallback' }).run('empty after clean');
       expect(run.sessionId).toBe('harness-fallback');
       expect(run.memoryEntryId).toBe('session-harness-fallback');
+    });
+
+    it('cleanSdkToken cannot rebuild a tag character from surrogates split by a ZWSP, and keeps an emoji (#135 review LOW-1)', () => {
+      const out = cleanSdkToken('abc\uDB40\u200B\uDC01');
+      expect(out).toBe('abc\uFFFD\uFFFD');
+      expect(out.includes('\u{E0001}')).toBe(false);
+      expect(cleanSdkToken('a\u{1F600}b')).toBe('a\u{1F600}b');
+    });
+
+    it('a non-string session_id does not throw and counts as absent (#135 review)', async () => {
+      const init = { type: 'system', subtype: 'init', session_id: 12345 } as unknown as SdkMessage;
+      const result = { type: 'result', subtype: 'success', session_id: { nested: true }, result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([init, result]));
+      const run = await createSession(deps, { skillsDir: null, generateId: () => 'harness-nonstring' }).run('non-string ids');
+      expect(run.sessionId).toBe('harness-nonstring');
+    });
+
+    it('keeps a valid init session_id when the result session_id cleans to nothing (#135 review)', async () => {
+      const init = { type: 'system', subtype: 'init', session_id: 'init-good-id' } as unknown as SdkMessage;
+      const result = { type: 'result', subtype: 'success', session_id: '\u200b\u202e', result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([init, result]));
+      const run = await createSession(deps, { skillsDir: null }).run('retain init id');
+      expect(run.sessionId).toBe('init-good-id');
+      expect(run.memoryEntryId).toBe('session-init-good-id');
     });
 
     it('a zero-width-smuggled refusal still detects, because cleaning runs first', async () => {

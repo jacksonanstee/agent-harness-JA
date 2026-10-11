@@ -1706,7 +1706,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       });
 
       for await (const message of stream) {
-        if (isSystemInit(message) && message.session_id) {
+        if (isSystemInit(message) && typeof message.session_id === 'string') {
           sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
         } else if (isModelRefusal(message)) {
           // Later banner wins: a turn that falls back and then refuses again
@@ -1734,7 +1734,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // session_id and subtype share stop_reason's envelope (#135, ADR-0025
           // amendment 2026-10-11): all three are open SDK strings reaching the
           // same sinks (result, memory row id and content, telemetry).
-          if (message.session_id) sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
+          if (typeof message.session_id === 'string') sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
           resultText = message.result ?? null;
           resultSubtype = typeof message.subtype === 'string' ? cleanSdkId(message.subtype) : null;
           // Cleaned and bounded like the banner tokens: `stop_reason` is an

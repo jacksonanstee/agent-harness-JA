@@ -199,6 +199,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
 }
 
 export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<number> {
+  const evalOutDir = seams.evalOutDir ?? EVAL_OUT_DIR;
   if (!process.env.ANTHROPIC_API_KEY) {
     process.stderr.write(apiKeyMissingMessage('required for eval'));
     return 2;
@@ -227,7 +228,7 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
   // the same exit 2 with its message, where it used to crash uncaught.
   try {
     refuseSymlinkedDir('.harness');
-    refuseSymlinkedDir(EVAL_OUT_DIR);
+    refuseSymlinkedDir(evalOutDir);
   } catch (error: unknown) {
     if (error instanceof EvalUsageError || error instanceof GuardedReadError) {
       process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
@@ -293,7 +294,7 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     // contract (ADR-0017 decision #4 — exit 2 means no scorecard produced).
     // Once the markdown below reaches stdout that contract can no longer be
     // kept, so writeScorecard maps every failure to a message, none bubble.
-    const written = writeScorecard(scorecard, EVAL_OUT_DIR);
+    const written = writeScorecard(scorecard, evalOutDir);
     if (!written.ok) {
       process.stderr.write(`${sanitizeDiagnostic(written.message)}\n`);
       return 2;

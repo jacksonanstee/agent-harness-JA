@@ -215,6 +215,8 @@ export type ImportSdk = () => Promise<{ query: unknown }>;
 export interface CliSeams {
   userDir?: string;
   importSdk?: ImportSdk;
+  /** The eval scorecard directory; defaults to `EVAL_OUT_DIR`. A vitest worker cannot chdir, so a test redirects the write here. */
+  evalOutDir?: string;
 }
 
 const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;

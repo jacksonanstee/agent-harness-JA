@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../cli.js';
+import { runInit } from './init-command.js';
 import type { SdkMessage } from '../session/index.js';
 
 // Issue #127. Every stderr diagnostic that echoes an operator- or repo-named
@@ -24,14 +25,12 @@ const RESULT: SdkMessage = {
 };
 
 const bases: string[] = [];
-const extraCleanup: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of bases.splice(0)) {
     try { chmodSync(join(dir, HOSTILE), 0o700); } catch { /* absent or not chmodded */ }
     rmSync(dir, { recursive: true, force: true });
   }
-  for (const path of extraCleanup.splice(0)) rmSync(path, { force: true });
 });
 
 function makeBase(): string {
@@ -69,6 +68,8 @@ async function evalWith(base: string, args: string[]): Promise<{ code: number; s
   try {
     const code = await main(['eval', ...args], {
       userDir: join(base, 'home'),
+      // A vitest worker cannot chdir, so the scorecard is redirected under the temp base.
+      evalOutDir: join(base, 'eval-out'),
       importSdk: async () => ({
         query: () =>
           (async function* () {
@@ -123,7 +124,7 @@ describe('eval stderr sinks strip bidi and default-ignorables from a hostile tas
     expectCleanButReadable(stderr);
   });
 
-  it('discovered N tasks progress line, and the scorecard-written line', async () => {
+  it('discovered N tasks progress line', async () => {
     const base = makeBase();
     mkdirSync(join(base, HOSTILE));
     writeFileSync(
@@ -131,8 +132,6 @@ describe('eval stderr sinks strip bidi and default-ignorables from a hostile tas
       '---\nid: a\ndescriptor:\n  shape: lookup\n  sensitivity: low\n  expected_tokens: 200\nmaxTurns: 1\n---\nsay pong\n',
     );
     const { stderr } = await evalWith(base, [HOSTILE]);
-    const written = /scorecard written to (.+)\n/u.exec(stderr);
-    if (written?.[1] !== undefined) extraCleanup.push(written[1]);
     expect(stderr).toContain('discovered 1 task in');
     expectCleanButReadable(stderr);
   });
@@ -158,13 +157,59 @@ describe('run stderr sinks strip bidi and default-ignorables from a hostile skil
   });
 });
 
-describe('redteam stderr sinks strip bidi and default-ignorables from a hostile baseline path (#127)', () => {
-  it('baseline parent directory does not exist', async () => {
+describe('redteam stderr sinks strip bidi and default-ignorables from a hostile holdout path (#127)', () => {
+  it('holdout load refusal runs before any scorecard, so nothing is written', async () => {
     const base = makeBase();
     const cap = capture(base);
-    const code = await main(['redteam', '--update-baseline', '--baseline', join(base, HOSTILE, 'baseline.json')]);
+    const code = await main(['redteam', '--judge', '--holdout', join(base, HOSTILE, 'holdout.json')]);
     expect(code).toBe(2);
-    expect(cap.stderr()).toContain('does not exist');
     expectCleanButReadable(cap.stderr());
+  });
+});
+
+describe('init success output strips bidi and default-ignorables from a hostile directory name (#127 review)', () => {
+  it('echoes the dir inside the copy-pasteable command through sanitizeDiagnostic', () => {
+    const base = makeBase();
+    const out: string[] = [];
+    const code = runInit({ command: 'init', dir: join(base, HOSTILE) }, { stdout: (t) => out.push(t), stderr: () => undefined });
+    expect(code).toBe(0);
+    expectCleanButReadable(out.join(''));
+  });
+});
+
+describe('run stdout prose keeps legitimate ZWJ and LRM (sink-level pin of the #127 split)', () => {
+  it('onText goes through sanitizeForTerminal, not sanitizeDiagnostic', async () => {
+    const base = makeBase();
+    mkdirSync(join(base, 'skills'));
+    const prose = 'fam\u{1F468}\u200D\u{1F469} rtl\u200Eend';
+    const out: string[] = [];
+    vi.spyOn(process, 'cwd').mockReturnValue(base);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      out.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+      return true;
+    });
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'unused';
+    try {
+      const code = await main(['run', '--skills-dir', join(base, 'skills'), '--db', join(base, 'run.db'), 'hi'], {
+        userDir: join(base, 'home'),
+        importSdk: async () => ({
+          query: () =>
+            (async function* () {
+              yield { type: 'system', subtype: 'init', session_id: 'sdk-1' };
+              yield { type: 'assistant', message: { content: [{ type: 'text', text: prose }] } };
+              yield RESULT;
+            })(),
+        }),
+      });
+      expect(code).toBe(0);
+    } finally {
+      if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
+      else delete process.env.ANTHROPIC_API_KEY;
+    }
+    const stdout = out.join('');
+    expect(stdout).toContain('\u200D');
+    expect(stdout).toContain('\u200E');
   });
 });
