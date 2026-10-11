@@ -446,8 +446,107 @@ describe('canonicalizeCommand (platform-independent via injected flag)', () => {
     expect(canonicalizeCommand('*', true)).toBe('*');
   });
 
-  it('folds NBSP/unicode whitespace into the separator (fails toward deny, never a bypass)', () => {
-    expect(canonicalizeCommand('rm -rf x', false)).toBe('rm -rf x');
+  it('collapses runs of spaces and tabs only; a newline stays (issue #161)', () => {
+    expect(canonicalizeCommand('git \t  status', false)).toBe('git status');
+    expect(canonicalizeCommand('\n git status \n', false)).toBe('git status');
+    // A newline ends a command; it does not separate the words of one.
+    expect(canonicalizeCommand('git\nstatus', false)).toBe('git\nstatus');
+  });
+});
+
+// Bash splits words on space, tab and newline only (issue #161, ADR-0014 §1).
+// JS \s also eats NBSP, U+2028/9, VT, FF, U+3000 and BOM (NEL is not \s, but bash keeps it in a word too), so the
+// canonicaliser used to turn `git<sep>status` into `git status` and an allow
+// or ask rule for `git status` matched a command bash runs as the program
+// named `git<sep>status`. Escapes, not literal characters, so an editor
+// cannot normalise a row into a plain space.
+const NON_BLANK_SPACES = [
+  ['NBSP', '\u00a0'],
+  ['NEL', '\u0085'],
+  ['LINE SEPARATOR', '\u2028'],
+  ['PARAGRAPH SEPARATOR', '\u2029'],
+  ['VT', '\v'],
+  ['FF', '\f'],
+  ['IDEOGRAPHIC SPACE', '\u3000'],
+  ['BOM', '\ufeff'],
+] as const;
+
+describe('command rules read argv[0] the way the shell does (issue #161)', () => {
+  const evalBash = (
+    rules: LayeredRule[],
+    command: string,
+    defaultDecision?: 'allow' | 'ask' | 'deny',
+  ) =>
+    createPermissionEvaluator({ rules, defaultDecision }).evaluate('Bash', { command }).decision;
+
+  it('the table holds what its names say (guards the escapes)', () => {
+    expect(NON_BLANK_SPACES.map(([, ch]) => ch.codePointAt(0))).toEqual([
+      0xa0, 0x85, 0x2028, 0x2029, 0x0b, 0x0c, 0x3000, 0xfeff,
+    ]);
+  });
+
+  it.each(NON_BLANK_SPACES)('%s stays inside the word through canonicalizeCommand', (_n, ch) => {
+    expect(canonicalizeCommand(`git${ch}status`, false)).toBe(`git${ch}status`);
+    expect(canonicalizeCommand(`git${ch}status`, true)).toBe(`git${ch}status`);
+    expect(canonicalizeCommand(`${ch}git status`, false)).toBe(`${ch}git status`);
+    expect(canonicalizeCommand(`git status${ch}`, false)).toBe(`git status${ch}`);
+  });
+
+  it.each(NON_BLANK_SPACES)('allow `git status` and `git *` do not match git%sstatus', (_n, ch) => {
+    const command = `git${ch}status`;
+    for (const match of ['git status', 'git *']) {
+      const rules = [rule({ tool: 'Bash', match, decision: 'allow' })];
+      // No rule matches, so the default applies: prove it is the default that
+      // answered, not the allow rule, by flipping the default.
+      expect(evalBash(rules, command, 'deny'), match).toBe('deny');
+      expect(evalBash(rules, 'git status', 'deny'), match).toBe('allow');
+    }
+  });
+
+  it.each(NON_BLANK_SPACES)('ask `git *` does not match git%sstatus', (_n, ch) => {
+    const rules = [rule({ tool: 'Bash', match: 'git *', decision: 'ask' })];
+    expect(evalBash(rules, `git${ch}status`)).toBe('allow');
+    expect(evalBash(rules, 'git status')).toBe('ask');
+  });
+
+  it.each(NON_BLANK_SPACES)('deny `git *` no longer over-matches git%sstatus', (_n, ch) => {
+    const rules = [rule({ tool: 'Bash', match: 'git *', decision: 'deny' })];
+    expect(evalBash(rules, 'git status')).toBe('deny');
+    // The rule names the program git; bash runs a program called
+    // `git<sep>status`. The default decision answers, here and with a deny default.
+    expect(evalBash(rules, `git${ch}status`)).toBe('allow');
+    expect(evalBash(rules, `git${ch}status`, 'deny')).toBe('deny');
+    const verdict = createPermissionEvaluator({ rules }).evaluate('Bash', {
+      command: `git${ch}status`,
+    });
+    expect(verdict.ruleIndex).toBeNull();
+    expect(verdict.reason).toContain('default allow (no matching rule)');
+  });
+
+  it.each(NON_BLANK_SPACES)('a rule naming the %s-joined program matches it', (_n, ch) => {
+    const rules = [rule({ tool: 'Bash', match: `git${ch}status`, decision: 'deny' })];
+    expect(evalBash(rules, `git${ch}status`)).toBe('deny');
+    expect(evalBash(rules, 'git status')).toBe('allow');
+  });
+
+  it('tabs and runs of spaces still collapse, so the rule matches them', () => {
+    const rules = [rule({ tool: 'Bash', match: 'git status', decision: 'deny' })];
+    expect(evalBash(rules, 'git\t status')).toBe('deny');
+    expect(evalBash(rules, '  git   status  ')).toBe('deny');
+    expect(evalBash(rules, '\tgit\t\tstatus\n')).toBe('deny');
+  });
+
+  it('a newline between words is a command boundary, not a space', () => {
+    const rules = [rule({ tool: 'Bash', match: 'git status', decision: 'deny' })];
+    expect(evalBash(rules, 'git\nstatus')).toBe('allow');
+  });
+
+  it('the case fold stops at the first shell separator, not at a Unicode space', () => {
+    expect(canonicalizeCommand('GIT\tSTATUS', true)).toBe('git STATUS');
+    expect(canonicalizeCommand('GIT\nSTATUS', true)).toBe('git\nSTATUS');
+    // NBSP is part of the word, so the whole word (NBSP and what follows) folds.
+    expect(canonicalizeCommand('GIT\u00a0STATUS arg', true)).toBe('git\u00a0status arg');
+    expect(canonicalizeCommand('GIT\u00a0STATUS ARG', true)).toBe('git\u00a0status ARG');
   });
 });
 

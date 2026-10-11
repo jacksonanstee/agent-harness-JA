@@ -5,6 +5,7 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import { collapseBlanks, firstShellWord, trimWordSeparators } from '../shell-words.js';
 import type {
   Evaluation,
   EvaluatorOptions,
@@ -60,12 +61,15 @@ export function matchesPathGlob(pattern: string, value: string): boolean {
  * on arbitrary tools are best-effort only (ADR-0014 §1).
  */
 /**
- * Normalizes a command string for rule matching: trims, collapses runs of
- * whitespace (a tab is the same separator as a space to a shell), and folds
+ * Normalizes a command string for rule matching: trims spaces, tabs and
+ * newlines at the ends, collapses runs of spaces and tabs (the shell's blanks;
+ * NOT JS `\s`, which also eats NBSP, U+2028, VT, FF and the other Unicode
+ * spaces that bash keeps inside a word, issue #161 — word grammar in
+ * `../shell-words.ts`, shared with the sandbox gate), and folds
  * case on the argv0 token ONLY, on case-insensitive platforms (where `RM`
  * executes /bin/rm — the same bypass class canonicalizePath closes for
  * paths; Week-2 milestone differential review F-1). The fold deliberately
- * stops at the first space: the filesystem rationale covers which *program*
+ * stops at the first shell separator: the filesystem rationale covers which *program*
  * resolves, not its arguments — folding the whole string would WIDEN allow
  * rules to case-variants of URLs/flags/literals the author never permitted
  * (review round on the F-1 fix). Match *patterns* for command targets go
@@ -75,11 +79,10 @@ export function canonicalizeCommand(
   value: string,
   caseInsensitive: boolean = CASE_INSENSITIVE_PLATFORM,
 ): string {
-  const collapsed = value.trim().replace(/\s+/g, ' ');
+  const collapsed = collapseBlanks(trimWordSeparators(value));
   if (!caseInsensitive || collapsed === '') return collapsed;
-  const sepIndex = collapsed.indexOf(' ');
-  if (sepIndex === -1) return collapsed.toLowerCase();
-  return collapsed.slice(0, sepIndex).toLowerCase() + collapsed.slice(sepIndex);
+  const argv0 = firstShellWord(collapsed);
+  return argv0.toLowerCase() + collapsed.slice(argv0.length);
 }
 
 export function extractMatchTarget(tool: string, args: unknown): string {

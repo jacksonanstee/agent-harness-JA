@@ -5,6 +5,7 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import { firstShellWord, trimBlanks } from '../shell-words.js';
 import type { Sandbox, SandboxAllowlist, SandboxConfig } from './types.js';
 
 /**
@@ -117,18 +118,6 @@ const BLOCKED_FIRST_TOKENS = new Set<string>([
 ]) as ReadonlySet<string>;
 
 /**
- * argv[0] as the shell reads it: leading separators skipped, then everything
- * up to the next one. Bash's parser splits words on blanks (space, tab) and
- * newline whatever IFS says (IFS governs splitting of expansions only); JS
- * `\s` and `trim()` also eat NBSP, U+2028, VT, FF and the other Unicode
- * spaces, so `git<NBSP>x` would be checked as `git` while bash runs the
- * program named `git<NBSP>x` (issue #159).
- */
-function firstShellWord(command: string): string {
-  return command.replace(/^[ \t\n]+/, '').split(/[ \t\n]/, 1)[0] ?? '';
-}
-
-/**
  * The basename identity used to test the blocklist: first shell word,
  * POSIX basename, case-folded on case-insensitive platforms — the same
  * normalization `allowCommand` applies to argv[0]. Accepts a full command or a
@@ -180,7 +169,7 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
       // Only blanks are trimmed. JS trim() also strips a trailing newline or
       // CR, which hid a second command from the metacharacter check
       // (`git status\n<NBSP>` ran a program named NBSP; issue #160).
-      const trimmed = cmd.replace(/^[ \t]+|[ \t]+$/g, '');
+      const trimmed = trimBlanks(cmd);
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
       const argv0 = firstShellWord(trimmed);
