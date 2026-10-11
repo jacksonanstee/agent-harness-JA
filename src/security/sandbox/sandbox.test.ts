@@ -569,10 +569,16 @@ describe('hasGlobCharacter (the glob-only subset of the rewrite set, issue #107)
   });
 });
 
-describe('a glob-shaped path entry stays inert (issue #107: warned at startup, behaviour unchanged)', () => {
-  it('denies everything under the intended prefix, because the entry is matched literally', () => {
+describe('a glob-shaped path entry is matched literally (issue #107: warned at startup, behaviour unchanged)', () => {
+  it('denies everything under the intended prefix when no directory has that literal name', () => {
     const sandbox = createSandbox({ paths: { allow: ['/tmp/proj/*'] } });
     expect(sandbox.allowPath('/tmp/proj/file')).toBe(false);
     expect(sandbox.allowPath('/tmp/proj')).toBe(false);
+  });
+
+  it('allows a path under a directory literally named with the glob character', () => {
+    // Why the warning says "only a directory with that exact name", not "nothing".
+    const sandbox = createSandbox({ paths: { allow: ['/tmp/proj/*'] } });
+    expect(sandbox.allowPath('/tmp/proj/*/sub/file')).toBe(true);
   });
 });

@@ -45,8 +45,8 @@ const SHELL_METACHARACTERS = [
  * and `#` are glob operators only under zsh `extendedglob`, which no shell
  * ever sees for a path entry; both are ordinary characters in a directory name.
  * `*`, `?` and `[` are the ones an operator reaches for expecting a pattern
- * (`/x/*`), and the ones that make the entry a literal name nothing sits
- * under. Defined first and spread into SHELL_REWRITE_CHARACTERS so the
+ * (`/x/*`), and the ones that make the entry a literal name that, unless
+ * a directory really has that name, nothing sits under. Defined first and spread into SHELL_REWRITE_CHARACTERS so the
  * command-side set contains it by construction and cannot drift (ADR-0034
  * decision 2).
  */
