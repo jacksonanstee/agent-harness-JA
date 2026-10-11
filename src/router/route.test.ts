@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createRouter, route } from './route.js';
 import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from './table.js';
-import type {
-  RoutingRule,
-  TaskDescriptor,
-  TaskSensitivity,
-  TaskShape,
+import {
+  TASK_SENSITIVITIES,
+  TASK_SHAPES,
+  type RoutingRule,
+  type TaskDescriptor,
+  type TaskSensitivity,
+  type TaskShape,
 } from './types.js';
 
 const base: TaskDescriptor = {
@@ -325,5 +327,47 @@ describe('router: the documented absence of a sensitivity floor', () => {
       routerSource,
       'a sensitivity floor now exists: update README.md and ADR-0007, which both state there is none',
     ).not.toContain('enforceSensitivityFloor');
+  });
+});
+
+describe('router: exported constants are frozen at runtime (issue #123)', () => {
+  // Type-level `readonly` stops nothing at runtime. Proven live by the security
+  // lens on #88: pushing onto TASK_SHAPES widened both the flag validator and
+  // route()'s assertValid, and assigning DEFAULT_ROUTING_TABLE[0].model steered
+  // sensitivity-high routing while the rule's reason still claimed opus. ESM
+  // test files run in strict mode, so each write must THROW, and the value is
+  // then proven unchanged rather than assumed.
+  it('TASK_SHAPES is frozen and rejects push', () => {
+    const before = [...TASK_SHAPES];
+    expect(Object.isFrozen(TASK_SHAPES)).toBe(true);
+    expect(() => (TASK_SHAPES as string[]).push('evil')).toThrow(TypeError);
+    expect([...TASK_SHAPES]).toEqual(before);
+  });
+
+  it('TASK_SENSITIVITIES is frozen and rejects push', () => {
+    const before = [...TASK_SENSITIVITIES];
+    expect(Object.isFrozen(TASK_SENSITIVITIES)).toBe(true);
+    expect(() => (TASK_SENSITIVITIES as string[]).push('evil')).toThrow(TypeError);
+    expect([...TASK_SENSITIVITIES]).toEqual(before);
+  });
+
+  it('DEFAULT_ROUTING_TABLE array is frozen and rejects push', () => {
+    const before = DEFAULT_ROUTING_TABLE.length;
+    expect(Object.isFrozen(DEFAULT_ROUTING_TABLE)).toBe(true);
+    expect(() => (DEFAULT_ROUTING_TABLE as RoutingRule[]).push(DEFAULT_ROUTING_TABLE[0]!)).toThrow(TypeError);
+    expect(DEFAULT_ROUTING_TABLE).toHaveLength(before);
+  });
+
+  it('every rule object in DEFAULT_ROUTING_TABLE is frozen, so rule.model cannot be reassigned', () => {
+    for (const rule of DEFAULT_ROUTING_TABLE) {
+      expect(Object.isFrozen(rule), `rule ${rule.id}`).toBe(true);
+    }
+    const first = DEFAULT_ROUTING_TABLE[0]!;
+    const modelBefore = first.model;
+    expect(() => {
+      (first as { model: string }).model = 'claude-fable-5';
+    }).toThrow(TypeError);
+    expect(first.model).toBe(modelBefore);
+    expect(DEFAULT_ROUTING_TABLE[0]!.model).toBe('claude-opus-5');
   });
 });

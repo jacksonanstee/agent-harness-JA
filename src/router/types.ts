@@ -36,15 +36,18 @@ export interface RoutingRule {
   reason: string;
 }
 
-export const TASK_SHAPES: readonly TaskShape[] = [
+// Frozen at runtime as well as typed readonly (issue #123): a push onto either
+// array would widen every validator that holds it while a rendered usage line
+// went stale. Same house pattern as DEFAULT_DESCRIPTOR.
+export const TASK_SHAPES: readonly TaskShape[] = Object.freeze([
   'review',
   'build',
   'research',
   'lookup',
-];
+] as const);
 
-export const TASK_SENSITIVITIES: readonly TaskSensitivity[] = [
+export const TASK_SENSITIVITIES: readonly TaskSensitivity[] = Object.freeze([
   'low',
   'medium',
   'high',
-];
+] as const);
