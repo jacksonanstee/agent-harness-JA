@@ -5,7 +5,7 @@ import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eva
 import type { HookEventRecord } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { loadJsonSettings } from '../internal/settings.js';
-import { TERMINAL_UNSAFE } from '../internal/sanitize.js';
+import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   hasJudgeKey,
   JudgeSettingsError,
@@ -74,6 +74,28 @@ export const USAGE =
 
 export function sanitizeForTerminal(text: string): string {
   return text.replace(TERMINAL_UNSAFE, ' ');
+}
+
+/**
+ * `sanitizeForTerminal` plus the bidi controls and every default-ignorable code
+ * point, for STDERR DIAGNOSTICS that echo an operator- or repo-named string (a
+ * task directory, a skills directory, a baseline path). Issue #127,
+ * security-model section 5.
+ *
+ * A SEPARATE function rather than a fold into `sanitizeForTerminal`, because
+ * that one also guards stdout PROSE (model text via `onText`, rendered
+ * reports), where ZWJ (emoji sequences), ZWNJ (Persian, Indic), VS16 (emoji
+ * presentation) and LRM/RLM (genuine RTL text) are legitimate. Bidi stripping
+ * is opt-in per sink (src/internal/sanitize.ts); every stderr diagnostic opts in.
+ *
+ * Reuses the two existing leaf strippers rather than a third charset:
+ * `stripBidi` (bidi controls to a space, so reordered text cannot hide) then
+ * `stripInvisibles` (`\p{Default_Ignorable_Code_Point}` plus U+FFF9-FFFB,
+ * deleted, so a zero-width byte leaves the visible name intact). The property
+ * class is a superset of `\p{Bidi_Control}`; shared.test.ts sweeps both.
+ */
+export function sanitizeDiagnostic(text: string): string {
+  return sanitizeForTerminal(stripInvisibles(stripBidi(text)));
 }
 
 
@@ -193,6 +215,8 @@ export type ImportSdk = () => Promise<{ query: unknown }>;
 export interface CliSeams {
   userDir?: string;
   importSdk?: ImportSdk;
+  /** The eval scorecard directory; defaults to `EVAL_OUT_DIR`. A vitest worker cannot chdir, so a test redirects the write here. */
+  evalOutDir?: string;
 }
 
 const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;

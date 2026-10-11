@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { apiKeyMissingMessage, loadSdkQuery, readPackageVersion, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
+import { apiKeyMissingMessage, loadSdkQuery, readPackageVersion, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
 
 /** The router table's model ids, deduplicated in first-appearance order: the
  *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
@@ -247,5 +247,50 @@ describe('loadSdkQuery (architecture lens A-3)', () => {
 
   it('an import rejection propagates: each caller keeps its own policy for it', async () => {
     await expect(loadSdkQuery(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+  });
+});
+
+describe('sanitizeDiagnostic vs sanitizeForTerminal: the pinned split (#127)', () => {
+  // Stdout prose (model text, reports) keeps legitimate ZWJ/ZWNJ/VS16/LRM; only
+  // diagnostics that echo operator- or repo-named strings drop them.
+  const PROSE = 'fam\u{1F468}\u200D\u{1F469} mi\u200Ckhaham heart\u2764\uFE0F rtl\u200Eend';
+
+  it('sanitizeForTerminal keeps ZWJ, ZWNJ, VS16 and LRM (onText-style content)', () => {
+    expect(sanitizeForTerminal(PROSE)).toBe(PROSE);
+  });
+
+  it('sanitizeDiagnostic strips the whole Default_Ignorable_Code_Point class and every bidi control', () => {
+    expect(sanitizeDiagnostic(PROSE)).toBe('fam\u{1F468}\u{1F469} mikhaham heart\u2764 rtl end');
+  });
+
+  it('still does everything sanitizeForTerminal does (ESC, CR; keeps LF and TAB)', () => {
+    expect(sanitizeDiagnostic('a\u001b[31mb\rc\nd\te')).toBe('a [31mb c\nd\te');
+  });
+
+  it('turns bidi controls into a space and deletes the other ignorables, so a path stays readable', () => {
+    expect(sanitizeDiagnostic('a\u202eb\u200bc')).toBe('a bc');
+  });
+
+  it('covers every code point of the two properties (a property class, not a list)', () => {
+    const bad = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u;
+    const survivors: string[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      if (bad.test(ch) && bad.test(sanitizeDiagnostic(`a${ch}b`))) survivors.push(cp.toString(16));
+    }
+    expect(survivors).toEqual([]);
+  });
+});
+
+describe('sanitizeDiagnostic surrogate handling (#127 review LOW-1)', () => {
+  it('does not rebuild a tag character from a lone surrogate pair split by a ZWSP', () => {
+    const out = sanitizeDiagnostic('\uDB40\u200B\uDC01');
+    expect(out).toBe('\uFFFD\uFFFD');
+    expect(out.includes('\u{E0001}')).toBe(false);
+  });
+
+  it('keeps a valid emoji', () => {
+    expect(sanitizeDiagnostic('x\u{1F600}y')).toBe('x\u{1F600}y');
   });
 });

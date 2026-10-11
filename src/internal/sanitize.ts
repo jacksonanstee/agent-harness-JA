@@ -120,8 +120,17 @@ const INVISIBLES =
 // eslint-disable-next-line no-misleading-character-class -- the joiners/VS ARE the payload chars being stripped, same suppression as the scanner's SMUGGLING_CHARS
   /[\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB]/gu;
 
+// A LONE surrogate is replaced with U+FFFD BEFORE the invisibles are deleted.
+// Deleting an invisible that sits between a lone high and a lone low surrogate
+// would otherwise join them into a NEW astral code point (U+DB40 ZWSP U+DC01
+// becomes U+E0001, a tag character): the strip would manufacture the very
+// smuggling character it exists to remove. `String.prototype.toWellFormed` is
+// ES2024 and this project's lib is ES2022, so this is the explicit property
+// (the same regex session.test.ts uses to assert well-formedness).
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export function stripInvisibles(text: string): string {
-  return text.replace(INVISIBLES, '');
+  return text.replace(LONE_SURROGATE, '\uFFFD').replace(INVISIBLES, '');
 }
 
 /**

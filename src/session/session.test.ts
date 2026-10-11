@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { escapePathUnsafe } from '../internal/sanitize.js';
+import { cleanSdkToken } from './sdk-refusal.js';
 
 import { createHookRuntime, HookDenial } from '../hooks/index.js';
 import type { HookRuntime } from '../hooks/index.js';
@@ -2611,6 +2612,101 @@ describe('createSession', () => {
 
       const row = deps.memory.read({ type: 'project' })[0];
       expect(row?.content).not.toContain('\u202e');
+    });
+
+    // Issue #135: session_id (both capture sites) and the result subtype are
+    // open SDK strings reaching the same sinks as stop_reason, so they share its
+    // envelope (ADR-0025 amendment 2026-10-11). Payload: x RLO ZWSP BEL
+    // <script> LRI y, which cleanSdkToken renders as x_<script>_y.
+    const HOSTILE_TOKEN = 'x\u202e\u200b\u0007<script>\u2066y';
+    const CLEANED_TOKEN = 'x_<script>_y';
+
+    it('cleans session_id at both capture sites and the result subtype in every sink (#135)', async () => {
+      const hostileInit = { type: 'system', subtype: 'init', session_id: `init-${HOSTILE_TOKEN}` } as unknown as SdkMessage;
+      const hostileResult = {
+        type: 'result',
+        subtype: `success${HOSTILE_TOKEN}`,
+        result: 'ok',
+        session_id: `result-${HOSTILE_TOKEN}`,
+        num_turns: 1,
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      } as unknown as SdkMessage;
+      const telemetry = fakeTelemetry();
+      const deps = makeDeps(fakeQuery([hostileInit, hostileResult]), { telemetry });
+      const session = createSession(deps, { skillsDir: null, turnId: 'turn-1' });
+
+      const result = await session.run('hostile ids');
+
+      expect(result.sessionId).toBe(`result-${CLEANED_TOKEN}`);
+      expect(result.resultSubtype).toBe(`success${CLEANED_TOKEN}`);
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('expected a turn-cost event');
+      expect(cost.payload.sdkSessionId).toBe(`result-${CLEANED_TOKEN}`);
+      expect(cost.payload.resultSubtype).toBe(`success${CLEANED_TOKEN}`);
+      const row = deps.memory.read({ type: 'project' })[0];
+      expect(row?.id).toBe(`session-result-${CLEANED_TOKEN}`);
+      expect(JSON.parse(row?.content ?? '{}').resultSubtype).toBe(`success${CLEANED_TOKEN}`);
+      expect(result.memoryEntryId).toBe(`session-result-${CLEANED_TOKEN}`);
+    });
+
+    it('cleans the system/init session_id when no result id follows (#135)', async () => {
+      const hostileInit = { type: 'system', subtype: 'init', session_id: `init-${HOSTILE_TOKEN}` } as unknown as SdkMessage;
+      const noId = { type: 'result', subtype: 'success', result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([hostileInit, noId]));
+      const result = await createSession(deps, { skillsDir: null }).run('init id only');
+      expect(result.sessionId).toBe(`init-${CLEANED_TOKEN}`);
+    });
+
+    it('passes a real UUID session_id and every SDK-declared subtype through unchanged (#135)', async () => {
+      const uuid = '3f2b8c1e-9d4a-4c7b-8e55-0a1b2c3d4e5f';
+      const declared = [
+        'success',
+        'error_during_execution',
+        'error_max_turns',
+        'error_max_budget_usd',
+        'error_max_structured_output_retries',
+      ];
+      for (const subtype of declared) {
+        const init = { type: 'system', subtype: 'init', session_id: uuid } as unknown as SdkMessage;
+        const result = { type: 'result', subtype, session_id: uuid, result: 'ok' } as unknown as SdkMessage;
+        const run = await createSession(makeDeps(fakeQuery([init, result])), { skillsDir: null }).run('real values');
+        expect(run.sessionId).toBe(uuid);
+        expect(run.resultSubtype).toBe(subtype);
+      }
+    });
+
+    it('an id that cleans to nothing falls back to the harness id, never an empty memory key (#135)', async () => {
+      const init = { type: 'system', subtype: 'init', session_id: '\u200b\u200b' } as unknown as SdkMessage;
+      const result = { type: 'result', subtype: 'success', session_id: '\u202e', result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([init, result]));
+      const run = await createSession(deps, { skillsDir: null, generateId: () => 'harness-fallback' }).run('empty after clean');
+      expect(run.sessionId).toBe('harness-fallback');
+      expect(run.memoryEntryId).toBe('session-harness-fallback');
+    });
+
+    it('cleanSdkToken cannot rebuild a tag character from surrogates split by a ZWSP, and keeps an emoji (#135 review LOW-1)', () => {
+      const out = cleanSdkToken('abc\uDB40\u200B\uDC01');
+      expect(out).toBe('abc\uFFFD\uFFFD');
+      expect(out.includes('\u{E0001}')).toBe(false);
+      expect(cleanSdkToken('a\u{1F600}b')).toBe('a\u{1F600}b');
+    });
+
+    it('a non-string session_id does not throw and counts as absent (#135 review)', async () => {
+      const init = { type: 'system', subtype: 'init', session_id: 12345 } as unknown as SdkMessage;
+      const result = { type: 'result', subtype: 'success', session_id: { nested: true }, result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([init, result]));
+      const run = await createSession(deps, { skillsDir: null, generateId: () => 'harness-nonstring' }).run('non-string ids');
+      expect(run.sessionId).toBe('harness-nonstring');
+    });
+
+    it('keeps a valid init session_id when the result session_id cleans to nothing (#135 review)', async () => {
+      const init = { type: 'system', subtype: 'init', session_id: 'init-good-id' } as unknown as SdkMessage;
+      const result = { type: 'result', subtype: 'success', session_id: '\u200b\u202e', result: 'ok' } as unknown as SdkMessage;
+      const deps = makeDeps(fakeQuery([init, result]));
+      const run = await createSession(deps, { skillsDir: null }).run('retain init id');
+      expect(run.sessionId).toBe('init-good-id');
+      expect(run.memoryEntryId).toBe('session-init-good-id');
     });
 
     it('a zero-width-smuggled refusal still detects, because cleaning runs first', async () => {

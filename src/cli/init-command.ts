@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from 'node:
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { INIT_FILES, INIT_TARGET_PATHS } from './init-templates.js';
-import { sanitizeForTerminal, USAGE } from './shared.js';
+import { sanitizeDiagnostic, USAGE } from './shared.js';
 
 export interface InitArgs {
   command: 'init';
@@ -126,7 +126,7 @@ function findSymlinkedComponents(dir: string): string[] {
  * anything is written; any collision or symlinked path component refuses the
  * whole operation (exit 2, the repo-wide "refused, nothing produced" class)
  * with zero writes. An unexpected fs failure mid-write propagates to
- * main()'s catch-all (exit 1). All printed paths pass sanitizeForTerminal:
+ * main()'s catch-all (exit 1). All printed paths pass sanitizeDiagnostic (the success output echoes the dir inside a copy-pasteable command):
  * the dir name is operator-supplied and may carry terminal escapes.
  */
 export function runInit(
@@ -143,14 +143,14 @@ export function runInit(
   const invocation = renderInvocation(cliPath, dir);
 
   if (existsSync(dir) && !statSync(dir).isDirectory()) {
-    streams.stderr(sanitizeForTerminal(`init: ${dir} exists and is not a directory.\n`));
+    streams.stderr(sanitizeDiagnostic(`init: ${dir} exists and is not a directory.\n`));
     return 2;
   }
 
   const symlinked = findSymlinkedComponents(dir);
   if (symlinked.length > 0) {
     streams.stderr(
-      sanitizeForTerminal(
+      sanitizeDiagnostic(
         `init: refusing to write through symlinks in ${dir}:\n` +
           symlinked.map((rel) => `  ${rel}`).join('\n') +
           '\nNothing was written.\n',
@@ -162,7 +162,7 @@ export function runInit(
   const collisions = INIT_TARGET_PATHS.filter((rel) => existsSync(join(dir, rel)));
   if (collisions.length > 0) {
     streams.stderr(
-      sanitizeForTerminal(
+      sanitizeDiagnostic(
         `init: refusing to overwrite existing files in ${dir}:\n` +
           collisions.map((rel) => `  ${rel}`).join('\n') +
           '\nNothing was written. Scaffold into a fresh directory instead:\n' +
@@ -179,7 +179,7 @@ export function runInit(
   }
 
   streams.stdout(
-    sanitizeForTerminal(buildOutput(dir, invocation, Boolean(env.ANTHROPIC_API_KEY))),
+    sanitizeDiagnostic(buildOutput(dir, invocation, Boolean(env.ANTHROPIC_API_KEY))),
   );
   return 0;
 }

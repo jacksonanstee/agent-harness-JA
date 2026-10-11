@@ -412,6 +412,17 @@ function truncate(value: string | null): string | null {
   return clean.length > SUMMARY_TEXT_LIMIT ? `${clean.slice(0, SUMMARY_TEXT_LIMIT)}…` : clean;
 }
 
+/**
+ * `cleanSdkToken` for an SDK identifier that must stay usable as a key
+ * (`session_id`, result `subtype`): a value that cleans to nothing is treated as
+ * absent, so a smuggled-only id falls back to the harness id instead of
+ * producing the memory key `session-`.
+ */
+function cleanSdkId(raw: string): string | null {
+  const clean = cleanSdkToken(raw);
+  return clean === '' ? null : clean;
+}
+
 function isSystemInit(message: SdkMessage): message is SdkSystemMessage {
   return message.type === 'system' && (message as SdkSystemMessage).subtype === 'init';
 }
@@ -1695,8 +1706,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       });
 
       for await (const message of stream) {
-        if (isSystemInit(message) && message.session_id) {
-          sdkSessionId = message.session_id;
+        if (isSystemInit(message) && typeof message.session_id === 'string') {
+          sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
         } else if (isModelRefusal(message)) {
           // Later banner wins: a turn that falls back and then refuses again
           // must report the terminal truth, not the intermediate swap.
@@ -1720,9 +1731,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // rewrite with no in-band signal, so the rewrite must be verified).
           verifyUserMessage(message);
         } else if (isResult(message)) {
-          if (message.session_id) sdkSessionId = message.session_id;
+          // session_id and subtype share stop_reason's envelope (#135, ADR-0025
+          // amendment 2026-10-11): all three are open SDK strings reaching the
+          // same sinks (result, memory row id and content, telemetry).
+          if (typeof message.session_id === 'string') sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
           resultText = message.result ?? null;
-          resultSubtype = message.subtype ?? null;
+          resultSubtype = typeof message.subtype === 'string' ? cleanSdkId(message.subtype) : null;
           // Cleaned and bounded like the banner tokens: `stop_reason` is an
           // equally open SDK string reaching the same three sinks (result,
           // memory summary, telemetry) plus the terminal, so leaving it raw

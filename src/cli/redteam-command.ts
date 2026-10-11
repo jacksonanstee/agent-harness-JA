@@ -31,6 +31,7 @@ import {
   EVAL_OUT_DIR,
   JUDGE_MODEL_IDS,
   readPackageVersion,
+  sanitizeDiagnostic,
   sanitizeForTerminal,
   USAGE,
   writeScorecard,
@@ -258,7 +259,7 @@ function runCompare(args: RedteamArgs, freshNorm: BaselineScorecard, internalDet
     loaded = loadBaseline(args.baselinePath);
   } catch (error: unknown) {
     if (error instanceof BaselineError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     throw error;
@@ -313,7 +314,7 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
   if (internalDetail !== null || freshNorm.totals.falseBlockCount > 0) {
     process.stderr.write(
       internalDetail !== null
-        ? `${sanitizeForTerminal(`refusing to update baseline: totals backstop mismatch: ${internalDetail}`)}\n`
+        ? `${sanitizeDiagnostic(`refusing to update baseline: totals backstop mismatch: ${internalDetail}`)}\n`
         : 'refusing to update baseline: the fresh run has a false-block; --update-baseline never bakes one in\n',
     );
     const outcome = gateOutcome({
@@ -338,7 +339,7 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
     refuseAncestorSymlinks(args.baselinePath);
   } catch (error: unknown) {
     if (error instanceof BaselineError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     throw error;
@@ -353,7 +354,7 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
   }
   if (!parentIsDir) {
     process.stderr.write(
-      `${sanitizeForTerminal(`${parentDir} does not exist; run --update-baseline from the repo root (or pass --baseline <path> pointing at an existing directory)`)}\n`,
+      `${sanitizeDiagnostic(`${parentDir} does not exist; run --update-baseline from the repo root (or pass --baseline <path> pointing at an existing directory)`)}\n`,
     );
     return 2;
   }
@@ -379,11 +380,11 @@ function runUpdate(args: RedteamArgs, freshNorm: BaselineScorecard, internalDeta
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code ?? 'write error';
     process.stderr.write(
-      `${sanitizeForTerminal(`failed to write baseline ${args.baselinePath} (${code})`)}\n`,
+      `${sanitizeDiagnostic(`failed to write baseline ${args.baselinePath} (${code})`)}\n`,
     );
     return 2;
   }
-  process.stderr.write(`baseline written to ${args.baselinePath}\n`);
+  process.stderr.write(`baseline written to ${sanitizeDiagnostic(args.baselinePath)}\n`);
 
   if (oldParsed !== null) {
     const findings = classifyDrift(oldParsed, freshNorm);
@@ -410,10 +411,10 @@ function runHeuristicArm(args: RedteamArgs, now: () => number): GateExit {
 
   const written = writeScorecard(scorecard, args.out, now());
   if (!written.ok) {
-    process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+    process.stderr.write(`${sanitizeDiagnostic(written.message)}\n`);
     return 2;
   }
-  process.stderr.write(`scorecard written to ${written.path}\n`);
+  process.stderr.write(`scorecard written to ${sanitizeDiagnostic(written.path)}\n`);
 
   process.stdout.write(sanitizeForTerminal(toRedteamMarkdown(scorecard)));
 
@@ -459,7 +460,7 @@ export async function runRedteamCommand(args: RedteamArgs, deps: RedteamCommandD
       holdout = loadHoldout(args.holdoutPath, scan);
     } catch (error: unknown) {
       if (error instanceof HoldoutError) {
-        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+        process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
         return 2;
       }
       throw error;

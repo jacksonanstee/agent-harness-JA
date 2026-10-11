@@ -35,6 +35,7 @@ import {
   loadSdkQuery,
   readPackageVersion,
   refuseSymlinkedDir,
+  sanitizeDiagnostic,
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
@@ -165,7 +166,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         );
         if (!result.ok) {
           process.stderr.write(
-            `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+            `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeDiagnostic(result.error.message)}\n`,
           );
         }
       },
@@ -191,13 +192,14 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         turnId,
         // No onText: eval's stdout is the scorecard, nothing else.
         onWarning: (message) =>
-          process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
+          process.stderr.write(`${WARNING_PREFIX}${sanitizeDiagnostic(message)}\n`),
       },
     );
   };
 }
 
 export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<number> {
+  const evalOutDir = seams.evalOutDir ?? EVAL_OUT_DIR;
   if (!process.env.ANTHROPIC_API_KEY) {
     process.stderr.write(apiKeyMissingMessage('required for eval'));
     return 2;
@@ -211,13 +213,13 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     });
   } catch (error: unknown) {
     if (error instanceof SettingsLoadError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     throw error;
   }
   for (const warning of security.warnings) {
-    process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
+    process.stderr.write(`${WARNING_PREFIX}${sanitizeDiagnostic(warning)}\n`);
   }
 
   // Pre-flight, before any spend: the write path must be trustworthy. A
@@ -226,10 +228,10 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
   // the same exit 2 with its message, where it used to crash uncaught.
   try {
     refuseSymlinkedDir('.harness');
-    refuseSymlinkedDir(EVAL_OUT_DIR);
+    refuseSymlinkedDir(evalOutDir);
   } catch (error: unknown) {
     if (error instanceof EvalUsageError || error instanceof GuardedReadError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     throw error;
@@ -277,11 +279,11 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     try {
       scorecard = await runner.run(args.taskDir, {
         maxTasks: args.maxTasks,
-        onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(line)}\n`),
+        onProgress: (line) => process.stderr.write(`${sanitizeDiagnostic(line)}\n`),
       });
     } catch (error: unknown) {
       if (error instanceof EvalUsageError) {
-        process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+        process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
         return 2;
       }
       throw error;
@@ -292,18 +294,18 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     // contract (ADR-0017 decision #4 — exit 2 means no scorecard produced).
     // Once the markdown below reaches stdout that contract can no longer be
     // kept, so writeScorecard maps every failure to a message, none bubble.
-    const written = writeScorecard(scorecard, EVAL_OUT_DIR);
+    const written = writeScorecard(scorecard, evalOutDir);
     if (!written.ok) {
-      process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(written.message)}\n`);
       return 2;
     }
-    process.stderr.write(`scorecard written to ${written.path}\n`);
+    process.stderr.write(`scorecard written to ${sanitizeDiagnostic(written.path)}\n`);
     // Operator-facing only: the terminal already saw the absolute root in the
     // discovery progress line above, so this discloses nothing new. The
     // RETAINED artefact is what suppression protects (issue #64, ADR-0030).
     if (scorecard.meta.taskDirForm === 'suppressed') {
       process.stderr.write(
-        `${WARNING_PREFIX}${sanitizeForTerminal(
+        `${WARNING_PREFIX}${sanitizeDiagnostic(
           'meta.taskDir suppressed in the written scorecard (working directory is not at or above the task directory)',
         )}\n`,
       );

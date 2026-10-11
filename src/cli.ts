@@ -10,6 +10,7 @@ import {
   composeSecurity,
   hookRecordToTelemetryInput,
   loadSdkQuery,
+  sanitizeDiagnostic,
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
@@ -323,7 +324,7 @@ function runTelemetryExport(args: TelemetryExportArgs): number {
         // emit a partial artefact. The message carries no untrusted bytes by
         // construction; sanitize anyway, this is a terminal sink.
         const message = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`error: ${sanitizeForTerminal(message)}\n`);
+        process.stderr.write(`error: ${sanitizeDiagnostic(message)}\n`);
         return 1;
       }
       lines = scrubbedRows.map((row) => JSON.stringify(row)).join('\n');
@@ -421,7 +422,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     // Parse errors echo the offending argv verbatim (e.g. an attacker-named
     // entry pulled in by a glob); sanitize before it reaches the terminal,
     // same as every command's own output sinks.
-    process.stderr.write(`${sanitizeForTerminal(parsed.error)}\n`);
+    process.stderr.write(`${sanitizeDiagnostic(parsed.error)}\n`);
     return 2;
   }
 
@@ -468,7 +469,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     refuseSymlink(resolve(skillsDir), 'skills directory');
   } catch (error: unknown) {
     if (error instanceof GuardedReadError && error.refusal === 'symlink') {
-      process.stderr.write(`refusing to load skills: ${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`refusing to load skills: ${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     if (!(error instanceof GuardedReadError)) throw error;
@@ -485,13 +486,13 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     });
   } catch (error: unknown) {
     if (error instanceof SettingsLoadError) {
-      process.stderr.write(`${sanitizeForTerminal(error.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     throw error;
   }
   for (const warning of security.warnings) {
-    process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(warning)}\n`);
+    process.stderr.write(`${WARNING_PREFIX}${sanitizeDiagnostic(warning)}\n`);
   }
 
   const query = await loadSdkQuery(seams.importSdk);
@@ -514,7 +515,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       );
       if (!result.ok) {
         process.stderr.write(
-          `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeForTerminal(result.error.message)}\n`,
+          `${WARNING_PREFIX}telemetry hook-event record failed: ${sanitizeDiagnostic(result.error.message)}\n`,
         );
       }
     },
@@ -544,7 +545,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       generateId: () => harnessSessionId,
       turnId,
       onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),
-      onWarning: (message) => process.stderr.write(`${WARNING_PREFIX}${sanitizeForTerminal(message)}\n`),
+      onWarning: (message) => process.stderr.write(`${WARNING_PREFIX}${sanitizeDiagnostic(message)}\n`),
     },
   );
 
@@ -606,7 +607,7 @@ if (invokedDirectly) {
     (code) => process.exit(code),
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`error: ${message}\n`);
+      process.stderr.write(`error: ${sanitizeDiagnostic(message)}\n`);
       process.exit(1);
     },
   );
