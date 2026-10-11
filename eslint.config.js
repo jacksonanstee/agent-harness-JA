@@ -124,9 +124,30 @@ export default tseslint.config(
   // Session is the harness orchestrator: below eval, above the leaves. It
   // must not import the eval layer (which drives IT) or the CLI. The CLI
   // (src/cli.ts) is the composition root and is deliberately exempt from all
-  // layering blocks — it wires every layer together.
+  // layering blocks: it wires every layer together. The SDK package is also
+  // banned here (ADR-0010 decision 2: structural SDK views, no SDK import in
+  // non-test session code); the type-parity tests below re-permit it.
   {
     files: ['src/session/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/eval/**', '**/eval', '**/cli', '**/cli.js', '**/cli/**',
+            '@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-agent-sdk/**',
+          ],
+        },
+      ],
+    },
+  },
+  // Session TEST files may import the SDK (the compile-time parity pins
+  // sdk-types.test.ts and sdk-contract.test.ts need its real types). NOTE:
+  // flat-config no-restricted-imports OVERRIDES rather than merges, so this
+  // block must restate the eval and cli bans above or it silently reopens them
+  // (pinned in src/layering.test.ts).
+  {
+    files: ['src/session/**/*.test.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
