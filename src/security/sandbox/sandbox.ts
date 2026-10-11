@@ -118,10 +118,11 @@ const BLOCKED_FIRST_TOKENS = new Set<string>([
 
 /**
  * argv[0] as the shell reads it: leading separators skipped, then everything
- * up to the next one. Only space, tab and newline separate words for bash
- * (default IFS); JS `\s` and `trim()` also eat NBSP, U+2028, VT, FF and the
- * other Unicode spaces, so `git<NBSP>x` would be checked as `git` while bash
- * runs the program named `git<NBSP>x` (issue #159).
+ * up to the next one. Bash's parser splits words on blanks (space, tab) and
+ * newline whatever IFS says (IFS governs splitting of expansions only); JS
+ * `\s` and `trim()` also eat NBSP, NEL, U+2028, VT, FF and the other Unicode
+ * spaces, so `git<NBSP>x` would be checked as `git` while bash runs the
+ * program named `git<NBSP>x` (issue #159).
  */
 function firstShellWord(command: string): string {
   return command.replace(/^[ \t\n]+/, '').split(/[ \t\n]/, 1)[0] ?? '';
@@ -176,12 +177,13 @@ export function createSandbox(config: SandboxConfig = {}): Sandbox {
     allowCommand(cmd: string): boolean {
       if (commandEntries === undefined) return true;
       if (typeof cmd !== 'string') return false;
-      const trimmed = cmd.trim();
+      // Only blanks are trimmed. JS trim() also strips a trailing newline or
+      // CR, which hid a second command from the metacharacter check
+      // (`git status\n<NBSP>` ran a program named NBSP; issue #160).
+      const trimmed = cmd.replace(/^[ \t]+|[ \t]+$/g, '');
       if (trimmed === '') return false;
       if (SHELL_METACHARACTERS.some((ch) => trimmed.includes(ch))) return false;
-      // argv[0] comes from the untrimmed string: trim() strips characters
-      // bash keeps inside a word, firstShellWord strips only what it skips.
-      const argv0 = firstShellWord(cmd);
+      const argv0 = firstShellWord(trimmed);
       // A rewrite character in argv[0] means the string names one program
       // and the shell starts another; refused before the allowlist is
       // consulted, so an entry that matches it exactly cannot rescue it

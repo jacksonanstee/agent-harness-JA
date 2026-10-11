@@ -249,7 +249,7 @@ describe('README `## Settings`: the examples load through the real composition',
     }
   });
 
-  it('every metacharacter the section lists denies a command outright; `[`, `*`, `~` and trimmed ends do not', () => {
+  it('every metacharacter the section lists denies a command outright; `[`, `*`, `~` and trimmed spaces and tabs do not', () => {
     const { section, userDoc, projectDoc } = loaded();
     const sandbox = createSandbox(compose(userDoc, projectDoc).sandbox);
     // Parsed from the section, not hand-copied: the twelve characters in
@@ -267,9 +267,12 @@ describe('README `## Settings`: the examples load through the real composition',
     expect(sandbox.allowCommand('git add [abc]')).toBe(true);
     expect(sandbox.allowCommand('git add *.ts')).toBe(true);
     expect(sandbox.allowCommand('git add ~/notes')).toBe(true);
-    expect(sandbox.allowCommand('  git status\n')).toBe(true);
+    expect(sandbox.allowCommand(' \tgit status \t')).toBe(true);
+    // Issue #160: only spaces and tabs are trimmed; a newline at an end denies.
+    expect(sandbox.allowCommand('  git status\n')).toBe(false);
     expect(section).toContain('a newline or a carriage return');
-    expect(section).toContain('after leading and trailing whitespace is trimmed');
+    expect(section).toContain('including at either end');
+    expect(section).not.toContain('after leading and trailing whitespace is trimmed');
     // Issue #133: the section says the builtins are denied, and the gate agrees.
     expect(section).toContain('`exec`, `eval`, `command`, `builtin`, `source` and `.`');
     expect(section).not.toContain('are not on that blocklist');

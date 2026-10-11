@@ -409,15 +409,25 @@ describe('shell builtins are blocklisted too (issue #133)', () => {
 describe('argv[0] is split on the shell word separators only (issue #159)', () => {
   // JS \s (and String.prototype.trim) also treat these as whitespace; bash
   // does not, so it reads `git<sep>x` as ONE word and runs that program.
+  // Escapes, not literal characters, so an editor cannot normalise a row
+  // into a plain space or drop it (a dropped BOM would still be refused,
+  // passing vacuously).
   const NON_IFS_SPACES = [
-    ['NBSP', ' '],
-    ['LINE SEPARATOR', ' '],
-    ['PARAGRAPH SEPARATOR', ' '],
+    ['NBSP', '\u00a0'],
+    ['NEL', '\u0085'],
+    ['LINE SEPARATOR', '\u2028'],
+    ['PARAGRAPH SEPARATOR', '\u2029'],
     ['VT', '\v'],
     ['FF', '\f'],
-    ['IDEOGRAPHIC SPACE', '　'],
-    ['BOM', '﻿'],
+    ['IDEOGRAPHIC SPACE', '\u3000'],
+    ['BOM', '\ufeff'],
   ] as const;
+
+  it('the table holds what its names say (guards the escapes)', () => {
+    expect(NON_IFS_SPACES.map(([, ch]) => ch.codePointAt(0))).toEqual([
+      0xa0, 0x85, 0x2028, 0x2029, 0x0b, 0x0c, 0x3000, 0xfeff,
+    ]);
+  });
 
   it.each(NON_IFS_SPACES)('%s between an allowlisted name and a suffix is refused', (_, ch) => {
     const sandbox = createSandbox({ commands: { allow: ['git'] } });
@@ -448,6 +458,34 @@ describe('argv[0] is split on the shell word separators only (issue #159)', () =
     const sandbox = createSandbox({ commands: { allow: [''] } });
     expect(sandbox.allowCommand('')).toBe(false);
     expect(sandbox.allowCommand(' \t ')).toBe(false);
+  });
+});
+
+describe('a newline or CR at either end is still a metacharacter (issue #160)', () => {
+  // ADR-0015 section 3: a newline or carriage return anywhere denies. JS
+  // trim() used to strip them from the ends first, so `git status\n<NBSP>`
+  // passed and bash then ran a second program named NBSP.
+  it.each([
+    ['newline then space', 'git status\n '],
+    ['newline then NBSP', 'git status\n\u00a0'],
+    ['CRLF then ideographic space', 'git status\r\n\u3000'],
+    ['bare trailing newline', 'git status\n'],
+    ['bare trailing CR', 'git status\r'],
+    ['leading newline', '\ngit status'],
+    ['leading CR', '\rgit status'],
+  ])('%s is refused', (_, cmd) => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(cmd)).toBe(false);
+  });
+
+  it('a CR inside argv[0] is refused', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand('git\r')).toBe(false);
+  });
+
+  it('leading and trailing spaces and tabs are still trimmed', () => {
+    const sandbox = createSandbox({ commands: { allow: ['git'] } });
+    expect(sandbox.allowCommand(' \tgit status \t')).toBe(true);
   });
 });
 
