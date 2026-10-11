@@ -244,7 +244,7 @@ INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
 VALUES (@id, @type, @sessionId, @turnId, @ts, @payload);
 `;
 
-interface OpenTelemetryDatabaseOptions {
+export interface OpenTelemetryDatabaseOptions {
   path?: string;
 }
 

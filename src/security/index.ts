@@ -64,6 +64,7 @@ export type {
   PreToolLike,
   Prompter,
   PromptRequest,
+  ReadFile,
   SettingsLayer,
 } from './permissions/index.js';
 export {
@@ -80,7 +81,12 @@ export {
   SHELL_BUILTIN_COMMANDS,
   SHELL_RUNNER_BINARIES,
 } from './sandbox/index.js';
-export type { Sandbox, SandboxAllowlist, SandboxConfig } from './sandbox/index.js';
+export type {
+  Sandbox,
+  SandboxAllowlist,
+  SandboxConfig,
+  SandboxPreToolLike,
+} from './sandbox/index.js';
 export {
   createSecretRedactor,
   redact,

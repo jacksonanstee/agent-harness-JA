@@ -1,6 +1,7 @@
 export { HOOK_EVENTS, HookDenial, createHookRuntime, fire, register } from './runtime.js';
 export type {
   FireResult,
+  FireResultBase,
   HookEvent,
   HookEventRecord,
   HookHandler,

@@ -422,7 +422,7 @@ export interface SkillDropPayloadFields {
  */
 export const TELEMETRY_ID_MAX = 128;
 
-interface TelemetryEventBase {
+export interface TelemetryEventBase {
   id: string;
   /**
    * Harness-generated session id — stable across hook/session/tool events.
@@ -452,7 +452,7 @@ export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
   | (TelemetryEventBase & { type: 'judge-call'; payload: JudgeCallPayload });
 
-interface TelemetryInputBase {
+export interface TelemetryInputBase {
   sessionId: string;
   turnId: string;
   /** epoch ms; the store stamps Date.now() when omitted. */

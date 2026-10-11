@@ -76,7 +76,7 @@ export interface HookHandlerError {
   error: unknown;
 }
 
-interface FireResultBase {
+export interface FireResultBase {
   event: HookEvent;
   /** Handlers invoked, including one that denied. */
   handlersFired: number;

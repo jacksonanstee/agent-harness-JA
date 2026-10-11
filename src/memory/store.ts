@@ -54,7 +54,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 const SELECT_BY_ID = `SELECT * FROM memory_entries WHERE id = @id;`;
 
-interface OpenMemoryDatabaseOptions {
+export interface OpenMemoryDatabaseOptions {
   path?: string;
 }
 
