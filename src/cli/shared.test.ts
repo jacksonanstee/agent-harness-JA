@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { apiKeyMissingMessage, loadSdkQuery, readPackageVersion, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
+import { apiKeyMissingMessage, loadSdkQuery, parseSafeInt, readPackageVersion, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
 
 /** The router table's model ids, deduplicated in first-appearance order: the
  *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
@@ -292,5 +292,20 @@ describe('sanitizeDiagnostic surrogate handling (#127 review LOW-1)', () => {
 
   it('keeps a valid emoji', () => {
     expect(sanitizeDiagnostic('x\u{1F600}y')).toBe('x\u{1F600}y');
+  });
+});
+
+describe('parseSafeInt (issue #128)', () => {
+  it('parses digit strings up to Number.MAX_SAFE_INTEGER, zero and padding included', () => {
+    expect(parseSafeInt('0')).toBe(0);
+    expect(parseSafeInt('1')).toBe(1);
+    expect(parseSafeInt('007')).toBe(7);
+    expect(parseSafeInt('9007199254740991')).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('returns undefined for anything that is not a plain safe digit string', () => {
+    for (const bad of ['', '-1', '+1', '4.5', '5abc', 'abc', ' 5', '5 ', '1e3', '0x10', '9007199254740992', '99999999999999999999']) {
+      expect(parseSafeInt(bad), JSON.stringify(bad)).toBeUndefined();
+    }
   });
 });

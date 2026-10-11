@@ -68,6 +68,24 @@ export const USAGE =
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
   '       agent-harness-ja init [dir]';
 
+/**
+ * The integer-flag parse the `run` and `eval` flags share (issue #128):
+ * digits only, then `parseInt`, then `Number.isSafeInteger`. Returns
+ * `undefined` for anything else; the CALLER applies its own floor and words
+ * its own message, because the floors differ (`--max-turns` and `--max-tasks`
+ * need 1, `--expected-tokens` accepts 0) and the messages are pinned.
+ *
+ * isSafeInteger, not isInteger: above 2^53 `parseInt` silently rewrites the
+ * digits (code lens on 472b1eb), and a bound the operator never typed is worse
+ * than a rejection. `redteam --samples` deliberately does not use this: its
+ * regex also rejects a leading zero and its range is 1 to 10.
+ */
+export function parseSafeInt(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 // TERMINAL_UNSAFE itself now lives in src/internal/sanitize.ts, beside the
 // JSON_TEXT_UNSAFE that derives from it: the zero-dep leaf is the only home
 // reachable by src/eval/**, which eslint blocks from importing src/cli/**.

@@ -339,3 +339,16 @@ price. Neither bound is a security boundary: R-10 already accepts
 arbitrary in-process oracle code from the same pack, so a hostile pack can do
 worse than run long. The bound is cost and wall-clock hygiene against
 mistakes and low-effort abuse.
+
+**Note 2026-10-12 (issue #128).** The digits-only, `parseInt`, `isSafeInteger`
+rule restated above no longer lives in three inline copies. It is one helper,
+`parseSafeInt` in `src/cli/shared.ts`, which returns `undefined` for anything
+that is not a plain safe digit string. Each call site keeps its own floor
+(`--max-turns` and `--max-tasks` need 1, `--expected-tokens` accepts 0) and its
+own message, byte for byte. `redteam --samples` is not a fourth copy and stays
+separate: its regex also rejects a leading zero and its range is 1 to 10. Also,
+"mirroring `session.run`" in decision 5's limitation was loose: `session.run`
+has no turn default (`maxTurns` is optional and passed to the SDK as given). The
+only default is `DEFAULT_MAX_TURNS` in `src/eval/golden/task.ts`, which
+`run --max-turns` now imports instead of hand-typing 10. Issue #124 (the
+if-ladder) is related and is not closed by this.
