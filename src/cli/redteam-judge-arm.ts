@@ -11,7 +11,7 @@ import { scan } from '../security/index.js';
 import type { JudgeCall } from '../security/index.js';
 import { buildJudge } from '../session/index.js';
 import type { QueryFn } from '../session/index.js';
-import { loadSdkQuery, readPackageVersion, sanitizeForTerminal, SDK_PACKAGE, writeScorecard } from './shared.js';
+import { loadSdkQuery, readPackageVersion, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, writeScorecard } from './shared.js';
 // Type-only, so erased at compile time: no runtime cycle with redteam-command.ts.
 import type { GateExit, RedteamArgs, RedteamCommandDeps } from './redteam-command.js';
 
@@ -119,7 +119,7 @@ async function obtainJudge(args: RedteamArgs, deps: RedteamCommandDeps): Promise
     query = await loadSdkQuery(deps.importSdk);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`${sanitizeForTerminal(`could not load ${SDK_PACKAGE} for --judge: ${detail}`)}\n`);
+    process.stderr.write(`${sanitizeDiagnostic(`could not load ${SDK_PACKAGE} for --judge: ${detail}`)}\n`);
     return null;
   }
   return query === null ? null : buildJudge(query, args.judgeModel);
@@ -162,17 +162,17 @@ export async function runJudgeArm(
     now,
     // Ids are charset-pinned and statuses are enums, so the line carries no
     // case text (U-1); sanitised anyway, as every stderr line is.
-    onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(line)}\n`),
+    onProgress: (line) => process.stderr.write(`${sanitizeDiagnostic(line)}\n`),
   });
 
   const written = writeScorecard(card, args.out, now(), 'judge-scorecard');
   if (!written.ok) {
     // G-8: a lost judge scorecard measured nothing; the `writeScorecard`
     // message is the remedy.
-    process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+    process.stderr.write(`${sanitizeDiagnostic(written.message)}\n`);
     return finish('failed');
   }
-  process.stderr.write(`judge scorecard written to ${written.path}\n`);
+  process.stderr.write(`judge scorecard written to ${sanitizeDiagnostic(written.path)}\n`);
 
   process.stdout.write(sanitizeForTerminal(toRedteamJudgeMarkdown(card)));
   const state = judgeArmState(card.totals);
@@ -214,18 +214,18 @@ async function runJudgeSamples(
       judgeModel: args.judgeModel,
       harnessVersion: readPackageVersion(),
       now,
-      onProgress: (line) => process.stderr.write(`${sanitizeForTerminal(`sample ${k}/${samples}: ${line}`)}\n`),
+      onProgress: (line) => process.stderr.write(`${sanitizeDiagnostic(`sample ${k}/${samples}: ${line}`)}\n`),
     });
     const written = writeScorecard(card, args.out, now(), `judge-scorecard-s${k}`);
     // Counted before the write: a lost file does not change what was measured,
     // and the gate below reads it against the n requested either way.
     cards.push(card);
     if (!written.ok) {
-      process.stderr.write(`${sanitizeForTerminal(written.message)}\n`);
+      process.stderr.write(`${sanitizeDiagnostic(written.message)}\n`);
       state = 'failed';
       break;
     }
-    process.stderr.write(`judge sample ${k}/${samples} written to ${written.path}\n`);
+    process.stderr.write(`judge sample ${k}/${samples} written to ${sanitizeDiagnostic(written.path)}\n`);
     const sampleState = judgeArmState(card.totals);
     if (STATE_RANK[sampleState] > STATE_RANK[state]) state = sampleState;
     const remedy = remedyLine(sampleState, card);

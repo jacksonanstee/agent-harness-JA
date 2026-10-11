@@ -255,6 +255,22 @@ scanner at session start (observe-only, the R-4 posture): they enter the
 system prompt, which made them a context-poisoning channel that bypassed the
 scanner entirely.
 
+Amended 2026-10-11 (issue #127): the CLI's stderr diagnostics are brought under
+the same stripping. Every eval, run, redteam and init diagnostic that can echo
+an operator- or repo-named string (a task directory, a skills directory, a
+baseline path, a scorecard path, a settings or skills error message) now passes
+`sanitizeDiagnostic` (`src/cli/shared.ts`): `sanitizeForTerminal` plus the bidi
+controls (to a space) and every `\p{Default_Ignorable_Code_Point}` code point
+(deleted, so a zero-width byte leaves the visible name intact). It composes the
+existing `stripBidi` and `stripInvisibles` leaf helpers rather than adding a
+charset; `\p{Bidi_Control}` is a subset of the default-ignorable property, and a
+sweep test pins that no code point of either survives. The stdout prose sinks
+(model text via `onText`, the rendered scorecards and drift reports) deliberately
+stay on plain `sanitizeForTerminal`: ZWJ in emoji sequences, ZWNJ in Persian and
+Indic text, VS16 and LRM/RLM in right-to-left prose are legitimate there, so
+bidi stripping remains opt-in per sink. Residual: a stdout sink that echoes a
+path (the `init` success output, the rendered reports) keeps those code points.
+
 As of 2026-07-14 (ADR-0006 amendment) the same treatment covers full skill
 **bodies**, which now enter the system prompt whole — the body is the skill's
 actual content, and until then it never reached the model at all. This is a
