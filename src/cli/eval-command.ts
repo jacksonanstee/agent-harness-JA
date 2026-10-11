@@ -63,6 +63,9 @@ type EvalParseResult =
   | { ok: false; error: string };
 
 export function parseEvalArgs(argv: string[]): EvalParseResult {
+  // Hand-written if-ladder on purpose, not a parser library: 2 flags
+  // (--challenge boolean, --max-tasks value) plus one positional. Revisit at 10
+  // flags in one parser. --max-tasks uses the shared parseSafeInt (#128).
   let taskDir = './eval/golden';
   let positionalSeen = false;
   let challenge = false;

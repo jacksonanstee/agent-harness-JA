@@ -140,6 +140,9 @@ function crossFlagRules(d: RedteamDraft): string | null {
  * renders).
  */
 export function parseRedteamArgs(argv: string[]): RedteamParseResult {
+  // Hand-written if-ladder on purpose, not a parser library: 7 flags, 2 boolean
+  // branches and 5 value flags sharing one branch (applyValueFlag). Revisit at
+  // 10 flags in one parser. --samples keeps its own stricter parse, not parseSafeInt.
   const draft: RedteamDraft = {
     out: EVAL_OUT_DIR,
     updateBaseline: false,

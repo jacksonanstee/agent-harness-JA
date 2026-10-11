@@ -117,6 +117,9 @@ export function parseArgs(argv: string[]): ParseResult {
 }
 
 function parseTelemetryArgs(argv: string[]): ParseResult {
+  // Hand-written if-ladder on purpose, not a parser library: 5 flags, all
+  // value flags in one branch. Revisit at 10 flags in one parser, where the
+  // ladder stops fitting a screen. Integers go through parseSafeInt (#128).
   const [subcommand, ...rest] = argv;
   if (subcommand !== 'export') {
     return { ok: false, error: `Unknown telemetry subcommand '${subcommand ?? ''}'. ${USAGE}` };
@@ -174,6 +177,9 @@ function parseTelemetryArgs(argv: string[]): ParseResult {
 }
 
 export function parseRunArgs(argv: string[]): ParseResult {
+  // Hand-written if-ladder on purpose, not a parser library: 6 flags, all
+  // value flags in one branch, plus the prompt positional. Revisit at 10 flags
+  // in one parser. Integers go through parseSafeInt (#128), floors per flag.
   const [command, ...rest] = argv;
   if (command !== 'run') {
     return { ok: false, error: `Unknown command '${command ?? ''}'. ${USAGE}` };
