@@ -20,6 +20,7 @@ import {
 import { DEFAULT_MAX_TURNS } from './eval/index.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
+import { formatUsd } from './internal/money.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
 import type { CliSeams, SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
@@ -550,7 +551,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
 
   const result = await session.run(prompt);
 
-  const cost = result.costUsd === null ? 'n/a' : `$${result.costUsd.toFixed(4)}`;
+  const cost = result.costUsd === null ? 'n/a' : formatUsd(result.costUsd);
   process.stdout.write(
     `\n[harness] model=${formatModelClaim(result.modelChoice.model, result.refusal)} ` +
       `(rule=${result.modelChoice.rule_id}) ` +

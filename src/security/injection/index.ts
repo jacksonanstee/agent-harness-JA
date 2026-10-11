@@ -2,6 +2,7 @@ export { createInjectionScanner, scan } from './scan.js';
 export {
   createJudgedScanner,
   isAnsweredResult,
+  isVerdict,
   JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_OVERSIZED_RULE_ID,
@@ -12,6 +13,7 @@ export {
   MAX_JUDGE_INPUT_BYTES,
   stricterVerdict,
   toInjectionJudge,
+  VERDICTS,
   verdictRank,
 } from './judge.js';
 export type {

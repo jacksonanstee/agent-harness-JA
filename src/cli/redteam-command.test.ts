@@ -976,6 +976,34 @@ describe('parseRedteamArgs --samples (issue #148)', () => {
   it('USAGE names the flag', () => {
     expect(USAGE).toContain('[--samples <n>]');
   });
+
+  // Issue #143: the parse loop's first-failure ordering and the missing-value
+  // text are byte-pinned for every value flag before the loop was split.
+  it('every value flag names itself in the missing-value error, even when it is the last argument', () => {
+    for (const flag of ['--out', '--baseline', '--judge-model', '--holdout', '--samples']) {
+      expect(parseRedteamArgs([flag]), flag).toEqual({ ok: false, error: `Missing value for ${flag}. ${USAGE}` });
+    }
+  });
+
+  it('reports the FIRST failing argument in argv order, and a value-flag value is never read as a flag', () => {
+    expect(parseRedteamArgs(['--judge', '--samples', 'abc', '--bogus'])).toEqual({
+      ok: false,
+      error: `--samples must be a whole number from 1 to 10. ${USAGE}`,
+    });
+    expect(parseRedteamArgs(['--bogus', '--samples', 'abc'])).toEqual({ ok: false, error: `Unexpected argument '--bogus'. ${USAGE}` });
+    expect(parseRedteamArgs(['--out', '--judge'])).toMatchObject({ ok: true, value: { out: '--judge', judge: false } });
+  });
+
+  it('applies the cross-flag rules in their fixed order after the loop', () => {
+    expect(parseRedteamArgs(['--judge-model', 'nope', '--holdout', 'h'])).toEqual({
+      ok: false,
+      error: `--judge-model requires --judge. ${USAGE}`,
+    });
+    expect(parseRedteamArgs(['--judge', '--update-baseline', '--judge-model', 'nope'])).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('--judge cannot be combined with --update-baseline'),
+    });
+  });
 });
 
 describe('runRedteamCommand --judge --samples (issue #148)', () => {

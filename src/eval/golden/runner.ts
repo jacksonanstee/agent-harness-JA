@@ -1,5 +1,6 @@
 import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { formatUsd } from '../../internal/money.js';
 import type { TaskDescriptor } from '../../router/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
@@ -507,7 +508,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
         if (outcome.model !== null) models.add(outcome.model);
         const { row } = outcome;
         const cost =
-          row.volatile.costUsd === null ? '' : ` ($${row.volatile.costUsd.toFixed(4)})`;
+          row.volatile.costUsd === null ? '' : ` (${formatUsd(row.volatile.costUsd)})`;
         const label = row.pass ? `pass${cost}` : `fail (${row.failureKind ?? 'unknown'})${cost}`;
         opts.onProgress?.(`[${index + 1}/${parses.length}] ${row.id} … ${label}`);
       }

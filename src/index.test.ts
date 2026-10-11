@@ -133,6 +133,11 @@ describe('root barrel (src/index.ts)', () => {
     expect(typeof securityBarrel.stricterVerdict).toBe('function');
     expect(rootNames).not.toContain('verdictRank');
     expect(rootNames).not.toContain('stricterVerdict');
+    // Issue #143: the hoisted verdict guard and tuple are security-barrel helpers, never root surface.
+    expect(typeof securityBarrel.isVerdict).toBe('function');
+    expect(securityBarrel.VERDICTS).toEqual(['pass', 'ask', 'block']);
+    expect(rootNames).not.toContain('isVerdict');
+    expect(rootNames).not.toContain('VERDICTS');
     // The closed errorKind union's tuple (security-lens S-2) is on the root beside JUDGE_MODES: a consumer
     // who builds a JudgeCall narrows against it as the eval arm does (architecture lens A-4). Four since
     // issue #152: `refused`, the one kind that is not a failure.

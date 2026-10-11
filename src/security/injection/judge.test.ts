@@ -6,6 +6,7 @@ import * as injectionBarrel from './index.js';
 import {
   createJudgedScanner,
   isAnsweredResult,
+  isVerdict,
   JUDGE_ERROR_KINDS,
   JUDGE_MODES,
   JUDGE_REFUSED_RULE_ID,
@@ -14,6 +15,7 @@ import {
   MAX_JUDGE_INPUT_BYTES,
   stricterVerdict,
   toInjectionJudge,
+  VERDICTS,
   verdictRank,
 } from './judge.js';
 import type { JudgeCall, JudgeCallResult, JudgedScanResult, JudgeMode, JudgeRunState } from './judge.js';
@@ -23,8 +25,6 @@ import type { InjectionJudge, InjectionScanner, ScanResult, Verdict } from './ty
 // Issue #96 PR-A, design spec D1/D3 (tasks/issue-96-design-spec.md, pins 1-12
 // and 14). Security layer only: no eval, no session, no cli import here (S-10).
 // Every assertion denies a shape: exact objects, exact arrays, exact key sets.
-
-const VERDICTS: readonly Verdict[] = ['pass', 'ask', 'block'];
 
 /** A scripted scanner: `suspicious` is tested independently of `verdict`
  *  because `scanInjection` is arbitrary caller code (ADR-0016:59-60). */
@@ -64,6 +64,19 @@ const judgeOf = (verdict: Verdict) => vi.fn(async (): Promise<Verdict> => verdic
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('VERDICTS and isVerdict (issue #143)', () => {
+  it('pins the closed verdict tuple, in rank order', () => {
+    expect(VERDICTS).toEqual(['pass', 'ask', 'block']);
+  });
+
+  it('accepts exactly the three verdict strings and nothing else', () => {
+    for (const verdict of VERDICTS) expect(isVerdict(verdict), verdict).toBe(true);
+    for (const other of ['', 'PASS', 'allow', ' pass', 'block ', 'refused', null, undefined, 0, 1, true, {}, [], ['pass']]) {
+      expect(isVerdict(other), String(other)).toBe(false);
+    }
+  });
 });
 
 describe('module constants (D1)', () => {

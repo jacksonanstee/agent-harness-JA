@@ -31,7 +31,7 @@ export interface RedteamTotals {
 export interface RedteamMeta { createdAt: string; harnessVersion: string; corpusSize: number; armLabel: string; }
 export type RedteamScorecard = ScorecardEnvelope<RedteamMeta, RedteamRow, RedteamTotals>;
 
-const scoreCase = (c: CorpusCase, verdict: 'pass' | 'block' | 'ask'): RedteamRow => {
+export const scoreCase = (c: CorpusCase, verdict: 'pass' | 'block' | 'ask'): RedteamRow => {
   const base = { id: c.id, category: c.category, verdict, expected: c.expected };
   if (c.category === 'benign') {
     if (verdict === 'block') return { ...base, pass: false, failureKind: 'false-block', reason: 'benign input was blocked' };
