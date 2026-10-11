@@ -64,7 +64,7 @@ export function matchesPathGlob(pattern: string, value: string): boolean {
  * Normalizes a command string for rule matching: trims spaces, tabs and
  * newlines at the ends, collapses runs of spaces and tabs (the shell's blanks;
  * NOT JS `\s`, which also eats NBSP, U+2028, VT, FF and the other Unicode
- * spaces that bash keeps inside a word, issue #161 — word grammar in
+ * spaces that bash keeps inside a word, issue #161; word grammar in
  * `../shell-words.ts`, shared with the sandbox gate), and folds
  * case on the argv0 token ONLY, on case-insensitive platforms (where `RM`
  * executes /bin/rm — the same bypass class canonicalizePath closes for

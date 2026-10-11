@@ -451,6 +451,8 @@ describe('canonicalizeCommand (platform-independent via injected flag)', () => {
     expect(canonicalizeCommand('\n git status \n', false)).toBe('git status');
     // A newline ends a command; it does not separate the words of one.
     expect(canonicalizeCommand('git\nstatus', false)).toBe('git\nstatus');
+    // A CR is not a shell blank: it stays in the word, as bash keeps it.
+    expect(canonicalizeCommand('git status\r', false)).toBe('git status\r');
   });
 });
 
