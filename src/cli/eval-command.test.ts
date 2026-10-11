@@ -4,6 +4,7 @@ import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
+import { USAGE } from './shared.js';
 import { buildAdversary, makeEvalSessionFactory, parseEvalArgs } from './eval-command.js';
 
 const RESULT: SdkMessage = {
@@ -115,6 +116,21 @@ describe('parseEvalArgs', () => {
       if (result.ok) continue;
       expect(result.error, value).toMatch(/--max-tasks must be a positive integer/);
     }
+  });
+
+  it('pins the --max-tasks rejection message byte for byte and its floor of 1 (#128)', () => {
+    for (const bad of ['0', 'abc', '99999999999999999999']) {
+      expect(parseEvalArgs(['--max-tasks', bad]), bad).toEqual({
+        ok: false,
+        error: `--max-tasks must be a positive integer. ${USAGE}`,
+      });
+    }
+    const one = parseEvalArgs(['--max-tasks', '1']);
+    expect(one.ok).toBe(true);
+    if (one.ok) expect(one.value.maxTasks).toBe(1);
+    const top = parseEvalArgs(['--max-tasks', '9007199254740991']);
+    expect(top.ok).toBe(true);
+    if (top.ok) expect(top.value.maxTasks).toBe(9007199254740991);
   });
 
   it('takes the last --max-tasks when the flag repeats (last-wins, as every run flag does)', () => {

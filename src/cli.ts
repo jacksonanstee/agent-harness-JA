@@ -10,12 +10,14 @@ import {
   composeSecurity,
   hookRecordToTelemetryInput,
   loadSdkQuery,
+  parseSafeInt,
   sanitizeDiagnostic,
   sanitizeForTerminal,
   SettingsLoadError,
   USAGE,
   WARNING_PREFIX,
 } from './cli/shared.js';
+import { DEFAULT_MAX_TURNS } from './eval/index.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
@@ -179,7 +181,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
   let prompt: string | null = null;
   let skillsDir = './skills';
   let dbPath = DEFAULT_DB_PATH;
-  let maxTurns = 10;
+  let maxTurns: number = DEFAULT_MAX_TURNS;
   // Descriptor defaults are the session's own fallback values, imported
   // rather than hand-copied, so the flagless route cannot drift (issue #88).
   let shape = DEFAULT_DESCRIPTOR.shape;
@@ -204,11 +206,8 @@ export function parseRunArgs(argv: string[]): ParseResult {
       if (arg === '--skills-dir') skillsDir = value;
       if (arg === '--db') dbPath = value;
       if (arg === '--max-turns') {
-        // isSafeInteger, not isInteger: above 2^53 parseInt silently rewrites
-        // the digits (code lens on 472b1eb), and a bound the operator never
-        // typed is worse than a rejection.
-        const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-        if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        const parsed = parseSafeInt(value);
+        if (parsed === undefined || parsed < 1) {
           return { ok: false, error: `--max-turns must be a positive integer. ${USAGE}` };
         }
         maxTurns = parsed;
@@ -232,8 +231,8 @@ export function parseRunArgs(argv: string[]): ParseResult {
         // 0 is valid: route() accepts any non-negative finite number and the
         // golden-task schema says minimum 0. This bound matches the layer the
         // value feeds, deliberately unlike --max-turns's >= 1.
-        const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-        if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        const parsed = parseSafeInt(value);
+        if (parsed === undefined) {
           return { ok: false, error: `--expected-tokens must be a non-negative integer. ${USAGE}` };
         }
         expectedTokens = parsed;

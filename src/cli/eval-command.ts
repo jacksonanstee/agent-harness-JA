@@ -33,6 +33,7 @@ import {
   EVAL_OUT_DIR,
   hookRecordToTelemetryInput,
   loadSdkQuery,
+  parseSafeInt,
   readPackageVersion,
   refuseSymlinkedDir,
   sanitizeDiagnostic,
@@ -82,11 +83,9 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
       if (value === undefined) {
         return { ok: false, error: `Missing value for ${arg}. ${USAGE}` };
       }
-      // Digits only, then isSafeInteger rather than isInteger: above 2^53
-      // parseInt silently rewrites the digits, and a limit the operator never
-      // typed is worse than a rejection. Floor 1: zero tasks is not a run.
-      const parsed = /^\d+$/.test(value) ? Number.parseInt(value, 10) : Number.NaN;
-      if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      // Floor 1: zero tasks is not a run.
+      const parsed = parseSafeInt(value);
+      if (parsed === undefined || parsed < 1) {
         return { ok: false, error: `--max-tasks must be a positive integer. ${USAGE}` };
       }
       maxTasks = parsed;

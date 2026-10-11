@@ -9,6 +9,7 @@ import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRed
 import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
+import { USAGE } from './cli/shared.js';
 import { redact, scan } from './security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
 import { MAX_SETTINGS_BYTES } from './internal/settings.js';
@@ -82,6 +83,28 @@ describe('parseRunArgs', () => {
     // a rewritten bound is worse than a rejected one. Same family as the
     // --expected-tokens case below.
     expect(parseRunArgs(['run', 'hi', '--max-turns', '99999999999999999999']).ok).toBe(false);
+  });
+
+  it('pins the --max-turns rejection message byte for byte and its floor of 1 (#128)', () => {
+    for (const bad of ['0', 'abc', '5abc', '-1', '4.5', '99999999999999999999']) {
+      expect(parseRunArgs(['run', 'hi', '--max-turns', bad]), bad).toEqual({
+        ok: false,
+        error: `--max-turns must be a positive integer. ${USAGE}`,
+      });
+    }
+    const one = parseRunArgs(['run', 'hi', '--max-turns', '1']);
+    expect(one.ok).toBe(true);
+    if (one.ok && one.value.command === 'run') expect(one.value.maxTurns).toBe(1);
+    const top = parseRunArgs(['run', 'hi', '--max-turns', '9007199254740991']);
+    expect(top.ok).toBe(true);
+    if (top.ok && top.value.command === 'run') expect(top.value.maxTurns).toBe(9007199254740991);
+  });
+
+  it('pins the --expected-tokens rejection message byte for byte (#128)', () => {
+    expect(parseRunArgs(['run', 'hi', '--expected-tokens', 'abc'])).toEqual({
+      ok: false,
+      error: `--expected-tokens must be a non-negative integer. ${USAGE}`,
+    });
   });
 
   it('overrides only the flagged descriptor field, keeping the other defaults (issue #88)', () => {
