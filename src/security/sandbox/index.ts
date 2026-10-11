@@ -1,6 +1,7 @@
 export {
   createSandbox,
   EXEC_WRAPPER_BINARIES,
+  hasGlobCharacter,
   isBlockedFirstToken,
   mergeSandboxLayers,
   sandboxHook,

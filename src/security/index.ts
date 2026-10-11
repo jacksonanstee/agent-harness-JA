@@ -67,6 +67,7 @@ export type {
 export {
   createSandbox,
   EXEC_WRAPPER_BINARIES,
+  hasGlobCharacter,
   isBlockedFirstToken,
   loadSandboxSettingsFile,
   mergeSandboxLayers,
