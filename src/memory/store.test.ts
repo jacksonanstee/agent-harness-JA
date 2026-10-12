@@ -615,3 +615,114 @@ describe('memory: delete refuses the filter fields it does not honour (#87)', ()
     expect(store.read({ type: 'user', order: 'asc' }).map((e) => e.content)).toEqual(['a', 'b']);
   });
 });
+
+describe('memory: delete treats an undefined-valued filter key as absent, as read does (#118)', () => {
+  // `MemoryDeleteFilter` types the refused fields `never`, and without
+  // exactOptionalPropertyTypes `never | undefined` accepts `undefined`, so these
+  // compile. `read` ignores an undefined value; `delete` used to refuse the key
+  // by name alone. The rule is now on DEFINED values.
+  function deleteUnchecked(store: MemoryStore, filter: Record<string, unknown>): unknown {
+    return (store.delete as unknown as (f: Record<string, unknown>) => unknown)(filter);
+  }
+
+  function seed(store: MemoryStore): { userIds: string[]; projectId: string } {
+    const a = writeOk(store, { type: 'user', content: 'a' });
+    const b = writeOk(store, { type: 'user', content: 'b' });
+    const c = writeOk(store, { type: 'project', content: 'c' });
+    return { userIds: [a.id, b.id], projectId: c.id };
+  }
+
+  it('deletes exactly the rows read returns for the same object', () => {
+    const { store } = freshStore();
+    const { userIds, projectId } = seed(store);
+    const filter = { type: 'user', limit: undefined };
+    const seen = store.read(filter as MemoryFilter).map((e) => e.id);
+    expect([...seen].sort()).toEqual([...userIds].sort());
+    expect(deleteUnchecked(store, filter)).toEqual({ ok: true, value: { deleted: 2 } });
+    expect(store.read().map((e) => e.id)).toEqual([projectId]);
+  });
+
+  it('accepts the spread-from-read-filter shape', () => {
+    const { store } = freshStore();
+    const { userIds, projectId } = seed(store);
+    const readFilter: MemoryFilter = { type: 'user' };
+    const seen = store.read(readFilter).map((e) => e.id);
+    const filter = { ...readFilter, limit: undefined, order: undefined, includeStale: undefined };
+    expect(store.delete(filter)).toEqual({ ok: true, value: { deleted: seen.length } });
+    expect(seen.sort()).toEqual([...userIds].sort());
+    expect(store.read().map((e) => e.id)).toEqual([projectId]);
+  });
+
+  it('accepts undefined-valued refused keys on the tag path too', () => {
+    const { store } = freshStore();
+    const a = writeOk(store, { type: 'user', content: 'a', tags: ['alpha'] });
+    const b = writeOk(store, { type: 'user', content: 'b', tags: ['beta'] });
+    expect(deleteUnchecked(store, { tag: 'alpha', order: undefined })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read().map((e) => e.id)).toEqual([b.id]);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it.each([
+    ['limit', 1],
+    ['order', 'asc'],
+    ['includeStale', true],
+  ])('still refuses %s with a defined value, message unchanged', (field, value) => {
+    const { store } = freshStore();
+    seed(store);
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', [field]: value });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(`refusing filter field(s) it does not honour: '${field}'.`);
+    expect(message).toContain('delete matches rows on type, key, tag only; ');
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('names only the defined-valued keys when a refused key is mixed with undefined ones', () => {
+    const { store } = freshStore();
+    seed(store);
+    let message = '';
+    try {
+      deleteUnchecked(store, { type: 'user', limit: undefined, order: 'asc', includeStale: undefined });
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("honour: 'order'.");
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('still refuses an unknown key with a defined value', () => {
+    const { store } = freshStore();
+    seed(store);
+    expect(() => deleteUnchecked(store, { type: 'user', limitt: 1 })).toThrow(/'limitt'/);
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('ignores an unknown key whose value is undefined, as read does', () => {
+    const { store } = freshStore();
+    const { projectId } = seed(store);
+    expect(deleteUnchecked(store, { type: 'user', limitt: undefined })).toEqual({ ok: true, value: { deleted: 2 } });
+    expect(store.read().map((e) => e.id)).toEqual([projectId]);
+  });
+
+  it('treats a filter that becomes empty after dropping undefined keys exactly as delete({})', () => {
+    const { store } = freshStore();
+    seed(store);
+    const messageOf = (filter: Record<string, unknown>): string => {
+      try {
+        deleteUnchecked(store, filter);
+      } catch (error: unknown) {
+        if (error instanceof TypeError) return error.message;
+      }
+      return 'did not throw TypeError';
+    };
+    const baseline = messageOf({});
+    expect(baseline).toContain('delete requires a non-empty filter');
+    expect(messageOf({ limit: undefined })).toBe(baseline);
+    expect(messageOf({ limit: undefined, order: undefined, includeStale: undefined })).toBe(baseline);
+    expect(messageOf({ type: undefined, key: undefined, tag: undefined, limit: undefined })).toBe(baseline);
+    expect(store.read()).toHaveLength(3);
+  });
+});
