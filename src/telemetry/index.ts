@@ -15,6 +15,7 @@ export {
   TOOL_REWRITE_REASONS,
   TOOL_TRACE_PHASES,
 } from './store.js';
+export type { OpenTelemetryDatabaseOptions } from './store.js';
 export { MIGRATIONS, runMigrations, type Migration } from './migrations/index.js';
 export {
   hasHomeShapedPath,
@@ -50,7 +51,11 @@ export type {
   JudgeCallState,
   JudgeCallVerdict,
   RecordResult,
+  SkillDropPathPair,
   SkillDropPayload,
+  SkillDropPayloadFields,
+  TelemetryEventBase,
+  TelemetryInputBase,
   SkillDropReason,
   TelemetryError,
   TelemetryErrorKind,

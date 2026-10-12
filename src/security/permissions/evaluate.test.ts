@@ -5,8 +5,8 @@ import {
   matchesGlob,
   PermissionDenied,
   permissionHook,
-  type PreToolLike,
 } from './evaluate.js';
+import type { PreToolLike } from '../pre-tool-like.js';
 import type { LayeredRule } from './types.js';
 
 const rule = (partial: Partial<LayeredRule> & Pick<LayeredRule, 'tool' | 'decision'>): LayeredRule => ({

@@ -6,7 +6,6 @@ export {
   matchesGlob,
   PermissionDenied,
   permissionHook,
-  type PreToolLike,
 } from './evaluate.js';
 export {
   loadSettingsFile,

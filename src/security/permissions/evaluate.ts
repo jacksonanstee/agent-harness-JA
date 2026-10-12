@@ -5,6 +5,7 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import type { PreToolLike } from '../pre-tool-like.js';
 import { collapseBlanks, firstShellWord, trimWordSeparators } from '../shell-words.js';
 import type {
   Evaluation,
@@ -245,16 +246,6 @@ export class PermissionDenied extends Error {
     super(message);
     this.name = 'PermissionDenied';
   }
-}
-
-/**
- * Structural subset of the hooks PreToolPayload — typed locally so security
- * never imports hooks (peer-leaf rule). Assignable to HookHandler<'pre-tool'>
- * at the composition root.
- */
-export interface PreToolLike {
-  readonly tool: string;
-  readonly args: unknown;
 }
 
 /**

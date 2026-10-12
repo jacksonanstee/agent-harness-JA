@@ -8,8 +8,8 @@ import {
   mergeSandboxLayers,
   sandboxHook,
   SandboxViolation,
-  type PreToolLike,
 } from './sandbox.js';
+import type { PreToolLike } from '../pre-tool-like.js';
 
 const preTool = (tool: string, args: unknown): PreToolLike => ({ tool, args });
 

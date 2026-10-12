@@ -53,6 +53,7 @@ export {
   PermissionSettingsError,
   permissionHook,
 } from './permissions/index.js';
+export type { PreToolLike } from './pre-tool-like.js';
 export type {
   Evaluation,
   EvaluatorOptions,
@@ -61,9 +62,9 @@ export type {
   PermissionEvaluator,
   PermissionRule,
   PermissionSettings,
-  PreToolLike,
   Prompter,
   PromptRequest,
+  ReadFile,
   SettingsLayer,
 } from './permissions/index.js';
 export {
@@ -80,7 +81,11 @@ export {
   SHELL_BUILTIN_COMMANDS,
   SHELL_RUNNER_BINARIES,
 } from './sandbox/index.js';
-export type { Sandbox, SandboxAllowlist, SandboxConfig } from './sandbox/index.js';
+export type {
+  Sandbox,
+  SandboxAllowlist,
+  SandboxConfig,
+} from './sandbox/index.js';
 export {
   createSecretRedactor,
   redact,
