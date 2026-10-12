@@ -17,7 +17,7 @@ import {
   USAGE,
   WARNING_PREFIX,
 } from './cli/shared.js';
-import { DEFAULT_MAX_TURNS } from './eval/index.js';
+import { DEFAULT_MAX_TURNS } from './internal/limits.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import { formatUsd } from './internal/money.js';

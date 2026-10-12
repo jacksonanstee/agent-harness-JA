@@ -297,6 +297,25 @@ function cliDeepImports(): string[] {
   return found.sort();
 }
 
+// #128 review follow-up: the run command's default turn count lives in the
+// internal leaf, so cli.ts must not reach into the eval layer for it. The CLI
+// root is exempt from the lint layering blocks, so this is a source pin.
+describe('cli.ts DEFAULT_MAX_TURNS source (#128 review follow-up)', () => {
+  const cliSource = () => stripComments(readFileSync(join(SRC, 'cli.ts'), 'utf8'));
+
+  it('imports DEFAULT_MAX_TURNS from the internal leaf', () => {
+    expect(cliSource()).toMatch(/import\s*\{\s*DEFAULT_MAX_TURNS\s*\}\s*from\s*'\.\/internal\/limits\.js'/);
+  });
+
+  it('does not import DEFAULT_MAX_TURNS from the eval layer', () => {
+    const evalImportsOf = (code: string) => [...code.matchAll(/import\s*\{([^}]*)\}\s*from\s*'\.\/eval\/[^']*'/g)];
+    const naming = (code: string) => evalImportsOf(code).filter((m) => /\bDEFAULT_MAX_TURNS\b/.test(m[1] ?? ''));
+    // Self-check: the matcher flags the old shape, so an empty result below means something.
+    expect(naming("import { DEFAULT_MAX_TURNS, x } from './eval/index.js';\n")).toHaveLength(1);
+    expect(naming(cliSource())).toEqual([]);
+  });
+});
+
 describe('CLI barrel rule (issue #96 PR-B1, architecture lens A-1)', () => {
   it('the only non-barrel import from the CLI into another domain is the pinned judgeCapWarning one', () => {
     expect(cliDeepImports()).toEqual([...ALLOWED_CLI_DEEP_IMPORTS]);

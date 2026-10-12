@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { TASK_SENSITIVITIES, TASK_SHAPES } from '../../router/index.js';
 import taskSchema from './schema.json' with { type: 'json' };
+import { DEFAULT_MAX_TURNS as LEAF_DEFAULT_MAX_TURNS } from '../../internal/limits.js';
+import { DEFAULT_MAX_TURNS as EVAL_BARREL_DEFAULT_MAX_TURNS } from '../index.js';
+import { DEFAULT_MAX_TURNS as GOLDEN_BARREL_DEFAULT_MAX_TURNS } from './index.js';
 import { DEFAULT_MAX_TURNS, parseTaskFile } from './task.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -229,6 +232,15 @@ describe('maxTurns schema bound (issue #95)', () => {
   it('keeps DEFAULT_MAX_TURNS inside the schema bound, since the default bypasses validation', () => {
     expect(DEFAULT_MAX_TURNS).toBeGreaterThanOrEqual(taskSchema.properties.maxTurns.minimum);
     expect(DEFAULT_MAX_TURNS).toBeLessThanOrEqual(taskSchema.properties.maxTurns.maximum);
+  });
+
+  // The constant lives in src/internal/limits.ts (#128 review follow-up). toBe
+  // on a number proves equal value, not one binding: a retyped 10 would pass,
+  // a changed value would not.
+  it('re-exports DEFAULT_MAX_TURNS from the internal leaf through task.ts and both eval barrels', () => {
+    expect(DEFAULT_MAX_TURNS).toBe(LEAF_DEFAULT_MAX_TURNS);
+    expect(GOLDEN_BARREL_DEFAULT_MAX_TURNS).toBe(LEAF_DEFAULT_MAX_TURNS);
+    expect(EVAL_BARREL_DEFAULT_MAX_TURNS).toBe(LEAF_DEFAULT_MAX_TURNS);
   });
 
   it('rejects maxTurns above the maximum as a task-parse failure naming the field', () => {

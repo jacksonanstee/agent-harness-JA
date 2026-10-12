@@ -352,3 +352,12 @@ has no turn default (`maxTurns` is optional and passed to the SDK as given). The
 only default is `DEFAULT_MAX_TURNS` in `src/eval/golden/task.ts`, which
 `run --max-turns` now imports instead of hand-typing 10. Issue #124 (the
 if-ladder) is related and is not closed by this.
+
+**Note 2026-10-12 (#128 review follow-up).** The owner of `DEFAULT_MAX_TURNS` is
+no longer `src/eval/golden/task.ts` (the note above, written the same day,
+names it). The constant now lives in `src/internal/limits.ts`, the zero-dep
+shared leaf, chosen over a `src/cli/` home because `task.ts` also needs it and
+eval may not import the CLI. `task.ts` imports it and re-exports it, so the
+golden and eval barrels keep the name, and `src/cli.ts` imports it from the
+leaf instead of the eval barrel. The value (10) and the fallback-not-cap
+semantics are unchanged.
