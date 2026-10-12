@@ -285,6 +285,21 @@ describe('check-docs.sh — table structure', () => {
     expectClean(fixture({ 'docs/a.md': '# T\n\n~~~\n| not | a | table |\n~~~\n\ntext\n' }));
   });
 
+  it('does not open a ``` fence whose info string contains a backtick (#119)', () => {
+    // CommonMark 0.30 section 4.5: a backtick fence's info string may not
+    // contain a backtick, so line 3 is a paragraph and the pipe row under it
+    // renders as a paragraph too. Both gates must agree with the renderer.
+    expectFinding(
+      fixture({ 'docs/a.md': '# T\n\n``` see `note\n| c | d |\n```\n\ntext\n' }),
+      'docs/a.md:4',
+    );
+  });
+
+  it('still opens a ~~~ fence whose info string contains a backtick (#119 pin)', () => {
+    // CommonMark allows a backtick in a tilde fence's info string.
+    expectClean(fixture({ 'docs/a.md': '# T\n\n~~~ see `note\n| not | a | table |\n~~~\n\ntext\n' }));
+  });
+
   it('does not let a ~~~ line close a ``` fence', () => {
     // Guards the fix from the lazy version where any fence marker toggles.
     expectClean(fixture({ 'docs/a.md': '# T\n\n```\n~~~\n| still inside |\n```\n\ntext\n' }));
@@ -385,6 +400,18 @@ describe('check-docs.sh — derived ADR constants', () => {
         ...adrTree(28),
         'README.md': '# R\n\nTwenty-eight ADRs (0001-0028).\n\n```\n29 ADRs (0001-0029)\n```\n',
       }),
+    );
+  });
+
+  it('reads an ADR claim after a ``` opener with a backtick in its info string (#119)', () => {
+    // The README fence-stripper is its own awk copy of the fence grammar. The
+    // stale claim sits under a line CommonMark renders as a paragraph.
+    expectFinding(
+      fixture({
+        ...adrTree(28),
+        'README.md': '# R\n\nTwenty-eight ADRs (0001-0028).\n\n``` see `note\nElsewhere: Twenty-six ADRs are recorded.\n',
+      }),
+      "'Twenty-six'",
     );
   });
 

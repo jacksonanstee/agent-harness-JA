@@ -240,6 +240,23 @@ describe('check-corpus-numbers.mjs: clean trees', () => {
     expectClean(root);
   });
 
+  it('checks a claim after a ``` opener whose info string contains a backtick (#119)', () => {
+    // CommonMark 0.30 section 4.5: that line is a paragraph, not a fence, so
+    // the stale claim under it is rendered prose and must be checked.
+    const root = fixture(tree({ 'docs/a.md': '``` see `note\nthe 51-case corpus, 92.5% detection\n' }));
+    expectFinding(root, 'docs/a.md:2', '51-case');
+  });
+
+  it('reads the closing ``` of the issue\'s three-line doc as a fence it never closes (#119)', () => {
+    const root = fixture(tree({ 'docs/a.md': '``` see `note\nthe 51-case corpus, 92.5% detection\n```\n' }));
+    expectIncomplete(root, 'never closed');
+  });
+
+  it('still opens a fence on a ~~~ opener whose info string contains a backtick (#119 pin)', () => {
+    const root = fixture(tree({ 'docs/a.md': '~~~ see `note\nthe 51-case corpus, 92.5% detection\n~~~\n' }));
+    expectClean(root);
+  });
+
   it('ignores a claim inside a skip/resume region', () => {
     const root = fixture(
       tree({

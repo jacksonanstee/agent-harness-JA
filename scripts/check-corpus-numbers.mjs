@@ -100,9 +100,8 @@
 // *known" / "misses*" is the exact shape that shipped stale, and why the blog
 // now says it on one line). A link that carries a title (`[t](x.md "...")`)
 // is not stripped, so its target is read as prose along with the title. The
-// fence grammar is check-docs.sh's, so it shares that gate's limit: a
-// backtick opener whose info string contains a backtick is a fence to both
-// gates and not to a CommonMark renderer (issue #119, both gates together).
+// fence grammar is check-docs.sh's, restated, and both honour the CommonMark
+// rule that a backtick opener's info string may not hold a backtick (#119).
 // A reference-style link label (`[text][label]`) is read as prose although a
 // reader never sees the label.
 //
@@ -491,7 +490,8 @@ function checkLine(name, lineNo, line, d, findings) {
 
 /**
  * Fence grammar is check-docs.sh's, restated: an opener is up to 3 spaces
- * then a run of 3+ backticks or tildes, and only a run of the SAME character
+ * then a run of 3+ backticks or tildes (a backtick opener's info string may
+ * not contain a backtick, a tilde opener's may), and only a run of the SAME character
  * at least as long, followed by whitespace only, closes it. Markers are seen
  * only outside fences, so fenced example text cannot open a skip region.
  */
@@ -526,7 +526,10 @@ function checkFile(root, rel, d, findings) {
     }
     const line = raw;
     const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
+    // A backtick opener whose info string holds a backtick is a paragraph, not
+    // a fence (CommonMark 0.30 section 4.5, issue #119); tildes keep any info.
+    const notAFence = fence && !inFence && fence[1][0] === '`' && fence[2].includes('`');
+    if (fence && !notAFence) {
       const run = fence[1];
       if (!inFence) {
         inFence = true;
