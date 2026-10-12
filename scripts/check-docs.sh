@@ -215,13 +215,20 @@ check_structure() {
         len = 0
         while (substr(marker, len + 1, 1) == ch) len++
         rest = substr(marker, len + 1)
-        if (!infence) {
-          flush()
-          infence = 1; fch = ch; flen = len
+        # CommonMark 0.30 section 4.5: a backtick opener whose info string
+        # holds a backtick is a paragraph, not a fence (issue #119). Tildes
+        # keep any info string. No next: the line falls through as prose.
+        if (!infence && ch == "`" && index(rest, "`") > 0) {
+          # not a fence
+        } else {
+          if (!infence) {
+            flush()
+            infence = 1; fch = ch; flen = len
+            next
+          }
+          if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
           next
         }
-        if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
-        next
       }
       infence { next }
       line ~ /^ ? ? ?\|/ {
@@ -295,9 +302,15 @@ readme_prose() {
       len = 0
       while (substr(marker, len + 1, 1) == ch) len++
       rest = substr(marker, len + 1)
-      if (!infence) { infence = 1; fch = ch; flen = len; next }
-      if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
-      next
+      # Backtick opener with a backtick in its info string is not a fence
+      # (CommonMark 0.30 section 4.5, issue #119); same rule as check_structure.
+      if (!infence && ch == "`" && index(rest, "`") > 0) {
+        # not a fence
+      } else {
+        if (!infence) { infence = 1; fch = ch; flen = len; next }
+        if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { infence = 0; next }
+        next
+      }
     }
     infence { next }
     { print line }

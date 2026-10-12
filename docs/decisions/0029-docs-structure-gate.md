@@ -333,6 +333,18 @@ limit, a backtick opener whose info string contains a backtick (issue #119).
 The grammar cannot be one definition across awk and node; the mitigation is
 one fixture set run by both docs-gate.test.ts and corpus-gate.test.ts, which
 #119 asks its fix to add.
+
+**Update 2026-10-12 (issue #119, closed).** The shared limit is fixed in all
+three copies of the fence grammar (both awk scripts in check-docs.sh and the
+restatement in check-corpus-numbers.mjs), in one change: a backtick opener
+whose info string contains a backtick is no longer a fence (CommonMark 0.30
+section 4.5), while a tilde opener keeps any info string. The statements above
+and in the follow-up paragraph describe the grammar as it stood when they were
+written; the "stated limit" sentences no longer hold. The fixture set is not
+literally shared: each of docs-gate.test.ts and corpus-gate.test.ts carries the
+issue's three-line doc and the tilde counterpart, and docs-gate.test.ts adds a
+case for the README fence-stripper, the one copy the structure fixture does
+not reach.
 The dated figures remain where they were: ADR-0018 keeps 51
 and 92.5% as the E-2 record, and the blog carries a note saying its figures
 are live.
