@@ -28,6 +28,14 @@
 # would fail every PR that touches a test without touching the README, which is
 # friction with no defect behind it.
 #
+# 2026-10-12 (#175): vitest's stderr is kept, not discarded. The gate flaked
+# with a bare "could not read the suite's test count" (a vitest SIGSEGV that
+# printed no JSON) and left nothing to diagnose it from. Every exit-2 path after
+# vitest has run now prints vitest's exit status (139 named as a SIGSEGV crash)
+# and the last 20 lines of its stderr. Exit codes are unchanged and the green
+# path prints none of it. There is deliberately no retry: a retry could mask a
+# red suite, and the cause of the flake is unconfirmed.
+#
 # Usage: check-test-count.sh [ROOT]   (ROOT exists so the suite can point it at
 # a fixture; it defaults to the repo root.)
 set -uo pipefail
@@ -40,8 +48,10 @@ set -uo pipefail
 # number into the README, which is precisely the defect this script exists to
 # prevent, one level up.
 checks_completed=""
+vitest_err=""
 finish() {
   local status=$?
+  [ -z "$vitest_err" ] || rm -f "$vitest_err"
   if [ -z "$checks_completed" ] && [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
     echo "check-test-count: did not complete (exit $status before the comparison)" >&2
     exit 2
@@ -81,8 +91,25 @@ fi
 
 # --reporter=json emits one JSON document on stdout. Status is captured
 # separately: a red suite must not be read as a docs drift.
-raw=$(npx vitest run --reporter=json 2>/dev/null)
+vitest_err=$(mktemp "${TMPDIR:-/tmp}/check-test-count.XXXXXX") || {
+  echo "check-test-count: cannot create a temp file for vitest's stderr" >&2
+  exit 2
+}
+raw=$(npx vitest run --reporter=json 2>"$vitest_err")
 vitest_status=$?
+
+# Printed on every exit-2 path below, never on success.
+report_vitest() {
+  if [ "$vitest_status" -eq 139 ]; then
+    echo "check-test-count: vitest exit 139 (crashed (SIGSEGV))" >&2
+  elif [ "$vitest_status" -gt 128 ]; then
+    echo "check-test-count: vitest exit $vitest_status (killed by signal $((vitest_status - 128)))" >&2
+  else
+    echo "check-test-count: vitest exit $vitest_status" >&2
+  fi
+  echo "check-test-count: last 20 lines of vitest stderr:" >&2
+  tail -n 20 "$vitest_err" >&2
+}
 
 parsed=$(printf '%s' "$raw" | node -e '
   let s = "";
@@ -106,6 +133,7 @@ parse_status=$?
 # rather than silently carried as though one were tested (round-2 review).
 if [ "$parse_status" -ne 0 ] || [ -z "$parsed" ]; then
   echo "check-test-count: could not read the suite's test count from vitest" >&2
+  report_vitest
   exit 2
 fi
 
@@ -118,6 +146,7 @@ failed_suites=$(printf '%s' "$parsed" | cut -d' ' -f3)
 # do with the README. Report the real problem instead of the derived one.
 if [ "$vitest_status" -ne 0 ] || [ "$failed_tests" -ne 0 ] || [ "$failed_suites" -ne 0 ]; then
   echo "check-test-count: the suite is not green ($failed_tests failed test(s), $failed_suites failed suite(s), vitest exit $vitest_status) - the count is not measurable and README is not the problem" >&2
+  report_vitest
   exit 2
 fi
 
