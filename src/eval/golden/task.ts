@@ -9,13 +9,16 @@ import {
   MAX_FILE_BYTES,
   SAFE_MATTER_OPTIONS,
 } from '../../internal/frontmatter.js';
+import { DEFAULT_MAX_TURNS } from '../../internal/limits.js';
 import { sanitizeControlChars as sanitize } from '../../internal/sanitize.js';
 import { stripBidi, truncateWellFormed } from '../scorecard/index.js';
 
 const ajv = new Ajv2020({ allErrors: true });
 const validateFrontmatter = ajv.compile(taskSchema);
 
-export const DEFAULT_MAX_TURNS = 10;
+// Owned by src/internal/limits.ts since 2026-10-12; re-exported so the golden
+// and eval barrels keep their public name.
+export { DEFAULT_MAX_TURNS };
 
 interface TaskFrontmatter {
   id: string;
