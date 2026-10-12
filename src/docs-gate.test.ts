@@ -126,6 +126,30 @@ describe('check-docs.sh — exit-code contract', () => {
     expect(run.stderr).toContain('check-docs:');
   });
 
+  it('⭐ an LF inside a filename cannot start an unprefixed, `::`-leading log line (issue #120)', () => {
+    // note() used to keep \t \n \r, so a filename carrying an LF reached the
+    // log as two lines and the second began `::error title=X::y.md`, with no
+    // `check-docs:` prefix: a workflow command. Reproduced on the scanner-
+    // failure path (BSD awk rejects a newline in -v) and fixed in note(). The
+    // name is built from a code point, never a literal byte. The `title=X`
+    // assertion keeps this from passing vacuously if the name never surfaces.
+    const lf = String.fromCharCode(0x0a);
+    const root = fixture({ [`docs/a${lf}::error title=X::y.md`]: '# T\n\n```\nunclosed\n' });
+    const run = runGate(root);
+    expect(run.status, run.stderr).not.toBe(0);
+    expect(run.stderr).toContain('title=X');
+    for (const line of run.stderr.split('\n').filter(Boolean)) {
+      expect(line.startsWith('check-docs:'), `unprefixed log line: ${line}`).toBe(true);
+    }
+  });
+
+  it('strips a TAB from a filename in a finding (issue #120)', () => {
+    const tab = String.fromCharCode(0x09);
+    const root = fixture({ [`docs/a${tab}b.md`]: '# T\n\n```\nunclosed\n' });
+    const run = expectFinding(root, 'docs/ab.md');
+    expect(run.stderr).not.toContain(tab);
+  });
+
   it('⭐ exits 2, not OK, when the log sanitiser itself fails', () => {
     // ROUND-3 SECURITY HIGH. Every finding funnels through note(), whose
     // tr|sed status was discarded: a failing sed dropped the finding, and if

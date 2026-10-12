@@ -115,8 +115,13 @@ FINDING_PREFIX='check-docs:'
 
 note() {
   # Doc content and FILENAMES are attacker-influenced under the cloned-repo
-  # threat model (security-model §2) and reach CI logs, so C0, C1, DEL and the
-  # bidi overrides/isolates come out first. C1 is two UTF-8 bytes (0xC2
+  # threat model (security-model §2) and reach CI logs, so C0 in full (TAB, LF
+  # and CR included), C1, DEL and the bidi overrides/isolates come out first.
+  # LF and CR must go too: a filename carrying one reaches the log as a second
+  # line with no `check-docs:` prefix, and a line starting `::` is a workflow
+  # command (issue #120; check-corpus-numbers.mjs strips the same range). The
+  # input is printed WITHOUT a trailing newline so the strip does not depend on
+  # one being there. C1 is two UTF-8 bytes (0xC2
   # 0x80-0x9F), which no `tr` byte range can express, so it needs the sed pass
   # — the previous version's comment claimed C1 and stripped only C0.
   #
@@ -126,8 +131,8 @@ note() {
   # the gate printed OK and exited 0. That is the same fail-open round 2 fixed
   # for awk, sitting at the choke point every finding passes through.
   local clean
-  clean=$(printf '%s\n' "$1" \
-    | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+  clean=$(printf '%s' "$1" \
+    | LC_ALL=C tr -d '\000-\037\177' \
     | LC_ALL=C sed $'s/\xc2[\x80-\x9f]//g; s/\xe2\x80[\xaa-\xae]//g; s/\xe2\x81[\xa6-\xa9]//g') || {
     echo "$FINDING_PREFIX the log sanitiser failed; refusing to report findings it could not clean" >&2
     exit 2
