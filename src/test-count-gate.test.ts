@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -62,6 +62,7 @@ function fixture(options: {
   readme: string;
   vitestJson?: string;
   vitestStatus?: number;
+  vitestStderr?: string;
 }): string {
   const root = mkdtempSync(join(tmpdir(), 'testcount-gate-'));
   roots.push(root);
@@ -70,7 +71,9 @@ function fixture(options: {
   const npx = join(root, 'bin', 'npx');
   writeFileSync(
     npx,
-    `#!/usr/bin/env bash\ncat <<'JSON'\n${options.vitestJson ?? ''}\nJSON\nexit ${options.vitestStatus ?? 0}\n`,
+    `#!/usr/bin/env bash\n` +
+      (options.vitestStderr ? `cat >&2 <<'ERR'\n${options.vitestStderr}\nERR\n` : '') +
+      `cat <<'JSON'\n${options.vitestJson ?? ''}\nJSON\nexit ${options.vitestStatus ?? 0}\n`,
   );
   execFileSync('chmod', ['+x', npx]);
   return root;
@@ -213,5 +216,89 @@ describe('check-test-count.sh', () => {
   it('exits 2 when the root does not exist', () => {
     const run = runGate(join(tmpdir(), 'testcount-gate-missing-4a71'));
     expect(run.status).toBe(2);
+  });
+
+  describe('vitest diagnosis (#175: an exit-139 flake that left no trace)', () => {
+    // The gate once discarded vitest's stderr, so a SIGSEGV that produced no
+    // JSON reported only "could not read the suite's test count". These pins
+    // hold the status and the stderr tail on every exit-2 path after vitest ran.
+    // The temp file is steered into the fixture with TMPDIR so its removal can
+    // be observed without touching a shared /tmp.
+    const tmpIn = (root: string): string => {
+      const dir = join(root, 'tmp');
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+
+    it('names SIGSEGV and shows the stderr tail when vitest crashes with no stdout', () => {
+      const root = fixture({
+        readme: readmeClaiming(1145),
+        vitestStderr: 'MARKER-segv-stderr',
+        vitestStatus: 139,
+      });
+      const run = runGateWithEnv(root, { TMPDIR: tmpIn(root) });
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('exit 139');
+      expect(run.stderr).toContain('SIGSEGV');
+      expect(run.stderr).toContain('MARKER-segv-stderr');
+    });
+
+    it('names a generic signal for another status above 128', () => {
+      const root = fixture({ readme: readmeClaiming(1145), vitestStatus: 137 });
+      const run = runGateWithEnv(root, { TMPDIR: tmpIn(root) });
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('killed by signal 9');
+    });
+
+    it('shows status and stderr tail on a red suite that did print JSON', () => {
+      const root = fixture({
+        readme: readmeClaiming(1145),
+        vitestJson: JSON.stringify({ numTotalTests: 1140, numFailedTests: 5, numFailedTestSuites: 1 }),
+        vitestStatus: 1,
+        vitestStderr: 'MARKER-red-stderr',
+      });
+      const run = runGateWithEnv(root, { TMPDIR: tmpIn(root) });
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('not green');
+      expect(run.stderr).toContain('exit 1');
+      expect(run.stderr).not.toContain('SIGSEGV');
+      expect(run.stderr).toContain('MARKER-red-stderr');
+    });
+
+    it('keeps only the last 20 lines of stderr', () => {
+      const lines = Array.from({ length: 30 }, (_, i) => `LINE-${String(i + 1).padStart(2, '0')}`);
+      const root = fixture({
+        readme: readmeClaiming(1145),
+        vitestStderr: lines.join('\n'),
+        vitestStatus: 139,
+      });
+      const run = runGateWithEnv(root, { TMPDIR: tmpIn(root) });
+      expect(run.stderr).not.toContain('LINE-10');
+      expect(run.stderr).toContain('LINE-11');
+      expect(run.stderr).toContain('LINE-30');
+    });
+
+    it('prints no stderr tail on the green path', () => {
+      const root = fixture({
+        readme: readmeClaiming(1145),
+        vitestJson: green(1145),
+        vitestStderr: 'MARKER-green-stderr',
+      });
+      const run = runGateWithEnv(root, { TMPDIR: tmpIn(root) });
+      expect(run.status).toBe(0);
+      expect(run.stdout + run.stderr).not.toContain('MARKER-green-stderr');
+    });
+
+    it('removes its temp file on the green path and on the exit-2 path', () => {
+      const greenRoot = fixture({ readme: readmeClaiming(1145), vitestJson: green(1145) });
+      const greenTmp = tmpIn(greenRoot);
+      expect(runGateWithEnv(greenRoot, { TMPDIR: greenTmp }).status).toBe(0);
+      expect(readdirSync(greenTmp)).toEqual([]);
+
+      const redRoot = fixture({ readme: readmeClaiming(1145), vitestStatus: 139 });
+      const redTmp = tmpIn(redRoot);
+      expect(runGateWithEnv(redRoot, { TMPDIR: redTmp }).status).toBe(2);
+      expect(readdirSync(redTmp)).toEqual([]);
+    });
   });
 });
