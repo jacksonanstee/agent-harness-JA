@@ -49,6 +49,8 @@ jobs:
   # so a cache restore would be pure waste (jq ships on ubuntu-latest).
   verify-tag:
     runs-on: ubuntu-latest
+    # First guess: this workflow has never run. Tighten from the first real release's timings.
+    timeout-minutes: 10
     # Skip GitHub pre-releases: publish has no --tag, so a pre-release would
     # otherwise land on the npm 'latest' dist-tag. Cut a normal release to
     # ship. Every other job needs this one transitively, so skipping here
@@ -88,6 +90,8 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
+    # First guess: this workflow has never run. Tighten from the first real release's timings.
+    timeout-minutes: 10
     # INVARIANT: no `if: always()` here. A failed or skipped gate (including
     # the pre-release skip, which cascades from verify-tag) must skip this job,
     # which the default success() condition on needs gives us. A `uses:` job
