@@ -116,6 +116,25 @@ treats `includeStale` as active only when it is `false`, while `delete` refuses
 it at any defined value, `true` included. Stricter than `read`, in the safe
 direction.*
 
+*Amended 2026-10-12 (issue #118): the refusal is on DEFINED values, not on key
+presence. `MemoryDeleteFilter` types the refused fields `never`, and without
+`exactOptionalPropertyTypes` that accepts `undefined`, so
+`{ ...readFilter, limit: undefined, order: undefined, includeStale: undefined }`
+compiles. `read` treats an undefined-valued key as absent, and `delete` used to
+refuse the key by name alone, a read/delete disagreement in the fail-closed
+direction. An own key whose value is undefined is now absent for `delete` too,
+for refused and unknown keys alike (`{ type, limitt: undefined }` is ignored by
+both). A defined value (`limit: 1`, `order: 'asc'`, `includeStale: true`,
+`limitt: 1`) is refused with the message unchanged. Delete-all safety is
+unmoved: a filter left with no `type`, `key` or `tag` after the undefined keys
+drop reaches the same non-empty guard `delete({})` does and throws the same
+error. Rejected: enabling `exactOptionalPropertyTypes` (wide blast radius, its
+own decision) and documenting the asymmetry instead. Informational: a getter on a
+refused field fires more than once per `delete` (review measured three reads
+for an own enumerable getter, two for a non-enumerable one: the undefined check
+added here, the property-access check, then `assertValidFilter`). The caller
+wrote the getter, so this is not a defect, but no single read decides.*
+
 *The narrowing is source-breaking, so it lands before the v0.1.0 release tag
 freezes the surface (ADR-0022, ADR-0023). After that tag it would be a breaking
 change requiring 0.2.0 under the 0.x convention, not literally a major.*

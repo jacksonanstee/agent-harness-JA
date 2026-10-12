@@ -68,6 +68,10 @@ export interface MemoryFilter {
  * anyone remembering to add it. The store's runtime list is pinned to
  * `keyof MemoryFilter` the same way.
  *
+ * The refusal is on defined values: an own key whose value is `undefined` is
+ * absent, as `read` treats it (#118), so `{ ...readFilter, limit: undefined }`
+ * compiles and deletes what `read` returns.
+ *
  * The runtime guard in the store is still load-bearing, and not only for
  * JavaScript callers and `as` casts: a type cannot see a field that arrives on
  * the prototype chain or behind a Proxy.

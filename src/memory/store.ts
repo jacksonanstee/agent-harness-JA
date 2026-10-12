@@ -228,7 +228,15 @@ function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
   // caller actually made rather than a downstream symptom of it. An unknown
   // key is refused on the same footing, because on the destructive path a
   // silently ignored field reads as a cap that was applied.
-  const named = Object.keys(filter).filter((k) => !DELETE_FILTER_KEY_SET.has(k));
+  //
+  // An own key whose value is undefined is absent, exactly as `read` treats it
+  // (#118): `MemoryDeleteFilter` types the refused fields `never`, and without
+  // exactOptionalPropertyTypes `never | undefined` compiles, so a caller
+  // migrating a MemoryFilter writes `{ ...f, limit: undefined }`. The rule is on
+  // DEFINED values. A filter left with no type, key or tag still reaches the
+  // non-empty guard below, so dropping undefined keys never widens a delete.
+  const view = filter as unknown as Readonly<Record<string, unknown>>;
+  const named = Object.keys(filter).filter((k) => !DELETE_FILTER_KEY_SET.has(k) && view[k] !== undefined);
   // Object.keys reports own enumerable string keys, so it catches a typo but
   // misses a field that arrives on the prototype chain, is defined
   // non-enumerable, or is hidden by a Proxy ownKeys trap. `read` would still
@@ -238,7 +246,6 @@ function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
   // hypothetical: Object.create(defaults) and class accessors both produce one.
   // Any defined value is refused, `includeStale: true` included, which read
   // would have ignored: stricter than read, in the safe direction.
-  const view = filter as unknown as Readonly<Record<string, unknown>>;
   const smuggled = REFUSED_READ_FIELDS.filter((f) => !named.includes(f) && view[f] !== undefined);
   const offending = [...named, ...smuggled];
   if (offending.length > 0) {
