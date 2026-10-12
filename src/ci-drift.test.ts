@@ -140,6 +140,27 @@ const extractJobNames = (yaml: string): string[] => {
     .map((line) => /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line)?.[1] ?? null)
     .filter((name): name is string => name !== null);
 };
+/**
+ * Ids of the runner jobs (those with a job-level `runs-on`) in a workflow that
+ * lack a positive integer job-level `timeout-minutes`. A `uses:` job cannot
+ * take `timeout-minutes` (Actions rejects it), so it is skipped. Reads the job
+ * list from the text, never from a fixed list, so a job added later is caught.
+ */
+const runnerJobsMissingTimeout = (yaml: string): string[] => {
+  const jobsSection = stripComments(yaml).split(/^jobs:\s*$/m)[1];
+  if (jobsSection === undefined) {
+    throw new Error('ci-drift extractor found no jobs: block, the workflow moved, update this test');
+  }
+  const blocks = jobsSection.split(/^ {2}([A-Za-z][\w-]*):\s*$/m).slice(1);
+  const missing: string[] = [];
+  for (let i = 0; i + 1 < blocks.length; i += 2) {
+    const body = blocks[i + 1] as string;
+    if (/^ {4}runs-on:/m.test(body) && !/^ {4}timeout-minutes:\s*[1-9]\d*\s*$/m.test(body)) {
+      missing.push(blocks[i] as string);
+    }
+  }
+  return missing;
+};
 
 const WORKFLOW_DIR = '.github/workflows';
 // Enumerated from disk, never hardcoded: a repo-level invariant asserted over a
@@ -263,6 +284,35 @@ describe('CI gate sequence (ADR-0022 R6)', () => {
         /^ {4}timeout-minutes:\s*[1-9]\d*\s*$/m,
       );
     }
+  });
+
+  it('every runner job in publish.yml declares a timeout-minutes (issue #174; a hung publish must not hold the OIDC-capable runner for 360 minutes)', () => {
+    expect(
+      runnerJobsMissingTimeout(publishYaml),
+      'publish.yml runner job(s) with no positive integer job-level timeout-minutes',
+    ).toEqual([]);
+  });
+
+  describe('runnerJobsMissingTimeout (fixtures)', () => {
+    const wrap = (jobs: string): string => `name: x\njobs:\n${jobs}`;
+
+    it('names a runner job with no timeout, and skips a uses: job', () => {
+      const yaml = wrap(
+        '  a:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n  b:\n    runs-on: ubuntu-latest\n  c:\n    uses: ./.github/workflows/g.yml\n',
+      );
+      expect(runnerJobsMissingTimeout(yaml)).toEqual(['b']);
+    });
+
+    it('rejects a zero or non-integer timeout', () => {
+      const yaml = wrap(
+        '  a:\n    runs-on: u\n    timeout-minutes: 0\n  b:\n    runs-on: u\n    timeout-minutes: ${{ x }}\n',
+      );
+      expect(runnerJobsMissingTimeout(yaml)).toEqual(['a', 'b']);
+    });
+
+    it('throws when the file has no jobs: block', () => {
+      expect(() => runnerJobsMissingTimeout('name: x\n')).toThrow(/no jobs/);
+    });
   });
 
   it('both CI and the publish path delegate to the one shared definition', () => {

@@ -114,6 +114,10 @@ The shared `gates.yml` gave `docs-links` a `timeout-minutes: 10` (added with the
 
 The value comes from the Actions history, not a guess: over the last 40 green `ci.yml` runs a `build-test` leg took 104 to 299 s on Node 20 (median about 142 s, p95 229 s) and 37 to 476 s on Node 22 (median 61 s, p95 182 s). Fifteen minutes (900 s) is about twice the slowest leg seen and about four times the slower p95, which leaves room for a cold `npm ci` cache or a slow runner and none for a hang. The publish path calls the same job, so it inherits the bound. `src/ci-drift.test.ts` now pins that every job in `gates.yml` declares a `timeout-minutes`, so a job added later cannot quietly take the default. Revisit the number if a leg's slowest run approaches half the bound.
 
+## Amendment (2026-10-12, issue #174): the two inline `publish.yml` jobs now have a timeout
+
+The #121 amendment bounded the jobs in `gates.yml`, but `publish.yml` has two inline runner jobs of its own, and both were on the 360-minute default: `verify-tag` and `publish`, the one job holding `id-token: write`. Each now carries `timeout-minutes: 10`. The number is a first guess, not a measurement: this workflow has never run, so there are no timings to derive it from. Tighten it from the first real release. The `gates` caller job is a `uses:` job and cannot take `timeout-minutes`; it inherits `gates.yml`'s bounds. `src/ci-drift.test.ts` now pins that every job in `publish.yml` with a `runs-on` carries a positive integer `timeout-minutes` and names the offender, reading the job list from the file so a job added later is caught.
+
 ## Revisit if
 
 - **R1:** the first release completes: verify the provenance badge renders on npm, that the provenance statement names `publish.yml` (confirming the trusted-publisher binding survived the 2026-07-28 gate extraction), and that `npx agent-harness-ja init` works from a clean machine.
