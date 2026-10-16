@@ -140,6 +140,13 @@ read-back, the index can point at the wrong rule — true before this change too
 no longer disambiguates; the per-layer index minimises the window and the residual is
 accepted. Live debugging is unchanged: no live deny print existed to lose.
 
+*(Note 2026-10-16, issue #74: `agent-harness-ja permissions list` now prints each layer's rules
+with the same `[rule N, layer]` key, N being the 0-based position in that layer's own settings
+file, so an operator can read the key off the live rule table instead of counting by hand. It
+reads the current files, so it narrows the staleness window above (compare it with the key in
+the export) without closing it. It is the ephemeral surface decision 5 allows to carry the
+glob, and it prints the sanitised glob.)*
+
 The blog's quoted telemetry row (`permission: deny Write [rule 0, project]`) was produced by
 a tool-only rule and survives verbatim; its `[rule 0, project]` now also happens to be the
 per-layer reading.
