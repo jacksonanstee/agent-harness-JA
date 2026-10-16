@@ -16,6 +16,7 @@ import {
   openTelemetryDatabase,
   SKILL_DROP_REASONS,
   TELEMETRY_EVENT_TYPES,
+  TOOL_REWRITE_KINDS,
 } from './store.js';
 import {
   HOOK_EVENT_REASON_MAX,
@@ -1438,5 +1439,30 @@ describe('tool-rewrite events and the post-tool-failure phase', () => {
         payload: { tool: 'Bash', phase: 'post-tool', resultSummary: 'x', annotation: 'deny' },
       } as unknown as TelemetryEventInput),
     ).toThrow(TypeError);
+  });
+
+  it('accepts kind redact and kind withhold, and a row without kind (pre-B2a) still round-trips without it (#145 B2a, W15)', () => {
+    const { store } = openStore();
+    for (const kind of ['redact', 'withhold'] as const) {
+      const r = store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, kind } } as TelemetryEventInput);
+      expect(r.ok, kind).toBe(true);
+      if (r.ok) expect((r.value.payload as { kind?: string }).kind).toBe(kind);
+    }
+    const legacy = store.record(TOOL_REWRITE);
+    expect(legacy.ok).toBe(true);
+    if (legacy.ok) expect(legacy.value.payload).not.toHaveProperty('kind');
+    const read = store.query({ type: 'tool-rewrite' }).map((e) => (e.payload as { kind?: string }).kind);
+    expect(read).toEqual(['redact', 'withhold', undefined]);
+  });
+
+  it('rejects a kind outside the mirror (#145 B2a, W15)', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...TOOL_REWRITE, payload: { ...TOOL_REWRITE.payload, kind: 'withheld' } } as unknown as TelemetryEventInput),
+    ).toThrow(TypeError);
+  });
+
+  it('TOOL_REWRITE_KINDS carries exactly redact and withhold', () => {
+    expect([...TOOL_REWRITE_KINDS].sort()).toEqual(['redact', 'withhold']);
   });
 });

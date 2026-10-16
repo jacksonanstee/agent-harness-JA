@@ -89,6 +89,16 @@ export type ToolRewriteOutcome =
   | 'unrewritten'
   | 'skipped'
   | 'failed-closed';
+/**
+ * Which pass wrote a `tool-rewrite` row (issue #145 B2a, spec D5): the #84
+ * secret redaction (`redact`) or the judge-block withhold (`withhold`, a
+ * shape-preserving placeholder, ADR-0039). Mirror of session's
+ * `OutputRewriteKind`; a drift test in src/session/session.test.ts keeps them
+ * equal. OPTIONAL on the READ path only: rows written before B2a carry no key,
+ * and `isToolRewritePayload` validates on read too (the TurnCostPayload
+ * refusal-field precedent); every row written since carries it.
+ */
+export type ToolRewriteKind = 'redact' | 'withhold';
 /** Why an `unobserved` rewrite could not be confirmed in band (mirror, U-11). */
 export type ToolRewriteUnobservedReason =
   | 'no-user-message'
@@ -116,6 +126,7 @@ export interface ToolTracePayload {
  * rewrite, and once per `unrewritten` call — every path leaves a row.
  * `findings` is the per-leaf model-pass count; `truncated` marks an oversized
  * leaf carrying the redactor's marker. `reason` is present on `unobserved` rows.
+ * A withheld call on the `unrewritten` or skipped redaction path carries TWO rows for one `tool_use_id`, pass 2's (no `kind` before B2a, `kind: 'redact'` since) and the withhold's (`kind: 'withhold'`); a reader joining to `judge-call` selects `kind = 'withhold'` (spec D4, S6).
  */
 export interface ToolRewritePayload {
   tool: string;
@@ -124,6 +135,8 @@ export interface ToolRewritePayload {
   truncated: boolean;
   outcome: ToolRewriteOutcome;
   reason?: ToolRewriteUnobservedReason;
+  /** Which pass wrote the row (#145 B2a); absent only on rows written before it. */
+  kind?: ToolRewriteKind;
 }
 
 /**
@@ -174,6 +187,17 @@ export interface JudgeCallPayload {
   redacted: boolean;
   costUsd: number | null;
   durationMs: number;
+  /**
+   * Issue #145 B2a (spec D5): true when the harness DECIDED to withhold this
+   * result and RETURNED the placeholder rewrite. A decision, never a landing:
+   * whether the placeholder reached the model is the `tool-rewrite` row's
+   * claim (`kind: 'withhold'`, joined on `tool_use_id`), and a reader must
+   * never read this key as "the model did not see it". OPTIONAL on the READ
+   * path only (the TurnCostPayload refusal-field precedent above): rows
+   * written before B2a carry no key; every row written since carries a
+   * boolean, `false` included.
+   */
+  withholdDecided?: boolean;
 }
 
 /**

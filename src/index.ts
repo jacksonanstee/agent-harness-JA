@@ -116,6 +116,7 @@ export {
   // constants survive in one surface.
   DEFAULT_DB_PATH as TELEMETRY_DEFAULT_DB_PATH,
   TELEMETRY_EVENT_TYPES,
+  TOOL_REWRITE_KINDS,
   TOOL_REWRITE_OUTCOMES,
   TOOL_TRACE_PHASES,
   MIGRATIONS,
@@ -147,6 +148,7 @@ export type {
   TelemetryFilter,
   TelemetryStore,
   ToolAnnotationVerdict,
+  ToolRewriteKind,
   ToolRewriteOutcome,
   ToolRewritePayload,
   ToolRewriteUnobservedReason,

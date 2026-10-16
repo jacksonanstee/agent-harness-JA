@@ -20,6 +20,7 @@ import type {
   TelemetryFilter,
   TelemetryStore,
   ToolAnnotationVerdict,
+  ToolRewriteKind,
   ToolRewriteOutcome,
   ToolRewriteUnobservedReason,
   ToolRewritePayload,
@@ -97,6 +98,11 @@ const TOOL_REWRITE_OUTCOME_PRESENCE: Record<ToolRewriteOutcome, true> = {
 export const TOOL_REWRITE_OUTCOMES = Object.keys(TOOL_REWRITE_OUTCOME_PRESENCE) as readonly ToolRewriteOutcome[];
 const TOOL_REWRITE_OUTCOME_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_OUTCOMES);
 
+// Issue #145 B2a (spec D5): the kind mirror, the EVENT_TYPE_PRESENCE idiom.
+const TOOL_REWRITE_KIND_PRESENCE: Record<ToolRewriteKind, true> = { redact: true, withhold: true };
+export const TOOL_REWRITE_KINDS = Object.keys(TOOL_REWRITE_KIND_PRESENCE) as readonly ToolRewriteKind[];
+const TOOL_REWRITE_KIND_SET: ReadonlySet<string> = new Set(TOOL_REWRITE_KINDS);
+
 const TOOL_ANNOTATION_VERDICT_PRESENCE: Record<ToolAnnotationVerdict, true> = { block: true, ask: true };
 const TOOL_ANNOTATION_VERDICT_SET: ReadonlySet<string> = new Set(Object.keys(TOOL_ANNOTATION_VERDICT_PRESENCE));
 
@@ -155,7 +161,7 @@ const JUDGE_CALL_ERROR_KIND_SET: ReadonlySet<string> = new Set(JUDGE_CALL_ERROR_
  * the mechanism the consumer reads by).
  */
 const JUDGE_CALL_KEYS: ReadonlySet<string> = new Set([
-  'tool', 'tool_use_id', 'phase', 'state', 'heuristic', 'judge', 'composed', 'errorKind', 'redacted', 'costUsd', 'durationMs',
+  'tool', 'tool_use_id', 'phase', 'state', 'heuristic', 'judge', 'composed', 'errorKind', 'redacted', 'costUsd', 'durationMs', 'withholdDecided',
 ]);
 
 /**
@@ -370,7 +376,11 @@ function isJudgeCallPayload(value: unknown): value is JudgeCallPayload {
       (typeof value.costUsd === 'number' && Number.isFinite(value.costUsd) && value.costUsd >= 0)) &&
     typeof value.durationMs === 'number' &&
     Number.isInteger(value.durationMs) &&
-    value.durationMs >= 0
+    value.durationMs >= 0 &&
+    // Issue #145 B2a: a boolean when present (the N-1 shape: the closed-key
+    // check alone would let a text value through under this key), absent on
+    // rows written before B2a.
+    (value.withholdDecided === undefined || typeof value.withholdDecided === 'boolean')
   );
 }
 
@@ -390,7 +400,9 @@ function isToolRewritePayload(value: unknown): value is ToolRewritePayload {
     typeof value.outcome === 'string' &&
     TOOL_REWRITE_OUTCOME_SET.has(value.outcome) &&
     (value.reason === undefined ||
-      (typeof value.reason === 'string' && TOOL_REWRITE_REASON_SET.has(value.reason)))
+      (typeof value.reason === 'string' && TOOL_REWRITE_REASON_SET.has(value.reason))) &&
+    // Issue #145 B2a: the kind mirror, absent on rows written before it.
+    (value.kind === undefined || inSet(TOOL_REWRITE_KIND_SET, value.kind))
   );
 }
 
