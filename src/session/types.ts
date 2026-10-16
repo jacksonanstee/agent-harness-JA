@@ -306,7 +306,7 @@ export interface SessionDeps {
    * classified `block` is WITHHELD instead, its string leaves replaced by a
    * placeholder through `updatedToolOutput` (issue #145, ADR-0039), off by
    * default and never on the failure hook; a walk that cannot run or that
-   * finds no string leaf withholds nothing and says so (`outputRewrites`). The INPUT side stays
+   * finds no non-empty string leaf withholds nothing and says so (`outputRewrites`). The INPUT side stays
    * observe-and-log (D3). Failures warn, never abort, and add no annotation
    * (fail open, ADR-0026 decision 7).
    */

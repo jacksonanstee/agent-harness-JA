@@ -1154,7 +1154,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // first lines added; failedClosed is false because the placeholder replaced
       // the sentinel too (S8). A new object replaces the redaction entry in place
       // (immutability: the old object is never mutated).
-      // The redaction pass's secret spans (the name avoids a `secret...` identifier so the staged secret scan passes honestly).
+      // The redaction pass's span lines, kept so a surviving secret still reads leaked.
       const keptSpans = redaction?.spanLines ?? [];
       const entry: PendingRewrite = {
         tool,
@@ -1412,7 +1412,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // Issue #145 B2a (spec D1, D2, D6): the withhold runs AFTER the step-6
         // re-decide, so a hook cancelled during the custom hook never withholds
         // (hook-cancelled is not judged), and only on the judge's own block.
-        if (withholdOn && hasOutput && decidesWithhold(decision)) {
+        // `deliver` is required so a rewrite is never returned without its notice.
+        if (withholdOn && hasOutput && decision !== null && decision.deliver && decidesWithhold(decision)) {
           withheld = applyWithhold(toolName, toolUseId, rewrite === null ? toolResponse : rewrite.value, rewrite?.pending ?? null);
         }
         annotation = decision === null ? annotate(scan, toolName, toolUseId, 'post-tool', false)

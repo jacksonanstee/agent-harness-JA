@@ -249,14 +249,14 @@ describe('W8: G-5 for withholds: no secret byte and no fixture byte in any sink'
     const b = build(fake.query, withholdOn());
     const result = await start(b).run('hi');
     expect(result.outputRewrites[0]).toMatchObject({ outcome: 'leaked', kind: 'withhold' });
-    // The tool-trace row's resultSummary carries the redacted output by design (#84 pass 1, unchanged), so it is
-    // not a withhold sink; every row the withhold or the verifier writes is.
+    // The AWS secret must be absent from EVERY sink, tool-trace included (a pass-1 redaction regression lands there).
+    // The tool-trace row's resultSummary carries the redacted output by design (#84 pass 1, unchanged), so only
+    // the fixture-line check excludes it; every row the withhold or the verifier writes is checked for both.
     const withholdRows = b.events().filter((e) => e.type !== 'tool-trace');
-    const sinks = [b.warnings.join('\n'), JSON.stringify(withholdRows), JSON.stringify(result.outputRewrites), JSON.stringify(result.outputAnnotations), JSON.stringify(b.judgeRows())];
-    for (const s of sinks) {
-      expect(s).not.toContain(AWS);
-      expect(s).not.toContain(FIXTURE_LINE);
-    }
+    const awsSinks = [b.warnings.join('\n'), JSON.stringify(b.events()), JSON.stringify(result.outputRewrites), JSON.stringify(result.outputAnnotations), JSON.stringify(b.judgeRows())];
+    const fixtureSinks = [b.warnings.join('\n'), JSON.stringify(withholdRows), JSON.stringify(result.outputRewrites), JSON.stringify(result.outputAnnotations), JSON.stringify(b.judgeRows())];
+    for (const s of awsSinks) expect(s).not.toContain(AWS);
+    for (const s of fixtureSinks) expect(s).not.toContain(FIXTURE_LINE);
   });
 });
 
