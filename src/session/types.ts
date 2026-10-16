@@ -298,11 +298,16 @@ export interface SessionDeps {
   /**
    * Optional prompt-injection scanner (S-1). Runs on each tool output (and, per
    * issue #84 D8, on a FAILED call's error text); the result feeds the
-   * post-tool hook's `scan` field. On a `block`/`ask` verdict the harness now
+   * post-tool hook's `scan` field. On a `block`/`ask` verdict the harness
    * ANNOTATES the model-facing copy with a plain-language note via the SDK's
-   * `additionalContext` channel (issue #84, D2) — nothing is withheld
-   * (withholding is PR-B2's decision; when `judge` is configured the judge also runs on these two hooks and may tighten the verdict, issue #96 PR-B1). The INPUT side stays observe-and-log (D3). Failures
-   * warn, never abort, and add no annotation (fail open, ADR-0026 decision 7).
+   * `additionalContext` channel (issue #84, D2). When `judge` is configured the
+   * judge also runs on these two hooks and may tighten the verdict (issue #96
+   * PR-B1); with `judge.withhold: 'block'` a SUCCESSFUL result the judge itself
+   * classified `block` is WITHHELD instead, its string leaves replaced by a
+   * placeholder through `updatedToolOutput` (issue #145, ADR-0039), off by
+   * default and never on the failure hook. The INPUT side stays
+   * observe-and-log (D3). Failures warn, never abort, and add no annotation
+   * (fail open, ADR-0026 decision 7).
    */
   scanInjection?: (text: string) => ScanResult;
   /**
@@ -443,21 +448,26 @@ export interface SessionResult {
   droppedSkills: DroppedSkill[];
   /**
    * Model-facing secret-redaction rewrites of SUCCESSFUL tool output (issue
-   * #84, D1/D5), one per call that carried a detectable secret, failed a leaf
-   * closed, was oversized, or was skipped/unrewritten. Reported structurally so
-   * an eval oracle asserts enforcement without scraping stderr.
+   * #84, D1/D5), one per pass that ran on a call: the redaction pass (`kind: 'redact'`)
+   * for a detectable secret, a leaf failed closed, an oversized leaf, or a
+   * skipped/unrewritten walk, and the withhold pass (`kind: 'withhold'`, issue
+   * #145, ADR-0039) for a result the judge classified `block` behind
+   * `judge.withhold: 'block'`. Reported structurally so an eval oracle asserts
+   * enforcement without scraping stderr.
    *
    * `outputRewrites.length === 0` means "no successful call carried a detectable
    * secret in a rewritable leaf" — NOT "the model saw no secret" (U-3, U-17). A
    * `leaked`/`unobserved`/`unrewritten` row, or ANY failed call (which cannot be
    * rewritten, D8), each mean the model may have seen a raw secret. The input
-   * side stays observe-only (D3).
+   * side stays observe-only (D3). A `withhold` row's `applied` is the only
+   * in-band proof a withhold landed; `leaked` or `unobserved` on it means the
+   * model may hold the raw bytes (spec D4, D5).
    */
   outputRewrites: OutputRewrite[];
   /**
    * Injection-scanner verdicts surfaced to the model as a note (issue #84,
    * D2/D5): `block`/`ask` on a successful call (phase 'post-tool') or a failed
-   * call (phase 'post-tool-failure'). Nothing is withheld; withholding is PR-B2's decision. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized`, `judge-redacted` or `judge-refused` (issue #152: the provider refused to judge the result, annotated `ask`, never a judgement) among its rule ids.
+   * call (phase 'post-tool-failure'). A withheld result (issue #145) records its annotation here too, `judge-block` among its rule ids; its landing is an `outputRewrites` row with `kind: 'withhold'`. With a judge configured, a note the judge path caused carries `judge-ask`, `judge-block`, `judge-oversized`, `judge-redacted` or `judge-refused` (issue #152: the provider refused to judge the result, annotated `ask`, never a judgement) among its rule ids.
    */
   outputAnnotations: OutputAnnotation[];
   /**
@@ -484,10 +494,21 @@ export type OutputRewriteOutcome =
   | 'failed-closed';
 
 /**
+ * Which pass produced a model-facing rewrite (issue #145 B2a, spec D5): the
+ * #84 secret redaction (`redact`) or the judge-block withhold (`withhold`, a
+ * shape-preserving placeholder behind `judge.withhold: 'block'`, ADR-0039).
+ * Telemetry mirrors it as `ToolRewriteKind`; a presence-record drift test in
+ * session.test.ts keeps the two equal (G-10).
+ */
+export type OutputRewriteKind = 'redact' | 'withhold';
+
+/**
  * A model-facing rewrite decision (issue #84). `tool_use_id` is the SDK's id
  * when it arrived, else null. `findings` is the per-leaf model-pass count;
  * `truncated` is true when an oversized leaf carried the redactor's
- * `[REDACTED:oversized-input]` marker.
+ * `[REDACTED:oversized-input]` marker. `kind` says which pass wrote the row; a
+ * withheld call that also took the redaction pass's `unrewritten` or skipped
+ * path carries one row per pass (spec D4, S6).
  */
 export interface OutputRewrite {
   tool: string;
@@ -495,6 +516,7 @@ export interface OutputRewrite {
   findings: number;
   truncated: boolean;
   outcome: OutputRewriteOutcome;
+  kind: OutputRewriteKind;
 }
 
 /** A model-facing injection-verdict annotation (issue #84, D2/D5). */

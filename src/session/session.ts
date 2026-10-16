@@ -17,6 +17,7 @@ import type {
   DroppedSkill,
   OutputAnnotation,
   OutputRewrite,
+  OutputRewriteKind,
   OutputRewriteOutcome,
   SdkAssistantMessage,
   SdkHookCallback,
@@ -194,6 +195,14 @@ type RewriteUnobservedReason = (typeof REWRITE_UNOBSERVED_REASONS)[number];
 export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
   OUTPUT_REWRITE_OUTCOME_PRESENCE,
 ) as readonly OutputRewriteOutcome[];
+
+/**
+ * Exhaustive BY CONSTRUCTION over `OutputRewriteKind` (issue #145 B2a, spec
+ * D5), the origin of telemetry's `ToolRewriteKind` mirror; `session.test.ts`
+ * re-derives the equality (G-10).
+ */
+const OUTPUT_REWRITE_KIND_PRESENCE: Record<OutputRewriteKind, true> = { redact: true, withhold: true };
+export const OUTPUT_REWRITE_KINDS = Object.keys(OUTPUT_REWRITE_KIND_PRESENCE) as readonly OutputRewriteKind[];
 
 
 function truncate(value: string | null): string | null {
@@ -561,6 +570,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       findings: number;
       truncated: boolean;
       failedClosed: boolean;
+      /** Which pass owns the entry; a withhold RE-OWNS a redaction entry (#145 B2a, spec D4). */
+      kind: OutputRewriteKind;
       /** `[REDACTED:<id>]` tokens present in the rewritten leaves (deduped). */
       markers: string[];
       /** First line (>= MIN_SPAN_LINE chars) of each original secret span. */
@@ -917,14 +928,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       findings: number,
       truncated: boolean,
       outcome: OutputRewriteOutcome,
+      kind: OutputRewriteKind,
       reason?: RewriteUnobservedReason,
     ): void {
-      outputRewrites.push({ tool, tool_use_id: toolUseId, findings, truncated, outcome });
+      outputRewrites.push({ tool, tool_use_id: toolUseId, findings, truncated, outcome, kind });
       recordTelemetry({
         type: 'tool-rewrite',
         sessionId: harnessSessionId,
         turnId,
-        payload: { tool, tool_use_id: toolUseId, findings, truncated, outcome, ...(reason ? { reason } : {}) },
+        payload: { tool, tool_use_id: toolUseId, findings, truncated, outcome, kind, ...(reason ? { reason } : {}) },
       });
     }
 
@@ -1029,12 +1041,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // (S-1, unreachable from the SDK's JSON) would otherwise propagate out of
         // the callback and lose the rewrite with no row, the issue #83 no-op
         // shape. Contain it here as an observable `skipped` outcome.
-        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped');
+        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped', 'redact');
         warn(`model-facing rewrite skipped for ${tool} output: the walk threw (${describeError(error)}); the raw output reached the model (#84)`);
         return null;
       }
       if (walk.skipped) {
-        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped');
+        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped', 'redact');
         warn(
           `model-facing rewrite skipped for ${tool} output: not JSON, or beyond ` +
             `${MAX_REWRITE_NODES} nodes / depth ${MAX_REWRITE_DEPTH}; the raw output reached the model (#84)`,
@@ -1049,6 +1061,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           findings: totalFindings,
           truncated: anyTruncated,
           failedClosed: anyFailedClosed,
+          kind: 'redact',
           markers: dedupMarkers,
           spanLines,
           resolved: false,
@@ -1074,7 +1087,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // found a secret the per-leaf pass cannot (a secret used as a JSON key,
       // A1): leave a row and a warning every time the blind spot is hit (G-9).
       if (pass1FindingsCount > 0) {
-        recordRewriteOutcome(tool, toolUseId, 0, false, 'unrewritten');
+        recordRewriteOutcome(tool, toolUseId, 0, false, 'unrewritten', 'redact');
         warn(
           `the ${tool} output redaction telemetry pass found a secret the per-leaf model ` +
             `pass did not rewrite (e.g. a secret used as a JSON key); the model may have received it (#84)`,
@@ -1111,7 +1124,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
               ? judgeLeakedByHookTimeoutWarning(p.tool)
               : `the ${p.tool} output rewrite LEAKED: a redacted secret survived into the model's copy (#84)`);
           }
-          recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, decided.outcome, decided.reason);
+          recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, decided.outcome, p.kind, decided.reason);
         }
       } catch (error: unknown) {
         warn(`rewrite verifier error: ${describeError(error)}`);
@@ -1512,7 +1525,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // sink, so this is defence in depth, but a per-iteration guard means a
           // throw on one pending cannot skip the rows for the rest.
           try {
-            recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, 'unobserved', 'no-user-message');
+            recordRewriteOutcome(p.tool, p.toolUseId, p.findings, p.truncated, 'unobserved', p.kind, 'no-user-message');
           } catch (error: unknown) {
             warn(`rewrite flush error for ${p.tool}: ${describeError(error)}`);
           }

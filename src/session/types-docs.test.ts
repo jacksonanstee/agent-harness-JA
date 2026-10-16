@@ -12,9 +12,12 @@ import type { JudgeSessionState, JudgeSummary, SessionJudge, SessionResult } fro
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'types.ts'), 'utf8');
 
 describe('session public doc comments (U-9)', () => {
-  it('no comment still says withholding is #96; withholding is named as B2', () => {
+  it('no comment still says nothing is withheld or defers withholding to B2; the two comments name the setting and ADR-0039 (#145 B2a, W18)', () => {
+    expect(source).not.toMatch(/withholding is PR-B2's decision/);
     expect(source).not.toMatch(/withholding is #96/);
-    expect(source.match(/withholding is PR-B2's decision/g)?.length).toBe(2);
+    expect(source).not.toMatch(/nothing is withheld/i);
+    expect(source.match(/judge\.withhold: 'block'/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source).toMatch(/ADR-0039/);
   });
 
   it('the QueryFn alias and the abortController key both state the consumer contract', () => {

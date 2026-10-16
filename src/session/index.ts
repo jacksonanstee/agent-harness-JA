@@ -12,6 +12,7 @@ export type {
   JudgeSummary,
   OutputAnnotation,
   OutputRewrite,
+  OutputRewriteKind,
   OutputRewriteOutcome,
   QueryFn,
   QueryOptions,
