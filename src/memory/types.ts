@@ -47,8 +47,9 @@ export interface MemoryFilter {
 }
 
 /**
- * What `delete` accepts: the three fields it matches rows on, and an explicit
- * refusal of the three it does not.
+ * What `delete` accepts: the four fields it matches rows on (`type`, `key`,
+ * `tag` and `ids`), and an explicit refusal of the three `MemoryFilter` fields
+ * it does not.
  *
  * `read` applies `limit`, `order` and `includeStale`; `delete` never has, so
  * accepting one meant deleting rows the same filter's `read` would not have
@@ -76,9 +77,34 @@ export interface MemoryFilter {
  * JavaScript callers and `as` casts: a type cannot see a field that arrives on
  * the prototype chain or behind a Proxy.
  */
-export type MemoryDeleteMatchField = 'type' | 'key' | 'tag';
+export type MemoryDeleteMatchField = 'type' | 'key' | 'tag' | 'ids';
 
-export type MemoryDeleteFilter = Pick<MemoryFilter, MemoryDeleteMatchField> & {
+/**
+ * `ids` (#116) is delete-only: `read` has no id filter, and a smuggled `ids` on
+ * a read filter is ignored there. It selects rows by `id`, AND-combined with
+ * any `type`, `key` and `tag` given: an id whose row does not match the other
+ * fields is not deleted. `DeleteResult.value.deleted` counts rows actually
+ * removed, so duplicate and unknown ids add nothing.
+ *
+ * Rules, all enforced by the store at runtime:
+ * - every element must be a non-empty string;
+ * - at most `MEMORY_DELETE_IDS_MAX` elements: an over-cap list is refused, never
+ *   truncated, because truncating would silently delete a subset;
+ * - `ids: []` is a matcher that matches nothing: it deletes nothing and returns
+ *   `{ deleted: 0 }`, alone or combined (it is not "no filter", so it does not
+ *   reach the empty-filter refusal);
+ * - an `ids` whose value is `undefined` is absent, as for every other field.
+ *
+ * A `tag` or `ids` delete selects and removes in one transaction. If another
+ * connection changes a selected row in between (under WAL), the delete returns
+ * `{ ok: false, error: { kind: 'db' } }` and removes nothing; that failure is
+ * transient and retrying is safe.
+ *
+ * `{ type, limit, order }` ("delete the N oldest") stays refused (ADR-0009).
+ */
+export type MemoryDeleteFilter = Pick<MemoryFilter, Extract<MemoryDeleteMatchField, keyof MemoryFilter>> & {
+  ids?: readonly string[];
+} & {
   [K in Exclude<keyof MemoryFilter, MemoryDeleteMatchField>]?: never;
 };
 

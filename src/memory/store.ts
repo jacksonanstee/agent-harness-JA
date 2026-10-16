@@ -159,7 +159,7 @@ function assertValidInput(entry: MemoryInput): void {
 }
 
 /** The only fields `delete` matches rows on; every other key is refused (#87). */
-const DELETE_FILTER_KEYS = ['type', 'key', 'tag'] as const satisfies readonly MemoryDeleteMatchField[];
+const DELETE_FILTER_KEYS = ['type', 'key', 'tag', 'ids'] as const satisfies readonly MemoryDeleteMatchField[];
 const DELETE_FILTER_KEY_SET: ReadonlySet<string> = new Set(DELETE_FILTER_KEYS);
 
 /** `read` applies these; `delete` does not, so `delete` refuses them (#87). */
@@ -185,6 +185,42 @@ void _filterExhaustive;
  * boundEcho, the same discipline the settings parser applies to unknown keys.
  */
 const REFUSAL_ECHO_MAX_KEYS = 5;
+
+/**
+ * Most ids one `delete({ ids })` accepts (#116). The ids are bound one
+ * placeholder each in an `id IN (...)` clause, next to at most two other bound
+ * parameters (`type`, `key`). SQLite's bound-parameter limit is 32766 in the
+ * bundled build (MAX_VARIABLE_NUMBER) but 999 in builds before 3.32.0 (sqlite.org/limits.html, item 9), and the
+ * store accepts a connection the caller opened. 500 sits under the legacy 999
+ * with roughly half of it spare, so the cap, not a SQLite error, is what a
+ * caller meets. Over-cap lists are refused, never truncated.
+ */
+export const MEMORY_DELETE_IDS_MAX = 500;
+
+/**
+ * Validates `delete`'s `ids` and returns a private copy, or undefined when the
+ * field is absent. Messages carry the element index and the list length, never
+ * an id value: ids are caller input and the refusal is a log-adjacent sink
+ * (#87).
+ */
+function validatedDeleteIds(raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new TypeError('filter.ids must be an array of non-empty strings when provided');
+  }
+  if (raw.length > MEMORY_DELETE_IDS_MAX) {
+    throw new TypeError(
+      `filter.ids has ${String(raw.length)} entries; delete accepts at most ${String(MEMORY_DELETE_IDS_MAX)} ` +
+        `(refused, not truncated, so no subset is deleted)`,
+    );
+  }
+  const copy: unknown[] = [...(raw as unknown[])];
+  const bad = copy.findIndex((id) => typeof id !== 'string' || id === '');
+  if (bad !== -1) {
+    throw new TypeError(`filter.ids[${String(bad)}] must be a non-empty string`);
+  }
+  return copy as string[];
+}
 
 function assertFilterObject(filter: unknown): void {
   if (typeof filter !== 'object' || filter === null) {
@@ -221,7 +257,7 @@ function assertValidFilter(filter: MemoryFilter): void {
  * catches what no type can see: JavaScript callers, `as` casts, and a field
  * reaching the object by a route `Object.keys` does not report.
  */
-function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
+function assertValidDeleteFilter(filter: MemoryDeleteFilter): string[] | undefined {
   assertFilterObject(filter);
   // Runs before the field validators and the non-empty guard: an unhonoured
   // field is the more specific fault, so reporting it names the mistake the
@@ -265,9 +301,12 @@ function assertValidDeleteFilter(filter: MemoryDeleteFilter): void {
     );
   }
   assertValidFilter(filter);
-  if (filter.type === undefined && filter.key === undefined && filter.tag === undefined) {
-    throw new TypeError('delete requires a non-empty filter (type, key, or tag) to avoid wiping the table');
+  const ids = validatedDeleteIds(filter.ids);
+  // `ids: []` counts as a filter: it selects nothing, so it never widens a delete.
+  if (filter.type === undefined && filter.key === undefined && filter.tag === undefined && ids === undefined) {
+    throw new TypeError('delete requires a non-empty filter (type, key, tag, or ids) to avoid wiping the table');
   }
+  return ids;
 }
 
 function memoryError(cause: unknown): MemoryError {
@@ -285,7 +324,7 @@ interface ReadQuery {
   postFilterLimit?: number;
 }
 
-function buildReadQuery(filter: MemoryFilter): ReadQuery {
+function buildReadQuery(filter: MemoryFilter, ids?: readonly string[]): ReadQuery {
   const clauses: string[] = ['1 = 1'];
   const params: Record<string, unknown> = {};
   if (filter.type !== undefined) {
@@ -295,6 +334,14 @@ function buildReadQuery(filter: MemoryFilter): ReadQuery {
   if (filter.key !== undefined) {
     clauses.push('key = @key');
     params.key = filter.key;
+  }
+  if (ids !== undefined) {
+    // One named placeholder per id; the caller has already bounded the count.
+    const names = ids.map((_, i) => `@id${String(i)}`);
+    clauses.push(`id IN (${names.join(', ')})`);
+    ids.forEach((id, i) => {
+      params[`id${String(i)}`] = id;
+    });
   }
   if (filter.includeStale === false) {
     clauses.push('(stale_after IS NULL OR stale_after > @now)');
@@ -351,7 +398,12 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
 
   function read(filter: MemoryFilter = {}): MemoryEntry[] {
     assertValidFilter(filter);
-    const query = buildReadQuery(filter);
+    return readRows(filter);
+  }
+
+  /** `read` plus the delete-only `ids` selector, which stays off the public read filter. */
+  function readRows(filter: MemoryFilter, ids?: readonly string[]): MemoryEntry[] {
+    const query = buildReadQuery(filter, ids);
     const rows = db.prepare(query.sql).all(query.params);
     let entries = rows.map(rowToEntry);
     if (query.postFilterTag !== undefined) {
@@ -364,8 +416,39 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
     return entries;
   }
 
+  /**
+   * The one delete-by-id primitive: removes the given ids and returns how many
+   * rows were actually removed (unknown ids add nothing). It does NOT open a
+   * transaction: callers run it inside `deleteWhere` so the read that chose the
+   * ids and these deletes are one atomic unit.
+   */
+  function removeIds(ids: readonly string[]): number {
+    const stmt = db.prepare(`DELETE FROM memory_entries WHERE id = @id;`);
+    let deleted = 0;
+    for (const id of ids) {
+      deleted += stmt.run({ id }).changes;
+    }
+    return deleted;
+  }
+
+  /**
+   * Select-then-delete as ONE transaction, for every path that chooses rows in
+   * JS (tag) or by id. The read must be inside it: the delete is by id only, so
+   * a row retagged or retyped by another connection between a read outside the
+   * transaction and the delete would still be removed. Under WAL (what
+   * openMemoryDatabase sets) the transaction's snapshot is stale by then and
+   * SQLite refuses the write ("database is locked"), so the whole delete fails
+   * closed with ok:false (kind 'db') and rolls back instead of deleting a
+   * non-match; the failure is transient and a retry is safe. Under a
+   * rollback-journal connection the other writer is blocked instead and the
+   * delete runs correctly.
+   */
+  const deleteWhere = db.transaction((filter: MemoryFilter, ids: readonly string[] | undefined): number =>
+    removeIds(readRows(filter, ids).map((e) => e.id)),
+  );
+
   function del(filter: MemoryDeleteFilter): DeleteResult {
-    assertValidDeleteFilter(filter);
+    const idFilter = assertValidDeleteFilter(filter);
     const clauses: string[] = ['1 = 1'];
     const params: Record<string, unknown> = {};
     if (filter.type !== undefined) {
@@ -377,27 +460,22 @@ export function createMemoryStore(db: Database.Database): MemoryStore {
       params.key = filter.key;
     }
     try {
-      if (filter.tag !== undefined) {
+      if (filter.tag !== undefined || idFilter !== undefined) {
         // Tags live in a JSON text column, so tag matching cannot happen in
-        // SQL. Reuse read() as the single definition of "which rows match this
-        // filter", and remove the matched ids in one transaction so a partial
-        // failure rolls back. This reuse alone did NOT make the two agree: the
-        // call below drops any field read applies and delete does not, which is
-        // exactly how { tag, limit } over-deleted (#87). What makes them agree
-        // is the narrowed filter, which carries only the three fields read
-        // matches on identically and refuses the rest before this point.
-        const deleteMatching = db.transaction((): number => {
-          const ids = read({ type: filter.type, key: filter.key, tag: filter.tag }).map((e) => e.id);
-          const stmt = db.prepare(`DELETE FROM memory_entries WHERE id = @id;`);
-          for (const id of ids) {
-            stmt.run({ id });
-          }
-          return ids.length;
-        });
-        return { ok: true, value: { deleted: deleteMatching() } };
+        // SQL. Reuse readRows() as the single definition of "which rows match
+        // this filter" (it also ANDs in `ids`; an empty list yields `id IN ()`,
+        // which SQLite evaluates as false, so it selects nothing rather than
+        // meaning "no filter"), and remove the matched ids in one transaction.
+        // This reuse alone did NOT make read and delete agree: the call below
+        // drops any field read applies and delete does not, which is exactly
+        // how { tag, limit } over-deleted (#87). What makes them agree is the
+        // narrowed filter, which carries only the fields read matches on
+        // identically and refuses the rest before this point.
+        const deleted = deleteWhere({ type: filter.type, key: filter.key, tag: filter.tag }, idFilter);
+        return { ok: true, value: { deleted } };
       }
       if (clauses.length === 1) {
-        // Unreachable today (the guard requires type, key, or tag), but if a
+        // Unreachable today (the guard requires type, key, tag or ids), but if a
         // future MemoryFilter field is added to the guard without a clause
         // here, fail loud instead of running an unconstrained DELETE.
         throw new TypeError('delete filter produced no WHERE clause; refusing to wipe the table');

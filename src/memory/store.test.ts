@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMemoryStore, openMemoryDatabase } from './index.js';
+import { MEMORY_DELETE_IDS_MAX, createMemoryStore, openMemoryDatabase } from './index.js';
 import type { MemoryDeleteFilter, MemoryFilter, MemoryInput, MemoryStore, MemoryType } from './index.js';
 
 let openDbs: BetterSqlite3.Database[] = [];
@@ -666,7 +666,7 @@ describe('memory: delete treats an undefined-valued filter key as absent, as rea
     ['limit', 1],
     ['order', 'asc'],
     ['includeStale', true],
-  ])('still refuses %s with a defined value, message unchanged', (field, value) => {
+  ])('still refuses %s with a defined value, naming ids among the honoured fields', (field, value) => {
     const { store } = freshStore();
     seed(store);
     let message = '';
@@ -676,7 +676,7 @@ describe('memory: delete treats an undefined-valued filter key as absent, as rea
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain(`refusing filter field(s) it does not honour: '${field}'.`);
-    expect(message).toContain('delete matches rows on type, key, tag only; ');
+    expect(message).toContain('delete matches rows on type, key, tag, ids only; ');
     expect(store.read()).toHaveLength(3);
   });
 
@@ -724,5 +724,265 @@ describe('memory: delete treats an undefined-valued filter key as absent, as rea
     expect(messageOf({ limit: undefined, order: undefined, includeStale: undefined })).toBe(baseline);
     expect(messageOf({ type: undefined, key: undefined, tag: undefined, limit: undefined })).toBe(baseline);
     expect(store.read()).toHaveLength(3);
+  });
+});
+
+describe('memory: delete by ids (#116)', () => {
+  function deleteUnchecked(store: MemoryStore, filter: Record<string, unknown>): unknown {
+    return (store.delete as unknown as (f: Record<string, unknown>) => unknown)(filter);
+  }
+
+  function seed(store: MemoryStore) {
+    const a = writeOk(store, { type: 'user', content: 'a', key: 'k', tags: ['t'] });
+    const b = writeOk(store, { type: 'user', content: 'b', key: 'k', tags: ['t'] });
+    const c = writeOk(store, { type: 'project', content: 'c', key: 'other', tags: ['u'] });
+    return { a, b, c };
+  }
+
+  it('deletes exactly the listed rows, even when key is shared (the preview-then-delete case)', () => {
+    const { store } = freshStore();
+    const { a, b, c } = seed(store);
+    expect(store.delete({ ids: [a.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(
+      store
+        .read()
+        .map((e) => e.id)
+        .sort(),
+    ).toEqual([b.id, c.id].sort());
+  });
+
+  it('accepts a readonly array', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    const ids: readonly string[] = [a.id];
+    expect(store.delete({ ids })).toEqual({ ok: true, value: { deleted: 1 } });
+  });
+
+  it('AND-combines with type: an id whose row has another type is not deleted', () => {
+    const { store } = freshStore();
+    const { a, c } = seed(store);
+    expect(store.delete({ type: 'user', ids: [a.id, c.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read({ type: 'project' }).map((e) => e.id)).toEqual([c.id]);
+  });
+
+  it('AND-combines with key', () => {
+    const { store } = freshStore();
+    const { a, c } = seed(store);
+    expect(store.delete({ key: 'k', ids: [a.id, c.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read({ key: 'other' }).map((e) => e.id)).toEqual([c.id]);
+  });
+
+  it('AND-combines with tag', () => {
+    const { store } = freshStore();
+    const { a, c } = seed(store);
+    expect(store.delete({ tag: 't', ids: [a.id, c.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read().map((e) => e.id)).not.toContain(a.id);
+    expect(store.read().map((e) => e.id)).toContain(c.id);
+  });
+
+  it('AND-combines with type, key and tag together', () => {
+    const { store } = freshStore();
+    const { a, b } = seed(store);
+    expect(store.delete({ type: 'user', key: 'k', tag: 't', ids: [a.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read().map((e) => e.id)).toContain(b.id);
+    expect(store.read().map((e) => e.id)).not.toContain(a.id);
+  });
+
+  it('ids: [] deletes nothing, alone or combined (never "no filter means everything")', () => {
+    const { store } = freshStore();
+    seed(store);
+    expect(store.delete({ ids: [] })).toEqual({ ok: true, value: { deleted: 0 } });
+    expect(store.delete({ type: 'user', ids: [] })).toEqual({ ok: true, value: { deleted: 0 } });
+    expect(store.delete({ tag: 't', ids: [] })).toEqual({ ok: true, value: { deleted: 0 } });
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('counts a duplicated id once', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    expect(store.delete({ ids: [a.id, a.id, a.id] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.read()).toHaveLength(2);
+  });
+
+  it('counts only rows actually deleted: unknown ids add nothing', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    expect(store.delete({ ids: [a.id, 'no-such-id'] })).toEqual({ ok: true, value: { deleted: 1 } });
+    expect(store.delete({ ids: ['no-such-id'] })).toEqual({ ok: true, value: { deleted: 0 } });
+    expect(store.read()).toHaveLength(2);
+  });
+
+  it('refuses a non-string or empty-string element and deletes nothing', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    for (const bad of [1, null, undefined, {}, ['x'], '']) {
+      expect(() => deleteUnchecked(store, { ids: [a.id, bad] })).toThrow(TypeError);
+    }
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('refuses ids that is not an array', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    for (const bad of [a.id, 1, null, {}, new Set([a.id])]) {
+      expect(() => deleteUnchecked(store, { ids: bad })).toThrow(TypeError);
+    }
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('does not echo id values in a refusal', () => {
+    const { store } = freshStore();
+    const hostile = 'SECRET-ID-\u001b[31mred';
+    let message = '';
+    try {
+      deleteUnchecked(store, { ids: ['ok', { toString: () => hostile }] });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).not.toBe('');
+    expect(message).not.toContain('SECRET-ID');
+    const over = Array.from({ length: MEMORY_DELETE_IDS_MAX + 1 }, () => 'SECRET-ID-x');
+    try {
+      store.delete({ ids: over });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain(String(MEMORY_DELETE_IDS_MAX));
+    expect(message).not.toContain('SECRET-ID');
+  });
+
+  it('accepts exactly the cap and refuses one more, without truncating', () => {
+    const { store } = freshStore();
+    const rows = Array.from({ length: MEMORY_DELETE_IDS_MAX + 1 }, (_, i) =>
+      writeOk(store, { type: 'user', content: `row-${String(i)}` }),
+    );
+    const over = rows.map((r) => r.id);
+    expect(() => store.delete({ ids: over })).toThrow(TypeError);
+    expect(store.read()).toHaveLength(MEMORY_DELETE_IDS_MAX + 1);
+    expect(store.delete({ ids: over.slice(0, MEMORY_DELETE_IDS_MAX) })).toEqual({
+      ok: true,
+      value: { deleted: MEMORY_DELETE_IDS_MAX },
+    });
+    expect(store.read()).toHaveLength(1);
+  });
+
+  it('a full cap of ids binds alongside type and key (the worst-case statement) and deletes them all', () => {
+    const { store } = freshStore();
+    const ids = Array.from({ length: MEMORY_DELETE_IDS_MAX }, (_, i) =>
+      writeOk(store, { type: 'user', key: 'k', content: `row-${String(i)}` }).id,
+    );
+    expect(store.delete({ type: 'user', key: 'k', ids })).toEqual({
+      ok: true,
+      value: { deleted: MEMORY_DELETE_IDS_MAX },
+    });
+    expect(store.read()).toEqual([]);
+  });
+
+  it('PIN: the cap plus the two other bound params (type, key) stays within the legacy 999 limit', () => {
+    // Derivation: ids bind one placeholder each, plus type and key. SQLite before
+    // 3.32.0 allows 999 host parameters. Raising the cap past 997 must fail here.
+    expect(MEMORY_DELETE_IDS_MAX + 2).toBeLessThanOrEqual(999);
+  });
+
+  it('exports MEMORY_DELETE_IDS_MAX from the memory index as a positive integer', () => {
+    expect(Number.isInteger(MEMORY_DELETE_IDS_MAX)).toBe(true);
+    expect(MEMORY_DELETE_IDS_MAX).toBeGreaterThan(0);
+  });
+
+  it('treats ids: undefined as absent: alone it hits the empty-filter guard, with type it is ignored', () => {
+    const { store } = freshStore();
+    seed(store);
+    expect(() => deleteUnchecked(store, { ids: undefined })).toThrow(/non-empty filter/);
+    expect(deleteUnchecked(store, { type: 'user', ids: undefined })).toEqual({ ok: true, value: { deleted: 2 } });
+  });
+
+  it('still refuses limit and order alongside ids', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    expect(() => deleteUnchecked(store, { ids: [a.id], limit: 1 })).toThrow(/limit/);
+    expect(() => deleteUnchecked(store, { ids: [a.id], order: 'asc' })).toThrow(/order/);
+    expect(store.read()).toHaveLength(3);
+  });
+
+  it('does not let read apply ids: read ignores an ids field', () => {
+    const { store } = freshStore();
+    const { a } = seed(store);
+    expect(store.read({ ids: [a.id] } as unknown as MemoryFilter)).toHaveLength(3);
+  });
+
+  it('returns ok:false on a closed db rather than throwing', () => {
+    const { store, db } = freshStore();
+    const { a } = seed(store);
+    db.close();
+    const r = store.delete({ ids: [a.id] });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('memory: tag and ids deletes read and delete in ONE transaction (#116 review)', () => {
+  // A second connection retags the row AFTER the store's SELECT and BEFORE its
+  // DELETE. In WAL mode a reader does not block a writer, so the write lands.
+  // If the read and the deletes share one transaction the store's snapshot is
+  // stale when it tries to write and SQLite refuses (ok:false), leaving the
+  // row alone. If the read sits outside, the store deletes a row that no
+  // longer matches the filter it was given.
+  function setup() {
+    const dir = mkdtempSync(join(tmpdir(), 'memory-txn-'));
+    const path = join(dir, 'telemetry.db');
+    const dbA = openMemoryDatabase({ path });
+    const dbB = openMemoryDatabase({ path });
+    const store = createMemoryStore(dbA);
+    const row = writeOk(store, { type: 'user', content: 'a', tags: ['t'] });
+    let fired = false;
+    const realPrepare = dbA.prepare.bind(dbA) as (sql: string) => BetterSqlite3.Statement;
+    (dbA as unknown as { prepare: (sql: string) => BetterSqlite3.Statement }).prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (!sql.startsWith('SELECT * FROM memory_entries WHERE')) return stmt;
+      const realAll = stmt.all.bind(stmt) as (...a: unknown[]) => unknown[];
+      (stmt as unknown as { all: (...a: unknown[]) => unknown[] }).all = (...a: unknown[]) => {
+        const rows = realAll(...a);
+        if (!fired) {
+          fired = true;
+          dbB.prepare(`UPDATE memory_entries SET tags = '["moved"]' WHERE id = ?`).run(row.id);
+        }
+        return rows;
+      };
+      return stmt;
+    };
+    const cleanup = () => {
+      dbA.close();
+      dbB.close();
+      rmSync(dir, { recursive: true, force: true });
+    };
+    return { store, dbB, row, cleanup, wasFired: () => fired };
+  }
+
+  it('tag delete does not remove a row retagged between the read and the delete', () => {
+    const { store, dbB, row, cleanup, wasFired } = setup();
+    try {
+      const result = store.delete({ tag: 't' });
+      expect(wasFired()).toBe(true);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.error.kind).toBe('db');
+      const left = dbB.prepare('SELECT tags FROM memory_entries WHERE id = ?').get(row.id) as { tags: string } | undefined;
+      expect(left?.tags).toBe('["moved"]');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('ids + tag delete does not remove a row retagged between the read and the delete', () => {
+    const { store, dbB, row, cleanup, wasFired } = setup();
+    try {
+      const result = store.delete({ tag: 't', ids: [row.id] });
+      expect(wasFired()).toBe(true);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.error.kind).toBe('db');
+      expect(dbB.prepare('SELECT 1 FROM memory_entries WHERE id = ?').get(row.id)).toBeDefined();
+    } finally {
+      cleanup();
+    }
   });
 });
