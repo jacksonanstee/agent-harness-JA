@@ -61,6 +61,7 @@ npm run redteam -- --judge             # keyed, report-only judge arm (docs/deci
 npm run redteam -- --judge --samples 5 # up to 5 judge runs, a pooled summary, a JUDGE_GATE= line (#148)
 node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --scrub-prefix to share
 node dist/cli.js init my-agent         # scaffold a starter project
+node dist/cli.js permissions list      # read-only: the permission rules a run would load, per layer, with each rule's index
 ```
 
 Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
@@ -72,6 +73,8 @@ Once the v0.1.0 release is published, the same commands run without a clone: `np
 ## Settings
 
 The security layer reads two JSON files and composes them (the `judge` block is read from your user file only): `~/.harness/settings.json` (yours, trusted) and `<cwd>/.harness/settings.json` (the project's, treated as attacker-influenced input, because a cloned repository ships its own). Both `run` and `eval` load them at startup. A missing file is an empty layer. A file that exists but is malformed fails loud before any tool runs and the CLI exits 2, for example: a file that is not valid JSON, an unknown key inside `permissions` or `sandbox` at any level, a decision outside `allow`, `ask` and `deny`, more than 1000 rules, or more than 1000 entries in one allowlist, a `judge` block in your user file that is malformed (for example `always` with no `maxCallsPerRun`), or a file that is a symlink, is not a regular file or is over the size cap. Keys at the root other than those three (`permissions`, `sandbox`, `judge`) are ignored, so the file can grow.
+
+`permissions list` prints the permission rules a `run` here would load, without running anything: each layer (`user`, then `project`) with its rules in file order, each tagged `[rule N, layer]` where N is the 0-based position in that layer's own settings file, the same key a deny reason carries (a `Read` or `Write` denial's `[rule 0, project]` is the first rule in the project file), then the effective `defaultDecision`. It shows permissions only, not the sandbox or the judge, and an `ask` rule is listed as `ask` although a run denies it (no prompter is wired). It loads settings the way `run` does, so a malformed file fails the same way (exit 2). Rule globs appear in the listing, sanitised and quoted; the listing is for your terminal, not for sharing.
 
 A hardened user file:
 
@@ -177,7 +180,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0038 |
-| Tests | 2320 at the 2026-10-12 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 2343 at the 2026-10-16 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 

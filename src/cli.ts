@@ -27,6 +27,8 @@ import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
 import { parseInitArgs, runInit } from './cli/init-command.js';
 import type { InitArgs } from './cli/init-command.js';
+import { parsePermissionsArgs, runPermissionsList } from './cli/permissions-command.js';
+import type { PermissionsListArgs } from './cli/permissions-command.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
@@ -94,7 +96,7 @@ export interface TelemetryExportArgs {
   scrubPrefixes: string[];
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs | InitArgs;
+export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs | InitArgs | PermissionsListArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -112,6 +114,9 @@ export function parseArgs(argv: string[]): ParseResult {
   }
   if (argv[0] === 'init') {
     return parseInitArgs(argv.slice(1));
+  }
+  if (argv[0] === 'permissions') {
+    return parsePermissionsArgs(argv.slice(1));
   }
   return parseRunArgs(argv);
 }
@@ -448,6 +453,10 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
 
   if (parsed.value.command === 'init') {
     return runInit(parsed.value);
+  }
+
+  if (parsed.value.command === 'permissions-list') {
+    return runPermissionsList(parsed.value, undefined, { userDir: seams.userDir ?? homedir() });
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {

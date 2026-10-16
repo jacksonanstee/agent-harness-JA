@@ -60,6 +60,8 @@ Permission denials flow through the existing `denied-by-hook` telemetry record; 
 - `match` on Bash is a prefix glob over the command string — trivially bypassable at the semantic level (`cd /; rm ...`), and `Bash(rm *)` misses `sudo rm`. Accepted and documented: argument-level enforcement is S-4's sandbox, not this grammar. *(Amended 2026-07-08, Week-2 milestone differential review F-1: "raw string" was too raw — leading/tab whitespace and case on case-insensitive platforms dodged deny rules. Both sides of a command match now go through `canonicalizeCommand` — trim, collapse whitespace runs, and case-fold **argv0 only** on darwin/win32 (the filesystem rationale covers which program resolves, not its arguments — folding the whole string would have widened allow rules to case-variants of URLs/flags, caught in the fix's own review round). The semantic bypass class above is unchanged.)*
 - No per-rule audit of which layer *file* a rule came from beyond the user/project tag.
 
+*(Note 2026-10-16, issue #74: `agent-harness-ja permissions list` prints the resolved rule table per layer with its per-layer indices and the effective `defaultDecision`; read-only, no evaluation.)*
+
 ## Alternatives considered
 
 - **Claude Code-style `"Bash(npm *)"` string syntax** — compact, but needs a parser with quoting/escaping edge cases; the object form is self-validating and diff-friendly. Rejected.
