@@ -305,7 +305,8 @@ export interface SessionDeps {
    * PR-B1); with `judge.withhold: 'block'` a SUCCESSFUL result the judge itself
    * classified `block` is WITHHELD instead, its string leaves replaced by a
    * placeholder through `updatedToolOutput` (issue #145, ADR-0039), off by
-   * default and never on the failure hook. The INPUT side stays
+   * default and never on the failure hook; a walk that cannot run or that
+   * finds no string leaf withholds nothing and says so (`outputRewrites`). The INPUT side stays
    * observe-and-log (D3). Failures warn, never abort, and add no annotation
    * (fail open, ADR-0026 decision 7).
    */
@@ -460,8 +461,8 @@ export interface SessionResult {
    * `leaked`/`unobserved`/`unrewritten` row, or ANY failed call (which cannot be
    * rewritten, D8), each mean the model may have seen a raw secret. The input
    * side stays observe-only (D3). A `withhold` row's `applied` is the only
-   * in-band proof a withhold landed; `leaked` or `unobserved` on it means the
-   * model may hold the raw bytes (spec D4, D5).
+   * in-band proof a withhold landed; `leaked`, `unobserved`, `skipped` or
+   * `unrewritten` on it means the model may hold the raw bytes (spec D4, D5).
    */
   outputRewrites: OutputRewrite[];
   /**
