@@ -52,8 +52,9 @@ that from the day it was written. This was an internal contradiction, not SDK dr
    exactly what `tool_output` violated). A future rename fails typecheck here.
 
 3. **A genuine-traffic replay gate, with its reach stated exactly.** `scripts/capture-sdk-hook-fixture.mjs`
-   records real SDK hook inputs from one keyed run and freezes them (volatile fields placeholdered,
-   the captured pair asserted to be the fixed benign marker before writing) as
+   records real SDK hook inputs from keyed runs of two tools, Bash and Read (#103), and freezes them
+   (volatile top-level fields placeholdered, known literal paths replaced at any depth and the write refused
+   if any other absolute or home-relative path remains, each captured pair asserted to be the fixed benign marker before writing) as
    `src/session/fixtures/sdk-hook-events.json`; `src/session/sdk-fixture.test.ts` replays them
    through the session. This gate is a REGRESSION pin (harness code must keep feeding the recorded
    shape into the post-tool path) and a view-staleness detector (a view that requires a field the

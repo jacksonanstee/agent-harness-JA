@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import * as pathScan from '../../scripts/fixture-path-scan.mjs';
+import { buildFixture, findMachinePaths } from '../../scripts/fixture-path-scan.mjs';
 import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
@@ -37,9 +39,18 @@ import type {
  * CI has no API key, so the capture is out-of-band and this replay runs per PR.
  */
 interface Fixture {
-  _provenance: { sdkVersion: string; marker: string };
+  _provenance: { sdkVersion: string; marker: string; readMarker: string };
   preToolUse: SdkPreToolUseInput;
   postToolUse: SdkPostToolUseInput;
+  // Second, structurally different tool (issue #103): Read.
+  readPreToolUse: SdkPreToolUseInput;
+  readPostToolUse: SdkPostToolUseInput;
+}
+
+/** The structured Read `tool_response` the SDK sends (not Bash's stdout/stderr). */
+interface ReadResponse {
+  type: string;
+  file: { filePath: string; content: string; numLines: number; startLine: number; totalLines: number };
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,18 +78,21 @@ const RESULT: SdkMessage = {
   usage: { input_tokens: 1, output_tokens: 1 },
 };
 
-function replayQuery(): QueryFn {
+function replayQuery(
+  pre: SdkPreToolUseInput = fixture.preToolUse,
+  post: SdkPostToolUseInput = fixture.postToolUse,
+): QueryFn {
   return (args) =>
     (async function* () {
       const signal = new AbortController().signal;
       for (const matcher of args.options?.hooks?.PreToolUse ?? []) {
         for (const cb of matcher.hooks as SdkHookCallback[]) {
-          await cb(fixture.preToolUse, 'toolu_fix', { signal });
+          await cb(pre, 'toolu_fix', { signal });
         }
       }
       for (const matcher of args.options?.hooks?.PostToolUse ?? []) {
         for (const cb of matcher.hooks as SdkHookCallback[]) {
-          await cb(fixture.postToolUse, 'toolu_fix', { signal });
+          await cb(post, 'toolu_fix', { signal });
         }
       }
       yield { type: 'system', subtype: 'init', session_id: 'sdk-1' } as SdkMessage;
@@ -132,6 +146,170 @@ describe('genuine SDK hook fixture', () => {
     if (trace?.type !== 'tool-trace') return;
     expect(trace.payload.resultSummary).not.toBeNull();
     expect(trace.payload.resultSummary).toContain(fixture._provenance.marker);
+  });
+});
+
+describe('genuine SDK hook fixture: Read, a structurally different tool (issue #103)', () => {
+  const readResponse = fixture.readPostToolUse?.tool_response as ReadResponse | undefined;
+
+  it('is a Read event whose tool_response is the structured file object, not Bash stdout', () => {
+    expect(fixture.readPreToolUse?.hook_event_name).toBe('PreToolUse');
+    expect(fixture.readPreToolUse?.tool_name).toBe('Read');
+    expect(fixture.readPostToolUse?.hook_event_name).toBe('PostToolUse');
+    expect(fixture.readPostToolUse?.tool_name).toBe('Read');
+    expect(readResponse).toBeDefined();
+    expect(Object.keys(readResponse ?? {}).sort()).toEqual(['file', 'type']);
+    expect(readResponse?.type).toBe('text');
+    expect(Object.keys(readResponse?.file ?? {}).sort()).toEqual([
+      'content',
+      'filePath',
+      'numLines',
+      'startLine',
+      'totalLines',
+    ]);
+    expect(readResponse).not.toHaveProperty('stdout');
+    expect(readResponse?.file.content).toContain(fixture._provenance.readMarker);
+  });
+
+  it('pins the scrubbed path placeholder, never a machine path, at both nesting depths', () => {
+    expect((fixture.readPreToolUse?.tool_input as { file_path?: string } | undefined)?.file_path).toBe('<read-target>');
+    expect(readResponse?.file.filePath).toBe('<read-target>');
+    // The SAME scan the capture script refuses to write on (one shared pattern
+    // list: home-like POSIX roots, ~/, Windows drive and UNC paths), over every
+    // string value at every depth, including model-written `description` and
+    // the failure `command`/`error`.
+    expect(findMachinePaths(fixture)).toEqual([]);
+  });
+
+  it('the shared scan flags every absolute or home-relative form and passes the placeholders', () => {
+    // Inverted policy: ANY path-looking token is flagged, not a list of roots.
+    const flagged = [
+      '../../Users/x', '$HOME/x', '${HOME}/x', '~', '~user/x', '~/x', '/mnt/Users/x', '/./Users/x',
+      '/opt/x', '/srv/x', '/nix/store/x', '/Library/x', '/etc/x', '/Users', 'cd /Users/a && ls', 'http://x/Users/jackson', 'https://x/a', 'ssh://h/Users/j',
+      'vscode://file/Users/jackson/x',
+      '(/Users/x)', 'C:\\Users\\x', 'C:/Users/x', '\\\\srv\\share', 'file:///Users/x', 'a/../b',
+    ];
+    for (const f of flagged) expect(findMachinePaths(f), f).not.toEqual([]);
+    const allowed = [
+      '<read-target>', '<cwd>/x.txt', 'cat: <cwd>/a: No such file', 'and/or', 'a~b',
+      'echo harness-fixture-capture-marker',
+    ];
+    for (const a of allowed) expect(findMachinePaths(a), a).toEqual([]);
+  });
+
+  it('the shared scan finds a planted nested value and a planted KEY', () => {
+    const planted = { a: { b: [{ filePath: '/Users/x/a' }] }, '/opt/key': 1 };
+    const leaks = findMachinePaths(planted);
+    expect(leaks).toHaveLength(2);
+    expect(leaks.join('\n')).toContain('$.a.b[0].filePath: /Users/x/a');
+    expect(leaks.join('\n')).toContain('<key "/opt/key">');
+  });
+
+  it('the .d.mts declares exactly the runtime exports of the .mjs', () => {
+    const dts = readFileSync(join(here, '..', '..', 'scripts', 'fixture-path-scan.d.mts'), 'utf8');
+    const declared = [...dts.matchAll(/export (?:function|const) (\w+)/g)].map((m) => m[1]).sort();
+    expect(declared.length).toBeGreaterThan(0);
+    expect(Object.keys(pathScan).sort()).toEqual(declared);
+  });
+});
+
+// The capture script's "validate and scan, then write or refuse" decision is the
+// pure buildFixture(); both refusals run here without a live capture.
+describe('capture decision step: buildFixture (issue #103)', () => {
+  const RAW_READ = '/machine/home/read-target.txt';
+  const RAW_FAIL = '/machine/home/harness-fixture-capture-missing-84.txt';
+  const RAW_CWD = '/machine/home';
+  const cfg = {
+    marker: fixture._provenance.marker,
+    markerFail: 'harness-fixture-capture-missing-84.txt',
+    readMarker: fixture._provenance.readMarker,
+    readPlaceholder: '<read-target>',
+    literals: [
+      [RAW_READ, '<read-target>'],
+      [RAW_FAIL, '<cwd>/harness-fixture-capture-missing-84.txt'],
+      [RAW_CWD, '<cwd>'],
+    ] as const,
+    volatile: { session_id: '<session>', transcript_path: '<transcript>', cwd: '<cwd>', prompt_id: '<prompt>', tool_use_id: '<tool_use_id>', duration_ms: 0 },
+    sdkVersion: fixture._provenance.sdkVersion,
+  };
+  // Re-materialise the machine paths the live run would have produced.
+  const unscrub = (v: unknown): Record<string, unknown> =>
+    JSON.parse(
+      JSON.stringify(v)
+        .split('<read-target>').join(RAW_READ)
+        .split('<cwd>/harness-fixture-capture-missing-84.txt').join(RAW_FAIL),
+    ) as Record<string, unknown>;
+  const raw = () => ({
+    pre: unscrub(fixture.preToolUse),
+    post: unscrub(fixture.postToolUse),
+    fail: unscrub((fixture as unknown as { postToolUseFailure: unknown }).postToolUseFailure),
+    readPre: unscrub(fixture.readPreToolUse),
+    readPost: unscrub(fixture.readPostToolUse),
+  });
+
+  it('round-trips: raw machine paths in, the committed fixture out', () => {
+    const result = buildFixture(raw(), cfg);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.fixture).toEqual(fixture);
+  });
+
+  it('refuses (bad) when Read touched a different file, so the path is not the placeholder', () => {
+    const ev = raw();
+    (ev.readPost as { tool_response: { file: { filePath: string } } }).tool_response.file.filePath = '/elsewhere/other.txt';
+    const result = buildFixture(ev, cfg);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe('bad');
+      expect(result.problems.join(' ')).toContain('readPost.tool_response.file.filePath');
+    }
+  });
+
+  it('replaces the cwd only at a path boundary: a sibling stays a path and is refused', () => {
+    const ev = raw();
+    (ev.pre as { tool_input: { description: string } }).tool_input.description = `see ${RAW_CWD}-other/x`;
+    const result = buildFixture(ev, cfg);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe('leaks');
+      expect(result.problems.join(' ')).toContain('-other/x');
+    }
+  });
+
+  it('refuses (leaks) on an unexpected path in a model-written field, naming where', () => {
+    const ev = raw();
+    (ev.pre as { tool_input: { description: string } }).tool_input.description = 'see /opt/secret/x';
+    const result = buildFixture(ev, cfg);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe('leaks');
+      expect(result.problems.join(' ')).toContain('$.preToolUse.tool_input.description: /opt/secret/x');
+    }
+  });
+});
+
+describe('genuine SDK hook fixture: Read replay continued (issue #103)', () => {
+  it('carries the recorded Read content into the post-tool telemetry summary', async () => {
+    const events: TelemetryEventInput[] = [];
+    const deps = makeDeps({
+      query: replayQuery(fixture.readPreToolUse, fixture.readPostToolUse),
+      telemetry: {
+        record: (event) => {
+          events.push(event);
+          return { ok: true, value: { ...event, id: 'evt', ts: 1 } };
+        },
+      },
+    });
+    const session = createSession(deps, { skillsDir: '/nowhere' });
+    await session.run('read the marker file');
+
+    const trace = events.find((e) => e.type === 'tool-trace');
+    expect(trace?.type).toBe('tool-trace');
+    if (trace?.type !== 'tool-trace') return;
+    expect(trace.payload.resultSummary).not.toBeNull();
+    expect(trace.payload.resultSummary).toContain(fixture._provenance.readMarker);
+    // A Bash-shaped replay could not produce this: the summary is the stringified
+    // NESTED object, so it carries the nested key and its scrubbed value.
+    expect(trace.payload.resultSummary).toContain('"filePath":"<read-target>"');
   });
 });
 
