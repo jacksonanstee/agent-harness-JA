@@ -191,7 +191,7 @@ describe('root barrel (src/index.ts)', () => {
     for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey']) {
       expect(rootNames, `root barrel must not export ${fixed}`).not.toContain(fixed);
     }
-    const settings: JudgeSettings = { mode: 'always', maxCallsPerRun: 1 };
+    const settings: JudgeSettings = { mode: 'always', maxCallsPerRun: 1, withhold: 'off' };
     const judge: SessionJudge = { call: async () => ({ ok: true, verdict: 'pass', costUsd: null }), maxCallsPerRun: 1 };
     const state: JudgeSessionState = 'stopped';
     const row = (p: JudgeCallPayload): string => p.state;

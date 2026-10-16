@@ -156,6 +156,15 @@ describe('validateSessionJudge (spec D3, A-10; pins 4, 20, 29, 32)', () => {
   // scan reads a `<name with secret in it>: <value>` pair as a credential.
   const ABSENT = undefined;
 
+  it('withhold: absent and the literal block are accepted; ask, off and any non-literal are refused with one message (#145 B2a, W13)', () => {
+    expect(messageOf(base({ call, maxCallsPerRun: 1, withhold: 'block' }))).toBe('no throw');
+    for (const bad of ['ask', 'off', 'BLOCK', true, 1, null]) {
+      expect(messageOf(base({ call, maxCallsPerRun: 1, withhold: bad })), String(bad)).toBe(
+        "createSession: deps.judge.withhold must be absent or the literal 'block' ('ask' is refused: ADR-0026 decision 3)",
+      );
+    }
+  });
+
   it('accepts a well-formed judge and an absent one', () => {
     expect(messageOf(base({ call, maxCallsPerRun: 1 }))).toBe('no throw');
     expect(messageOf(base({ call, maxCallsPerRun: 1000 }))).toBe('no throw');

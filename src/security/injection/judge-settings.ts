@@ -11,6 +11,14 @@ import { unknownKeyMessage, unknownKeys } from '../../internal/settings.js';
 export interface JudgeSettings {
   mode: 'always';
   maxCallsPerRun: number;
+  /**
+   * Issue #145 B2a (spec D3, ADR-0039): `'block'` withholds a successful tool
+   * result the judge ITSELF classified `block`; `'off'` (the default when the
+   * key is absent) is ADR-0037's annotate-only path. `"ask"` is refused: an
+   * ask verdict is medium-confidence and far too broad to withhold on
+   * (ADR-0026 decision 3). User layer only, like the rest of the block.
+   */
+  withhold: 'off' | 'block';
 }
 
 /** Same fail-loud contract as PermissionSettingsError and SandboxSettingsError (ADR-0034, A-8). */
@@ -24,7 +32,7 @@ export class JudgeSettingsError extends Error {
 /** A typo guard, not a budget (spec D1). The money ceiling is below. */
 export const MAX_JUDGE_CALLS_PER_RUN = 1000;
 
-const JUDGE_KEYS: readonly string[] = ['mode', 'maxCallsPerRun'];
+const JUDGE_KEYS: readonly string[] = ['mode', 'maxCallsPerRun', 'withhold'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -56,6 +64,19 @@ export function parseJudgeSettings(doc: unknown): JudgeSettings | null {
     );
   }
   if (mode !== 'always' && mode !== 'off') throw new JudgeSettingsError('judge.mode must be "always" or "off"');
+  const withhold = judge['withhold'];
+  if (withhold === 'ask') {
+    throw new JudgeSettingsError(
+      'judge.withhold "ask" is not available: an ask verdict is medium-confidence and far too broad to withhold on (ADR-0026 decision 3); use "block" or "off"',
+    );
+  }
+  // Only ABSENCE means the default (lesson 2026-09-04): null and every other value are refused.
+  if (withhold !== undefined && withhold !== 'off' && withhold !== 'block') {
+    throw new JudgeSettingsError('judge.withhold must be "off" or "block"');
+  }
+  if (withhold === 'block' && mode === 'off') {
+    throw new JudgeSettingsError('judge.withhold "block" needs judge.mode "always": there is nothing to withhold on when the judge is off');
+  }
   if (cap === undefined) {
     if (mode === 'off') return null;
     throw new JudgeSettingsError(
@@ -65,7 +86,7 @@ export function parseJudgeSettings(doc: unknown): JudgeSettings | null {
   if (!isCap(cap)) {
     throw new JudgeSettingsError(`judge.maxCallsPerRun must be an integer from 1 to ${MAX_JUDGE_CALLS_PER_RUN}`);
   }
-  return mode === 'off' ? null : { mode: 'always', maxCallsPerRun: cap };
+  return mode === 'off' ? null : { mode: 'always', maxCallsPerRun: cap, withhold: withhold === 'block' ? 'block' : 'off' };
 }
 
 /**

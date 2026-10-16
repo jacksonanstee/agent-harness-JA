@@ -143,12 +143,15 @@ describe('run path with the judge on (D2, D7; pins 3, 16, 32)', () => {
     }
   });
 
-  it('runJudgeDeps: off carries no judge key; on carries exactly call and maxCallsPerRun (pins 3, 32)', () => {
+  it('runJudgeDeps: off carries no judge key; on carries exactly call and maxCallsPerRun; withhold block adds exactly withhold (pins 3, 32; #145 B2a, W12)', () => {
     const query: QueryFn = () => (async function* () {})();
     expect('judge' in runJudgeDeps(null, query)).toBe(false);
-    const on = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7 }, query);
+    const on = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7, withhold: 'off' }, query);
     expect(Object.keys(on.judge ?? {}).sort()).toEqual(['call', 'maxCallsPerRun']);
     expect(on.judge?.maxCallsPerRun).toBe(7);
+    const withhold = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7, withhold: 'block' }, query);
+    expect(Object.keys(withhold.judge ?? {}).sort()).toEqual(['call', 'maxCallsPerRun', 'withhold']);
+    expect(withhold.judge?.withhold).toBe('block');
   });
 });
 
@@ -157,6 +160,8 @@ describe('malformed user judge blocks exit 2 before any tool runs (pin 1)', () =
     [{ judge: { mode: 'always' } }, 'judge.maxCallsPerRun is required'],
     [{ judge: { mode: 'suspicious', maxCallsPerRun: 5 } }, 'judge.mode "suspicious" is not available'],
     [{ judge: { mode: 'always', maxCallsPerRun: 1001 } }, 'judge.maxCallsPerRun must be an integer from 1 to 1000'],
+    [{ judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'ask' } }, 'judge.withhold "ask" is not available'],
+    [{ judge: { mode: 'off', withhold: 'block' } }, 'judge.withhold "block" needs judge.mode "always"'],
   ])('run with %j', async (settings, message) => {
     const sdk = fakeSdk('{"verdict":"pass"}');
     const { code, stderr, userDir } = await runMain(runArgs().argv, settings, undefined, sdk.query);
@@ -217,9 +222,16 @@ describe('the summary and start lines (D7; pins 17, 29)', () => {
   });
 
   it('the start line derives its 60 s from JUDGE_TIMEOUT_MS', () => {
-    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9 })).toBe(
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'off' })).toBe(
       '[harness] judge: on (always, cap 9): each tool result waits for one judge call, typically about 3 s and at most 60 s',
     );
+  });
+
+  it('the start line names withholding when it is on, and nothing when it is off (#145 B2a, D3)', () => {
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'block' })).toBe(
+      '[harness] judge: on (always, cap 9, withhold: block): each tool result waits for one judge call, typically about 3 s and at most 60 s',
+    );
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'off' })).not.toContain('withhold');
   });
 });
 

@@ -40,11 +40,12 @@ describe('parseJudgeSettings (spec D1, pin 1)', () => {
   });
 
   it('always with a cap in range parses to the typed setting, both ends of the range', () => {
-    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 200 } })).toEqual({ mode: 'always', maxCallsPerRun: 200 });
-    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 1 } })).toEqual({ mode: 'always', maxCallsPerRun: 1 });
+    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 200 } })).toEqual({ mode: 'always', maxCallsPerRun: 200, withhold: 'off' });
+    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 1 } })).toEqual({ mode: 'always', maxCallsPerRun: 1, withhold: 'off' });
     expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: MAX_JUDGE_CALLS_PER_RUN } })).toEqual({
       mode: 'always',
       maxCallsPerRun: 1000,
+      withhold: 'off',
     });
   });
 
@@ -70,7 +71,7 @@ describe('parseJudgeSettings (spec D1, pin 1)', () => {
 
   it('an unknown key inside judge fails loud, naming the key through boundEcho, in either mode (K-7)', () => {
     expect(messageOf({ judge: { mode: 'always', maxCallsPerRun: 5, modle: 'x' } })).toBe(
-      "judge has an unknown key 'modle' (known keys: mode, maxCallsPerRun)",
+      "judge has an unknown key 'modle' (known keys: mode, maxCallsPerRun, withhold)",
     );
     expect(messageOf({ judge: { mode: 'off', extra: true } })).toMatch(/^judge has an unknown key 'extra'/);
     const hostile = `k${String.fromCharCode(0x1b)}[31m${'x'.repeat(200)}`;
@@ -110,5 +111,46 @@ describe('the money ceiling (T-4, N-4; pin 33)', () => {
     expect(Number.isInteger(microUsd)).toBe(true);
     expect(JUDGE_WORST_CASE_USD_PER_CALL).toBe(microUsd / 1_000_000);
     expect(JUDGE_PRICE_READ_ON).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('judge.withhold (issue #145 B2a, spec D3; W11)', () => {
+  const ASK_REFUSED =
+    'judge.withhold "ask" is not available: an ask verdict is medium-confidence and far too broad to withhold on (ADR-0026 decision 3); use "block" or "off"';
+  const RANGE_W = 'judge.withhold must be "off" or "block"';
+  const NEEDS_MODE = 'judge.withhold "block" needs judge.mode "always": there is nothing to withhold on when the judge is off';
+
+  it('absent is off (the default, spec D10); "off" is off; "block" is block', () => {
+    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 5 } })).toEqual({ mode: 'always', maxCallsPerRun: 5, withhold: 'off' });
+    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' } })).toEqual({ mode: 'always', maxCallsPerRun: 5, withhold: 'off' });
+    expect(parseJudgeSettings({ judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'block' } })).toEqual({ mode: 'always', maxCallsPerRun: 5, withhold: 'block' });
+  });
+
+  it('"ask" is refused with the ADR-0026 decision 3 reason, verbatim', () => {
+    expect(messageOf({ judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'ask' } })).toBe(ASK_REFUSED);
+  });
+
+  it.each([
+    ['a string', 'MARKER-w1'],
+    ['a boolean', true],
+    ['null (not absence, lesson 2026-09-04)', null],
+    ['a number', 1],
+    ['the wrong case', 'Block'],
+  ])('%s is refused naming the key and the two values, never echoing the value (G-3)', (_name, value) => {
+    const message = messageOf({ judge: { mode: 'always', maxCallsPerRun: 5, withhold: value } });
+    expect(message).toBe(RANGE_W);
+    expect(message).not.toContain('MARKER-w1');
+  });
+
+  it('"block" with mode "off" is refused (nothing to withhold on; K-7: one grammar whatever the mode), "off" with mode "off" is judge off', () => {
+    expect(messageOf({ judge: { mode: 'off', withhold: 'block' } })).toBe(NEEDS_MODE);
+    expect(messageOf({ judge: { mode: 'off', maxCallsPerRun: 5, withhold: 'block' } })).toBe(NEEDS_MODE);
+    expect(parseJudgeSettings({ judge: { mode: 'off', withhold: 'off' } })).toBeNull();
+  });
+
+  it('the unknown-key message lists withhold among the known keys', () => {
+    expect(messageOf({ judge: { mode: 'always', maxCallsPerRun: 5, withholdd: 'block' } })).toBe(
+      "judge has an unknown key 'withholdd' (known keys: mode, maxCallsPerRun, withhold)",
+    );
   });
 });

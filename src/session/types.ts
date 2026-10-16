@@ -512,6 +512,15 @@ export interface SessionJudge {
   call: JudgeCall;
   /** Model calls attempted per `run()`: an integer from 1 to `MAX_JUDGE_CALLS_PER_RUN` (1000). */
   maxCallsPerRun: number;
+  /**
+   * Issue #145 B2a (spec D3, ADR-0039): `'block'` withholds a SUCCESSFUL tool
+   * result the judge ITSELF classified `block` (never `ask`, never a
+   * heuristic-only block, never on the failure hook, never in a degraded
+   * judge state), replacing the model's copy with a shape-preserving
+   * placeholder through `updatedToolOutput`. Absent is ADR-0037's
+   * annotate-only path. `createSession` refuses any other value.
+   */
+  withhold?: 'block';
 }
 
 /**

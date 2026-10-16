@@ -24,6 +24,9 @@ export function validateSessionJudge(deps: SessionDeps): void {
   if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1 || cap > MAX_JUDGE_CALLS_PER_RUN) {
     throw new TypeError(`createSession: deps.judge.maxCallsPerRun must be an integer from 1 to ${MAX_JUDGE_CALLS_PER_RUN}`);
   }
+  if (judge.withhold !== undefined && judge.withhold !== 'block') {
+    throw new TypeError("createSession: deps.judge.withhold must be absent or the literal 'block' ('ask' is refused: ADR-0026 decision 3)");
+  }
   if (typeof deps.scanInjection !== 'function') {
     throw new TypeError("createSession: deps.judge needs deps.scanInjection (the judge only tightens the heuristic's verdict)");
   }
