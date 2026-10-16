@@ -135,6 +135,48 @@ for an own enumerable getter, two for a non-enumerable one: the undefined check
 added here, the property-access check, then `assertValidFilter`). The caller
 wrote the getter, so this is not a defect, but no single read decides.*
 
+*Correction 2026-10-16 (issue #116), to the #118 note above, which is left as
+written: "the message unchanged" and "no `type`, `key` or `tag`" were true when
+written. Adding `ids` changes both. The refusal message now reads "delete
+matches rows on type, key, tag, ids only", and the delete-all guard fires when
+a filter is left with no `type`, `key`, `tag` or `ids`, throwing "delete requires
+a non-empty filter (type, key, tag, or ids)". The behaviour the note describes
+(defined values refused, undefined-valued keys absent) is unchanged.*
+
+*Amended 2026-10-16 (issue #116): `delete` gains a fourth matching field,
+`ids?: readonly string[]`, so a caller can delete exactly the rows a preview
+returned (`key` is non-unique, so no other field can say it). Chosen over a
+separate `deleteEntries` method: one destructive entry point, one refusal
+path. `MemoryDeleteMatchField` is now `'type' | 'key' | 'tag' | 'ids'`; `ids` is
+not a `MemoryFilter` field, so `read` does not apply it and a smuggled `ids` on
+a read filter is ignored there. Semantics, each pinned by a test:
+`ids` AND-combines with `type`, `key` and `tag` (an id whose row fails the other
+fields is not deleted); `ids: []` is a matcher that selects nothing, so it
+returns `{ deleted: 0 }` rather than reaching the empty-filter refusal (an
+all-empty filter still throws, and an `ids` whose value is `undefined` is absent
+as for every other field, so `{ ids: undefined }` alone still throws); duplicate
+ids count once and unknown ids add nothing, because `deleted` counts rows
+actually removed; every element must be a non-empty string. The list is capped
+at `MEMORY_DELETE_IDS_MAX = 500` (exported from the memory index beside `MEMORY_TYPES`, so callers can chunk against it) and an over-cap list is refused, never
+truncated, because truncating would silently delete a subset. Derivation: ids
+are bound one placeholder each in `id IN (...)` alongside at most two other
+bound parameters; SQLite's limit is 32766 in the bundled build (3.53.2) but 999
+before 3.32.0 (sqlite.org/limits.html, item 9), and the store accepts a caller-opened connection, so 500 stays
+under the legacy limit with about half spare. Refusals name the element index
+and list length, never an id value (the section 9 echo discipline). The tag and ids
+paths share one select-then-delete transaction and one delete-by-id primitive,
+read included: the delete is by id only, so a read outside the transaction
+would let a row retagged by another connection in between be deleted. Under
+WAL (what `openMemoryDatabase` sets) the snapshot is stale by then, SQLite
+refuses the write ("database is locked"), and the delete fails closed with
+`{ ok: false, error: { kind: 'db' } }`, removing nothing; that failure is
+transient and a retry is safe (pinned by a two-connection test). Under a
+rollback-journal connection the other writer is blocked instead and the delete
+runs correctly. Still refused,
+unchanged: `limit`, `order` and `includeStale`, so `{ type, limit, order }`
+("delete the N oldest") remains unavailable, for the reasons in Alternatives
+item 8; a caller wanting it reads with those fields and passes the ids.*
+
 *The narrowing is source-breaking, so it lands before the v0.1.0 release tag
 freezes the surface (ADR-0022, ADR-0023). After that tag it would be a breaking
 change requiring 0.2.0 under the 0.x convention, not literally a major.*
@@ -240,7 +282,7 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 5. **Module-level default store (router/hooks style).** Rejected — would open a DB file at import time; no sensible process-global DB exists pre-H-1. Factory-only.
 6. **A full migration runner now.** Rejected for Week 1 — idempotent `CREATE TABLE IF NOT EXISTS` is sufficient; telemetry brings the runner and adopts this DDL.
 7. **`node:sqlite` (built-in) instead of `better-sqlite3`.** Held as a fallback in case the native binary failed on Node 25; the prebuilt binary loaded cleanly, so we stay on ADR-0004's `better-sqlite3` substrate. Revisit only if the native dep becomes an install burden.
-8. **Make `delete` HONOUR `limit`/`order`/`includeStale` instead of refusing them** *(added 2026-08-30, issue #87)*. This is a real capability, not a straw man: `{ type, limit: 3, order: 'asc' }` would delete the three oldest entries of a type, and the tag path's id-list transaction already shows how to implement it. Rejected for now on three grounds. **Reversibility:** refusing now and honouring later is additive, whereas shipping the semantics now fixes them before the surface freeze; refusal is the option that keeps the other one open. **`includeStale` is clock-raced:** it selects rows against `Date.now()`, so a preview and a delete can disagree across two calls even when both honour it, and a destructive method should not have a filter whose meaning moves. **The right primitive is delete-by-id, which does not exist:** `key` is explicitly non-unique (section 2), so a caller still cannot preview and then delete exactly the rows they saw, even though the tag path deletes by id internally. That gap is genuine and additive, so it is filed as #116 rather than fixed here (Revisit if).
+8. **Make `delete` HONOUR `limit`/`order`/`includeStale` instead of refusing them** *(added 2026-08-30, issue #87)*. This is a real capability, not a straw man: `{ type, limit: 3, order: 'asc' }` would delete the three oldest entries of a type, and the tag path's id-list transaction already shows how to implement it. Rejected for now on three grounds. **Reversibility:** refusing now and honouring later is additive, whereas shipping the semantics now fixes them before the surface freeze; refusal is the option that keeps the other one open. **`includeStale` is clock-raced:** it selects rows against `Date.now()`, so a preview and a delete can disagree across two calls even when both honour it, and a destructive method should not have a filter whose meaning moves. **The right primitive is delete-by-id, which does not exist:** `key` is explicitly non-unique (section 2), so a caller still cannot preview and then delete exactly the rows they saw, even though the tag path deletes by id internally. That gap is genuine and additive, so it is filed as #116 rather than fixed here (Revisit if). *Resolved 2026-10-16 (issue #116): delete-by-id landed as an `ids` filter on `delete`, not as honouring `limit`/`order`; see section 2.*
 
 ## Revisit if
 
@@ -251,5 +293,6 @@ Unlike router (stateless over a table) and hooks (cheap in-memory registry, so a
 - A `MemoryError.message` starts embedding untrusted `key`/`content` — memory becomes the 4th `CONTROL_CHARS` consumer; extract to `src/internal/`.
   - **Status 2026-08-30 (issue #87):** tripped, in a form this bullet did not anticipate: `delete`'s refusal message (a thrown `TypeError`, not `MemoryError`) echoes caller-chosen filter KEY NAMES, not entry content. The extraction had already happened; memory imports `boundEcho` from `src/internal/settings.ts`. See section 9.
 - Concurrent multi-process writers appear — inherits ADR-0004's single-writer `SQLITE_BUSY` caveat.
-- A caller needs to delete exactly the rows a preview returned: `delete` has no `id` filter and `key` is non-unique, so that is not expressible today (#116, filed 2026-08-30 alongside #87). Additive whenever it is wanted.
+- A caller needs to delete exactly the rows a preview returned.
+  - **Status 2026-10-16 (issue #116):** resolved by `delete({ ids })` with a 500-id cap; see section 2. Revisit if a caller needs more than 500 ids in one call (loop in batches, or raise the cap after checking the SQLite limit) or wants "delete the N oldest" (still refused).
 - Upsert-by-`key` (not just `id`) is requested — add a unique index and a keyed conflict target.
