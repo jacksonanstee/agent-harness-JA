@@ -229,6 +229,24 @@ export function decideJudgedResult(hook: JudgeHookState, outcome: JudgedScanOutc
 }
 
 /**
+ * Issue #145 B2a (spec D2, D6): withhold only when the judge ITSELF returned
+ * `block` on a JUDGED result. Reads the RECORD, not only the composed scan:
+ * `state === 'judged'` excludes every degraded state (the floor alone never
+ * withholds, D6: cap-reached, stopped, queue-timed-out, timed-out, failed,
+ * refused, oversized, not-escalated) and `hook-cancelled`, the one state whose
+ * record can still carry an `ok` block; the record's verdict excludes `ask`
+ * and a heuristic-only block (never escalated, so never `judged`: the
+ * `not-escalated` branch of `scanWithJudge` in judge.ts). The composed check is implied by `compose` (tighten-only) and kept so
+ * the predicate reads as the spec states it; written so B2b's scope (b') is a
+ * one-flag extension (the record's verdict is what it reads either way).
+ */
+export function decidesWithhold(decision: JudgeDecision | null): boolean {
+  if (decision === null || decision.state !== 'judged' || decision.composed.verdict !== 'block') return false;
+  const result = decision.outcome.snapshot.result;
+  return result !== null && result.ok && result.verdict === 'block';
+}
+
+/**
  * Read through a function so TypeScript's narrowing from the wrapper's
  * earlier `if (signal?.aborted === true) return` does not survive the
  * `await` into the `finally` (TS2367; plan review R2-1).
@@ -294,7 +312,8 @@ export interface JudgeHook {
   readonly state: JudgeHookState;
   scan(input: JudgedScanInput): Promise<JudgedScanOutcome | null>;
   decide(outcome: JudgedScanOutcome | null): JudgeDecision | null;
-  record(decision: JudgeDecision | null): void;
+  /** `withholdDecided`: the harness decided to withhold AND returned the rewrite (#145 B2a, spec D5); false on the failure hook and wherever nothing was returned. */
+  record(decision: JudgeDecision | null, withholdDecided: boolean): void;
   track<T>(work: Promise<T>): Promise<T>;
   dispose(): void;
 }
@@ -333,7 +352,7 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
   const inFlight = new Set<Promise<unknown>>();
   let capReached = 0;
 
-  function record(hook: JudgeHookState, decision: JudgeDecision): void {
+  function record(hook: JudgeHookState, decision: JudgeDecision, withholdDecided: boolean): void {
     const { state, composed, deliver, outcome } = decision;
     const { snapshot, floor, input } = outcome;
     const called = snapshot.outcome === 'called';
@@ -356,6 +375,7 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       redacted: input.redacted,
       costUsd,
       durationMs: outcome.durationMs,
+      withholdDecided,
     });
     entries.push({ state, called, costUsd, delivered: deliver, tightened: deliver && verdictRank(composed.verdict) > verdictRank(floor.verdict) });
     // R6's counter and the first-failure line both moved to call settle
@@ -386,8 +406,8 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       state,
       scan: (input) => runJudgedScan(ctx, state, input),
       decide: (outcome) => decideJudgedResult(state, outcome),
-      record: (decision) => {
-        if (decision !== null) record(state, decision);
+      record: (decision, withholdDecided) => {
+        if (decision !== null) record(state, decision, withholdDecided);
       },
       track: <T>(work: Promise<T>): Promise<T> => {
         inFlight.add(work);

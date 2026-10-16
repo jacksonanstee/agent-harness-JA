@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS } from '../security/index.js';
+import { JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS, MAX_JUDGE_INPUT_BYTES } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, ScanResult, Verdict } from '../security/index.js';
 import { JUDGE_CALL_ERROR_KINDS, JUDGE_CALL_STATES, JUDGE_CALL_VERDICTS } from '../telemetry/index.js';
 import type { JudgeCallPayload } from '../telemetry/index.js';
 import {
   asFloor,
   createJudgeRun,
+  decidesWithhold,
   foldJudgeSummary,
   JUDGE_ABORT_GRACE_MS,
   JUDGE_DRAIN_MS,
@@ -98,7 +99,7 @@ function harness(judge: InternalSessionJudge) {
             redacted: o.redacted ?? false,
           });
           const decision = hook.decide(outcome);
-          hook.record(decision);
+          hook.record(decision, false);
           return decision;
         })(),
       );
@@ -658,6 +659,7 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
       redacted: false,
       costUsd: 0.002283,
       durationMs: expect.any(Number),
+      withholdDecided: false,
     });
     const onAsk = await h.result({ id: 'a', floor: ASK_FLOOR });
     expect(onAsk).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['r-ask'] } });
@@ -681,7 +683,7 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
         snapshot: { outcome: 'called', result, threw: false },
         durationMs: 1,
       };
-      hook.record(hook.decide(outcome));
+      hook.record(hook.decide(outcome), false);
       hook.dispose();
       return h.rows.at(-1);
     };
@@ -773,5 +775,75 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect((await summary).pendingAtEnd).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("decidesWithhold: the judge's own block on a judged result, and nothing else (#145 B2a, spec D2, D6; W4 unit)", () => {
+  const BLOCK_FLOOR: ScanResult = { verdict: 'block', rule_ids: ['r-block'], excerpts: [], suspicious: false };
+
+  it('judged + judge block: true, on a pass floor and on an ask floor', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 5 });
+    expect(decidesWithhold(await h.result())).toBe(true);
+    expect(decidesWithhold(await h.result({ floor: ASK_FLOOR }))).toBe(true);
+  });
+
+  const rows: ReadonlyArray<readonly [string, InternalSessionJudge, Options]> = [
+    ['judged + judge ask', { call: async () => OK('ask'), maxCallsPerRun: 5 }, {}],
+    ['judged + judge pass', { call: async () => OK('pass'), maxCallsPerRun: 5 }, {}],
+    ['not-escalated (heuristic block, judge never consulted)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { floor: BLOCK_FLOOR }],
+    ['failed', { call: async () => CALL_FAILED, maxCallsPerRun: 5 }, {}],
+    ['refused (composed ask)', { call: async () => REFUSED, maxCallsPerRun: 5 }, {}],
+    ['oversized (composed ask, no call)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { text: 'x'.repeat(MAX_JUDGE_INPUT_BYTES + 1) }],
+    ['hook pre-cancelled (not-escalated, no record)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { signal: AbortSignal.abort() }],
+  ];
+  it.each(rows)('%s: false', async (_name, judge, opts) => {
+    expect(decidesWithhold(await harness(judge).result(opts))).toBe(false);
+  });
+
+  it('cap-reached: false (the second call is over the cap, so a would-be block is never called)', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 1 });
+    expect(decidesWithhold(await h.result())).toBe(true);
+    const second = await h.result();
+    expect(second?.state).toBe('cap-reached');
+    expect(decidesWithhold(second)).toBe(false);
+  });
+
+  it('timed-out: false (the scanner timer aborts; no ok verdict on the record)', async () => {
+    vi.useFakeTimers();
+    const h = harness({ call: (_t, signal) => new Promise((resolve) => signal?.addEventListener('abort', () => resolve(CALL_FAILED), { once: true })), maxCallsPerRun: 5 });
+    const pending = h.result();
+    await vi.advanceTimersByTimeAsync(JUDGE_TIMEOUT_MS);
+    expect(decidesWithhold(await pending)).toBe(false);
+  });
+
+  it('stopped: false (three failures, then a would-be block is never called)', async () => {
+    let n = 0;
+    const h = harness({ call: async () => (n++ < 3 ? CALL_FAILED : OK('block')), maxCallsPerRun: 10 });
+    for (let i = 0; i < 3; i += 1) await h.result();
+    const d = await h.result();
+    expect(d?.state).toBe('stopped');
+    expect(decidesWithhold(d)).toBe(false);
+  });
+
+  it('hook-cancelled with an ok block on the record: false (the one state whose record carries a verdict; binds the state clause)', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 5 });
+    const d = await h.result();
+    expect(d?.state).toBe('judged');
+    const cancelled = { ...d!, state: 'hook-cancelled' as const, deliver: false };
+    expect(cancelled.outcome.snapshot.result).toMatchObject({ ok: true, verdict: 'block' });
+    expect(decidesWithhold(cancelled)).toBe(false);
+  });
+
+  it('judged + composed block + record ok ask: false (binds the record-verdict clause)', async () => {
+    const h = harness({ call: async () => OK('ask'), maxCallsPerRun: 5 });
+    const d = await h.result();
+    expect(d?.state).toBe('judged');
+    const forged = { ...d!, composed: { ...d!.composed, verdict: 'block' as const } };
+    expect(forged.outcome.snapshot.result).toMatchObject({ ok: true, verdict: 'ask' });
+    expect(decidesWithhold(forged)).toBe(false);
+  });
+
+  it('null (the floor never entered the judge path): false', () => {
+    expect(decidesWithhold(null)).toBe(false);
   });
 });

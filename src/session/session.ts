@@ -61,6 +61,7 @@ import { cleanSdkToken, isModelRefusal } from './sdk-refusal.js';
 import { describeError } from './describe-error.js';
 import { createJudgeRun, judgeLeakedByHookTimeoutWarning, validateSessionJudge } from './judged-scan.js';
 import type { InternalSessionJudge, JudgeHook } from './judged-scan.js';
+import { MIN_SPAN_LINE } from './withhold.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -158,12 +159,6 @@ export const OVERSIZED_REDACTION_MARKER = '[REDACTED:oversized-input]';
 /** No notice and no tool-trace annotation: the judge path's value until step 6 has decided (spec D3). */
 const NO_NOTICE: { notice: string | null; verdict: 'block' | 'ask' | undefined } = { notice: null, verdict: undefined };
 
-/**
- * Minimum length of a secret span's first line for the verifier to treat it as
- * a leak signal (D4, S-13). Short spans are too collision-prone to key an alarm
- * on; a superstring an attacker plants can force `unobserved`, never `applied`.
- */
-const MIN_SPAN_LINE = 8;
 
 /**
  * Exhaustive BY CONSTRUCTION over `OutputRewriteOutcome` — the origin of the
@@ -1331,7 +1326,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const decision = jh.decide(judged);
         annotation = decision === null ? annotate(scan, toolName, toolUseId, 'post-tool')
           : decision.deliver ? annotate(decision.composed, toolName, toolUseId, 'post-tool') : NO_NOTICE;
-        jh.record(decision);
+        jh.record(decision, false);
         writeTrace(annotation.verdict);
       }
 
@@ -1410,7 +1405,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const decision = jh.decide(judged);
         annotation = decision === null ? annotate(scan, toolName, toolUseId, 'post-tool-failure')
           : decision.deliver ? annotate(decision.composed, toolName, toolUseId, 'post-tool-failure') : NO_NOTICE;
-        jh.record(decision);
+        jh.record(decision, false);
         writeTrace(annotation.verdict);
       }
       // No rewrite channel on a failed call: annotation only.
