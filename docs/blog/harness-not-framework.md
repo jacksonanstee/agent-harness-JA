@@ -144,6 +144,8 @@ So far it has held.
 > call routes to a hook with no rewrite channel, so the model sees its raw
 > error, and that residual is named (R-22) rather than forked around.
 
+*(2026-10-20: withholding now exists behind `judge.withhold: "block"`, off by default, for the judge's own `block` only, [ADR-0039](../decisions/0039-judge-withholding-off-by-default.md).)*
+
 If these essays share one stance, it is this: constrain power, make claims
 falsifiable, and prefer a visible limitation to a hidden capability.
 
