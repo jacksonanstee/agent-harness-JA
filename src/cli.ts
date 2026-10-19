@@ -29,6 +29,8 @@ import { parseInitArgs, runInit } from './cli/init-command.js';
 import type { InitArgs } from './cli/init-command.js';
 import { parsePermissionsArgs, runPermissionsList } from './cli/permissions-command.js';
 import type { PermissionsListArgs } from './cli/permissions-command.js';
+import { parseTelemetryCostArgs, runTelemetryCost } from './cli/telemetry-cost-command.js';
+import type { TelemetryCostArgs } from './cli/telemetry-cost-command.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
@@ -96,7 +98,7 @@ export interface TelemetryExportArgs {
   scrubPrefixes: string[];
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs | EvalArgs | RedteamArgs | InitArgs | PermissionsListArgs;
+export type CliArgs = RunArgs | TelemetryExportArgs | TelemetryCostArgs | EvalArgs | RedteamArgs | InitArgs | PermissionsListArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -126,6 +128,7 @@ function parseTelemetryArgs(argv: string[]): ParseResult {
   // value flags in one branch. Revisit at 10 flags in one parser, where the
   // ladder stops fitting a screen. Integers go through parseSafeInt (#128).
   const [subcommand, ...rest] = argv;
+  if (subcommand === 'cost') return parseTelemetryCostArgs(rest);
   if (subcommand !== 'export') {
     return { ok: false, error: `Unknown telemetry subcommand '${subcommand ?? ''}'. ${USAGE}` };
   }
@@ -439,6 +442,13 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
 
   if (parsed.value.command === 'telemetry-export') {
     return runTelemetryExport(parsed.value);
+  }
+
+  if (parsed.value.command === 'telemetry-cost') {
+    return runTelemetryCost(parsed.value, {
+      stdout: (text) => process.stdout.write(text),
+      stderr: (text) => process.stderr.write(text),
+    });
   }
 
   if (parsed.value.command === 'eval') {
