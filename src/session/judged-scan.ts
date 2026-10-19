@@ -377,7 +377,7 @@ export function createJudgeRun(opts: JudgeRunOptions): JudgeRun {
       durationMs: outcome.durationMs,
       withholdDecided,
     });
-    entries.push({ state, called, costUsd, delivered: deliver, tightened: deliver && verdictRank(composed.verdict) > verdictRank(floor.verdict) });
+    entries.push({ state, called, costUsd, delivered: deliver, tightened: deliver && verdictRank(composed.verdict) > verdictRank(floor.verdict), withholdDecided });
     // R6's counter and the first-failure line both moved to call settle
     // (countAtSettle; decision 17, plan review R2-2).
     if (state === 'cap-reached') {

@@ -611,10 +611,13 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   const refusalLine = formatRefusalLine(result.refusal, result.stopReason);
   if (refusalLine !== null) process.stderr.write(`${refusalLine}\n`);
 
-  // Issue #84 (D5/U-5): a one-line summary of the model-facing controls, and a
-  // WARNING line whenever a rewrite did not land clean or a failed call's output
-  // could only be annotated (never rewritten). Counts only — no secret bytes.
-  const appliedRewrites = result.outputRewrites.filter((r) => r.outcome === 'applied').length;
+  // Issue #84 (D5/U-5) and #145 B2a (spec D5): a one-line summary of the model-facing
+  // controls, and a WARNING line whenever a rewrite did not land clean or a failed
+  // call's output could only be annotated (never rewritten). Counts only — no secret
+  // bytes. `rewrite(s) applied` counts the redaction pass only; an applied withhold
+  // is counted once, under its own word (r2 N3b). The problem clause stays kind-blind.
+  const appliedRewrites = result.outputRewrites.filter((r) => r.outcome === 'applied' && r.kind !== 'withhold').length;
+  const appliedWithholds = result.outputRewrites.filter((r) => r.kind === 'withhold' && r.outcome === 'applied').length;
   const problemRewrites = result.outputRewrites.filter(
     (r) =>
       r.outcome === 'leaked' ||
@@ -625,7 +628,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   const failureAnnotations = result.outputAnnotations.filter((a) => a.phase === 'post-tool-failure').length;
   process.stderr.write(
     `[harness] model-facing: ${appliedRewrites} rewrite(s) applied, ` +
-      `${result.outputAnnotations.length} injection note(s)\n`,
+      `${result.outputAnnotations.length} injection note(s)` +
+      `${appliedWithholds > 0 ? `, ${appliedWithholds} withhold(s) applied` : ''}\n`,
   );
   if (problemRewrites > 0 || failureAnnotations > 0) {
     process.stderr.write(

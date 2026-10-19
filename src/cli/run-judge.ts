@@ -44,6 +44,8 @@ export function judgeSummaryLines(s: JudgeSummary): { summary: string; capWarnin
   const unjudged = UNJUDGED.filter((state) => s.byState[state] > 0).map((state) => `${s.byState[state]} ${state}`);
   if (s.pendingAtEnd > 0) unjudged.push(`${s.pendingAtEnd} pending at end`);
   const parts = [`[harness] judge: ${s.calls}/${s.cap} call(s)`, `${s.tightened} note(s) added by the judge path`];
+  // Issue #145 B2a (spec D5, review S4): decisions, never "withheld"; the landing count is the model-facing line's.
+  if (s.withholdsDecided > 0) parts.push(`${s.withholdsDecided} withhold(s) decided`);
   if (unjudged.length > 0) parts.push(`unjudged: ${unjudged.join(', ')}`);
   const unknown = s.costUnknown > 0 ? `; ${s.costUnknown} call(s) of unknown cost` : '';
   parts.push(`cost=${formatUsd(s.costUsd)} (not included in cost= above${unknown})`);

@@ -720,8 +720,8 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
 });
 
 describe('the summary fold (spec D7, K-6; pin 17)', () => {
-  const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false): JudgeSummaryEntry =>
-    ({ state, called, costUsd, delivered, tightened });
+  const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false, withholdDecided = false): JudgeSummaryEntry =>
+    ({ state, called, costUsd, delivered, tightened, withholdDecided });
 
   it('costUnknown counts reserved slots with no known cost only; unreserved states never count; refused entries fold like oversized (#152, T3e)', () => {
     // Two refused entries (#152): a pass-floor one, tightened to ask with its charged
@@ -748,10 +748,21 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
       },
       annotated: 5,
       tightened: 3,
+      withholdsDecided: 0,
       costUsd: expect.closeTo(0.006283, 10),
       costUnknown: 2,
       pendingAtEnd: 1,
     });
+  });
+
+  it('withholdsDecided counts DECISIONS from the entries, never landings (#145 B2a, spec D5; W14)', () => {
+    const s = foldJudgeSummary(10, 3, [
+      entry('judged', true, 0.002, true, true, true),
+      entry('judged', true, 0.002, true, true, true),
+      entry('judged', true, 0.002, true, true, false),
+    ], 0);
+    expect(s.withholdsDecided).toBe(2);
+    expect(s).toMatchObject({ annotated: 3, tightened: 3 });
   });
 
   it('the drain awaits a running path up to JUDGE_DRAIN_MS and counts one past it in pendingAtEnd (D3 step 7)', async () => {

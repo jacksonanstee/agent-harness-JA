@@ -577,6 +577,13 @@ export interface JudgeSummary {
   annotated: number;
   /** Of those, the ones whose composed verdict is stricter than the heuristic's. */
   tightened: number;
+  /**
+   * Judge-path results the harness DECIDED to withhold and returned the
+   * placeholder for (issue #145 B2a, spec D5). A decision count, never a
+   * landing count: landings are `outputRewrites` rows with `kind: 'withhold'`
+   * and `outcome: 'applied'`.
+   */
+  withholdsDecided: number;
   /** Sum of known call costs in USD; NOT included in `SessionResult.costUsd`. */
   costUsd: number;
   /** Reserved slots whose cost is unknown to the run (timed out, aborted, still pending). */
