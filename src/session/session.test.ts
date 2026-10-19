@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_EXPECTED_OUTPUT_TOKENS, estimateRunCostUsd, PRICE_TABLE } from '../internal/pricing.js';
 import { escapePathUnsafe } from '../internal/sanitize.js';
 import { cleanSdkToken } from './sdk-refusal.js';
 
@@ -579,6 +580,73 @@ describe('createSession', () => {
     expect(cost.payload.resultSubtype).toBe('success');
     expect(cost.payload.model).toBeTruthy();
     expect(cost.payload.ruleId).toBeTruthy();
+  });
+
+  describe('turn-cost estimate (#192)', () => {
+    const SKILL = {
+      name: 'greeting',
+      description: 'How to greet',
+      version: '1.0.0',
+      body: 'x'.repeat(4000),
+      path: '/skills/greeting.md',
+    };
+
+    async function runWith(
+      config: Record<string, unknown>,
+      skills: unknown[] = [SKILL],
+    ): Promise<{ payload: Extract<TelemetryEventInput, { type: 'turn-cost' }>['payload']; prompt: string }> {
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, RESULT]);
+      const session = createSession(
+        makeDeps(fake, {
+          telemetry,
+          loadSkills: () => ({ skills, errors: [], root: '/skills' }) as never,
+        }),
+        { skillsDir: '/skills', ...config },
+      );
+      await session.run('hi');
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('no turn-cost event');
+      return { payload: cost.payload, prompt: fake.captured[0]?.options?.systemPrompt ?? '' };
+    }
+
+    it('stores the estimate re-derived from model, assembled prompt length, maxTurns and the given output tokens, with its inputs', async () => {
+      const { payload, prompt } = await runWith({ maxTurns: 6, outputGuess: 3000 });
+      expect(prompt.length).toBeGreaterThan(4000);
+      const want = estimateRunCostUsd(payload.model, prompt.length, 6, 3000);
+      expect(want).not.toBeNull();
+      expect(payload.estimateUsd).toBe(want);
+      expect(payload.estimateSystemPromptChars).toBe(prompt.length);
+      expect(payload.estimateTurns).toBe(6);
+      expect(payload.estimateOutputCount).toBe(3000);
+      expect(payload.estimateOutputDefaulted).toBe(false);
+      expect(payload.estimatePriceChecked).toBe(PRICE_TABLE.find((r) => r.model === payload.model)?.checked);
+    });
+
+    it('uses the named default output guess when none is given, records it as null and flags it defaulted', async () => {
+      const { payload, prompt } = await runWith({ maxTurns: 4 });
+      expect(payload.estimateUsd).toBe(estimateRunCostUsd(payload.model, prompt.length, 4, DEFAULT_EXPECTED_OUTPUT_TOKENS));
+      expect(payload.estimateOutputCount).toBeNull();
+      expect(payload.estimateOutputDefaulted).toBe(true);
+    });
+
+    it('the routing descriptor expected_tokens does not feed the estimate', async () => {
+      const a = await runWith({ maxTurns: 4, descriptor: { shape: 'build', sensitivity: 'low', expected_tokens: 1000 } });
+      const b = await runWith({ maxTurns: 4, descriptor: { shape: 'build', sensitivity: 'low', expected_tokens: 15000 } });
+      expect(a.payload.model).toBe(b.payload.model);
+      expect(a.payload.estimateUsd).toBe(b.payload.estimateUsd);
+    });
+
+    // maxTurns unset or <= 0 gives no estimate (documented in session.ts and ADR-0007).
+    it.each([[undefined], [0], [-3]])('stores a null estimate, with null inputs, when maxTurns is %s', async (maxTurns) => {
+      const { payload } = await runWith(maxTurns === undefined ? {} : { maxTurns });
+      expect(payload.estimateUsd).toBeNull();
+    });
+
+    it('stores a null estimate when there is no system prompt (no skills), never an output-only figure', async () => {
+      const { payload } = await runWith({ maxTurns: 5 }, []);
+      expect(payload.estimateUsd).toBeNull();
+    });
   });
 
   it('records a turn-cost event with null metrics on the error path, then rethrows', async () => {

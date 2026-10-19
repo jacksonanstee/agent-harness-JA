@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main, parseArgs } from '../cli.js';
 import { formatUsd } from '../internal/money.js';
+import { PRICE_MAX_AGE_DAYS, PRICE_TABLE } from '../internal/pricing.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { USAGE } from './shared.js';
 import {
@@ -130,7 +131,7 @@ function run(over: Partial<TelemetryCostArgs> & { dbPath: string }, now?: () => 
   const out: string[] = [];
   const err: string[] = [];
   const code = runTelemetryCost(
-    { command: 'telemetry-cost', since: '2026-10-01', by: 'model', ...over },
+    { command: 'telemetry-cost', since: '2026-10-01', by: 'model', estimate: false, ...over },
     { stdout: (t) => out.push(t), stderr: (t) => err.push(t) },
     now === undefined ? {} : { now },
   );
@@ -183,7 +184,7 @@ describe('parseTelemetryCostArgs', () => {
   it('takes all three flags and is reached through parseArgs', () => {
     expect(parseArgs(['telemetry', 'cost', '--db', 'x.db', '--since', '2026-10-05', '--by', 'day'])).toEqual({
       ok: true,
-      value: { command: 'telemetry-cost', dbPath: 'x.db', since: '2026-10-05', by: 'day' },
+      value: { command: 'telemetry-cost', dbPath: 'x.db', since: '2026-10-05', by: 'day', estimate: false },
     });
   });
 
@@ -390,6 +391,137 @@ describe('runTelemetryCost', () => {
     expect(result.out).toContain('since 2026-10-03 (local time)');
     const expected = derive(FIXTURE, 'agent', 'model', 3);
     expect(sectionRows(result.out, 'agent spend')).toHaveLength(expected.size);
+  });
+});
+
+interface EstFixture {
+  session: string;
+  day: number;
+  model: string;
+  cost: number | null;
+  /** 'absent' writes a pre-#192 payload with no estimateUsd key at all. */
+  estimate: number | null | 'absent';
+  /** Non-null writes refusalFallbackModel: priced on a different model, so unpaired. */
+  fallback?: string;
+}
+
+/** Dyadic values so any summation order is exact. */
+const EST_FIXTURE: EstFixture[] = [
+  { session: 's-a', day: 1, model: 'model-x', cost: 0.5, estimate: 0.25 },
+  { session: 's-a', day: 2, model: 'model-x', cost: 0.25, estimate: 0.125 },
+  { session: 's-b', day: 2, model: 'model-y', cost: 0.125, estimate: null },
+  { session: 's-b', day: 3, model: 'model-y', cost: null, estimate: 0.5 },
+  { session: 's-c', day: 3, model: 'model-x', cost: 1, estimate: 'absent' },
+];
+
+function estDb(rows: EstFixture[] = EST_FIXTURE): string {
+  const path = join(tempDir(), 'telemetry.db');
+  const db = openTelemetryDatabase({ path });
+  try {
+    const store = createTelemetryStore(db);
+    rows.forEach((r, i) => {
+      const payload = {
+        model: r.model,
+        ruleId: 'rule',
+        costUsd: r.cost,
+        numTurns: 1,
+        usage: null,
+        sdkSessionId: null,
+        resultSubtype: 'success',
+        ...(r.estimate === 'absent' ? {} : { estimateUsd: r.estimate }),
+        ...(r.fallback === undefined ? {} : { refusalFallbackModel: r.fallback }),
+      };
+      store.record({ type: 'turn-cost', sessionId: r.session, turnId: `t${i}`, ts: at(r.day), payload });
+    });
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+const EST_TITLE = 'estimate vs actual';
+
+describe('telemetry cost --estimate (#192)', () => {
+  it('parses --estimate as a value-less flag, default off', () => {
+    expect(parseTelemetryCostArgs(['--estimate'])).toEqual({
+      ok: true,
+      value: expect.objectContaining({ estimate: true }),
+    });
+    expect(parseTelemetryCostArgs([])).toEqual({ ok: true, value: expect.objectContaining({ estimate: false }) });
+    expect(parseTelemetryCostArgs(['--estimate', '--by', 'day'])).toEqual({
+      ok: true,
+      value: expect.objectContaining({ estimate: true, by: 'day' }),
+    });
+    expect(USAGE).toContain('--estimate');
+  });
+
+  it('adds nothing to the default report', () => {
+    const path = estDb();
+    expect(run({ dbPath: path }).out).not.toContain(EST_TITLE);
+    const base = run({ dbPath: path }).out;
+    const withFlag = run({ dbPath: path, estimate: true }).out;
+    expect(withFlag.startsWith(base.split('\nTOTAL')[0] as string)).toBe(true);
+  });
+
+  it('pairs only rows where estimate and actual are both known; sums and ratio re-derived', () => {
+    const result = run({ dbPath: estDb(), estimate: true });
+    expect(result.code).toBe(0);
+    const rows = sectionRows(result.out, EST_TITLE);
+    const paired = EST_FIXTURE.filter(
+      (r): r is EstFixture & { cost: number; estimate: number } =>
+        r.cost !== null && typeof r.estimate === 'number',
+    );
+    const keys = [...new Set(EST_FIXTURE.map((r) => r.model))].sort();
+    expect(rows.map((c) => c[0])).toEqual(keys.map((k) => JSON.stringify(k)));
+    for (const key of keys) {
+      const mine = paired.filter((r) => r.model === key);
+      const unpaired = EST_FIXTURE.filter((r) => r.model === key).length - mine.length;
+      const est = mine.reduce((a, r) => a + r.estimate, 0);
+      const act = mine.reduce((a, r) => a + r.cost, 0);
+      const cells = rows.find((c) => c[0] === JSON.stringify(key)) as string[];
+      expect(cells[1]).toBe(String(mine.length));
+      expect(cells[2]).toBe(mine.length === 0 ? 'n/a' : formatUsd(est));
+      expect(cells[3]).toBe(mine.length === 0 ? 'n/a' : formatUsd(act));
+      expect(cells[4]).toBe(mine.length === 0 || est === 0 ? 'n/a' : `${(act / est).toFixed(2)}x`);
+      expect(cells[5]).toBe(unpaired === 0 ? '-' : `unpaired (${label(unpaired)})`);
+    }
+  });
+
+  it('a null or absent estimate is unpaired, never a zero estimate', () => {
+    const rows = sectionRows(run({ dbPath: estDb(), estimate: true }).out, EST_TITLE);
+    const y = rows.find((c) => c[0] === '"model-y"') as string[];
+    expect(y[1]).toBe('0');
+    expect(y[2]).toBe('n/a');
+    expect(y[5]).toBe('unpaired (2 rows)');
+    const x = rows.find((c) => c[0] === '"model-x"') as string[];
+    expect(x[5]).toBe('unpaired (1 row)');
+  });
+
+  it('leaves a row unpaired when it was answered by a fallback model', () => {
+    const path = estDb([
+      { session: 's-a', day: 1, model: 'model-x', cost: 0.5, estimate: 0.25 },
+      { session: 's-a', day: 2, model: 'model-x', cost: 0.5, estimate: 0.25, fallback: 'other-model' },
+    ]);
+    const x = sectionRows(run({ dbPath: path, estimate: true }).out, EST_TITLE)[0] as string[];
+    expect(x[1]).toBe('1');
+    expect(x[5]).toBe('unpaired (1 row)');
+  });
+
+  it('suppresses the stale note when no row was paired', () => {
+    const path = estDb([{ session: 's-a', day: 1, model: 'model-x', cost: 0.5, estimate: null }]);
+    const checked = Date.parse(`${(PRICE_TABLE[0] as { checked: string }).checked}T00:00:00Z`);
+    const out = run({ dbPath: path, estimate: true }, () => checked + (PRICE_MAX_AGE_DAYS + 1) * 86_400_000).out;
+    expect(out).toContain(EST_TITLE);
+    expect(out).not.toContain('price table is older');
+  });
+
+  it('notes a stale price table through the clock seam, and stays quiet when fresh', () => {
+    const path = estDb();
+    const checked = Date.parse(`${(PRICE_TABLE[0] as { checked: string }).checked}T00:00:00Z`);
+    const fresh = run({ dbPath: path, estimate: true }, () => checked);
+    expect(fresh.out).not.toContain('price table is older');
+    const stale = run({ dbPath: path, estimate: true }, () => checked + (PRICE_MAX_AGE_DAYS + 1) * 86_400_000);
+    expect(stale.out).toMatch(new RegExp(`note: price table is older than ${PRICE_MAX_AGE_DAYS} days`));
   });
 });
 
