@@ -3,6 +3,7 @@ import { statSync } from 'node:fs';
 import Database from 'better-sqlite3';
 
 import { formatUsd } from '../internal/money.js';
+import { stalePriceRows, PRICE_MAX_AGE_DAYS } from '../internal/pricing.js';
 import { DEFAULT_DB_PATH } from '../memory/index.js';
 import { sanitizeDiagnostic, USAGE } from './shared.js';
 
@@ -16,6 +17,8 @@ export interface TelemetryCostArgs {
   /** Validated `YYYY-MM-DD` (local calendar date), or null for "today, local time". */
   since: string | null;
   by: CostGrouping;
+  /** `--estimate`: add the estimate-vs-actual section (#192). */
+  estimate: boolean;
 }
 
 export type TelemetryCostParseResult =
@@ -47,9 +50,14 @@ export function parseTelemetryCostArgs(argv: string[]): TelemetryCostParseResult
   let dbPath = DEFAULT_DB_PATH;
   let since: string | null = null;
   let by: CostGrouping = 'model';
+  let estimate = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === undefined) break;
+    if (arg === '--estimate') {
+      estimate = true;
+      continue;
+    }
     if (arg !== '--db' && arg !== '--since' && arg !== '--by') {
       return { ok: false, error: `Unexpected argument '${arg}'. ${USAGE}` };
     }
@@ -70,7 +78,7 @@ export function parseTelemetryCostArgs(argv: string[]): TelemetryCostParseResult
     }
     i += 1;
   }
-  return { ok: true, value: { command: 'telemetry-cost', dbPath, since, by } };
+  return { ok: true, value: { command: 'telemetry-cost', dbPath, since, by, estimate } };
 }
 
 export interface TelemetryCostStreams {
@@ -103,17 +111,22 @@ type Spend = 'agent' | 'judge';
 const NO_MODEL = '(not recorded)';
 
 /** A usable cost is a finite number >= 0; anything else (null, wrong type, bad JSON) is unknown. */
-function readCost(payload: string): { cost: number | null; model: string | null } {
+function readCost(payload: string): { cost: number | null; model: string | null; estimate: number | null } {
+  // A fallback-answered row was billed on a different model than the one the
+  // estimate priced, so its estimate is dropped (the row reads as unpaired).
   try {
     const parsed: unknown = JSON.parse(payload);
-    if (typeof parsed !== 'object' || parsed === null) return { cost: null, model: null };
+    if (typeof parsed !== 'object' || parsed === null) return { cost: null, model: null, estimate: null };
     const record = parsed as Record<string, unknown>;
     const c = record.costUsd;
     const cost = typeof c === 'number' && Number.isFinite(c) && c >= 0 ? c : null;
     const model = typeof record.model === 'string' ? record.model : null;
-    return { cost, model };
+    const e = record.estimateUsd;
+    const fellBack = typeof record.refusalFallbackModel === 'string';
+    const estimate = !fellBack && typeof e === 'number' && Number.isFinite(e) && e >= 0 ? e : null;
+    return { cost, model, estimate };
   } catch {
-    return { cost: null, model: null };
+    return { cost: null, model: null, estimate: null };
   }
 }
 
@@ -170,6 +183,57 @@ function section(title: string, by: CostGrouping, buckets: Map<string, Bucket>):
     );
   });
   return lines;
+}
+
+/** Per-key tally of agent rows whose estimate AND actual are both known. */
+interface PairBucket {
+  paired: number;
+  estimate: number;
+  actual: number;
+  /** Null/absent estimate or null actual: counted, never summed as zero. */
+  unpaired: number;
+}
+
+function estimateSection(by: CostGrouping, since: string, buckets: Map<string, PairBucket>): string[] {
+  const lines = [`estimate vs actual (turn-cost rows with both known) by ${by}, since ${since} (local time)`];
+  const keys = [...buckets.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (keys.length === 0) return [...lines, '  (no rows)'];
+  const shown = keys.map((key) => (by === 'day' ? key : quote(key)));
+  const keyWidth = Math.max(by.length, ...shown.map((s) => s.length));
+  const cells = keys.map((key) => {
+    const b = buckets.get(key) as PairBucket;
+    const none = b.paired === 0;
+    return [
+      String(b.paired),
+      none ? 'n/a' : formatUsd(b.estimate),
+      none ? 'n/a' : formatUsd(b.actual),
+      none || b.estimate === 0 ? 'n/a' : `${(b.actual / b.estimate).toFixed(2)}x`,
+      b.unpaired === 0 ? '-' : `unpaired (${rowsLabel(b.unpaired)})`,
+    ];
+  });
+  const widths = [0, 1, 2, 3].map((c) => Math.max(...cells.map((row) => (row[c] as string).length), 4));
+  const head = ['PAIRED', 'ESTIMATE', 'ACTUAL', 'ACTUAL/EST'];
+  const pad = (c: number): number => Math.max(widths[c] as number, (head[c] as string).length);
+  lines.push(
+    `  ${by.toUpperCase().padEnd(keyWidth)}  ${head.map((h, c) => h.padStart(pad(c))).join('  ')}  UNPAIRED`,
+  );
+  keys.forEach((_, i) => {
+    const row = cells[i] as string[];
+    lines.push(
+      `  ${(shown[i] as string).padEnd(keyWidth)}  ${[0, 1, 2, 3].map((c) => (row[c] as string).padStart(pad(c))).join('  ')}  ${row[4] as string}`,
+    );
+  });
+  return lines;
+}
+
+function pairedRows(pairs: Map<string, PairBucket>): number {
+  return [...pairs.values()].reduce((n, b) => n + b.paired, 0);
+}
+
+function staleNote(now: () => number): string[] {
+  return stalePriceRows(now()).length === 0
+    ? []
+    : [`  note: price table is older than ${PRICE_MAX_AGE_DAYS} days (see src/internal/pricing.ts); estimates may be out of date`];
 }
 
 function isFile(path: string): boolean {
@@ -231,9 +295,10 @@ export function runTelemetryCost(
 
   const agent = new Map<string, Bucket>();
   const judge = new Map<string, Bucket>();
+  const pairs = new Map<string, PairBucket>();
   for (const row of rows) {
     const spend: Spend = row.type === 'turn-cost' ? 'agent' : 'judge';
-    const { cost, model } = readCost(row.payload);
+    const { cost, model, estimate } = readCost(row.payload);
     const target = spend === 'agent' ? agent : judge;
     const key = groupKey(row, spend, model, args.by);
     const bucket = target.get(key) ?? { known: 0, sum: 0, unknown: 0 };
@@ -243,6 +308,16 @@ export function runTelemetryCost(
       bucket.sum += cost;
     }
     target.set(key, bucket);
+    if (spend === 'agent') {
+      const pair = pairs.get(key) ?? { paired: 0, estimate: 0, actual: 0, unpaired: 0 };
+      if (cost === null || estimate === null) pair.unpaired += 1;
+      else {
+        pair.paired += 1;
+        pair.estimate += estimate;
+        pair.actual += cost;
+      }
+      pairs.set(key, pair);
+    }
   }
 
   const agentTotal = sumOf(agent);
@@ -252,6 +327,9 @@ export function runTelemetryCost(
     ...section(`agent spend (turn-cost rows) by ${args.by}, since ${since} (local time)`, args.by, agent),
     '',
     ...section(`judge spend (judge-call rows) by ${args.by}, since ${since} (local time)`, args.by, judge),
+    ...(args.estimate
+      ? ['', ...estimateSection(args.by, since, pairs), ...(pairedRows(pairs) > 0 ? staleNote(options.now ?? Date.now) : [])]
+      : []),
     '',
     `TOTAL ${formatUsd(agentTotal.sum + judgeTotal.sum)} (agent ${formatUsd(agentTotal.sum)}, judge ${formatUsd(judgeTotal.sum)})` +
       `; unknown cost, not included: ${rowsLabel(unknown)} (agent ${agentTotal.unknown}, judge ${judgeTotal.unknown})`,

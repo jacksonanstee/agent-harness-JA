@@ -119,3 +119,43 @@ a custom-table consumer constructs descriptors programmatically rather than thro
 else here moves: the shapes, sensitivities, the 20k/50k thresholds, first-match-wins ordering, and
 the custom-table footgun all stand, and reaching `claude-opus-5` from the CLI via
 `--sensitivity high` is this table's existing policy becoming reachable, not new policy.
+
+## Note (2026-10-19, issue #192): a pre-run cost estimate now exists; routing is unchanged
+
+The thresholds above remain admitted intuition: nothing in this note moves a rule, a threshold, a
+model or the first-match-wins order. What changed is that the evidence #98 says is missing can now
+be collected. `src/internal/pricing.ts` holds a frozen price table (USD per million input, output,
+5-minute cache-write and cache-read tokens) for every model in the router's `MODELS` list, which
+is compiler-tied to `Model` by a presence record, so a model added without a price row fails
+`src/cli/pricing-coverage.test.ts`. Each row carries its `source` URL and `checked` date.
+`stalePriceRows` flags a row older than `PRICE_MAX_AGE_DAYS` (120) against a caller-supplied clock,
+and treats an unparseable date as stale. This is a report note in `telemetry cost --estimate`, not a
+CI failure: the tests pin their clock, so they cannot go red as real time passes. The source page
+lists no long-context step for these four models, so every row's `longContext` is null (the type
+supports a step for a future row).
+
+Each `run` writes `estimateUsd` on its `turn-cost` row: one cache write of the assembled system
+prompt, `maxTurns - 1` cache reads of it, plus an output-token guess. The inputs ride beside it
+(`estimateSystemPromptChars`, `estimateTurns`, `estimateOutputCount`, `estimateOutputDefaulted`,
+`estimatePriceChecked`) so a stored figure can be re-derived and a later price change cannot
+silently re-mean old rows. `maxTurns` is a ceiling on turns, not the count taken, so the estimate
+leans high on cache reads; the user prompt, tool results and per-turn growth are not counted and
+characters become tokens by a named approximation (4 characters per token), so it leans low on
+input. It is for calibration against `costUsd`, not billing. The estimate is null, never zero, when
+`maxTurns` is unset or below 1, when there is no system prompt (no skills loaded), or when the model
+is unpriced.
+
+The output guess is a new CLI-only flag, `--expected-output-tokens`; `--expected-tokens` stays
+routing-only. No descriptor or golden-frontmatter field maps naturally (the descriptor is routing
+input, and golden tasks have no output budget), so the session takes it as a separate config value.
+When it is absent the estimate uses `DEFAULT_EXPECTED_OUTPUT_TOKENS` rather than dropping the output
+term: dropping it would make every defaulted row systematically low and unflaggable, while a named
+default recorded as `estimateOutputCount: null` with `estimateOutputDefaulted: true` lets a
+calibration separate guessed rows from supplied ones.
+
+No schema migration was needed: the estimate rides in the `turn-cost` JSON payload as optional
+fields, exactly as the ADR-0025 refusal fields do, so old rows read back with them absent
+(ADR-0011's promoted columns are for fields the store filters or indexes on; this is neither).
+`telemetry cost --estimate` adds one section pairing estimate with actual per group. A row with
+either side unknown, or answered by a fallback model (priced on a different model than the
+estimate), is counted as unpaired rather than summed as zero.

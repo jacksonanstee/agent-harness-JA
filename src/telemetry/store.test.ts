@@ -423,6 +423,70 @@ describe('createTelemetryStore.query', () => {
       expect(rows).toHaveLength(1);
     });
 
+    it('round-trips estimateUsd, accepts null, and still reads a row without it (#192)', () => {
+      const { db, store } = openStore();
+      const base = {
+        model: 'claude-sonnet-5',
+        ruleId: 'r',
+        costUsd: 0.1,
+        numTurns: 2,
+        usage: null,
+        sdkSessionId: null,
+        resultSubtype: 'success',
+      };
+      expect(store.record({ type: 'turn-cost', sessionId: 's1', turnId: 't1', payload: { ...base, estimateUsd: 0.25 } }).ok).toBe(true);
+      expect(store.record({ type: 'turn-cost', sessionId: 's1', turnId: 't2', payload: { ...base, estimateUsd: null } }).ok).toBe(true);
+      db.prepare(
+        `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+         VALUES ('old-est', 'turn-cost', 's1', 't3', 1, '{"model":"m","ruleId":"r","costUsd":null,"numTurns":null,"usage":null,"sdkSessionId":null,"resultSubtype":null}');`,
+      ).run();
+      const payloads = store.query({ type: 'turn-cost' }).map((e) => (e.payload as { estimateUsd?: number | null }).estimateUsd);
+      expect(payloads).toContain(0.25);
+      expect(payloads).toContain(null);
+      expect(payloads).toContain(undefined);
+    });
+
+    it('accepts the estimate input fields, all optional, and rejects wrong types or a negative estimate (#192)', () => {
+      const { store } = openStore();
+      const base = {
+        model: 'm', ruleId: 'r', costUsd: null, numTurns: null, usage: null, sdkSessionId: null, resultSubtype: null,
+      };
+      const rec = (extra: Record<string, unknown>) =>
+        store.record({ type: 'turn-cost', sessionId: 's', turnId: `t${Math.random()}`, payload: { ...base, ...extra } as never });
+      expect(rec({ estimateUsd: 0.5, estimateSystemPromptChars: 10, estimateTurns: 3, estimateOutputCount: null,
+        estimateOutputDefaulted: true, estimatePriceChecked: '2026-10-19' }).ok).toBe(true);
+      expect(() => rec({ estimateUsd: -0.01 })).toThrow(/not a valid turn-cost payload/);
+      for (const key of ['estimateSystemPromptChars', 'estimateTurns', 'estimateOutputCount']) {
+        expect(() => rec({ [key]: -1 }), key).toThrow(/not a valid/);
+        expect(rec({ [key]: 0 }).ok, key).toBe(true);
+        expect(rec({ [key]: null }).ok, key).toBe(true);
+      }
+      expect(() => rec({ estimateSystemPromptChars: '10' })).toThrow(/not a valid/);
+      expect(() => rec({ estimateTurns: Number.NaN })).toThrow(/not a valid/);
+      expect(() => rec({ estimateOutputCount: 'x' })).toThrow(/not a valid/);
+      expect(() => rec({ estimateOutputDefaulted: 1 })).toThrow(/not a valid/);
+      expect(() => rec({ estimatePriceChecked: 5 })).toThrow(/not a valid/);
+    });
+
+    it('rejects an estimateUsd of the wrong type on read and on write (#192)', () => {
+      const { db, store } = openStore();
+      db.prepare(
+        `INSERT INTO telemetry_events (id, type, session_id, turn_id, ts, payload)
+         VALUES ('bad-est', 'turn-cost', 's1', 't1', 1,
+           '{"model":"m","ruleId":"r","costUsd":null,"numTurns":null,"usage":null,"sdkSessionId":null,"resultSubtype":null,"estimateUsd":"1"}');`,
+      ).run();
+      expect(() => store.query()).toThrow(/structural validation|payload/i);
+      expect(() => store.record({
+        type: 'turn-cost',
+        sessionId: 's1',
+        turnId: 't9',
+        payload: {
+          model: 'm', ruleId: 'r', costUsd: null, numTurns: null, usage: null, sdkSessionId: null, resultSubtype: null,
+          estimateUsd: Number.NaN,
+        },
+      })).toThrow(/not a valid turn-cost payload/);
+    });
+
     it('rejects a refusal field of the wrong type', () => {
       const { db, store } = openStore();
       db.prepare(

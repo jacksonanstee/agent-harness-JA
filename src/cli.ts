@@ -83,6 +83,8 @@ export interface RunArgs {
   maxTurns: number;
   /** DEFAULT_DESCRIPTOR plus any --shape/--sensitivity/--expected-tokens overrides (issue #88). */
   descriptor: TaskDescriptor;
+  /** `--expected-output-tokens`: CLI-only guess for the cost estimate (#192); key absent when not given. */
+  outputGuess?: number;
 }
 
 export interface TelemetryExportArgs {
@@ -207,6 +209,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
   let shape = DEFAULT_DESCRIPTOR.shape;
   let sensitivity = DEFAULT_DESCRIPTOR.sensitivity;
   let expectedTokens = DEFAULT_DESCRIPTOR.expected_tokens;
+  let outputGuess: number | undefined;
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
@@ -217,7 +220,8 @@ export function parseRunArgs(argv: string[]): ParseResult {
       arg === '--max-turns' ||
       arg === '--shape' ||
       arg === '--sensitivity' ||
-      arg === '--expected-tokens'
+      arg === '--expected-tokens' ||
+      arg === '--expected-output-tokens'
     ) {
       const value = rest[i + 1];
       if (value === undefined) {
@@ -257,6 +261,13 @@ export function parseRunArgs(argv: string[]): ParseResult {
         }
         expectedTokens = parsed;
       }
+      if (arg === '--expected-output-tokens') {
+        const parsed = parseSafeInt(value);
+        if (parsed === undefined) {
+          return { ok: false, error: `--expected-output-tokens must be a non-negative integer. ${USAGE}` };
+        }
+        outputGuess = parsed;
+      }
       i += 1;
     } else if (arg.startsWith('--')) {
       return { ok: false, error: `Unknown flag '${arg}'. ${USAGE}` };
@@ -280,6 +291,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
       dbPath,
       maxTurns,
       descriptor: { shape, sensitivity, expected_tokens: expectedTokens },
+      ...(outputGuess === undefined ? {} : { outputGuess }),
     },
   };
 }
@@ -483,7 +495,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     return 2;
   }
 
-  const { prompt, skillsDir, dbPath, maxTurns, descriptor } = parsed.value;
+  const { prompt, skillsDir, dbPath, maxTurns, descriptor, outputGuess } = parsed.value;
 
   // A malicious clone can commit its skills directory as a symlink whose
   // target escapes the project; load() realpaths the root and scans the
@@ -576,6 +588,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       skillsDir,
       maxTurns,
       descriptor,
+      ...(outputGuess === undefined ? {} : { outputGuess }),
       generateId: () => harnessSessionId,
       turnId,
       onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),

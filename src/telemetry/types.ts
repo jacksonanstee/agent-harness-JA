@@ -40,6 +40,28 @@ export interface TurnCostPayload {
   refusalCategory?: string | null;
   /** Non-null means the answering model was NOT `model` above (a fallback swap). */
   refusalFallbackModel?: string | null;
+  /**
+   * Pre-run cost estimate in USD (#192, `src/internal/pricing.ts`), stored so
+   * `telemetry cost --estimate` can set it beside `costUsd`. OPTIONAL for the
+   * same reason as the refusal fields: rows written before #192 carry no key
+   * and must still validate on read. No schema migration is needed because the
+   * payload is JSON (ADR-0011). Null means no estimate could be made (unpriced
+   * model, or `maxTurns` unset); it is never zero.
+   */
+  estimateUsd?: number | null;
+  /**
+   * The estimate's inputs, so a stored figure can be re-derived and a later
+   * price or default change does not silently re-mean old rows. All optional
+   * for the same reason as `estimateUsd`.
+   */
+  estimateSystemPromptChars?: number | null;
+  estimateTurns?: number | null;
+  /** The operator's output-token guess, or null when the default was used. */
+  estimateOutputCount?: number | null;
+  /** True when `DEFAULT_EXPECTED_OUTPUT_TOKENS` stood in for a missing guess. */
+  estimateOutputDefaulted?: boolean;
+  /** The `checked` date of the price row used (`PriceRow.checked`). */
+  estimatePriceChecked?: string | null;
 }
 
 /**

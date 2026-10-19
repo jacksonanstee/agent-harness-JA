@@ -290,6 +290,10 @@ function isFiniteOrNull(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value));
 }
 
+function isNonNegativeOrNull(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
 function isTurnUsage(value: unknown): value is TurnUsage {
   return (
     isObject(value) &&
@@ -317,7 +321,13 @@ function isTurnCostPayload(value: unknown): value is TurnCostPayload {
     isOptionalStringOrNull(value.stopReason) &&
     isOptionalStringOrNull(value.refusalSource) &&
     isOptionalStringOrNull(value.refusalCategory) &&
-    isOptionalStringOrNull(value.refusalFallbackModel)
+    isOptionalStringOrNull(value.refusalFallbackModel) &&
+    (value.estimateUsd === undefined || value.estimateUsd === null || (isFiniteOrNull(value.estimateUsd) && value.estimateUsd >= 0)) &&
+    (value.estimateSystemPromptChars === undefined || isNonNegativeOrNull(value.estimateSystemPromptChars)) &&
+    (value.estimateTurns === undefined || isNonNegativeOrNull(value.estimateTurns)) &&
+    (value.estimateOutputCount === undefined || isNonNegativeOrNull(value.estimateOutputCount)) &&
+    (value.estimateOutputDefaulted === undefined || typeof value.estimateOutputDefaulted === 'boolean') &&
+    isOptionalStringOrNull(value.estimatePriceChecked)
   );
 }
 
@@ -687,6 +697,7 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       refusalSource: sanitizeOptional(p.refusalSource),
       refusalCategory: sanitizeOptional(p.refusalCategory),
       refusalFallbackModel: sanitizeOptional(p.refusalFallbackModel),
+      estimatePriceChecked: sanitizeOptional(p.estimatePriceChecked),
     };
   }
   if (event.type === 'tool-trace') {

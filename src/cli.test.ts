@@ -100,6 +100,25 @@ describe('parseRunArgs', () => {
     if (top.ok && top.value.command === 'run') expect(top.value.maxTurns).toBe(9007199254740991);
   });
 
+  it('--expected-output-tokens is CLI-only, separate from --expected-tokens, and omitted when absent (#192)', () => {
+    const without = parseRunArgs(['run', 'hi']);
+    expect(without.ok && 'outputGuess' in without.value).toBe(false);
+    const given = parseRunArgs(['run', 'hi', '--expected-output-tokens', '1234', '--expected-tokens', '77']);
+    expect(given.ok).toBe(true);
+    if (given.ok && given.value.command === 'run') {
+      expect(given.value.outputGuess).toBe(1234);
+      expect(given.value.descriptor.expected_tokens).toBe(77);
+    }
+    expect(parseRunArgs(['run', 'hi', '--expected-output-tokens', '0']).ok).toBe(true);
+    for (const bad of ['-1', '1.5', 'abc', '']) {
+      expect(parseRunArgs(['run', 'hi', '--expected-output-tokens', bad])).toEqual({
+        ok: false,
+        error: `--expected-output-tokens must be a non-negative integer. ${USAGE}`,
+      });
+    }
+    expect(parseRunArgs(['run', 'hi', '--expected-output-tokens']).ok).toBe(false);
+  });
+
   it('pins the --expected-tokens rejection message byte for byte (#128)', () => {
     expect(parseRunArgs(['run', 'hi', '--expected-tokens', 'abc'])).toEqual({
       ok: false,

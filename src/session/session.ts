@@ -44,6 +44,7 @@ import {
   truncateWellFormed,
 } from '../internal/sanitize.js';
 import { MAX_SKILL_PROMPT_CHARS } from '../internal/limits.js';
+import { buildRunEstimate } from '../internal/pricing.js';
 import {
   cleanSkillText,
   FENCE_OPENER_RE,
@@ -1649,6 +1650,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         refusalSource: refusal?.source ?? null,
         refusalCategory: refusal?.category ?? null,
         refusalFallbackModel: refusal?.fallbackModel ?? null,
+        // #192: the pre-run estimate and its inputs. maxTurns is a ceiling on
+        // the turns taken, so the estimate leans high on cache reads. An unset
+        // maxTurns, a maxTurns below 1, or no system prompt (no skills) gives
+        // a null estimate, never zero. The output guess is the operator's
+        // `outputGuess`, NOT the routing descriptor's expected_tokens.
+        ...buildRunEstimate({
+          model: modelChoice.model,
+          systemPromptChars: systemPrompt?.length,
+          turns: config.maxTurns,
+          outputGuess: config.outputGuess,
+        }),
       },
     });
 

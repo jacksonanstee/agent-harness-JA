@@ -16,6 +16,20 @@ export type Model =
   | 'claude-opus-5'
   | 'claude-fable-5';
 
+// Presence record (the house idiom, see TELEMETRY_EVENT_TYPES): `satisfies
+// Record<Model, true>` makes a union member without an entry a compile error,
+// and an entry outside the union an excess-property error. MODELS is the
+// runtime list the price-table coverage test iterates (#192). It is NOT
+// re-exported from the router barrel and `Model` does not reference it, so the
+// public surface (ADR-0023) is unchanged.
+const MODEL_PRESENCE = Object.freeze({
+  'claude-haiku-4-5': true,
+  'claude-sonnet-5': true,
+  'claude-opus-5': true,
+  'claude-fable-5': true,
+} satisfies Record<Model, true>);
+export const MODELS: readonly Model[] = Object.freeze(Object.keys(MODEL_PRESENCE) as Model[]);
+
 export interface TaskDescriptor {
   shape: TaskShape;
   sensitivity: TaskSensitivity;
