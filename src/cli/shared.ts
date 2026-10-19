@@ -66,6 +66,7 @@ export const USAGE =
   '       agent-harness-ja eval [taskDir] [--challenge] [--max-tasks <n>]\n' +
   `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${JUDGE_MODEL_IDS.join('|')}>] [--holdout <path>] [--samples <n>]\n` +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
+  '       agent-harness-ja telemetry cost [--db <path>] [--since <YYYY-MM-DD>] [--by model|session|day]\n' +
   '       agent-harness-ja init [dir]\n' +
   '       agent-harness-ja permissions list';
 
