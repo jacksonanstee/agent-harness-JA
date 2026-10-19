@@ -31,6 +31,8 @@ import { parsePermissionsArgs, runPermissionsList } from './cli/permissions-comm
 import type { PermissionsListArgs } from './cli/permissions-command.js';
 import { parseTelemetryCostArgs, runTelemetryCost } from './cli/telemetry-cost-command.js';
 import type { TelemetryCostArgs } from './cli/telemetry-cost-command.js';
+import { parseSkillsArgs, runSkillsLint } from './cli/skills-command.js';
+import type { SkillsLintArgs } from './cli/skills-command.js';
 import { parseRedteamArgs, runRedteamCommand } from './cli/redteam-command.js';
 import type { RedteamArgs } from './cli/redteam-command.js';
 import { createHookRuntime } from './hooks/index.js';
@@ -98,7 +100,7 @@ export interface TelemetryExportArgs {
   scrubPrefixes: string[];
 }
 
-export type CliArgs = RunArgs | TelemetryExportArgs | TelemetryCostArgs | EvalArgs | RedteamArgs | InitArgs | PermissionsListArgs;
+export type CliArgs = RunArgs | TelemetryExportArgs | TelemetryCostArgs | EvalArgs | RedteamArgs | InitArgs | PermissionsListArgs | SkillsLintArgs;
 
 export type ParseResult =
   | { ok: true; value: CliArgs }
@@ -119,6 +121,9 @@ export function parseArgs(argv: string[]): ParseResult {
   }
   if (argv[0] === 'permissions') {
     return parsePermissionsArgs(argv.slice(1));
+  }
+  if (argv[0] === 'skills') {
+    return parseSkillsArgs(argv.slice(1));
   }
   return parseRunArgs(argv);
 }
@@ -467,6 +472,10 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
 
   if (parsed.value.command === 'permissions-list') {
     return runPermissionsList(parsed.value, undefined, { userDir: seams.userDir ?? homedir() });
+  }
+
+  if (parsed.value.command === 'skills-lint') {
+    return runSkillsLint(parsed.value);
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {

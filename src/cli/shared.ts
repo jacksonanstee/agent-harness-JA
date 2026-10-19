@@ -68,7 +68,8 @@ export const USAGE =
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
   '       agent-harness-ja telemetry cost [--db <path>] [--since <YYYY-MM-DD>] [--by model|session|day]\n' +
   '       agent-harness-ja init [dir]\n' +
-  '       agent-harness-ja permissions list';
+  '       agent-harness-ja permissions list\n' +
+  '       agent-harness-ja skills lint <dir>';
 
 /**
  * The integer-flag parse the `run` and `eval` flags share (issue #128):
