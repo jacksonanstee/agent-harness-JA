@@ -303,7 +303,7 @@ export interface SessionDeps {
    * `additionalContext` channel (issue #84, D2). When `judge` is configured the
    * judge also runs on these two hooks and may tighten the verdict (issue #96
    * PR-B1); with `judge.withhold: 'block'` a SUCCESSFUL result the judge itself
-   * classified `block` is WITHHELD instead, its string leaves replaced by a
+   * classified `block` is WITHHELD instead, its non-empty string leaves replaced by a
    * placeholder through `updatedToolOutput` (issue #145, ADR-0039), off by
    * default and never on the failure hook; a walk that cannot run or that
    * finds no non-empty string leaf withholds nothing and says so (`outputRewrites`). The INPUT side stays

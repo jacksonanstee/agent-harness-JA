@@ -1412,7 +1412,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // Issue #145 B2a (spec D1, D2, D6): the withhold runs AFTER the step-6
         // re-decide, so a hook cancelled during the custom hook never withholds
         // (hook-cancelled is not judged), and only on the judge's own block.
-        // `deliver` is required so a rewrite is never returned without its notice.
+        // `deliver` is required so a WITHHOLD rewrite never goes out without its notice (a pass-verdict redaction rewrite carries none, #84).
         if (withholdOn && hasOutput && decision !== null && decision.deliver && decidesWithhold(decision)) {
           withheld = applyWithhold(toolName, toolUseId, rewrite === null ? toolResponse : rewrite.value, rewrite?.pending ?? null);
         }
