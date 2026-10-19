@@ -200,7 +200,7 @@ export const PATH_ESCAPE_SEQUENCE = /\\\\|\\u\{[0-9A-F]+\}/g;
  * Escapes every character that would otherwise be deleted or space-
  * substituted out of a filesystem path (PATH_ESCAPE_TARGETS), so the result
  * is printable ASCII-safe text that still IDENTIFIES the file. Deleting or
- * substituting is wrong here, unlike for `name` (cleanSkillText, session.ts):
+ * substituting is wrong here, unlike for `name` (cleanSkillText, src/internal/skill-section.ts):
  * an invisible character renders as nothing either way, so removing it buys
  * no visibility while destroying the only thing that distinguishes two
  * paths — letting a hostile `/skills/he<U+200B>lper.md` collapse onto a

@@ -1588,7 +1588,8 @@ describe('createSession', () => {
         /\p{Me}/u,
         /\p{Cc}/u,
       ];
-      // Mirrors session.ts's TWO prompt-sink transforms. `cleanSkillText`
+      // Mirrors the TWO prompt-sink transforms in src/internal/skill-section.ts
+      // (used by session.ts). `cleanSkillText`
       // covers name/description; since issue #45 the BODY uses
       // `cleanSkillBody`, whose control-char pass keeps tab and newline. This
       // sweep is the repo's strongest anti-smuggling guard, and mirroring only

@@ -17,8 +17,8 @@ export interface Skill {
   name: string;
   /**
    * RAW attacker-influenced free text (length-capped only). Deliberately not
-   * sanitized at load — sinks opt in per charset contract: session.ts
-   * `cleanSkillText` strips control/bidi/invisible chars before the system
+   * sanitized at load — sinks opt in per charset contract:
+   * `cleanSkillText` (src/internal/skill-section.ts) strips control/bidi/invisible chars before the system
    * prompt and scans the raw text. A new consumer of this field must do the
    * same at its own boundary.
    *
@@ -41,7 +41,7 @@ export interface Skill {
    * Markdown body below the frontmatter, trimmed. Like `description`, this is
    * RAW attacker-influenced free text — bounded only by the loader's 1 MB
    * file cap, and deliberately not sanitized at load. Sinks opt in per
-   * charset contract: session.ts `cleanSkillBody` strips control/bidi/
+   * charset contract: `cleanSkillBody` (src/internal/skill-section.ts) strips control/bidi/
    * invisible chars before the system prompt, scans the raw text first, and
    * bounds the aggregate injected size. A new consumer of this field must do
    * the same at its own boundary.

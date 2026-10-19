@@ -63,9 +63,12 @@ node dist/cli.js telemetry export      # JSONL; filter by --session / --type; --
 node dist/cli.js telemetry cost --since 2026-10-01 --by model   # read-only spend report: agent and judge spend apart, unknown costs counted, not summed
 node dist/cli.js init my-agent         # scaffold a starter project
 node dist/cli.js permissions list      # read-only: the permission rules a run would load, per layer, with each rule's index
+node dist/cli.js skills lint skills       # read-only: static checks over a skills directory (exit 0 clean, 1 findings, 2 cannot lint)
 ```
 
 Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
+
+`skills lint <dir>` statically checks a skills directory without running anything, one line per finding: `"<file>": <rule>: <message>`. It reuses the loader, so any read, parse or schema error `run` would report appears here under the same rule name, and it adds four checks the loader does not make: `duplicate-name` (two files with the same skill name, each naming the other), `body-size` (a skill whose prompt section, header and separator included, is more than the 256,000-character skill prompt budget, which a run always drops), `aggregate-budget` (a skill that overflows what is left of that budget after the earlier skills in load order, which a run also drops; skills a run would block for an injection hit are not modelled) and `dangling-reference` (a relative markdown link or link definition in the body that does not resolve, through symlinks, to a file inside the skills directory; URLs, `#` anchors, absolute paths and anything in a code fence or inline code are ignored). Exit 0 is clean, 1 means findings, 2 means the directory could not be linted (missing, not a directory, or a symlink at the root, which `run` refuses too). Whether a description leads with its trigger condition is not checked: that is not mechanically decidable.
 
 `init` refuses to overwrite anything it would create (scaffold into a fresh directory), prints the exact next-step commands for a from-clone install, and the starter it produces passes its own eval in one turn. The scaffolded policy denies the network tools and its README explains the Bash route-around it deliberately leaves open, and how to close it.
 
@@ -181,7 +184,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0038 |
-| Tests | 2482 at the 2026-10-19 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 2522 at the 2026-10-19 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
