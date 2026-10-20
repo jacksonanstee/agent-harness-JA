@@ -494,6 +494,13 @@ describe('H2: an MCP content-block array keeps each block type so the CLI render
     expect(result.outputRewrites.map((r: OutputRewrite) => [r.kind, r.outcome])).toEqual([['withhold', 'applied']]);
   });
 
+  it('the MCP block-type keep is scoped to MCP tools: a built-in Read with type "resource" has it replaced (N)', async () => {
+    const fake = drivenQuery([{ id: 'toolu_1', tool: 'Read', output: { type: 'resource', file: { content: 'plain notes\nsecond line of the note' } } }]);
+    const b = build(fake.query, withholdOn());
+    await start(b).run('hi');
+    expect(rewriteOf(fake.outputs.get('toolu_1'))).toEqual({ type: PLACEHOLDER, file: { content: PLACEHOLDER } });
+  });
+
   it('a non-block-type value under key type on an MCP tool is content, so it is the placeholder (N)', async () => {
     const tool = 'mcp__srv__tool';
     const place = withholdPlaceholder(tool);
