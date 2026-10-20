@@ -69,7 +69,7 @@ export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonl
 export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
-const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'hook-error', 'hook-fired']);
+const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'granted-by-rule', 'hook-error', 'hook-fired']);
 
 /**
  * Exhaustive BY CONSTRUCTION over the telemetry MIRRORS of session's tool-trace

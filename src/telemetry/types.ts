@@ -206,7 +206,7 @@ export interface JudgeCallPayload {
  * from src/hooks — telemetry and hooks are peer leaf modules; the adapter that
  * maps one to the other lives in the composition root (cli.ts).
  */
-export type HookEventKind = 'denied-by-hook' | 'hook-error' | 'hook-fired';
+export type HookEventKind = 'denied-by-hook' | 'granted-by-rule' | 'hook-error' | 'hook-fired';
 
 export interface HookEventPayload {
   kind: HookEventKind;

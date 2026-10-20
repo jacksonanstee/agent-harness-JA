@@ -481,7 +481,7 @@ export function hookRecordToTelemetryInput(
   deps: HookTelemetryDeps,
 ): TelemetryEventInput {
   const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
-  if (record.kind === 'denied-by-hook') {
+  if (record.kind === 'denied-by-hook' || record.kind === 'granted-by-rule') {
     return {
       ...base,
       payload: {

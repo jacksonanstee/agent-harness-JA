@@ -10,6 +10,7 @@ import type {
   PreToolPayload,
   Unsubscribe,
 } from './types.js';
+import { isPreToolGrant } from '../internal/pre-tool-grant.js';
 import { sanitizeControlChars as sanitize } from '../internal/sanitize.js';
 
 export const HOOK_EVENTS = [
@@ -144,11 +145,17 @@ export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
     const snapshot = [...(registry.get(event) ?? [])];
     const errors: HookHandlerError[] = [];
     let handlersFired = 0;
+    let firstGrant: { handlerIndex: number; reason: string } | null = null;
 
     for (const [index, handler] of snapshot.entries()) {
       handlersFired++;
       try {
-        await handler(payload);
+        const returned: unknown = await handler(payload);
+        // Only a pre-tool return can grant; the reason read sits inside this try,
+        // so a throwing getter is a deny, never a grant.
+        if (event === 'pre-tool' && firstGrant === null && isPreToolGrant(returned)) {
+          firstGrant = { handlerIndex: index, reason: sanitize(returned.reason) };
+        }
       } catch (thrown: unknown) {
         const reason = reasonOf(thrown);
         if (event === 'pre-tool') {
@@ -171,7 +178,26 @@ export function createHookRuntime(opts: HookRuntimeOptions = {}): HookRuntime {
       }
     }
 
+    if (event === 'pre-tool' && firstGrant !== null) {
+      emit({
+        kind: 'granted-by-rule',
+        event: 'pre-tool',
+        handlerIndex: firstGrant.handlerIndex,
+        tool: sanitize(String((payload as PreToolPayload).tool)),
+        reason: firstGrant.reason,
+      });
+    }
     emit({ kind: 'hook-fired', event, handlersFired });
+    if (event === 'pre-tool') {
+      return {
+        event,
+        handlersFired,
+        errors,
+        denied: false,
+        granted: firstGrant !== null,
+        grantReason: firstGrant?.reason ?? null,
+      };
+    }
     return { event, handlersFired, errors, denied: false };
   }
 
