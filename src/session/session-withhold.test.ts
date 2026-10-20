@@ -484,6 +484,15 @@ describe('H1: a withhold with no recorded span cannot read applied (review3 H1; 
     expect(rewriteRows(b)[0]).toMatchObject({ reason: 'neither-token' });
   });
 
+  it('M1: a failed-closed sentinel is no span: the token present, a short leaf, redactor down: unobserved/no-content-span, not applied (N)', async () => {
+    const out = bashOut('ab\ncd');
+    const fake = drivenQuery([{ id: 'toolu_1', tool: 'Bash', output: out }], { userMessages: [userResult('toolu_1', { stdout: withholdPlaceholder('Bash', NONCE), stderr: '', interrupted: false, isImage: false })] });
+    const b = build(fake.query, withholdOn(), { redactSecrets: () => { throw new Error('redactor down'); } });
+    const result = await start(b).run('hi');
+    expect(result.outputRewrites[0]).toMatchObject({ kind: 'withhold', outcome: 'unobserved' });
+    expect(rewriteRows(b)[0]).toMatchObject({ reason: 'no-content-span' });
+  });
+
   it('defence in depth: this run\'s token present but NO span recorded (every line short) is unobserved/no-content-span, not applied (N)', async () => {
     const shortOut = bashOut('ab\ncd');
     const fake = drivenQuery([{ id: 'toolu_1', tool: 'Bash', output: shortOut }], { userMessages: [userResult('toolu_1', { stdout: withholdPlaceholder('Bash', NONCE), stderr: '', interrupted: false, isImage: false })] });
