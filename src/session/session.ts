@@ -69,7 +69,7 @@ import {
   withholdUnrewrittenWarning,
 } from './judged-scan.js';
 import type { InternalSessionJudge, JudgeHook } from './judged-scan.js';
-import { MIN_SPAN_LINE, WITHHELD_MARKER, WITHHOLD_SPAN_LINES_MAX, withholdNotice, withholdPlaceholder, withholdSpanLine } from './withhold.js';
+import { MIN_SPAN_LINE, WITHHOLD_NONCE_HEX, WITHHOLD_SPAN_LINES_MAX, withholdNotice, withholdPlaceholder, withholdSpanLine, withholdToken } from './withhold.js';
 
 // Alias: keeps the ~10 pre-existing call sites unchanged after the
 // internal/ hoist; charset contract (C0/C1 only) is identical.
@@ -122,6 +122,14 @@ function assertValidSkillNonce(value: string): string {
       `generateNonce() must return exactly ${SKILL_NONCE_BYTES * 2} lowercase hex characters ` +
         `(got a ${value.length}-character value that does not match)`,
     );
+  }
+  return value;
+}
+
+/** Validates the withhold nonce (8 lowercase hex); the value never enters the message. */
+function assertValidWithholdNonce(value: string): string {
+  if (!new RegExp(`^[0-9a-f]{${WITHHOLD_NONCE_HEX}}$`).test(value)) {
+    throw new Error(`generateWithholdNonce() must return exactly ${WITHHOLD_NONCE_HEX} lowercase hex characters`);
   }
   return value;
 }
@@ -445,6 +453,7 @@ function buildSystemPrompt(skills: Skill[], nonce: string): {
 export function createSession(deps: SessionDeps, config: SessionConfig): Session {
   const now = config.now ?? Date.now;
   const generateId = config.generateId ?? randomUUID;
+  const generateWithholdNonce = config.generateWithholdNonce ?? (() => randomBytes(WITHHOLD_NONCE_HEX / 2).toString('hex'));
   const generateNonce =
     config.generateNonce ?? (() => randomBytes(SKILL_NONCE_BYTES).toString('hex'));
   const warn = config.onWarning ?? (() => undefined);
@@ -587,6 +596,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Issue #145 B2a (spec D3): withholding is on only when the seam says so.
     // Off is ADR-0037's path, decided once per run().
     const withholdOn = deps.judge?.withhold === 'block';
+    // Per-run nonce in the placeholder (review3 H1, fold 2): minted only when withholding is on, kept in memory like spans.
+    const withholdNonce = withholdOn ? assertValidWithholdNonce(generateWithholdNonce()) : '';
 
     // Issue #96 PR-B1 (spec D3, R1): per-run judge state; null with no judge, so that path is today's.
     const judgeRun = deps.judge === undefined ? null : createJudgeRun({
@@ -1124,7 +1135,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       source: unknown,
       redaction: PendingRewrite | null,
     ): { value: unknown } | null {
-      const placeholder = withholdPlaceholder(truncateWellFormed(cleanSdkToken(tool), NOTICE_TOOL_NAME_MAX));
+      const placeholder = withholdPlaceholder(truncateWellFormed(cleanSdkToken(tool), NOTICE_TOOL_NAME_MAX), withholdNonce);
       let replaced = 0;
       const contentSpans: string[] = [];
       let walk: { value: unknown; skipped: boolean };
@@ -1167,7 +1178,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         truncated: redaction?.truncated ?? false,
         failedClosed: false,
         kind: 'withhold',
-        markers: [WITHHELD_MARKER],
+        markers: [withholdToken(withholdNonce)],
         spanLines: [...keptSpans, ...contentSpans.filter((s) => !keptSpans.includes(s))],
         resolved: false,
       };

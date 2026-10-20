@@ -16,15 +16,29 @@ export const WITHHOLD_SPAN_LINES_MAX = 32;
  */
 export const MIN_SPAN_LINE = 8;
 
+/** Hex characters of the per-run withhold nonce (4 random bytes). Memory only: never written to a sink (G-5, G-11). */
+export const WITHHOLD_NONCE_HEX = 8;
+
+/**
+ * The token the verifier looks for in the model's copy: the public marker plus
+ * this run's nonce. The bare marker is public (README, ADR, this source), so
+ * content can carry it; it cannot carry a nonce minted after the content was
+ * produced, so only the placeholder the harness itself wrote can contain the
+ * full token (review3 H1, fold 2).
+ */
+export function withholdToken(nonce: string): string {
+  return `${WITHHELD_MARKER} ref ${nonce}`;
+}
+
 /**
  * The placeholder every non-empty string leaf of a withheld result becomes
- * (spec D1), except a leaf holding a literal the SDK declares for the tool's output (`isShapeLeaf`, issue #203), and, on an MCP tool, a content-block `type` (`isMcpBlockTypeLeaf`, review3 H2). `tool` is
+ * (spec D1), except a leaf holding a literal the SDK declares for the tool's output (`isShapeLeaf`, issue #203), and, on an MCP tool, a content-block `type` (`isMcpBlockTypeLeaf`, review3 H2). `nonce` is the run's `WITHHOLD_NONCE_HEX` token. `tool` is
  * the cleaned, bounded tool name the notice uses; no rule id, no excerpt and no attacker byte enters it. Pinned to scan
  * `pass` on the shipped heuristic (W9).
  */
-export function withholdPlaceholder(tool: string): string {
+export function withholdPlaceholder(tool: string, nonce: string): string {
   return (
-    `${WITHHELD_MARKER} The harness withheld this ${tool} result: its prompt-injection judge ` +
+    `${withholdToken(nonce)} The harness withheld this ${tool} result: its prompt-injection judge ` +
     'classified the content as an attack. Continue the task without it; repeating the call will not return it.'
   );
 }
@@ -50,10 +64,13 @@ export function withholdNotice(tool: string, idText: string): string {
  * the placeholder or the marker CONTAINS, or an applied withhold of such a
  * leaf would read `both-present`. Null when no line qualifies. An attacker who
  * shapes content so that NO span is recorded (every line short, or the marker
- * planted as a line) can force `unobserved` (`no-content-span` when the marker
- * is present, `neither-token` otherwise), never a false `applied`: the verifier
- * refuses `applied` for a withhold entry with no span at all (review3 H1). A
- * blank first line no longer forces it.
+ * planted as a line) can force `unobserved`, never a false `applied`: `applied`
+ * needs this run's nonce token in the copy (the bare public marker counts as
+ * absent, `neither-token`) AND at least one recorded span (`no-content-span`,
+ * defence in depth). A Read records `file.filePath` as a span although the CLI
+ * renders `file.content` only, so the nonce, not the span, is what makes
+ * `applied` unforgeable (review3 H1, fold 2). A blank first line no longer
+ * forces `unobserved`.
  * Held per run only, like secret spans (G-5, G-11).
  */
 export function withholdSpanLine(leaf: string, placeholder: string): string | null {

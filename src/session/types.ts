@@ -382,6 +382,13 @@ export interface SessionConfig {
    * choice; the default is a fresh 64-bit value per run from `randomBytes`.
    */
   generateNonce?: () => string;
+  /**
+   * Injected source for the per-run withhold nonce (issue #145 review3 H1,
+   * ADR-0039): exactly 8 lowercase hex characters, called once per run and only
+   * when `judge.withhold` is on. Tests inject a constant; the default is
+   * `randomBytes(4)` per run. Held in memory only, like the verifier's spans.
+   */
+  generateWithholdNonce?: () => string;
 }
 
 export interface DeniedToolCall {

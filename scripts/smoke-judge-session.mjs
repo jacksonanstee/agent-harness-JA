@@ -142,7 +142,7 @@ const {
 const { JUDGE_MAX_CONCURRENT, JUDGE_HOOK_TIMEOUT_S } = await import(distConstants);
 const { JUDGE_HOOK_CANCELLED_WARNING, judgeLeakedByHookTimeoutWarning } = await import(distLines);
 const { WITHHELD_MARKER, withholdPlaceholder } = await import(distWithhold);
-const withholdPlaceholderProbe = () => withholdPlaceholder('Read');
+const withholdPlaceholderProbe = () => withholdPlaceholder('Read', '00000000');
 const evidenceDirB2 = join(repoRoot, 'tasks', 'issue-145-evidence', 'prb2-smoke');
 
 // ---------------------------------------------------------------------------

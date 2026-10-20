@@ -8,7 +8,6 @@ import { main } from '../cli.js';
 import { JUDGE_SESSION_STATES } from '../session/index.js';
 import type { JudgeSummary, QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from '../session/index.js';
 import { JUDGE_SYSTEM_PROMPT } from '../session/judge.js';
-import { withholdPlaceholder } from '../session/withhold.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import type { JudgeCallPayload } from '../telemetry/index.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './run-judge.js';
@@ -39,6 +38,8 @@ function dir(settings?: unknown): string {
   return d;
 }
 
+/** `userToolResult` may be ECHO_UPDATED: the hook's own updatedToolOutput is echoed, so the run's nonce need not be known. */
+const ECHO_UPDATED = Symbol('echo-updated');
 function fakeSdk(judgeReply: string, userToolResult?: unknown) {
   const primary: QueryOptions[] = [];
   const judge: QueryOptions[] = [];
@@ -53,17 +54,19 @@ function fakeSdk(judgeReply: string, userToolResult?: unknown) {
     if (o !== undefined) primary.push(o);
     return (async function* () {
       const signal = new AbortController().signal;
+      let updated: unknown;
       for (const m of o?.hooks?.PostToolUse ?? []) {
         for (const cb of m.hooks as unknown as SdkHookCallback[]) {
-          await cb(
+          const out = await cb(
             { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, tool_response: `notes ${MARKER}`, tool_use_id: 'toolu_1' },
             'toolu_1',
             { signal },
           );
+          updated = (out as { hookSpecificOutput?: { updatedToolOutput?: unknown } } | undefined)?.hookSpecificOutput?.updatedToolOutput;
         }
       }
       if (userToolResult !== undefined) {
-        yield { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: userToolResult, is_error: false }] }, parent_tool_use_id: null } as unknown as SdkMessage;
+        yield { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: userToolResult === ECHO_UPDATED ? updated : userToolResult, is_error: false }] }, parent_tool_use_id: null } as unknown as SdkMessage;
       }
       yield { type: 'system', subtype: 'init', session_id: 'sdk-1' } as SdkMessage;
       yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sdk-1', num_turns: 1, total_cost_usd: 0.01 } as SdkMessage;
@@ -162,7 +165,7 @@ describe('run path with the judge on (D2, D7; pins 3, 16, 32)', () => {
 
 describe('withhold counts: decisions and landings apart (#145 B2a, W14)', () => {
   it('withhold on, the placeholder echoed: the start line names withholding, the model-facing line counts the landing, the judge line counts the decision, both rows carry it (#145 B2a, W14)', async () => {
-    const sdk = fakeSdk('{"verdict":"block"}', withholdPlaceholder('Read'));
+    const sdk = fakeSdk('{"verdict":"block"}', ECHO_UPDATED);
     const { argv, db } = runArgs();
     const { code, stderr } = await runMain(argv, { judge: { mode: 'always', maxCallsPerRun: 3, withhold: 'block' } }, undefined, sdk.query);
     expect(code).toBe(0);

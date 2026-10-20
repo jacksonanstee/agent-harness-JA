@@ -12,9 +12,9 @@ describe('the placeholder and the notice (spec D1; W9)', () => {
   });
 
   it('the placeholder is the spec sentence, starts with the marker, and scans pass on the shipped heuristic', () => {
-    const p = withholdPlaceholder('Read');
+    const p = withholdPlaceholder('Read', 'abcd1234');
     expect(p).toBe(
-      '[WITHHELD:judge-block] The harness withheld this Read result: its prompt-injection judge classified the content as an attack. ' +
+      '[WITHHELD:judge-block] ref abcd1234 The harness withheld this Read result: its prompt-injection judge classified the content as an attack. ' +
         'Continue the task without it; repeating the call will not return it.',
     );
     expect(p.startsWith(WITHHELD_MARKER)).toBe(true);
@@ -31,14 +31,14 @@ describe('the placeholder and the notice (spec D1; W9)', () => {
   });
 
   it('neither string carries a verdict word as a bare token the model could read as an instruction to itself: no "ignore", "disregard", "instructions"', () => {
-    for (const s of [withholdPlaceholder('Bash'), withholdNotice('Bash', 'judge-block')]) {
+    for (const s of [withholdPlaceholder('Bash', 'abcd1234'), withholdNotice('Bash', 'judge-block')]) {
       expect(s).not.toMatch(/\b(ignore|disregard|instructions?)\b/i);
     }
   });
 });
 
 describe('the content span oracle (spec D4, S5; W9b unit)', () => {
-  const P = withholdPlaceholder('Read');
+  const P = withholdPlaceholder('Read', 'abcd1234');
 
   it('takes the first NON-EMPTY line of at least MIN_SPAN_LINE chars: a blank first line, --- and a short line are skipped', () => {
     expect(withholdSpanLine('\n\n---\n#!/sh\nthe real first line of content here\nmore', P)).toBe('the real first line of content here');
