@@ -383,6 +383,27 @@ describe('permissionHook', () => {
     await expect(denyAll(preTool('Bash', {}))).rejects.toThrowError(PermissionDenied);
   });
 
+  it('pin iv: a USER-layer rule allow returns the grant whose reason equals evaluate().reason; a project-layer allow and a default allow return undefined (#140, D-7)', async () => {
+    const userAllow = createPermissionEvaluator({ rules: [rule({ tool: 'Bash', match: 'git *', decision: 'allow', layer: 'user' })] });
+    const projectAllow = createPermissionEvaluator({ rules: [rule({ tool: 'Bash', decision: 'allow', layer: 'project' })] });
+    const nothing = createPermissionEvaluator({ rules: [] });
+    const call = preTool('Bash', { command: 'git status' });
+    await expect(permissionHook(userAllow)(call)).resolves.toEqual({ grant: 'rule', reason: userAllow.evaluate('Bash', { command: 'git status' }).reason });
+    expect(userAllow.evaluate('Bash', { command: 'git status' }).reason).toBe('permission: allow Bash [rule 0, user]');
+    await expect(permissionHook(projectAllow)(call)).resolves.toBeUndefined();
+    await expect(permissionHook(nothing)(call)).resolves.toBeUndefined();
+  });
+
+  it('a user deny beside a project allow still throws (sticky deny; the grant never reaches a deny winner)', async () => {
+    const mixed = createPermissionEvaluator({ rules: [rule({ tool: 'Bash', decision: 'deny', layer: 'user' }), rule({ tool: 'Bash', decision: 'allow', layer: 'project' })] });
+    await expect(permissionHook(mixed)(preTool('Bash', {}))).rejects.toThrowError(PermissionDenied);
+  });
+
+  it('Review Focus 4: an approved ask is not a grant', async () => {
+    const userAsk = createPermissionEvaluator({ rules: [rule({ tool: 'Bash', decision: 'ask', layer: 'user' })] });
+    await expect(permissionHook(userAsk, async () => true)(preTool('Bash', {}))).resolves.toBeUndefined();
+  });
+
   it('fails closed when the prompter throws or rejects', async () => {
     const throwing = permissionHook(askBash, () => {
       throw new Error('tty gone');

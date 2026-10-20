@@ -5,6 +5,7 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import { PRE_TOOL_GRANT_KIND, type PreToolGrant } from '../../internal/pre-tool-grant.js';
 import type { PreToolLike } from '../pre-tool-like.js';
 import { collapseBlanks, firstShellWord, trimWordSeparators } from '../shell-words.js';
 import type {
@@ -252,14 +253,22 @@ export class PermissionDenied extends Error {
  * Pre-tool hook enforcing the permission model. Throws PermissionDenied on
  * deny; 'ask' resolves via the prompter and fails closed without one, or when
  * the prompter throws/rejects (ADR-0014 §4).
+ *
+ * A rule allow from the USER layer returns a PreToolGrant: the SDK grant
+ * (ADR-0040 D3, owner ruling D-7). A project-layer or default allow resolves
+ * void, which the session maps to `{}` so the CLI's own floor decides. Deny and
+ * ask are unchanged, and an approved ask is not a grant. The reason is the
+ * ADR-0031 shape (no glob) and reaches telemetry only, never the SDK.
  */
 export function permissionHook(
   evaluator: PermissionEvaluator,
   prompter?: Prompter,
-): (payload: PreToolLike) => Promise<void> {
+): (payload: PreToolLike) => Promise<void | PreToolGrant> {
   return async (payload) => {
     const result = evaluator.evaluate(payload.tool, payload.args);
-    if (result.decision === 'allow') return;
+    if (result.decision === 'allow') {
+      return result.layer === 'user' ? { grant: PRE_TOOL_GRANT_KIND, reason: result.reason } : undefined;
+    }
     if (result.decision === 'deny') {
       throw new PermissionDenied(result.reason);
     }
@@ -275,5 +284,6 @@ export function permissionHook(
     if (!approved) {
       throw new PermissionDenied(`${result.reason} — declined by prompter`);
     }
+    return undefined;
   };
 }
