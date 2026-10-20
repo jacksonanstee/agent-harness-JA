@@ -1110,8 +1110,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
 
     // Issue #145 B2a (spec D1, D4): replace every non-empty string leaf of the
     // model's copy, except a CLI shape leaf (isShapeLeaf, #203), with the
-    // placeholder and RE-OWN (or enrol) the verifier's
-    // pending entry. `source` is the copy the judge judged, by reference: the
+    // placeholder and RE-OWN (or enrol) the verifier's pending entry. `source` is the copy the judge judged, by reference: the
     // redaction rewrite when one applied, else the raw response (D1; the custom
     // hook received the raw object at step 4 and could, as operator code, have
     // mutated it in between, S9). Null means nothing was withheld: a walk that

@@ -309,7 +309,7 @@ describe('W10: a walk that cannot run on the withhold pass (spec D1)', () => {
   });
 });
 
-describe('W11: the withhold keeps the CLI\'s shape leaves on a built-in tool (Task 8b, issue #203, ADR-0039 20/10/2026)', () => {
+describe("W11: the withhold keeps the CLI's shape leaves on a built-in tool (Task 8b, issue #203, ADR-0039 20/10/2026)", () => {
   const run = async (tool: string, output: unknown): Promise<unknown> => {
     const fake = drivenQuery([{ id: 'toolu_1', tool, output }]);
     const b = build(fake.query, withholdOn());
@@ -318,11 +318,8 @@ describe('W11: the withhold keeps the CLI\'s shape leaves on a built-in tool (Ta
   };
 
   it('(a) Read: type stays "text" byte-exact, the numbers are untouched, file.content and file.filePath are the placeholder (N)', async () => {
-    const out = (await run('Read', READ)) as { type: string; file: Record<string, unknown> };
-    expect(out.type).toBe('text');
+    const out = await run('Read', READ);
     expect(out).toEqual({ type: 'text', file: { filePath: PLACEHOLDER, content: PLACEHOLDER, numLines: 2, startLine: 1, totalLines: 2, empty: '' } });
-    expect(out.file.content).toEqual(PLACEHOLDER);
-    expect(out.file.filePath).toEqual(PLACEHOLDER);
   });
 
   it('(b) Edit: gitDiff.status stays "modified"; gitDiff.patch and the file path are the placeholder (N)', async () => {
@@ -333,15 +330,35 @@ describe('W11: the withhold keeps the CLI\'s shape leaves on a built-in tool (Ta
       gitDiff: { filename: 'note.txt', status: 'modified', additions: 1, deletions: 1, changes: 2, patch: '@@ -1 +1 @@\n-a\n+b' },
     };
     const place = withholdPlaceholder('Edit');
-    const fake = drivenQuery([{ id: 'toolu_1', tool: 'Edit', output: edit }]);
-    const b = build(fake.query, withholdOn());
-    await start(b).run('hi');
-    expect(rewriteOf(fake.outputs.get('toolu_1'))).toEqual({
+    const withheld = {
       filePath: place,
       oldString: place,
       newString: place,
       gitDiff: { filename: place, status: 'modified', additions: 1, deletions: 1, changes: 2, patch: place },
-    });
+    };
+    // The stream echoes the withheld copy, which still carries the kept literal 'modified'. That literal is 8 characters
+    // (MIN_SPAN_LINE): a keeper placed after the span push would record it as a content span and the verifier would read leaked.
+    const fake = drivenQuery([{ id: 'toolu_1', tool: 'Edit', output: edit }], { userMessages: [userResult('toolu_1', withheld)] });
+    const b = build(fake.query, withholdOn());
+    const result = await start(b).run('hi');
+    expect(rewriteRows(b)).toEqual([{ tool: 'Edit', tool_use_id: 'toolu_1', findings: 0, truncated: false, outcome: 'applied', kind: 'withhold' }]);
+    expect(result.outputRewrites.map((r: OutputRewrite) => [r.kind, r.outcome])).toEqual([['withhold', 'applied']]);
+    expect(rewriteOf(fake.outputs.get('toolu_1'))).toEqual(withheld);
+  });
+
+  it.each([
+    ['Read, empty content', 'Read', { type: 'text', file: { filePath: '', content: '', numLines: 0, startLine: 1, totalLines: 0 } }],
+    ['Edit, only a gitDiff status', 'Edit', { gitDiff: { status: 'modified' } }],
+  ])('(e) %s: only shape literals left, so nothing is withheld: no rewrite, today\'s note, the unrewritten warning, a withhold/unrewritten row (N)', async (_name, tool, output) => {
+    const fake = drivenQuery([{ id: 'toolu_1', tool, output }]);
+    const b = build(fake.query, withholdOn());
+    const result = await start(b).run('hi');
+    expect(rewriteOf(fake.outputs.get('toolu_1'))).toBeUndefined();
+    expect(contextOf(fake.outputs.get('toolu_1'))).toMatch(new RegExp(`^The harness prompt-injection scanner flagged this ${tool} result \\(judge-block\\)\\. It is shown to you unchanged;`));
+    expect(b.judgeRows()[0]).toMatchObject({ state: 'judged', judge: 'block', withholdDecided: false });
+    expect(b.warnings).toContain(`the harness decided to withhold the ${tool} result but found no string leaf to replace (the content sits only in object keys, in empty leaves, or in values the CLI needs unchanged), so the model received it with the note only (#145)`);
+    expect(rewriteRows(b)).toEqual([{ tool, tool_use_id: 'toolu_1', findings: 0, truncated: false, outcome: 'unrewritten', kind: 'withhold' }]);
+    expect(result.outputRewrites.map((r: OutputRewrite) => [r.kind, r.outcome])).toEqual([['withhold', 'unrewritten']]);
   });
 
   it('(c) an MCP tool is not schema-checked by the CLI: its type "text" IS the placeholder (N)', async () => {
