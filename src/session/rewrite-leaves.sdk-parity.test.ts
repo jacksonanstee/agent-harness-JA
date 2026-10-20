@@ -29,6 +29,30 @@ const SDK_TOOLS_DTS = join(process.cwd(), 'node_modules', '@anthropic-ai', 'clau
  */
 const UNPARSEABLE_FIELDS: readonly string[] = [];
 
+/**
+ * Fields with at least one string literal AND a non-literal residue (for
+ * example `"a" | SomeAlias`): the table would hold part of the vocabulary and
+ * silently miss the rest. Returned sorted so the caller can compare it to
+ * UNPARSEABLE_FIELDS.
+ */
+function partialFields(source: string): string[] {
+  const found = new Set<string>();
+  for (const { body } of outputDeclarations(source)) {
+    const keyRe = /(\w+|"[^"]+")\??:\s*/g;
+    for (let m = keyRe.exec(body); m !== null; m = keyRe.exec(body)) {
+      const rest = body.slice(keyRe.lastIndex);
+      const end = rest.indexOf(';');
+      const expr = end < 0 ? rest : rest.slice(0, end);
+      // A nested object starts a block, not a type expression: its own fields are visited separately.
+      if (expr.trimStart().startsWith('{')) continue;
+      const hasLiteral = /"[^"]*"/.test(expr);
+      const residue = expr.replace(/"[^"]*"/g, '').replace(/[()|\s]|\[\]|null/g, '');
+      if (hasLiteral && residue !== '') found.add((m[1] ?? '').replace(/"/g, ''));
+    }
+  }
+  return [...found].sort();
+}
+
 /** Every `*Output` declaration (interface or type alias), comments stripped. */
 function outputDeclarations(source: string): { name: string; body: string }[] {
   return source
@@ -88,8 +112,14 @@ describe('SDK_OUTPUT_LITERALS is derived from the installed SDK declarations (is
     expect(members.filter((m) => !declared.has(m))).toEqual([]);
   });
 
-  it('lists no unparseable field silently', () => {
-    expect(UNPARSEABLE_FIELDS).toEqual([]);
+  it('lists every partially-parseable field in UNPARSEABLE_FIELDS (never silently dropped)', () => {
+    expect(partialFields(source)).toEqual([...UNPARSEABLE_FIELDS].sort());
+  });
+
+  it('control: a field mixing a literal with an alias is caught by the partial-field check', () => {
+    const extra = source + '\nexport interface FakeOutput {\n  mixed: "a" | SomeAlias;\n}\n';
+    expect(partialFields(extra)).toEqual(['mixed']);
+    expect(partialFields(extra)).not.toEqual([...UNPARSEABLE_FIELDS].sort());
   });
 
   it('the derivation fails on a synthetic added literal and a synthetic added field', () => {
