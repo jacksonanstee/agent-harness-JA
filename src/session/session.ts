@@ -19,6 +19,7 @@ import type {
   OutputRewrite,
   OutputRewriteKind,
   OutputRewriteOutcome,
+  QueryOptions,
   SdkAssistantMessage,
   SdkHookCallback,
   SdkHookOutputFor,
@@ -436,6 +437,19 @@ function buildSystemPrompt(skills: Skill[], nonce: string): {
  * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
  * is injected so tests never touch the network.
  */
+/**
+ * ADR-0040 D1, D3: the primary session's isolation keys, built in ONE place
+ * so the keyless canary asserts one object and the null mutation has one
+ * target. `[]` (the default) loads no user, project or local Claude Code
+ * settings file into the child; `strictMcpConfig` follows the list, so an
+ * isolated child also ignores `.mcp.json` and settings-declared servers.
+ * The list is copied: the caller's array is never handed to the SDK.
+ */
+function buildSessionIsolation(config: SessionConfig): Pick<QueryOptions, 'settingSources' | 'strictMcpConfig'> {
+  const settingSources = [...(config.settingSources ?? [])];
+  return { settingSources, strictMcpConfig: settingSources.length === 0 };
+}
+
 /**
  * Issue #51. The telemetry store refuses a malformed correlation id, but
  * `recordTelemetry` below catches that throw and downgrades it to one stderr
@@ -1566,6 +1580,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           model: modelChoice.model,
           systemPrompt,
           maxTurns: config.maxTurns,
+          ...buildSessionIsolation(config),
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],

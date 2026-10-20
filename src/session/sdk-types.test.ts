@@ -19,7 +19,9 @@ import type {
   SDKMessage,
   SDKResultMessage,
   SDKUserMessage,
+  SettingSource as SettingSource_SDK,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { SettingSource } from '../security/index.js';
 import type {
   QueryOptions,
   SdkHookCallback,
@@ -155,7 +157,8 @@ const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMe
 // Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks},
 // the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6), and
 // since PR-B1 `abortController` (spec D4), used by the judge call only.
-// Ten keys. The SESSION's primary query still passes its four.
+// Ten keys. The judge passes all five; since ADR-0040 the SESSION passes
+// `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
 const _seamExact: ExactKeys<
   QueryOptions,
   | 'model'
@@ -190,6 +193,9 @@ const _settingSourcesMirrorsSdk: Assignable<
   NonNullable<QueryOptions['settingSources']>,
   NonNullable<Options['settingSources']>
 > = true;
+// ADR-0040: the harness's own SettingSource literal union equals the SDK's, both directions.
+const _settingSourceToSdk: Assignable<SettingSource, SettingSource_SDK> = true;
+const _settingSourceFromSdk: Assignable<SettingSource_SDK, SettingSource> = true;
 const _strictMcpConfigMirrorsSdk: Assignable<
   NonNullable<QueryOptions['strictMcpConfig']>,
   NonNullable<Options['strictMcpConfig']>
@@ -238,6 +244,8 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _matcherTimeoutMirrorsSdk,
       _seamCarriesNoBudget,
       _settingSourcesMirrorsSdk,
+      _settingSourceToSdk,
+      _settingSourceFromSdk,
       _strictMcpConfigMirrorsSdk,
       _toolsMirrorsSdk,
       _skillsMirrorsSdk,

@@ -54,6 +54,8 @@ export {
   permissionHook,
 } from './permissions/index.js';
 export type { PreToolLike } from './pre-tool-like.js';
+export { SETTING_SOURCES } from './sdk-settings.js';
+export type { SettingSource } from './sdk-settings.js';
 export type {
   Evaluation,
   EvaluatorOptions,

@@ -63,6 +63,7 @@ export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
+  SETTING_SOURCES,
 } from './security/index.js';
 export type {
   Confidence,
@@ -104,6 +105,7 @@ export type {
   SecretPrecision,
   SecretRedactor,
   SecretRule,
+  SettingSource,
 } from './security/index.js';
 export {
   createTelemetryStore,
