@@ -571,10 +571,19 @@ describe('A1 (review3 fold 2): the Read shape cannot forge applied with the publ
     expect(seen.size).toBeGreaterThan(1);
   });
 
-  it('a malformed generateWithholdNonce() is refused without echoing the value (N)', async () => {
+  it.each([
+    ['a malformed value', () => 'SECRET-not-hex'],
+    ['a throwing source', () => { throw new Error('SECRET-seam-down'); }],
+  ])('%s from generateWithholdNonce() is a skipped withhold: a row, the skipped warning, today\'s note, no raw delivery without a trace, nothing echoed (L1) (N)', async (_name, source) => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, withholdOn());
-    await expect(baseStart(b, { generateWithholdNonce: () => 'SECRET-not-hex' }).run('hi')).rejects.toThrow(/generateWithholdNonce\(\) must return exactly 8 lowercase hex characters$/);
+    const result = await baseStart(b, { generateWithholdNonce: source }).run('hi');
+    expect(rewriteOf(fake.outputs.get('toolu_1'))).toBeUndefined();
+    expect(contextOf(fake.outputs.get('toolu_1'))).toMatch(TODAY);
+    expect(b.judgeRows()[0]).toMatchObject({ state: 'judged', judge: 'block', withholdDecided: false });
+    expect(result.outputRewrites.map((r: OutputRewrite) => [r.kind, r.outcome])).toContainEqual(['withhold', 'skipped']);
+    expect(b.warnings.filter((w) => w === withholdSkippedWarning('Read'))).toHaveLength(1);
+    expect(JSON.stringify([b.warnings, b.events()])).not.toContain('SECRET');
   });
 });
 

@@ -1134,7 +1134,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       redaction: PendingRewrite | null,
     ): { value: unknown } | null {
       // Per-CALL nonce (review3 fold 3): a token disclosed for call N verifies only call N's entry, never a later call's. Memory only, like spans.
-      const withholdNonce = assertValidWithholdNonce(generateWithholdNonce());
+      // A seam that throws or returns a malformed value is a SKIPPED withhold (row + warning, today's note), never a rejected hook: caught here
+      // rather than probed at run start, because a probe call would consume a nonce and shift an injected sequence (differential review L1).
+      let withholdNonce: string;
+      try {
+        withholdNonce = assertValidWithholdNonce(generateWithholdNonce());
+      } catch {
+        recordRewriteOutcome(tool, toolUseId, 0, false, 'skipped', 'withhold');
+        warn(withholdSkippedWarning(tool));
+        return null;
+      }
       const placeholder = withholdPlaceholder(truncateWellFormed(cleanSdkToken(tool), NOTICE_TOOL_NAME_MAX), withholdNonce);
       let replaced = 0;
       const contentSpans: string[] = [];
