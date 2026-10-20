@@ -3854,6 +3854,13 @@ describe('issue #84 D1: secret redaction rewrites the model-facing tool output',
       expect(r.warnings.some((w) => w.includes('failed redaction closed'))).toBe(true);
     });
 
+    it('T12b: the same on the non-string branch', async () => {
+      const r = await runRead({ type: 'text', numLines: 1 }, nonString);
+      expect(r.rewritten).toEqual({ type: 'text', numLines: 1 });
+      expect(r.outcome).toBe('unobserved');
+      expect(r.warnings.some((w) => w.includes('failed redaction closed'))).toBe(true);
+    });
+
     it('isShapeLeaf: exact-literal, keyed, non-MCP', () => {
       expect(isShapeLeaf('Read', 'type', 'text')).toBe(true);
       expect(isShapeLeaf('Read', 'type', 'image/png')).toBe(true);
