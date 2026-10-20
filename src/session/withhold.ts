@@ -17,8 +17,8 @@ export const WITHHOLD_SPAN_LINES_MAX = 32;
 export const MIN_SPAN_LINE = 8;
 
 /**
- * The placeholder every non-empty string leaf of a withheld result becomes
- * (spec D1). `tool` is the cleaned, bounded tool name the notice uses;
+ * The placeholder every non-empty string leaf of a withheld result becomes,
+ * except a CLI shape leaf (`isShapeLeaf`, issue #203) (spec D1). `tool` is the cleaned, bounded tool name the notice uses;
  * no rule id, no excerpt and no attacker byte enters it. Pinned to scan
  * `pass` on the shipped heuristic (W9).
  */

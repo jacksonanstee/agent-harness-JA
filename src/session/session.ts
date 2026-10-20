@@ -1109,7 +1109,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     // Issue #145 B2a (spec D1, D4): replace every non-empty string leaf of the
-    // model's copy with the placeholder and RE-OWN (or enrol) the verifier's
+    // model's copy, except a CLI shape leaf (isShapeLeaf, #203), with the
+    // placeholder and RE-OWN (or enrol) the verifier's
     // pending entry. `source` is the copy the judge judged, by reference: the
     // redaction rewrite when one applied, else the raw response (D1; the custom
     // hook received the raw object at step 4 and could, as operator code, have
@@ -1128,8 +1129,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const contentSpans: string[] = [];
       let walk: { value: unknown; skipped: boolean };
       try {
-        walk = rewriteStringLeaves(source, (leaf) => {
+        walk = rewriteStringLeaves(source, (leaf, key) => {
           if (leaf === '') return leaf;
+          // CLI vocabulary (issue #203), not content: the CLI reverts a built-in tool's rewrite that fails its output schema and would deliver the raw output. A kept leaf is no content span and not counted.
+          if (isShapeLeaf(tool, key, leaf)) return leaf;
           replaced += 1;
           const span = withholdSpanLine(leaf, placeholder);
           if (span !== null && contentSpans.length < WITHHOLD_SPAN_LINES_MAX && !contentSpans.includes(span)) contentSpans.push(span);

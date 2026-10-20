@@ -22,7 +22,7 @@ import {
 } from '../../test/session-harness.js';
 import type { Built } from '../../test/session-harness.js';
 import { judgeLeakedByHookTimeoutWarning, withholdLeakedWarning, withholdSkippedWarning, withholdUnrewrittenWarning } from './judged-scan.js';
-import { MAX_REWRITE_DEPTH } from './session.js';
+import { MAX_REWRITE_DEPTH } from './rewrite-leaves.js';
 import type { OutputRewrite, SdkMessage, SessionJudge } from './types.js';
 import { withholdNotice, withholdPlaceholder } from './withhold.js';
 
@@ -37,9 +37,9 @@ afterEach(() => {
 const PLACEHOLDER = withholdPlaceholder('Read');
 const NOTICE = withholdNotice('Read', 'judge-block');
 const TODAY = /^The harness prompt-injection scanner flagged this Read result \(judge-block\)\. It is shown to you unchanged;/;
-/** A Read-shaped tool_response: two non-empty string leaves, one empty leaf, three numbers, key order fixed. */
+/** A Read-shaped tool_response: one kept shape leaf (type), two replaceable string leaves, one empty leaf, three numbers, key order fixed. */
 const READ = { type: 'text', file: { filePath: '/tmp/note.txt', content: 'plain notes\nsecond line of the note', numLines: 2, startLine: 1, totalLines: 2, empty: '' } };
-const READ_WITHHELD = { type: PLACEHOLDER, file: { filePath: PLACEHOLDER, content: PLACEHOLDER, numLines: 2, startLine: 1, totalLines: 2, empty: '' } };
+const READ_WITHHELD = { type: 'text', file: { filePath: PLACEHOLDER, content: PLACEHOLDER, numLines: 2, startLine: 1, totalLines: 2, empty: '' } };
 const FIXTURE_LINE = 'plain notes';
 /** A `user` message carrying one tool_result, as the SDK streams it. */
 const userResult = (toolUseId: string, content: unknown): SdkMessage =>
@@ -54,7 +54,7 @@ const rewriteRows = (b: Built): Array<{ kind?: string; outcome: string; reason?:
 // The `redactSecrets:` entries below are split across two lines only so the staged secret scan does not read the key's row as a credential (Task 3 precedent).
 const noRedaction = (t: string): RedactResult => ({ redacted: t, findings: [] });
 
-describe('W1: a judge block on a heuristic pass with withhold on replaces every non-empty string leaf (spec D1, D2, D5)', () => {
+describe('W1: a judge block on a heuristic pass with withhold on replaces every non-empty string leaf but the CLI\'s shape leaves (spec D1, D2, D5)', () => {
   it('returns the walked shape with numbers, keys, order and empty leaves intact; the withhold notice; withholdDecided true; the annotation (N)', async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, withholdOn());
@@ -306,6 +306,53 @@ describe('W10: a walk that cannot run on the withhold pass (spec D1)', () => {
     expect(b.warnings.filter((w) => w === withholdSkippedWarning('Read'))).toHaveLength(1);
     expect(b.warnings.filter((w) => w === withholdUnrewrittenWarning('Read'))).toHaveLength(0);
     expect(result.outputRewrites.map((r: OutputRewrite) => [r.kind, r.outcome])).toEqual([['redact', 'skipped'], ['withhold', 'skipped']]);
+  });
+});
+
+describe('W11: the withhold keeps the CLI\'s shape leaves on a built-in tool (Task 8b, issue #203, ADR-0039 20/10/2026)', () => {
+  const run = async (tool: string, output: unknown): Promise<unknown> => {
+    const fake = drivenQuery([{ id: 'toolu_1', tool, output }]);
+    const b = build(fake.query, withholdOn());
+    await start(b).run('hi');
+    return rewriteOf(fake.outputs.get('toolu_1'));
+  };
+
+  it('(a) Read: type stays "text" byte-exact, the numbers are untouched, file.content and file.filePath are the placeholder (N)', async () => {
+    const out = (await run('Read', READ)) as { type: string; file: Record<string, unknown> };
+    expect(out.type).toBe('text');
+    expect(out).toEqual({ type: 'text', file: { filePath: PLACEHOLDER, content: PLACEHOLDER, numLines: 2, startLine: 1, totalLines: 2, empty: '' } });
+    expect(out.file.content).toEqual(PLACEHOLDER);
+    expect(out.file.filePath).toEqual(PLACEHOLDER);
+  });
+
+  it('(b) Edit: gitDiff.status stays "modified"; gitDiff.patch and the file path are the placeholder (N)', async () => {
+    const edit = {
+      filePath: '/tmp/note.txt',
+      oldString: 'a',
+      newString: 'b',
+      gitDiff: { filename: 'note.txt', status: 'modified', additions: 1, deletions: 1, changes: 2, patch: '@@ -1 +1 @@\n-a\n+b' },
+    };
+    const place = withholdPlaceholder('Edit');
+    const fake = drivenQuery([{ id: 'toolu_1', tool: 'Edit', output: edit }]);
+    const b = build(fake.query, withholdOn());
+    await start(b).run('hi');
+    expect(rewriteOf(fake.outputs.get('toolu_1'))).toEqual({
+      filePath: place,
+      oldString: place,
+      newString: place,
+      gitDiff: { filename: place, status: 'modified', additions: 1, deletions: 1, changes: 2, patch: place },
+    });
+  });
+
+  it('(c) an MCP tool is not schema-checked by the CLI: its type "text" IS the placeholder (N)', async () => {
+    const tool = 'mcp__srv__tool';
+    const place = withholdPlaceholder(tool);
+    expect(await run(tool, { type: 'text', text: 'plain notes' })).toEqual({ type: place, text: place });
+  });
+
+  it('(d) a declared key with a NON-declared value is content, so it IS the placeholder (N)', async () => {
+    const out = await run('Read', { type: 'pwned-text', file: { content: 'plain notes\nsecond line of the note' } });
+    expect(out).toEqual({ type: PLACEHOLDER, file: { content: PLACEHOLDER } });
   });
 });
 

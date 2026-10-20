@@ -69,7 +69,7 @@ export function withholdSkippedWarning(tool: string): string {
   return `the harness decided to withhold the ${tool} result but could not: the output is not JSON or is beyond the rewrite bounds, so the model received it with the note only (#145)`;
 }
 
-/** Issue #145 B2a (spec D1, review S3, r2 N2): the walk ran and replaced nothing (every string leaf empty, or the payload sits only in object keys). Distinct from the skipped line: one value, one meaning. */
+/** Issue #145 B2a (spec D1, review S3, r2 N2): the walk ran and replaced nothing (every string leaf empty or a kept CLI shape leaf, or the payload sits only in object keys). Distinct from the skipped line: one value, one meaning. */
 export function withholdUnrewrittenWarning(tool: string): string {
   return `the harness decided to withhold the ${tool} result but found no string leaf to replace (the content sits only in object keys or in empty leaves), so the model received it with the note only (#145)`;
 }
