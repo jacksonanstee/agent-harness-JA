@@ -17,7 +17,7 @@
 // calls 0 is FAIL; rows without a charge, or calls outside 1..3, are UNCHECKED.
 // Judge quality is measured by the D8 re-measure, not here.
 //
-// Eight legs, each recorded to tasks/issue-96-evidence/prb1-smoke/<leg>.json and
+// Eight legs, six recorded to tasks/issue-96-evidence/prb1-smoke/<leg>.json (the two B2a legs go to prb2-smoke, below) and
 // printed as one `LEG <name>: PASS|FAIL|UNCHECKED <detail>` line. Three states
 // (lesson 2026-08-04): a leg that cannot observe what it needs is UNCHECKED,
 // never PASS, and no leg reaches PASS from the harness's own in-process report
@@ -81,7 +81,9 @@
 // the fixture line, and the tool-rewrite row reads kind withhold / outcome applied. A judge that does not
 // answer block on the day is UNCHECKED (re-run), never FAIL; a decided withhold the stream shows dropped
 // is FAIL. `failure-stdout` (D7, U4) RECORDS whether a failed Bash call's `error` carries the command's
-// stdout (`cat <fixture>; exit 1`); it cannot fail and never moves the exit code (status RECORDED).
+// stdout (`cat <fixture>; exit 1`); none of its RECORDED outcomes can fail or move the exit code. A THROWN
+// failure-stdout (or withheld) leg is UNCHECKED like any thrown leg (exit 3, a re-run signal, never a blocker),
+// and its fallback record lands in prb2-smoke too.
 // SMOKE_LEGS=<comma list> runs a subset (Task 9 runs these two alone, under USD 0.20).
 //
 // DO NOT import this file from a test or run it under CI.
@@ -282,14 +284,14 @@ function recordLeg(name, status, detail, data, dir = evidenceDir) {
 // the evidence write itself is what threw, the fallback record would throw
 // again, so it falls back to a console-only record and the summary still
 // prints (N7).
-async function guarded(name, fn) {
+async function guarded(name, fn, dir = evidenceDir) {
   if (only.size > 0 && !only.has(name)) return;
   try {
     await fn();
   } catch (error) {
     const detail = `the leg threw before it could decide: ${error instanceof Error ? error.message : String(error)}`;
     try {
-      recordLeg(name, 'UNCHECKED', detail, {});
+      recordLeg(name, 'UNCHECKED', detail, {}, dir);
     } catch (writeError) {
       console.log(`LEG ${name}: UNCHECKED ${detail} (evidence write failed: ${writeError instanceof Error ? writeError.message : String(writeError)})`);
       legs.push({ name, status: 'UNCHECKED' });
@@ -470,7 +472,8 @@ function observe(sink, message) {
         at,
         containsSynth: text.includes(SYNTH),
         containsMarker: text.includes(WITHHELD_MARKER),
-        containsFixtureLine: text.includes(WITHHELD_FIXTURE_LINE),
+        // Raw or JSON-escaped (the fixture has inner quotes), mirroring the harness's spanIn.
+        containsFixtureLine: text.includes(WITHHELD_FIXTURE_LINE) || text.includes(JSON.stringify(WITHHELD_FIXTURE_LINE).slice(1, -1)),
         noticeInToolResult: noticeFragmentsIn(text).length > 0,
         noticeInUserMessage: results.length === 1 && noticeFragmentsIn(wholeMessage).length > 0,
       });
@@ -961,20 +964,41 @@ async function legWithheld() {
   const sink = newSink();
   const { dir, paths } = makeFixtureDir('withheld', [`${WITHHELD_FIXTURE_LINE}\n`]);
   try {
+    // CONTENT-FREE shape of the raw Read output the hook saw: key names and typeof only, never content.
+    const readShapes = [];
     const { result, rows, rewriteRows } = await runSession({
       dir, prompt: readPrompt(paths[0]), judgeExtras: { withhold: 'block' }, maxCallsPerRun: 3, sink,
+      onPostTool: (payload) => {
+        if (payload.failed === true || payload.tool !== 'Read') return;
+        const r = payload.result;
+        const isObj = r !== null && typeof r === 'object';
+        readShapes.push({
+          resultType: typeof r,
+          keys: isObj ? Object.keys(r) : null,
+          typeofType: isObj ? typeof r.type : null,
+          fileKeys: isObj && r.file !== null && typeof r.file === 'object' ? Object.keys(r.file) : null,
+        });
+      },
     });
-    const { id, user } = firstToolResult(sink);
-    const judgeRow = rows.find((r) => r.payload.tool_use_id === id)?.payload ?? null;
+    // The judged Read (first Read judge-call row on the post-tool hook), not postTool[0]: a stray
+    // first tool must not be attributed to the fixture.
+    const judgeRow = rows.find((r) => r.payload.tool === 'Read' && r.payload.phase === 'post-tool')?.payload ?? null;
+    const id = judgeRow?.tool_use_id ?? null;
+    const user = id === null ? null : sink.userResults.get(id) ?? null;
     const withholdRow = rewriteRows.find((r) => r.payload.tool_use_id === id && r.payload.kind === 'withhold')?.payload ?? null;
     const data = {
       fixture: WITHHELD_FIXTURE_ID, toolUseId: id, judgeRow, withholdRow, userResult: user,
       outputRewrites: result.outputRewrites, judge: summarise(result), warnings: sink.warnings,
       childInit: sink.initMessages, resultMessages: sink.resultMessages,
+      hookResponses: sink.hookResponses, allUserMessages: sink.allUserMessages, userResults: userResultsAsObject(sink),
+      sessionCostUsd: result.costUsd ?? null, readShapes,
     };
     const rec = (status, detail) => recordLeg('withheld', status, detail, data, evidenceDirB2);
-    if (sink.postTool.length === 0 || id === null) return rec('UNCHECKED', 'the model never ran the Read tool, so nothing reached the judge path');
-    if (judgeRow === null) return rec('FAIL', 'a tool ran but no judge-call row carries its tool_use_id');
+    if (judgeRow === null) {
+      return rec('UNCHECKED', sink.postTool.length === 0
+        ? 'the model never ran a tool, so nothing reached the judge path'
+        : 'no Read was judged on the post-tool hook (the model ran no Read, or a judged Read left no row); re-run');
+    }
     if (judgeRow.state !== 'judged') return rec('UNCHECKED', `the judge did not answer (state ${judgeRow.state}); re-run`);
     if (judgeRow.judge !== 'block') return rec('UNCHECKED', `the judge said ${judgeRow.judge} on ${WITHHELD_FIXTURE_ID} (block in all five #148 samples); the withhold was not exercised; re-run once, then raise it with Jackson`);
     if (judgeRow.withholdDecided !== true) return rec('FAIL', 'a judged block with withhold on, but the row says withholdDecided false: the harness did not decide to withhold');
@@ -1006,7 +1030,7 @@ async function legFailureStdout() {
     });
     const data = { observations: seen, failureRows: rows.filter((r) => r.payload.phase === 'post-tool-failure').map((r) => r.payload), childInit: sink.initMessages, resultMessages: sink.resultMessages };
     if (seen.length === 0) {
-      recordLeg('failure-stdout', 'RECORDED', 'unobserved: no failed Bash call reached the failure hook (the model did not run it, or the SDK did not route it to PostToolUseFailure); U4 stays UNCHECKED', data, evidenceDirB2);
+      recordLeg('failure-stdout', 'RECORDED', 'unobserved: no failed Bash call reached the failure hook (the model did not run it, or the SDK did not route it to PostToolUseFailure); U4 stays unanswered', data, evidenceDirB2);
     } else if (seen[0].carriesFixtureLine) {
       recordLeg('failure-stdout', 'RECORDED', "the failure hook's error CARRIES the command's stdout: the failure hook is a withhold-free channel for any payload a command can print (D7)", data, evidenceDirB2);
     } else {
@@ -1108,11 +1132,11 @@ await guarded('peak-concurrency', legPeakConcurrency);
 await guarded('hook-cancelled', legHookCancelled);
 await guarded('hook-inside-timeout', legHookInsideTimeout);
 await guarded('hostile-cwd', legHostileCwd);
-await guarded('withheld', legWithheld);
-await guarded('failure-stdout', legFailureStdout);
+await guarded('withheld', legWithheld, evidenceDirB2);
+await guarded('failure-stdout', legFailureStdout, evidenceDirB2);
 
 const count = (s) => legs.filter((l) => l.status === s).length;
-console.log(`smoke-judge-session: ${count('PASS')} PASS, ${count('FAIL')} FAIL, ${count('UNCHECKED')} UNCHECKED, ${count('RECORDED')} RECORDED; evidence in ${evidenceDir}`);
+console.log(`smoke-judge-session: ${count('PASS')} PASS, ${count('FAIL')} FAIL, ${count('UNCHECKED')} UNCHECKED, ${count('RECORDED')} RECORDED; evidence in ${evidenceDir} (the withheld and failure-stdout legs: ${evidenceDirB2})`);
 console.log('NOT VERIFIABLE HERE: API-side billing of an aborted request (record as UNVERIFIED in ADR-0037).');
 // Exit releases what the legs leave behind: each `:memory:` memory database,
 // and any session stream whose `for await` ended on a rejected next() (that
