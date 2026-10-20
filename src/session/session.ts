@@ -38,6 +38,7 @@ import type {
   SkillDropChannel,
 } from './types.js';
 import type { RedactResult } from '../security/index.js';
+import { isShapeLeaf, MAX_REWRITE_DEPTH, MAX_REWRITE_NODES, rewriteStringLeaves } from './rewrite-leaves.js';
 import {
   escapePathUnsafe,
   sanitizeControlChars,
@@ -118,15 +119,6 @@ function assertValidSkillNonce(value: string): string {
 /** Telemetry sentinel when the secret redactor throws (fail-closed — never raw). */
 const REDACTION_FAILED = '[REDACTION FAILED]';
 
-/**
- * Aggregate bounds on the model-facing rewrite walk (issue #84, D1, G-7).
- * `JSON.parse` accepts nesting and breadth a recursive walk cannot survive, so
- * a tool author could crash the callback and lose the rewrite. Beyond either
- * bound the walk is SKIPPED (output left raw, warning + telemetry row), never a
- * throw and never a wrong-shaped return. Re-derived by test, not hand-copied.
- */
-export const MAX_REWRITE_NODES = 100_000;
-export const MAX_REWRITE_DEPTH = 200;
 
 /**
  * Cap on rule ids interpolated into the injection notice (issue #84, D2, G-6).
@@ -171,86 +163,6 @@ const NO_NOTICE: { notice: string | null; verdict: 'block' | 'ask' | undefined }
  * on; a superstring an attacker plants can force `unobserved`, never `applied`.
  */
 const MIN_SPAN_LINE = 8;
-
-/** Non-error early-exit for the bounded, iterative rewrite walk. */
-class RewriteSkip extends Error {}
-
-/**
- * Shape-preserving, ITERATIVE walk over the JSON value the SDK delivered (issue
- * #84, D1). String leaves go through `fn`; arrays and plain objects are rebuilt
- * with their element/key ORDER intact (keys are never rewritten — a key is
- * schema, and a changed key is a changed shape the SDK silently drops); numbers,
- * booleans and null pass through. A non-JSON value (a function, a class instance),
- * a repeated object reference (a cycle OR a non-cyclic shared node, both caught by
- * the visited set: unreachable from the SDK's JSON, which is a tree, and fail-safe
- * either way), or a value exceeding `MAX_REWRITE_NODES`/`MAX_REWRITE_DEPTH` returns
- * `{ skipped: true }` with the INPUT unchanged, never a wrong-shaped rewrite.
- * Explicit stack, no recursion (G-7). Returns a NEW value (immutability).
- */
-export function rewriteStringLeaves(
-  input: unknown,
-  fn: (leaf: string) => string,
-): { value: unknown; skipped: boolean } {
-  let nodes = 0;
-  const seen = new WeakSet<object>();
-  const root: { out: unknown } = { out: undefined };
-  interface Frame {
-    value: unknown;
-    depth: number;
-    assign: (result: unknown) => void;
-  }
-  const stack: Frame[] = [{ value: input, depth: 0, assign: (r) => { root.out = r; } }];
-  try {
-    while (stack.length > 0) {
-      const frame = stack.pop() as Frame;
-      nodes += 1;
-      if (nodes > MAX_REWRITE_NODES || frame.depth > MAX_REWRITE_DEPTH) throw new RewriteSkip();
-      const v = frame.value;
-      if (typeof v === 'string') {
-        frame.assign(fn(v));
-        continue;
-      }
-      if (v === null || typeof v === 'number' || typeof v === 'boolean') {
-        frame.assign(v);
-        continue;
-      }
-      if (Array.isArray(v)) {
-        if (seen.has(v)) throw new RewriteSkip();
-        seen.add(v);
-        const arr: unknown[] = new Array(v.length);
-        frame.assign(arr);
-        for (let i = 0; i < v.length; i += 1) {
-          const idx = i;
-          stack.push({ value: v[i], depth: frame.depth + 1, assign: (r) => { arr[idx] = r; } });
-        }
-        continue;
-      }
-      if (typeof v === 'object') {
-        const proto = Object.getPrototypeOf(v) as unknown;
-        if (proto !== Object.prototype && proto !== null) throw new RewriteSkip();
-        if (seen.has(v)) throw new RewriteSkip();
-        seen.add(v);
-        const source = v as Record<string, unknown>;
-        const obj: Record<string, unknown> = {};
-        // Establish every key up front so key ORDER survives regardless of the
-        // stack's LIFO resolution order.
-        for (const key of Object.keys(source)) obj[key] = undefined;
-        frame.assign(obj);
-        for (const key of Object.keys(source)) {
-          const k = key;
-          stack.push({ value: source[key], depth: frame.depth + 1, assign: (r) => { obj[k] = r; } });
-        }
-        continue;
-      }
-      // function, symbol, bigint, undefined: not JSON.
-      throw new RewriteSkip();
-    }
-  } catch (error: unknown) {
-    if (error instanceof RewriteSkip) return { value: input, skipped: true };
-    throw error;
-  }
-  return { value: root.out, skipped: false };
-}
 
 /**
  * Exhaustive BY CONSTRUCTION over `OutputRewriteOutcome` — the origin of the
@@ -1080,17 +992,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const firstLine = leaf.split('\n')[0] ?? '';
         if (firstLine.length >= MIN_SPAN_LINE) spanLines.push(firstLine);
       };
-      const leafFn = (leaf: string): string => {
+      const leafFn = (leaf: string, key: string | null): string => {
         let result: RedactResult;
         try {
           result = redactor(leaf);
         } catch {
           anyFailedClosed = true;
+          if (isShapeLeaf(tool, key, leaf)) return leaf;
           recordFailedSpan(leaf);
           return REDACTION_FAILED;
         }
         if (typeof result.redacted !== 'string') {
           anyFailedClosed = true;
+          if (isShapeLeaf(tool, key, leaf)) return leaf;
           recordFailedSpan(leaf);
           return REDACTION_FAILED;
         }
