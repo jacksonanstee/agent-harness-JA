@@ -176,7 +176,7 @@ describe('withhold counts: decisions and landings apart (#145 B2a, W14)', () => 
       const store = createTelemetryStore(handle);
       expect(store.query({ type: 'judge-call' }).map((r) => (r.payload as JudgeCallPayload).withholdDecided)).toEqual([true]);
       expect(store.query({ type: 'tool-rewrite' }).map((r) => r.payload)).toEqual([expect.objectContaining({ kind: 'withhold', outcome: 'applied', tool_use_id: 'toolu_1' })]);
-      // The tool-trace row keeps the redacted telemetry summary by design (#84 D1, not model-facing); the brief's whole-store check was a plan defect, so the rows B2a owns are checked.
+      // The tool-trace row keeps the redacted telemetry summary by design (#84 D1, not model-facing); the rows B2a owns are checked, as in the W8 precedent (session-withhold.test.ts, describe 'W8').
       expect(JSON.stringify(store.query({ type: 'judge-call' }))).not.toContain(MARKER);
       expect(JSON.stringify(store.query({ type: 'tool-rewrite' }))).not.toContain(MARKER);
     } finally {

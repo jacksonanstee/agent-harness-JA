@@ -54,7 +54,7 @@ const rewriteRows = (b: Built): Array<{ kind?: string; outcome: string; reason?:
 // The `redactSecrets:` entries below are split across two lines only so the staged secret scan does not read the key's row as a credential (Task 3 precedent).
 const noRedaction = (t: string): RedactResult => ({ redacted: t, findings: [] });
 
-describe('W1: a judge block on a heuristic pass with withhold on replaces every non-empty string leaf but the CLI\'s shape leaves (spec D1, D2, D5)', () => {
+describe("W1: a judge block on a heuristic pass with withhold on replaces every non-empty string leaf but the CLI's shape leaves (spec D1, D2, D5)", () => {
   it('returns the walked shape with numbers, keys, order and empty leaves intact; the withhold notice; withholdDecided true; the annotation (N)', async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, withholdOn());
@@ -69,7 +69,7 @@ describe('W1: a judge block on a heuristic pass with withhold on replaces every 
     expectNoLostRows(b);
   });
 
-  it('withhold OFF (judge on, no withhold key) is today\'s path: the note, no rewrite, withholdDecided false', async () => {
+  it("withhold OFF (judge on, no withhold key) is today's path: the note, no rewrite, withholdDecided false", async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, { call: fakeJudge(() => OK('block')).call, maxCallsPerRun: 5 });
     await start(b).run('hi');
@@ -100,7 +100,7 @@ describe('W1b: zero leaves replaced is NOT a withhold (spec D1, review S3, r2 N2
 });
 
 describe('W2 and W3: ask, the two composed-ask floor states, and a heuristic block never withhold (spec D2, D6)', () => {
-  it('judge ask on a pass floor: today\'s note, no rewrite, withholdDecided false (N)', async () => {
+  it("judge ask on a pass floor: today's note, no rewrite, withholdDecided false (N)", async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, withholdOn(() => OK('ask')));
     await start(b).run('hi');
@@ -128,7 +128,7 @@ describe('W2 and W3: ask, the two composed-ask floor states, and a heuristic blo
     expect(b.judgeRows()[0]).toMatchObject({ state: 'refused', composed: 'ask', withholdDecided: false });
   });
 
-  it('W3: a heuristic block is never escalated: the judge is not called, today\'s note with r-block, withholdDecided false (N)', async () => {
+  it("W3: a heuristic block is never escalated: the judge is not called, today's note with r-block, withholdDecided false (N)", async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const fj = fakeJudge(() => OK('block'));
     const b = build(fake.query, { call: fj.call, maxCallsPerRun: 5, withhold: 'block' }, { scanInjection: fixed(BLOCK_SCAN) });
@@ -294,7 +294,7 @@ describe('W9b: the span oracle through the session (spec D4, S5)', () => {
 });
 
 describe('W10: a walk that cannot run on the withhold pass (spec D1)', () => {
-  it('an over-bound output: today\'s note, the skipped warning, withholdDecided false, a withhold/skipped row beside pass 2\'s redact/skipped row (S6)', async () => {
+  it("an over-bound output: today's note, the skipped warning, withholdDecided false, a withhold/skipped row beside pass 2's redact/skipped row (S6)", async () => {
     let deep: unknown = 'content at the bottom of the nesting';
     for (let i = 0; i < MAX_REWRITE_DEPTH + 5; i += 1) deep = [deep];
     const fake = drivenQuery([{ id: 'toolu_1', output: deep }]);
@@ -413,7 +413,7 @@ describe('Review Focus 1 to 5', () => {
     expect(b.warnings.some((w) => w.startsWith('a leaf of the Read output failed redaction closed'))).toBe(true);
   });
 
-  it('4: a judge block on a heuristic ASK floor is withheld (the predicate reads the judge\'s verdict, not the floor)', async () => {
+  it("4: a judge block on a heuristic ASK floor is withheld (the predicate reads the judge's verdict, not the floor)", async () => {
     const fake = drivenQuery([{ id: 'toolu_1', output: READ }]);
     const b = build(fake.query, withholdOn(), { scanInjection: fixed(ASK_SCAN) });
     const result = await start(b).run('hi');
