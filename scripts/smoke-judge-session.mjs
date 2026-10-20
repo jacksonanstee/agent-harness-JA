@@ -995,9 +995,9 @@ async function legWithheld() {
     };
     const rec = (status, detail) => recordLeg('withheld', status, detail, data, evidenceDirB2);
     if (judgeRow === null) {
-      return rec('UNCHECKED', sink.postTool.length === 0
-        ? 'the model never ran a tool, so nothing reached the judge path'
-        : 'no Read was judged on the post-tool hook (the model ran no Read, or a judged Read left no row); re-run');
+      // The custom post-tool hook fires BEFORE the judge row is recorded, so a Read seen there with no row is a harness defect.
+      if (readShapes.length > 0) return rec('FAIL', `${readShapes.length} Read result(s) reached the harness post-tool hook but no judge-call row carries tool Read: the judge path did not record (harness defect, merge blocker)`);
+      return rec('UNCHECKED', sink.postTool.length === 0 ? 'the model never ran a tool, so nothing reached the judge path' : 'the model ran no Read, so the fixture never reached the judge path; re-run');
     }
     if (judgeRow.state !== 'judged') return rec('UNCHECKED', `the judge did not answer (state ${judgeRow.state}); re-run`);
     if (judgeRow.judge !== 'block') return rec('UNCHECKED', `the judge said ${judgeRow.judge} on ${WITHHELD_FIXTURE_ID} (block in all five #148 samples); the withhold was not exercised; re-run once, then raise it with Jackson`);
