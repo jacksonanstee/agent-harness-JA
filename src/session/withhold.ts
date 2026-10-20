@@ -16,15 +16,18 @@ export const WITHHOLD_SPAN_LINES_MAX = 32;
  */
 export const MIN_SPAN_LINE = 8;
 
-/** Hex characters of the per-run withhold nonce (4 random bytes). Memory only: never written to a sink (G-5, G-11). */
+/** Hex characters of the per-CALL withhold nonce (4 random bytes). Memory only: never written to a sink (G-5, G-11). */
 export const WITHHOLD_NONCE_HEX = 8;
 
 /**
  * The token the verifier looks for in the model's copy: the public marker plus
- * this run's nonce. The bare marker is public (README, ADR, this source), so
- * content can carry it; it cannot carry a nonce minted after the content was
- * produced, so only the placeholder the harness itself wrote can contain the
- * full token (review3 H1, fold 2).
+ * THIS CALL's nonce, minted when the withhold is applied. The bare marker is
+ * public (README, ADR, this source), so content can carry it; content produced
+ * before the call's placeholder was written cannot carry that call's nonce.
+ * Residual: once the model has seen call N's placeholder, an attacker who
+ * receives it back can replay the token, but it matches ONLY call N's entry,
+ * which that placeholder already resolved, never a later call's (review3 H1,
+ * folds 2 and 3).
  */
 export function withholdToken(nonce: string): string {
   return `${WITHHELD_MARKER} ref ${nonce}`;
@@ -32,7 +35,7 @@ export function withholdToken(nonce: string): string {
 
 /**
  * The placeholder every non-empty string leaf of a withheld result becomes
- * (spec D1), except a leaf holding a literal the SDK declares for the tool's output (`isShapeLeaf`, issue #203), and, on an MCP tool, a content-block `type` (`isMcpBlockTypeLeaf`, review3 H2). `nonce` is the run's `WITHHOLD_NONCE_HEX` token. `tool` is
+ * (spec D1), except a leaf holding a literal the SDK declares for the tool's output (`isShapeLeaf`, issue #203), and, on an MCP tool, a content-block `type` (`isMcpBlockTypeLeaf`, review3 H2). `nonce` is the call's `WITHHOLD_NONCE_HEX` token. `tool` is
  * the cleaned, bounded tool name the notice uses; no rule id, no excerpt and no attacker byte enters it. Pinned to scan
  * `pass` on the shipped heuristic (W9).
  */
@@ -65,7 +68,7 @@ export function withholdNotice(tool: string, idText: string): string {
  * leaf would read `both-present`. Null when no line qualifies. An attacker who
  * shapes content so that NO span is recorded (every line short, or the marker
  * planted as a line) can force `unobserved`, never a false `applied`: `applied`
- * needs this run's nonce token in the copy (the bare public marker counts as
+ * needs this call's nonce token in the copy (the bare public marker counts as
  * absent, `neither-token`) AND at least one recorded span (`no-content-span`,
  * defence in depth). A Read records `file.filePath` as a span although the CLI
  * renders `file.content` only, so the nonce, not the span, is what makes

@@ -596,8 +596,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Issue #145 B2a (spec D3): withholding is on only when the seam says so.
     // Off is ADR-0037's path, decided once per run().
     const withholdOn = deps.judge?.withhold === 'block';
-    // Per-run nonce in the placeholder (review3 H1, fold 2): minted only when withholding is on, kept in memory like spans.
-    const withholdNonce = withholdOn ? assertValidWithholdNonce(generateWithholdNonce()) : '';
 
     // Issue #96 PR-B1 (spec D3, R1): per-run judge state; null with no judge, so that path is today's.
     const judgeRun = deps.judge === undefined ? null : createJudgeRun({
@@ -1135,6 +1133,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       source: unknown,
       redaction: PendingRewrite | null,
     ): { value: unknown } | null {
+      // Per-CALL nonce (review3 fold 3): a token disclosed for call N verifies only call N's entry, never a later call's. Memory only, like spans.
+      const withholdNonce = assertValidWithholdNonce(generateWithholdNonce());
       const placeholder = withholdPlaceholder(truncateWellFormed(cleanSdkToken(tool), NOTICE_TOOL_NAME_MAX), withholdNonce);
       let replaced = 0;
       const contentSpans: string[] = [];

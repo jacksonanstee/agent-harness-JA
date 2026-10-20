@@ -383,10 +383,10 @@ export interface SessionConfig {
    */
   generateNonce?: () => string;
   /**
-   * Injected source for the per-run withhold nonce (issue #145 review3 H1,
-   * ADR-0039): exactly 8 lowercase hex characters, called once per run and only
-   * when `judge.withhold` is on. Tests inject a constant; the default is
-   * `randomBytes(4)` per run. Held in memory only, like the verifier's spans.
+   * Injected source for the per-CALL withhold nonce (issue #145 review3 H1,
+   * ADR-0039): exactly 8 lowercase hex characters, called once per withhold
+   * (so a token disclosed for one call verifies no other call). Tests inject a constant; the default is
+   * `randomBytes(4)` per call. Held in memory only, like the verifier's spans.
    */
   generateWithholdNonce?: () => string;
 }
