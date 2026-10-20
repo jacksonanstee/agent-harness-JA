@@ -39,7 +39,7 @@ import type {
   SkillDropChannel,
 } from './types.js';
 import type { RedactResult } from '../security/index.js';
-import { isShapeLeaf, MAX_REWRITE_DEPTH, MAX_REWRITE_NODES, rewriteStringLeaves } from './rewrite-leaves.js';
+import { isMcpBlockTypeLeaf, isShapeLeaf, MAX_REWRITE_DEPTH, MAX_REWRITE_NODES, rewriteStringLeaves } from './rewrite-leaves.js';
 import {
   escapePathUnsafe,
   sanitizeControlChars,
@@ -192,6 +192,7 @@ export const REWRITE_UNOBSERVED_REASONS = [
   'both-present',
   'unwalkable',
   'neither-token',
+  'no-content-span',
 ] as const;
 type RewriteUnobservedReason = (typeof REWRITE_UNOBSERVED_REASONS)[number];
 
@@ -1109,7 +1110,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     // Issue #145 B2a (spec D1, D4): replace every non-empty string leaf of the
-    // model's copy, except a CLI shape leaf (isShapeLeaf, #203), with the
+    // model's copy, except an SDK-declared literal leaf (isShapeLeaf, #203) or an MCP block type, with the
     // placeholder and RE-OWN (or enrol) the verifier's pending entry. `source` is the copy the judge judged, by reference: the
     // redaction rewrite when one applied, else the raw response (D1; the custom
     // hook received the raw object at step 4 and could, as operator code, have
@@ -1131,9 +1132,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         walk = rewriteStringLeaves(source, (leaf, key) => {
           if (leaf === '') return leaf;
           // CLI vocabulary (issue #203), not content: the CLI reverts a built-in tool's rewrite that fails its output schema and would deliver the raw output. A kept leaf is no content span and not counted.
-          if (isShapeLeaf(tool, key, leaf)) return leaf;
+          if (isShapeLeaf(tool, key, leaf) || isMcpBlockTypeLeaf(tool, key, leaf)) return leaf;
           replaced += 1;
-          const span = withholdSpanLine(leaf, placeholder);
+          // The failed-closed sentinel is what the redaction pass put in the walked copy, never content the model could receive raw (review3 M1).
+          const span = leaf === REDACTION_FAILED ? null : withholdSpanLine(leaf, placeholder);
           if (span !== null && contentSpans.length < WITHHOLD_SPAN_LINES_MAX && !contentSpans.includes(span)) contentSpans.push(span);
           return placeholder;
         });
@@ -1232,6 +1234,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const hasMarker = p.markers.some((m) => rendered.includes(m));
       if (hasSpan && hasMarker) return { outcome: 'unobserved', reason: 'both-present' };
       if (hasSpan) return { outcome: 'leaked' };
+      // Issue #145 review3 H1: the marker is a public constant, so a marker in the copy proves a landed withhold ONLY when a span was recorded
+      // to watch for the raw content. With none, content shaped to carry the marker is indistinguishable from the placeholder: never `applied`.
+      if (hasMarker && p.kind === 'withhold' && p.spanLines.length === 0) return { outcome: 'unobserved', reason: 'no-content-span' };
       if (hasMarker) return { outcome: 'applied' };
       return { outcome: 'unobserved', reason: 'neither-token' };
     }

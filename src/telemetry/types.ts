@@ -104,7 +104,8 @@ export type ToolRewriteUnobservedReason =
   | 'no-user-message'
   | 'both-present'
   | 'unwalkable'
-  | 'neither-token';
+  | 'neither-token'
+  | 'no-content-span';
 
 export interface ToolTracePayload {
   tool: string;

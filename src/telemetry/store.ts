@@ -117,6 +117,7 @@ const TOOL_REWRITE_REASON_PRESENCE: Record<ToolRewriteUnobservedReason, true> = 
   'both-present': true,
   unwalkable: true,
   'neither-token': true,
+  'no-content-span': true,
 };
 export const TOOL_REWRITE_REASONS = Object.keys(
   TOOL_REWRITE_REASON_PRESENCE,

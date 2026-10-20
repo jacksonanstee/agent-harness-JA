@@ -18,7 +18,7 @@ export const MIN_SPAN_LINE = 8;
 
 /**
  * The placeholder every non-empty string leaf of a withheld result becomes
- * (spec D1), except a CLI shape leaf (`isShapeLeaf`, issue #203). `tool` is
+ * (spec D1), except a leaf holding a literal the SDK declares for the tool's output (`isShapeLeaf`, issue #203), and, on an MCP tool, a content-block `type` (`isMcpBlockTypeLeaf`, review3 H2). `tool` is
  * the cleaned, bounded tool name the notice uses; no rule id, no excerpt and no attacker byte enters it. Pinned to scan
  * `pass` on the shipped heuristic (W9).
  */
@@ -48,8 +48,12 @@ export function withholdNotice(tool: string, idText: string): string {
  * span (`#!/bin/sh`, 9 chars, is itself a valid span)
  * and a dropped withhold reads `leaked`, not `unobserved`; and never a line
  * the placeholder or the marker CONTAINS, or an applied withhold of such a
- * leaf would read `both-present`. Null when no line qualifies: an attacker
- * can still force `unobserved` that way, a blank first line no longer does.
+ * leaf would read `both-present`. Null when no line qualifies. An attacker who
+ * shapes content so that NO span is recorded (every line short, or the marker
+ * planted as a line) can force `unobserved` (`no-content-span` when the marker
+ * is present, `neither-token` otherwise), never a false `applied`: the verifier
+ * refuses `applied` for a withhold entry with no span at all (review3 H1). A
+ * blank first line no longer forces it.
  * Held per run only, like secret spans (G-5, G-11).
  */
 export function withholdSpanLine(leaf: string, placeholder: string): string | null {
