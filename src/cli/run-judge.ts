@@ -9,16 +9,23 @@ import { judgeCapWarning } from '../session/judged-scan.js'; // the one pinned d
 // two operator lines. The mid-run live lines come from the session through
 // onWarning (cli.ts); only the start and summary lines are composed here.
 
-/** D2: `{}` when the judge is off, so the deps handed to createSession carry no `judge` key (pin 3); exactly two keys when on (pin 32). */
+/** D2: `{}` when the judge is off, so the deps handed to createSession carry no `judge` key (pin 3); exactly two keys when on (pin 32), or three with `withhold: 'block'` (#145 B2a, spec D3). */
 export function runJudgeDeps(settings: JudgeSettings | null, query: QueryFn): { judge?: SessionJudge } {
   if (settings === null) return {};
-  return { judge: { call: buildJudge(query, JUDGE_MODEL), maxCallsPerRun: settings.maxCallsPerRun } };
+  return {
+    judge: {
+      call: buildJudge(query, JUDGE_MODEL),
+      maxCallsPerRun: settings.maxCallsPerRun,
+      ...(settings.withhold === 'block' ? { withhold: 'block' as const } : {}),
+    },
+  };
 }
 
-/** U-3: the per-call stall, stated once at run start. 60 s includes any wait for a judge slot (decision 14). */
+/** U-3: the per-call stall, stated once at run start. 60 s includes any wait for a judge slot (decision 14). `, withhold: block` when on (#145 B2a). */
 export function judgeStartLine(settings: JudgeSettings): string {
+  const withhold = settings.withhold === 'block' ? ', withhold: block' : '';
   return (
-    `[harness] judge: on (always, cap ${settings.maxCallsPerRun}): each tool result waits for one judge call, ` +
+    `[harness] judge: on (always, cap ${settings.maxCallsPerRun}${withhold}): each tool result waits for one judge call, ` +
     `typically about 3 s and at most ${JUDGE_TIMEOUT_MS / 1000} s`
   );
 }
@@ -37,6 +44,8 @@ export function judgeSummaryLines(s: JudgeSummary): { summary: string; capWarnin
   const unjudged = UNJUDGED.filter((state) => s.byState[state] > 0).map((state) => `${s.byState[state]} ${state}`);
   if (s.pendingAtEnd > 0) unjudged.push(`${s.pendingAtEnd} pending at end`);
   const parts = [`[harness] judge: ${s.calls}/${s.cap} call(s)`, `${s.tightened} note(s) added by the judge path`];
+  // Issue #145 B2a (spec D5, review S4): decisions, never "withheld"; the landing count is the model-facing line's.
+  if (s.withholdsDecided > 0) parts.push(`${s.withholdsDecided} withhold(s) decided`);
   if (unjudged.length > 0) parts.push(`unjudged: ${unjudged.join(', ')}`);
   const unknown = s.costUnknown > 0 ? `; ${s.costUnknown} call(s) of unknown cost` : '';
   parts.push(`cost=${formatUsd(s.costUsd)} (not included in cost= above${unknown})`);

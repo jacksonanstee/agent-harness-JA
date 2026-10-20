@@ -44,12 +44,13 @@ import {
   FENCE_OPENER_RE,
   SKILL_DROP_CHANNELS,
   NOTICE_RULE_IDS_MAX,
+  OUTPUT_REWRITE_KINDS,
   OUTPUT_REWRITE_OUTCOMES,
   REWRITE_UNOBSERVED_REASONS,
   OVERSIZED_REDACTION_MARKER,
 } from './session.js';
 import { isShapeLeaf, MAX_REWRITE_DEPTH, MAX_REWRITE_NODES } from './rewrite-leaves.js';
-import { TOOL_REWRITE_OUTCOMES, TOOL_REWRITE_REASONS, TOOL_TRACE_PHASES } from '../telemetry/index.js';
+import { TOOL_REWRITE_KINDS, TOOL_REWRITE_OUTCOMES, TOOL_REWRITE_REASONS, TOOL_TRACE_PHASES } from '../telemetry/index.js';
 import { OVERSIZED_MARKER } from '../security/secrets/redact.js';
 import type {
   QueryFn,
@@ -4011,6 +4012,28 @@ describe('issue #84 D2/G-6: notice is bounded and charset-restricted', () => {
 });
 
 describe('issue #84 D4: in-band three-state verifier', () => {
+  it('every redaction-pass row carries kind redact, structurally and in telemetry (#145 B2a, D5)', async () => {
+    const telemetry = fakeTelemetry();
+    const fake = richQuery(
+      [INIT, RESULT],
+      [{ tool: 'Read', input: {}, output: `key ${AWS_SECRET}` }],
+      [{ toolUseId: 'toolu_1', content: `key ${AWS_MARKER}` }],
+    );
+    const deps = makeDeps(
+      { query: fake.query, captured: [] },
+      {
+        telemetry,
+        redactSecrets:
+          makeLeafRedactor(),
+      },
+    );
+    const session = createSession(deps, { skillsDir: '/nowhere' });
+    const result = await session.run('hi');
+    expect(result.outputRewrites).toEqual([{ tool: 'Read', tool_use_id: 'toolu_1', findings: 1, truncated: false, outcome: 'applied', kind: 'redact' }]);
+    const rows = telemetry.events.filter((e) => e.type === 'tool-rewrite').map((e) => (e.payload as { kind?: string }).kind);
+    expect(rows).toEqual(['redact']);
+  });
+
   it('reports applied when the user message echoes the marker (pin 3)', async () => {
     const fake = richQuery(
       [INIT, RESULT],
@@ -4294,6 +4317,11 @@ describe('issue #84 D4/A-1: a delivered failed-closed blackout stays failed-clos
 describe('issue #84 D5/G-10: mirrored union drift', () => {
   it('OUTPUT_REWRITE_OUTCOMES equals the telemetry mirror TOOL_REWRITE_OUTCOMES', () => {
     expect([...OUTPUT_REWRITE_OUTCOMES].sort()).toEqual([...TOOL_REWRITE_OUTCOMES].sort());
+  });
+
+  it('OUTPUT_REWRITE_KINDS equals the telemetry mirror TOOL_REWRITE_KINDS and has the two spec members (#145 B2a, W16)', () => {
+    expect([...OUTPUT_REWRITE_KINDS].sort()).toEqual([...TOOL_REWRITE_KINDS].sort());
+    expect([...OUTPUT_REWRITE_KINDS].sort()).toEqual(['redact', 'withhold']);
   });
 
   it('the tool-trace phases are exactly post-tool and post-tool-failure', () => {

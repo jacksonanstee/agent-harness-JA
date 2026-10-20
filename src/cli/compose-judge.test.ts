@@ -27,7 +27,7 @@ const projectWarning = (projectDir: string): string =>
 describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2)', () => {
   it('a user `always` block reaches the composition', () => {
     const s = composeSecurity({ userDir: layer({ judge: { mode: 'always', maxCallsPerRun: 7 } }), projectDir: layer(undefined) });
-    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 7 });
+    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 7, withhold: 'off' });
     expect(s.warnings).toEqual([]);
   });
 
@@ -52,11 +52,24 @@ describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2
   ])('%s: not parsed, exactly one warning naming the project path, the user setting stands', (_name, projectDoc) => {
     const project = layer(projectDoc);
     const withUserAlways = composeSecurity({ userDir: layer({ judge: { mode: 'always', maxCallsPerRun: 3 } }), projectDir: project });
-    expect(withUserAlways.judge).toEqual({ mode: 'always', maxCallsPerRun: 3 });
+    expect(withUserAlways.judge).toEqual({ mode: 'always', maxCallsPerRun: 3, withhold: 'off' });
     expect(withUserAlways.warnings).toEqual([projectWarning(project)]);
     const withUserNone = composeSecurity({ userDir: layer({}), projectDir: project });
     expect(withUserNone.judge).toBeNull();
     expect(withUserNone.warnings).toEqual([projectWarning(project)]);
+  });
+
+  it('a project judge.withhold is ignored with the existing one warning, whatever the user layer says (#145 B2a, W12b, a pin)', () => {
+    const project = layer({ judge: { mode: 'always', maxCallsPerRun: 9, withhold: 'block' } });
+    const s = composeSecurity({ userDir: layer({ judge: { mode: 'always', maxCallsPerRun: 3 } }), projectDir: project });
+    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 3, withhold: 'off' });
+    expect(s.warnings).toEqual([projectWarning(project)]);
+  });
+
+  it('a project judge.withhold block cannot switch withholding on over a user off (#145 B2a, W12b)', () => {
+    const project = layer({ judge: { mode: 'always', maxCallsPerRun: 9, withhold: 'block' } });
+    const s = composeSecurity({ userDir: layer({ judge: { mode: 'always', maxCallsPerRun: 3, withhold: 'off' } }), projectDir: project });
+    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 3, withhold: 'off' });
   });
 
   it('a project `off` block cannot turn a user `always` off', () => {
@@ -64,6 +77,6 @@ describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2
       userDir: layer({ judge: { mode: 'always', maxCallsPerRun: 4 } }),
       projectDir: layer({ judge: { mode: 'off' } }),
     });
-    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 4 });
+    expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 4, withhold: 'off' });
   });
 });

@@ -166,3 +166,20 @@ export function isShapeLeaf(toolName: string, key: string | null, leaf: string):
   if (!Object.prototype.hasOwnProperty.call(SDK_OUTPUT_LITERALS, key)) return false;
   return (SDK_OUTPUT_LITERALS[key] ?? []).includes(leaf);
 }
+
+/**
+ * The `type` values of an MCP tool result's content blocks. The CLI's generic
+ * MCP mapper renders a block as text only when `type === 'text'` (an image
+ * needs `'image'`, and so on); a block whose `type` became a placeholder falls
+ * through to a JSON-stringified block, so the rendered copy would carry the
+ * placeholder inside a JSON envelope the in-band verifier does not read as a
+ * landing (issue #145 review3 H2; CLI 2.1.201, bundled binary, the `SBm`
+ * content mapper). Used by the withhold walk ONLY: the redaction keeper does
+ * not need it (a failed-closed blackout is not read back as text).
+ */
+export const MCP_CONTENT_BLOCK_TYPES: readonly string[] = ['text', 'image', 'audio', 'resource', 'resource_link'];
+
+/** True for an MCP tool's `type` leaf holding exactly one of `MCP_CONTENT_BLOCK_TYPES` (CLI vocabulary, not content). */
+export function isMcpBlockTypeLeaf(toolName: string, key: string | null, leaf: string): boolean {
+  return key === 'type' && toolName.startsWith(MCP_TOOL_PREFIX) && MCP_CONTENT_BLOCK_TYPES.includes(leaf);
+}

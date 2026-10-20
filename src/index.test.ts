@@ -22,6 +22,7 @@ import type {
   JudgeSummary,
   OutputAnnotation,
   OutputRewrite,
+  OutputRewriteKind,
   OutputRewriteOutcome,
   QueryFn,
   RefusalSource,
@@ -188,10 +189,10 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.JUDGE_CALL_VERDICTS).toHaveLength(3);
     expect(barrel.JUDGE_CALL_ERROR_KINDS).toHaveLength(4);
     const rootNames = Object.keys(barrel);
-    for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey']) {
+    for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey', 'WITHHELD_MARKER']) {
       expect(rootNames, `root barrel must not export ${fixed}`).not.toContain(fixed);
     }
-    const settings: JudgeSettings = { mode: 'always', maxCallsPerRun: 1 };
+    const settings: JudgeSettings = { mode: 'always', maxCallsPerRun: 1, withhold: 'off' };
     const judge: SessionJudge = { call: async () => ({ ok: true, verdict: 'pass', costUsd: null }), maxCallsPerRun: 1 };
     const state: JudgeSessionState = 'stopped';
     const row = (p: JudgeCallPayload): string => p.state;
@@ -204,6 +205,11 @@ describe('root barrel (src/index.ts)', () => {
     type NotOnRoot = Root.InternalSessionJudge;
     const probe: NotOnRoot | null = null;
     expect(probe).toBeNull();
+    // Issue #145 B2a, W19: the withhold marker is a wire internal (ADR-0023), not API.
+    // @ts-expect-error WITHHELD_MARKER is internal to src/session/withhold.ts
+    type NoMarker = typeof Root.WITHHELD_MARKER;
+    const marker: NoMarker | null = null;
+    expect(marker).toBeNull();
     expect([settings.mode, typeof judge.call, state, typeof row, typeof summary]).toEqual(['always', 'function', 'stopped', 'function', 'function']);
   });
 
@@ -227,12 +233,13 @@ describe('root barrel (src/index.ts)', () => {
     const refusal: SessionRefusal = { source, category: null, fallbackModel: null };
     // Issue #84 additive public types: reachable from the root barrel.
     const outcome: OutputRewriteOutcome = 'applied';
-    const rewrite: OutputRewrite = { tool: 'Bash', tool_use_id: null, findings: 0, truncated: false, outcome };
+    const kind: OutputRewriteKind = 'withhold';
+    const rewrite: OutputRewrite = { tool: 'Bash', tool_use_id: null, findings: 0, truncated: false, outcome, kind: 'redact' };
     const annotation: OutputAnnotation = { tool: 'Bash', tool_use_id: null, phase: 'post-tool', verdict: 'block', ruleIds: [] };
     expect(typeof adversary).toBe('function');
     expect(input.taskId).toBe('t');
     expect(refusal.source).toBe('system-event');
-    expect(rewrite.outcome).toBe('applied');
+    expect([rewrite.outcome, kind]).toEqual(['applied', 'withhold']);
     expect(annotation.phase).toBe('post-tool');
     expect([verdictOf, findingsOf, idOf, closeOf].every((f) => typeof f === 'function')).toBe(true);
   });

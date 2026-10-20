@@ -38,7 +38,9 @@ function dir(settings?: unknown): string {
   return d;
 }
 
-function fakeSdk(judgeReply: string) {
+/** `userToolResult` may be ECHO_UPDATED: the hook's own updatedToolOutput is echoed, so the run's nonce need not be known. */
+const ECHO_UPDATED = Symbol('echo-updated');
+function fakeSdk(judgeReply: string, userToolResult?: unknown) {
   const primary: QueryOptions[] = [];
   const judge: QueryOptions[] = [];
   const query: QueryFn = (args) => {
@@ -52,14 +54,19 @@ function fakeSdk(judgeReply: string) {
     if (o !== undefined) primary.push(o);
     return (async function* () {
       const signal = new AbortController().signal;
+      let updated: unknown;
       for (const m of o?.hooks?.PostToolUse ?? []) {
         for (const cb of m.hooks as unknown as SdkHookCallback[]) {
-          await cb(
+          const out = await cb(
             { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, tool_response: `notes ${MARKER}`, tool_use_id: 'toolu_1' },
             'toolu_1',
             { signal },
           );
+          updated = (out as { hookSpecificOutput?: { updatedToolOutput?: unknown } } | undefined)?.hookSpecificOutput?.updatedToolOutput;
         }
+      }
+      if (userToolResult !== undefined) {
+        yield { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: userToolResult === ECHO_UPDATED ? updated : userToolResult, is_error: false }] }, parent_tool_use_id: null } as unknown as SdkMessage;
       }
       yield { type: 'system', subtype: 'init', session_id: 'sdk-1' } as SdkMessage;
       yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sdk-1', num_turns: 1, total_cost_usd: 0.01 } as SdkMessage;
@@ -98,6 +105,7 @@ const summaryOf = (over: Partial<JudgeSummary>): JudgeSummary => ({
   byState: Object.fromEntries(JUDGE_SESSION_STATES.map((s) => [s, 0])) as JudgeSummary['byState'],
   annotated: 0,
   tightened: 0,
+  withholdsDecided: 0,
   costUsd: 0,
   costUnknown: 0,
   pendingAtEnd: 0,
@@ -143,12 +151,65 @@ describe('run path with the judge on (D2, D7; pins 3, 16, 32)', () => {
     }
   });
 
-  it('runJudgeDeps: off carries no judge key; on carries exactly call and maxCallsPerRun (pins 3, 32)', () => {
+  it('runJudgeDeps: off carries no judge key; on carries exactly call and maxCallsPerRun; withhold block adds exactly withhold (pins 3, 32; #145 B2a, W12)', () => {
     const query: QueryFn = () => (async function* () {})();
     expect('judge' in runJudgeDeps(null, query)).toBe(false);
-    const on = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7 }, query);
+    const on = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7, withhold: 'off' }, query);
     expect(Object.keys(on.judge ?? {}).sort()).toEqual(['call', 'maxCallsPerRun']);
     expect(on.judge?.maxCallsPerRun).toBe(7);
+    const withhold = runJudgeDeps({ mode: 'always', maxCallsPerRun: 7, withhold: 'block' }, query);
+    expect(Object.keys(withhold.judge ?? {}).sort()).toEqual(['call', 'maxCallsPerRun', 'withhold']);
+    expect(withhold.judge?.withhold).toBe('block');
+  });
+});
+
+describe('withhold counts: decisions and landings apart (#145 B2a, W14)', () => {
+  it('withhold on, the placeholder echoed: the start line names withholding, the model-facing line counts the landing, the judge line counts the decision, both rows carry it (#145 B2a, W14)', async () => {
+    const sdk = fakeSdk('{"verdict":"block"}', ECHO_UPDATED);
+    const { argv, db } = runArgs();
+    const { code, stderr } = await runMain(argv, { judge: { mode: 'always', maxCallsPerRun: 3, withhold: 'block' } }, undefined, sdk.query);
+    expect(code).toBe(0);
+    expect(stderr).toMatch(/^\[harness\] judge: on \(always, cap 3, withhold: block\): each tool result waits for one judge call, typically about 3 s and at most 60 s$/m);
+    expect(stderr).toMatch(/^\[harness\] model-facing: 0 rewrite\(s\) applied, 1 injection note\(s\), 1 withhold\(s\) applied$/m);
+    expect(stderr).toMatch(/^\[harness\] judge: 1\/3 call\(s\), 1 note\(s\) added by the judge path, 1 withhold\(s\) decided, cost=\$0\.0021 \(not included in cost= above\)$/m);
+    expect(stderr).not.toMatch(/^warning: model-facing enforcement incomplete/m);
+    expect(stderr).not.toContain(MARKER);
+    const handle = openTelemetryDatabase({ path: db });
+    try {
+      const store = createTelemetryStore(handle);
+      expect(store.query({ type: 'judge-call' }).map((r) => (r.payload as JudgeCallPayload).withholdDecided)).toEqual([true]);
+      expect(store.query({ type: 'tool-rewrite' }).map((r) => r.payload)).toEqual([expect.objectContaining({ kind: 'withhold', outcome: 'applied', tool_use_id: 'toolu_1' })]);
+      // The tool-trace row keeps the redacted telemetry summary by design (#84 D1, not model-facing); the rows B2a owns are checked, as in the W8 precedent (session-withhold.test.ts, describe 'W8').
+      expect(JSON.stringify(store.query({ type: 'judge-call' }))).not.toContain(MARKER);
+      expect(JSON.stringify(store.query({ type: 'tool-rewrite' }))).not.toContain(MARKER);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('withhold on, no user message: 1 withhold(s) decided on the judge line, NO applied clause on the model-facing line, and the problem warning lists the unobserved row (decisions and landings apart, S4)', async () => {
+    const sdk = fakeSdk('{"verdict":"block"}');
+    const { argv } = runArgs();
+    const { code, stderr } = await runMain(argv, { judge: { mode: 'always', maxCallsPerRun: 3, withhold: 'block' } }, undefined, sdk.query);
+    expect(code).toBe(0);
+    expect(stderr).toMatch(/^\[harness\] model-facing: 0 rewrite\(s\) applied, 1 injection note\(s\)$/m);
+    expect(stderr).toMatch(/^\[harness\] judge: 1\/3 call\(s\), 1 note\(s\) added by the judge path, 1 withhold\(s\) decided, cost=/m);
+    expect(stderr).toMatch(/^warning: model-facing enforcement incomplete: 1 rewrite\(s\) leaked\/unobserved\/unrewritten\/failed-closed, 0 failed-call result\(s\)/m);
+  });
+
+  it('withhold off with a judge block: today\'s three lines, byte for byte, and withholdDecided false on the row', async () => {
+    const sdk = fakeSdk('{"verdict":"block"}');
+    const { argv, db } = runArgs();
+    const { stderr } = await runMain(argv, { judge: { mode: 'always', maxCallsPerRun: 3 } }, undefined, sdk.query);
+    expect(stderr).toMatch(/^\[harness\] judge: on \(always, cap 3\): /m);
+    expect(stderr).toMatch(/^\[harness\] model-facing: 0 rewrite\(s\) applied, 1 injection note\(s\)$/m);
+    expect(stderr).toMatch(/^\[harness\] judge: 1\/3 call\(s\), 1 note\(s\) added by the judge path, cost=\$0\.0021 \(not included in cost= above\)$/m);
+    const handle = openTelemetryDatabase({ path: db });
+    try {
+      expect(createTelemetryStore(handle).query({ type: 'judge-call' }).map((r) => (r.payload as JudgeCallPayload).withholdDecided)).toEqual([false]);
+    } finally {
+      handle.close();
+    }
   });
 });
 
@@ -157,6 +218,8 @@ describe('malformed user judge blocks exit 2 before any tool runs (pin 1)', () =
     [{ judge: { mode: 'always' } }, 'judge.maxCallsPerRun is required'],
     [{ judge: { mode: 'suspicious', maxCallsPerRun: 5 } }, 'judge.mode "suspicious" is not available'],
     [{ judge: { mode: 'always', maxCallsPerRun: 1001 } }, 'judge.maxCallsPerRun must be an integer from 1 to 1000'],
+    [{ judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'ask' } }, 'judge.withhold "ask" is not available'],
+    [{ judge: { mode: 'off', withhold: 'block' } }, 'judge.withhold "block" needs judge.mode "always"'],
   ])('run with %j', async (settings, message) => {
     const sdk = fakeSdk('{"verdict":"pass"}');
     const { code, stderr, userDir } = await runMain(runArgs().argv, settings, undefined, sdk.query);
@@ -181,6 +244,14 @@ describe('eval shares composeSecurity (G-5; pin 23)', () => {
 });
 
 describe('the summary and start lines (D7; pins 17, 29)', () => {
+  it('the judge line prints withhold(s) decided after the notes clause and before the unjudged clause, only when non-zero (#145 B2a, W14)', () => {
+    const byState = { ...summaryOf({}).byState, judged: 3, 'cap-reached': 1 };
+    expect(judgeSummaryLines(summaryOf({ calls: 3, byState, tightened: 2, withholdsDecided: 2, costUsd: 0.006 })).summary).toBe(
+      '[harness] judge: 3/200 call(s), 2 note(s) added by the judge path, 2 withhold(s) decided, unjudged: 1 cap-reached, cost=$0.0060 (not included in cost= above)',
+    );
+    expect(judgeSummaryLines(summaryOf({ calls: 1, withholdsDecided: 0 })).summary).not.toContain('withhold');
+  });
+
   it('0 calls, only not-escalated rows', () => {
     const { summary, capWarning } = judgeSummaryLines(summaryOf({ byState: { ...summaryOf({}).byState, 'not-escalated': 2 } }));
     expect(summary).toBe('[harness] judge: 0/200 call(s), 0 note(s) added by the judge path, cost=$0.0000 (not included in cost= above)');
@@ -217,9 +288,16 @@ describe('the summary and start lines (D7; pins 17, 29)', () => {
   });
 
   it('the start line derives its 60 s from JUDGE_TIMEOUT_MS', () => {
-    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9 })).toBe(
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'off' })).toBe(
       '[harness] judge: on (always, cap 9): each tool result waits for one judge call, typically about 3 s and at most 60 s',
     );
+  });
+
+  it('the start line names withholding when it is on, and nothing when it is off (#145 B2a, D3)', () => {
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'block' })).toBe(
+      '[harness] judge: on (always, cap 9, withhold: block): each tool result waits for one judge call, typically about 3 s and at most 60 s',
+    );
+    expect(judgeStartLine({ mode: 'always', maxCallsPerRun: 9, withhold: 'off' })).not.toContain('withhold');
   });
 });
 

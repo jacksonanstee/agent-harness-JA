@@ -811,6 +811,13 @@ throws, so placement is pinned by the ordering test instead — which is a
 statement about what the guard does, not a claim that a test could not do it; a
 fixture-keyed variant is writable.
 
+## Amendment (2026-10-20, issue #145 B2a, ADR-0039): two row keys, no m006
+
+1. `judge-call` gains `withholdDecided`: optional on READ only (a boolean on every row written since), a DECISION that the harness withheld and returned the rewrite, never a landing. The store validates it as a boolean when present, and the closed key set gains the key.
+2. `tool-rewrite` gains `kind` (`redact` or `withhold`), optional on read only, a mirror of the session's `OutputRewriteKind` and drift-tested.
+
+No migration: the CHECK constrains `type`, not the payload (#152 D8's reasoning). A withheld call on the `unrewritten` or skipped redaction path carries two `tool-rewrite` rows for one `tool_use_id`; the join to `judge-call` on `tool_use_id` selects `kind = 'withhold'`.
+
 ## Revisit if
 
 - Retention policy: `telemetry_events` has **no TTL/purge** (memory's session

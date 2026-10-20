@@ -331,6 +331,13 @@ describe('README `**Judge.**`: the example loads through the real composition (p
       `ignoring "judge" in ${join(projectDir, '.harness', 'settings.json')}: the judge is configured only in ~/.harness/settings.json`,
     ]);
   });
+
+  it('the judge paragraph names the withhold setting and its default, in the sentence ADR-0039 owns (#145 B2a, W17)', () => {
+    const { section } = loaded();
+    expect(section).toContain('Withholding is off by default: with `"withhold": "block"` in the same block');
+    expect(section).toContain('[ADR-0039](./docs/decisions/0039-judge-withholding-off-by-default.md)');
+    expect(section).not.toContain('nothing is withheld');
+  });
 });
 
 describe('README `**Judge.**`: money and time figures re-derive from the code (pin 33, D1, K-11)', () => {

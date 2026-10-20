@@ -58,3 +58,18 @@ export function judgeScanFailedWarning(error: unknown): string {
 export function judgeLeakedByHookTimeoutWarning(tool: string): string {
   return `the ${tool} output rewrite LEAKED: its hook ran past the SDK's hook timeout, so the harness's redaction never reached the model (#84, #96)`;
 }
+
+/** Issue #145 B2a (spec D4): a withheld result whose content survived into the model's copy. The tool name only, never a span (G-5). */
+export function withholdLeakedWarning(tool: string): string {
+  return `the ${tool} result withhold LEAKED: content the judge classified as an attack survived into the model's copy (#145)`;
+}
+
+/** Issue #145 B2a (spec D1): the walk could not run, so nothing could be withheld; the model received the result with the note only. */
+export function withholdSkippedWarning(tool: string): string {
+  return `the harness decided to withhold the ${tool} result but could not: the output is not JSON or is beyond the rewrite bounds, so the model received it with the note only (#145)`;
+}
+
+/** Issue #145 B2a (spec D1, review S3, r2 N2): the walk ran and replaced nothing (every string leaf empty or a kept SDK-declared literal leaf, or the payload sits only in object keys). Distinct from the skipped line: one value, one meaning. */
+export function withholdUnrewrittenWarning(tool: string): string {
+  return `the harness decided to withhold the ${tool} result but found no string leaf to replace (the content sits only in object keys, in empty leaves, or in values the CLI needs unchanged), so the model received it with the note only (#145)`;
+}

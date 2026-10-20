@@ -218,7 +218,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     try {
       const factory = makeEvalSessionFactory({
         query,
-        security: { permissions: { rules: [] }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5 }, warnings: [] },
+        security: { permissions: { rules: [] }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
         create: (deps, config) => {

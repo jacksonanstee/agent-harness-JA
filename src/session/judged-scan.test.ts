@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS } from '../security/index.js';
+import { JUDGE_ERROR_KINDS, JUDGE_TIMEOUT_MS, MAX_JUDGE_INPUT_BYTES } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, ScanResult, Verdict } from '../security/index.js';
 import { JUDGE_CALL_ERROR_KINDS, JUDGE_CALL_STATES, JUDGE_CALL_VERDICTS } from '../telemetry/index.js';
 import type { JudgeCallPayload } from '../telemetry/index.js';
 import {
   asFloor,
   createJudgeRun,
+  decidesWithhold,
   foldJudgeSummary,
   JUDGE_ABORT_GRACE_MS,
   JUDGE_DRAIN_MS,
@@ -98,7 +99,7 @@ function harness(judge: InternalSessionJudge) {
             redacted: o.redacted ?? false,
           });
           const decision = hook.decide(outcome);
-          hook.record(decision);
+          hook.record(decision, false);
           return decision;
         })(),
       );
@@ -155,6 +156,15 @@ describe('validateSessionJudge (spec D3, A-10; pins 4, 20, 29, 32)', () => {
   // A dep set to undefined (the key present); named, because the staged secret
   // scan reads a `<name with secret in it>: <value>` pair as a credential.
   const ABSENT = undefined;
+
+  it('withhold: absent and the literal block are accepted; ask, off and any non-literal are refused with one message (#145 B2a, W13)', () => {
+    expect(messageOf(base({ call, maxCallsPerRun: 1, withhold: 'block' }))).toBe('no throw');
+    for (const bad of ['ask', 'off', 'BLOCK', true, 1, null]) {
+      expect(messageOf(base({ call, maxCallsPerRun: 1, withhold: bad })), String(bad)).toBe(
+        "createSession: deps.judge.withhold must be absent or the literal 'block' ('ask' is refused: ADR-0026 decision 3)",
+      );
+    }
+  });
 
   it('accepts a well-formed judge and an absent one', () => {
     expect(messageOf(base({ call, maxCallsPerRun: 1 }))).toBe('no throw');
@@ -649,6 +659,7 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
       redacted: false,
       costUsd: 0.002283,
       durationMs: expect.any(Number),
+      withholdDecided: false,
     });
     const onAsk = await h.result({ id: 'a', floor: ASK_FLOOR });
     expect(onAsk).toMatchObject({ state: 'refused', deliver: true, composed: { verdict: 'ask', rule_ids: ['r-ask'] } });
@@ -672,7 +683,7 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
         snapshot: { outcome: 'called', result, threw: false },
         durationMs: 1,
       };
-      hook.record(hook.decide(outcome));
+      hook.record(hook.decide(outcome), false);
       hook.dispose();
       return h.rows.at(-1);
     };
@@ -709,8 +720,8 @@ describe('the decision (spec D3 steps 3, 3a, 3b, 6)', () => {
 });
 
 describe('the summary fold (spec D7, K-6; pin 17)', () => {
-  const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false): JudgeSummaryEntry =>
-    ({ state, called, costUsd, delivered, tightened });
+  const entry = (state: JudgeSummaryEntry['state'], called: boolean, costUsd: number | null, delivered = false, tightened = false, withholdDecided = false): JudgeSummaryEntry =>
+    ({ state, called, costUsd, delivered, tightened, withholdDecided });
 
   it('costUnknown counts reserved slots with no known cost only; unreserved states never count; refused entries fold like oversized (#152, T3e)', () => {
     // Two refused entries (#152): a pass-floor one, tightened to ask with its charged
@@ -737,10 +748,21 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
       },
       annotated: 5,
       tightened: 3,
+      withholdsDecided: 0,
       costUsd: expect.closeTo(0.006283, 10),
       costUnknown: 2,
       pendingAtEnd: 1,
     });
+  });
+
+  it('withholdsDecided counts DECISIONS from the entries, never landings (#145 B2a, spec D5; W14)', () => {
+    const s = foldJudgeSummary(10, 3, [
+      entry('judged', true, 0.002, true, true, true),
+      entry('judged', true, 0.002, true, true, true),
+      entry('judged', true, 0.002, true, true, false),
+    ], 0);
+    expect(s.withholdsDecided).toBe(2);
+    expect(s).toMatchObject({ annotated: 3, tightened: 3 });
   });
 
   it('the drain awaits a running path up to JUDGE_DRAIN_MS and counts one past it in pendingAtEnd (D3 step 7)', async () => {
@@ -764,5 +786,75 @@ describe('the summary fold (spec D7, K-6; pin 17)', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect((await summary).pendingAtEnd).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("decidesWithhold: the judge's own block on a judged result, and nothing else (#145 B2a, spec D2, D6; W4 unit)", () => {
+  const BLOCK_FLOOR: ScanResult = { verdict: 'block', rule_ids: ['r-block'], excerpts: [], suspicious: false };
+
+  it('judged + judge block: true, on a pass floor and on an ask floor', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 5 });
+    expect(decidesWithhold(await h.result())).toBe(true);
+    expect(decidesWithhold(await h.result({ floor: ASK_FLOOR }))).toBe(true);
+  });
+
+  const rows: ReadonlyArray<readonly [string, InternalSessionJudge, Options]> = [
+    ['judged + judge ask', { call: async () => OK('ask'), maxCallsPerRun: 5 }, {}],
+    ['judged + judge pass', { call: async () => OK('pass'), maxCallsPerRun: 5 }, {}],
+    ['not-escalated (heuristic block, judge never consulted)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { floor: BLOCK_FLOOR }],
+    ['failed', { call: async () => CALL_FAILED, maxCallsPerRun: 5 }, {}],
+    ['refused (composed ask)', { call: async () => REFUSED, maxCallsPerRun: 5 }, {}],
+    ['oversized (composed ask, no call)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { text: 'x'.repeat(MAX_JUDGE_INPUT_BYTES + 1) }],
+    ['hook pre-cancelled (not-escalated, no record)', { call: async () => OK('block'), maxCallsPerRun: 5 }, { signal: AbortSignal.abort() }],
+  ];
+  it.each(rows)('%s: false', async (_name, judge, opts) => {
+    expect(decidesWithhold(await harness(judge).result(opts))).toBe(false);
+  });
+
+  it('cap-reached: false (the second call is over the cap, so a would-be block is never called)', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 1 });
+    expect(decidesWithhold(await h.result())).toBe(true);
+    const second = await h.result();
+    expect(second?.state).toBe('cap-reached');
+    expect(decidesWithhold(second)).toBe(false);
+  });
+
+  it('timed-out: false (the scanner timer aborts; no ok verdict on the record)', async () => {
+    vi.useFakeTimers();
+    const h = harness({ call: (_t, signal) => new Promise((resolve) => signal?.addEventListener('abort', () => resolve(CALL_FAILED), { once: true })), maxCallsPerRun: 5 });
+    const pending = h.result();
+    await vi.advanceTimersByTimeAsync(JUDGE_TIMEOUT_MS);
+    expect(decidesWithhold(await pending)).toBe(false);
+  });
+
+  it('stopped: false (three failures, then a would-be block is never called)', async () => {
+    let n = 0;
+    const h = harness({ call: async () => (n++ < 3 ? CALL_FAILED : OK('block')), maxCallsPerRun: 10 });
+    for (let i = 0; i < 3; i += 1) await h.result();
+    const d = await h.result();
+    expect(d?.state).toBe('stopped');
+    expect(decidesWithhold(d)).toBe(false);
+  });
+
+  it('hook-cancelled with an ok block on the record: false (the one state whose record carries a verdict; binds the state clause)', async () => {
+    const h = harness({ call: async () => OK('block'), maxCallsPerRun: 5 });
+    const d = await h.result();
+    expect(d?.state).toBe('judged');
+    const cancelled = { ...d!, state: 'hook-cancelled' as const, deliver: false };
+    expect(cancelled.outcome.snapshot.result).toMatchObject({ ok: true, verdict: 'block' });
+    expect(decidesWithhold(cancelled)).toBe(false);
+  });
+
+  it('judged + composed block + record ok ask: false (binds the record-verdict clause)', async () => {
+    const h = harness({ call: async () => OK('ask'), maxCallsPerRun: 5 });
+    const d = await h.result();
+    expect(d?.state).toBe('judged');
+    const forged = { ...d!, composed: { ...d!.composed, verdict: 'block' as const } };
+    expect(forged.outcome.snapshot.result).toMatchObject({ ok: true, verdict: 'ask' });
+    expect(decidesWithhold(forged)).toBe(false);
+  });
+
+  it('null (the floor never entered the judge path): false', () => {
+    expect(decidesWithhold(null)).toBe(false);
   });
 });

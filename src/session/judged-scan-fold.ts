@@ -11,9 +11,11 @@ export interface JudgeSummaryEntry {
   costUsd: number | null;
   delivered: boolean;
   tightened: boolean;
+  /** The harness decided to withhold and returned the rewrite (#145 B2a, spec D5). */
+  withholdDecided: boolean;
 }
 
-/** `SessionResult.judge` (spec D7, K-6). `calls` counts reserved slots; `costUnknown` is reserved slots with no known cost. */
+/** `SessionResult.judge` (spec D7, K-6). `calls` counts reserved slots; `costUnknown` is reserved slots with no known cost. `withholdsDecided` counts DECISIONS (entries whose rewrite was returned), never landings, which are the `tool-rewrite` rows' claim. */
 export function foldJudgeSummary(
   cap: number,
   calls: number,
@@ -23,16 +25,18 @@ export function foldJudgeSummary(
   const byState = Object.fromEntries(JUDGE_SESSION_STATES.map((s) => [s, 0])) as Record<JudgeSessionState, number>;
   let annotated = 0;
   let tightened = 0;
+  let withholdsDecided = 0;
   let costUsd = 0;
   let known = 0;
   for (const e of entries) {
     byState[e.state] += 1;
     if (e.delivered) annotated += 1;
     if (e.tightened) tightened += 1;
+    if (e.withholdDecided) withholdsDecided += 1;
     if (e.called && e.costUsd !== null) {
       costUsd += e.costUsd;
       known += 1;
     }
   }
-  return { cap, calls, byState, annotated, tightened, costUsd, costUnknown: calls - known, pendingAtEnd };
+  return { cap, calls, byState, annotated, tightened, withholdsDecided, costUsd, costUnknown: calls - known, pendingAtEnd };
 }

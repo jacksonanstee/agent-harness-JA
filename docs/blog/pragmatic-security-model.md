@@ -43,6 +43,8 @@ down in bold.
 
 *(2026-09-11: the judge now exists and is measured, ADR-0036; withholding is still its call and still PR-B's.)*
 
+*(2026-10-20: withholding now exists behind `judge.withhold: "block"`, off by default, for the judge's own `block` only, [ADR-0039](../decisions/0039-judge-withholding-off-by-default.md).)*
+
 Why does writing it down matter beyond ethics? Because named gaps compose.
 The model's §6 chains R-4 with R-3 (ungated network egress) into the
 "critical-shaped scenario": flagged-but-not-blocked injection steers the

@@ -126,3 +126,32 @@ describe('judge-call rows (spec D6)', () => {
     expect([...JUDGE_CALL_ERROR_KINDS].sort()).toEqual(['call-failed', 'refused', 'unknown-enum', 'unparseable']);
   });
 });
+
+describe('withholdDecided (issue #145 B2a, spec D5; W15)', () => {
+  it('a row with withholdDecided true round-trips through the validator and the read path', () => {
+    const row: JudgeCallPayload = { ...VALID, judge: 'block', composed: 'block', withholdDecided: true };
+    const { result, rows } = write(row);
+    expect(result.ok).toBe(true);
+    expect(rows.map((r) => r.payload)).toEqual([row]);
+  });
+
+  it('a row with withholdDecided false round-trips (every row B2a writes carries a boolean)', () => {
+    const row: JudgeCallPayload = { ...VALID, withholdDecided: false };
+    const { rows } = write(row);
+    expect(rows.map((r) => r.payload)).toEqual([row]);
+  });
+
+  it('a row WITHOUT the key (written before B2a) still reads, and reads without the key', () => {
+    const { result, rows } = write(VALID);
+    expect(result.ok).toBe(true);
+    expect(rows[0]?.payload).not.toHaveProperty('withholdDecided');
+  });
+
+  it.each([['true'], [1], [null], ['']])('rejects withholdDecided = %j: a boolean or absent, never a text value (the N-1 shape)', (value) => {
+    expectRejected({ ...VALID, withholdDecided: value });
+  });
+
+  it('the closed key set gains exactly withholdDecided: a key spelled withheld is still rejected (G-4)', () => {
+    expectRejected({ ...VALID, withholdDecided: true, withheld: true });
+  });
+});
