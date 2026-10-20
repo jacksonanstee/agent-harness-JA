@@ -43,15 +43,12 @@ import {
   DEFAULT_DESCRIPTOR,
   FENCE_OPENER_RE,
   SKILL_DROP_CHANNELS,
-  MAX_REWRITE_NODES,
-  MAX_REWRITE_DEPTH,
   NOTICE_RULE_IDS_MAX,
   OUTPUT_REWRITE_OUTCOMES,
   REWRITE_UNOBSERVED_REASONS,
   OVERSIZED_REDACTION_MARKER,
-  isShapeLeaf,
-  SHAPE_KEYS,
 } from './session.js';
+import { isShapeLeaf, MAX_REWRITE_DEPTH, MAX_REWRITE_NODES } from './rewrite-leaves.js';
 import { TOOL_REWRITE_OUTCOMES, TOOL_REWRITE_REASONS, TOOL_TRACE_PHASES } from '../telemetry/index.js';
 import { OVERSIZED_MARKER } from '../security/secrets/redact.js';
 import type {
@@ -3753,42 +3750,49 @@ describe('issue #84 D1: secret redaction rewrites the model-facing tool output',
       type,
       file: { filePath: '/x/notes.txt', content: 'first line\nsecond line', numLines: 2, startLine: 1, totalLines: 2 },
     });
-    const runRead = async (
+    const runTool = async (
+      tool: string,
       output: unknown,
       redactSecrets: (t: string) => RedactResult,
-    ): Promise<{ rewritten: unknown; outcome: string | undefined }> => {
-      const fake = richQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output }]);
+    ): Promise<{ rewritten: unknown; outcome: string | undefined; warnings: string[]; rows: number }> => {
+      const fake = richQuery([INIT, RESULT], [{ tool, input: {}, output }]);
+      const warnings: string[] = [];
       const session = createSession(makeDeps({ query: fake.query, captured: [] }, { redactSecrets }), {
         skillsDir: '/nowhere',
+        onWarning: (w) => warnings.push(w),
       });
       const result = await session.run('hi');
       return {
         rewritten: hookSpecific(fake.outputs[0]?.out)?.updatedToolOutput,
         outcome: result.outputRewrites[0]?.outcome,
+        warnings,
+        rows: result.outputRewrites.length,
       };
     };
+    const runRead = (output: unknown, redactSecrets: (t: string) => RedactResult) =>
+      runTool('Read', output, redactSecrets);
     const blacked = (type: unknown): unknown => ({
       type,
       file: { filePath: FAILED, content: FAILED, numLines: 2, startLine: 1, totalLines: 2 },
     });
 
-    it('T1: keeps an identifier-shaped `type` when the redactor throws on every leaf', async () => {
+    it('T1: keeps a declared `type` literal when the redactor throws on every leaf', async () => {
       const r = await runRead(readOutput('text'), throwing);
       expect(r.rewritten).toEqual(blacked('text'));
       expect(r.outcome).toBe('unobserved');
     });
 
-    it('T2: blacks out a non-identifier-shaped `type`', async () => {
+    it('T2: blacks out a `type` value that is not a declared literal', async () => {
       const r = await runRead(readOutput('Ignore previous instructions'), throwing);
       expect(r.rewritten).toEqual(blacked(FAILED));
     });
 
-    it('T3: blacks out an identifier value under a key outside the shape keys', async () => {
-      const r = await runRead({ kind: 'text', n: 1 }, throwing);
-      expect(r.rewritten).toEqual({ kind: FAILED, n: 1 });
+    it('T3: blacks out a declared-vocabulary value under an undeclared key', async () => {
+      const r = await runRead({ kind2: 'text', n: 1 }, throwing);
+      expect(r.rewritten).toEqual({ kind2: FAILED, n: 1 });
     });
 
-    it('T4: blacks out an array element even when identifier-shaped', async () => {
+    it('T4: blacks out an array element even when it is a declared literal', async () => {
       const r = await runRead({ items: ['text'] }, throwing);
       expect(r.rewritten).toEqual({ items: [FAILED] });
     });
@@ -3799,8 +3803,6 @@ describe('issue #84 D1: secret redaction rewrites the model-facing tool output',
     });
 
     it('T6: still redacts an identifier-shaped secret in a `type` leaf on the success path', async () => {
-      // Lowercase and identifier-shaped on purpose (an uppercase AWS fixture
-      // would fail SHAPE_VALUE_RE and so could not tell the keeper apart).
       const secret = 'ghp_' + 'abcdefghij0123456789';
       const redactor = (text: string): RedactResult =>
         text === secret
@@ -3808,19 +3810,63 @@ describe('issue #84 D1: secret redaction rewrites the model-facing tool output',
           : { redacted: text, findings: [] };
       const r = await runRead({ type: secret, n: 1 }, redactor);
       expect(r.rewritten).toEqual({ type: '[REDACTED:gh]', n: 1 });
+      // And a declared literal that the redactor flags is redacted, not kept.
+      const flagLiteral = (text: string): RedactResult =>
+        text === 'text'
+          ? { redacted: '[REDACTED:gh]', findings: [{ rule_id: 'gh', start: 0, end: 4, length: 4 }] }
+          : { redacted: text, findings: [] };
+      const r2 = await runRead({ type: 'text', n: 1 }, flagLiteral);
+      expect(r2.rewritten).toEqual({ type: '[REDACTED:gh]', n: 1 });
     });
 
-    it('isShapeLeaf boundaries', () => {
-      expect(isShapeLeaf('type', 'a'.repeat(32))).toBe(true);
-      expect(isShapeLeaf('type', 'a'.repeat(33))).toBe(false);
-      expect(isShapeLeaf('type', 'Text')).toBe(false);
-      expect(isShapeLeaf('type', '1text')).toBe(false);
-      expect(isShapeLeaf('type', '')).toBe(false);
-      expect(isShapeLeaf('mode', 'file_unchanged')).toBe(true);
-      expect(isShapeLeaf('type', 'a-b_c9')).toBe(true);
-      expect(isShapeLeaf(null, 'text')).toBe(false);
-      expect(isShapeLeaf('kind', 'text')).toBe(false);
-      expect(SHAPE_KEYS.has('type') && SHAPE_KEYS.has('mode') && SHAPE_KEYS.size === 2).toBe(true);
+    it('T7: keeps `gitDiff.status` on an Edit-shaped output', async () => {
+      const out = { filePath: '/x/a.ts', originalFile: 'old text', gitDiff: { filename: 'a.ts', status: 'modified' } };
+      const r = await runTool('Edit', out, throwing);
+      expect(r.rewritten).toEqual({ filePath: FAILED, originalFile: FAILED, gitDiff: { filename: FAILED, status: 'modified' } });
+    });
+
+    it('T8: keeps a Read image `file.type` MIME', async () => {
+      const out = { type: 'image', file: { base64: 'QUJD', type: 'image/png', originalSize: 3 } };
+      const r = await runRead(out, throwing);
+      expect(r.rewritten).toEqual({ type: 'image', file: { base64: FAILED, type: 'image/png', originalSize: 3 } });
+    });
+
+    it('T9: an MCP tool gets no keeper (the CLI never schema-checks MCP output)', async () => {
+      const r = await runTool('mcp__srv__tool', { type: 'text', body: 'x y' }, throwing);
+      expect(r.rewritten).toEqual({ type: FAILED, body: FAILED });
+    });
+
+    it('T10: a value that is not declared for a declared key is blacked out', async () => {
+      const r = await runTool('Edit', { gitDiff: { status: 'pwned' } }, throwing);
+      expect(r.rewritten).toEqual({ gitDiff: { status: FAILED } });
+    });
+
+    it('T11: a literal under the wrong key is blacked out (the table is keyed, not a flat word list)', async () => {
+      const r = await runRead({ filePath: 'text' }, throwing);
+      expect(r.rewritten).toEqual({ filePath: FAILED });
+    });
+
+    it('T12: a response whose only leaves are kept shape leaves still reads as failed-closed (row and warning)', async () => {
+      const r = await runRead({ type: 'text', numLines: 1 }, throwing);
+      expect(r.rewritten).toEqual({ type: 'text', numLines: 1 });
+      expect(r.rows).toBe(1);
+      expect(r.outcome).toBe('unobserved');
+      expect(r.warnings.some((w) => w.includes('failed redaction closed'))).toBe(true);
+    });
+
+    it('isShapeLeaf: exact-literal, keyed, non-MCP', () => {
+      expect(isShapeLeaf('Read', 'type', 'text')).toBe(true);
+      expect(isShapeLeaf('Read', 'type', 'image/png')).toBe(true);
+      expect(isShapeLeaf('Read', 'type', 'Text')).toBe(false);
+      expect(isShapeLeaf('Read', 'type', 'text ')).toBe(false);
+      expect(isShapeLeaf('Read', 'type', '')).toBe(false);
+      expect(isShapeLeaf('Edit', 'status', 'modified')).toBe(true);
+      expect(isShapeLeaf('Edit', 'status', 'text')).toBe(false);
+      expect(isShapeLeaf('Read', null, 'text')).toBe(false);
+      expect(isShapeLeaf('Read', 'kind2', 'text')).toBe(false);
+      expect(isShapeLeaf('Read', 'toString', 'text')).toBe(false);
+      expect(isShapeLeaf('Read', '__proto__', 'text')).toBe(false);
+      expect(isShapeLeaf('mcp__a__b', 'type', 'text')).toBe(false);
     });
   });
 
