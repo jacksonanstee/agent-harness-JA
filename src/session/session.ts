@@ -175,6 +175,24 @@ const MIN_SPAN_LINE = 8;
 /** Non-error early-exit for the bounded, iterative rewrite walk. */
 class RewriteSkip extends Error {}
 
+/** Object keys whose string value is structural (a discriminator), not content. */
+export const SHAPE_KEYS: ReadonlySet<string> = new Set(['type', 'mode']);
+
+/** An identifier-shaped value: lowercase, short, no whitespace or punctuation beyond `_` and `-`. */
+export const SHAPE_VALUE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * True when a leaf is a structural discriminator that a fail-closed rewrite
+ * must leave intact. The CLI safeParses a built-in tool's rewritten output
+ * against the tool's output schema and silently reverts to the ORIGINAL output
+ * on mismatch (issue #203), so blacking out a union's `type` would deliver the
+ * raw secret. The identifier-shape condition stops a sentence riding through a
+ * structural key. `key` is null for the root and for array elements.
+ */
+export function isShapeLeaf(key: string | null, leaf: string): boolean {
+  return key !== null && SHAPE_KEYS.has(key) && SHAPE_VALUE_RE.test(leaf);
+}
+
 /**
  * Shape-preserving, ITERATIVE walk over the JSON value the SDK delivered (issue
  * #84, D1). String leaves go through `fn`; arrays and plain objects are rebuilt
@@ -189,7 +207,7 @@ class RewriteSkip extends Error {}
  */
 export function rewriteStringLeaves(
   input: unknown,
-  fn: (leaf: string) => string,
+  fn: (leaf: string, key: string | null) => string,
 ): { value: unknown; skipped: boolean } {
   let nodes = 0;
   const seen = new WeakSet<object>();
@@ -197,9 +215,10 @@ export function rewriteStringLeaves(
   interface Frame {
     value: unknown;
     depth: number;
+    key: string | null;
     assign: (result: unknown) => void;
   }
-  const stack: Frame[] = [{ value: input, depth: 0, assign: (r) => { root.out = r; } }];
+  const stack: Frame[] = [{ value: input, depth: 0, key: null, assign: (r) => { root.out = r; } }];
   try {
     while (stack.length > 0) {
       const frame = stack.pop() as Frame;
@@ -207,7 +226,7 @@ export function rewriteStringLeaves(
       if (nodes > MAX_REWRITE_NODES || frame.depth > MAX_REWRITE_DEPTH) throw new RewriteSkip();
       const v = frame.value;
       if (typeof v === 'string') {
-        frame.assign(fn(v));
+        frame.assign(fn(v, frame.key));
         continue;
       }
       if (v === null || typeof v === 'number' || typeof v === 'boolean') {
@@ -221,7 +240,7 @@ export function rewriteStringLeaves(
         frame.assign(arr);
         for (let i = 0; i < v.length; i += 1) {
           const idx = i;
-          stack.push({ value: v[i], depth: frame.depth + 1, assign: (r) => { arr[idx] = r; } });
+          stack.push({ value: v[i], depth: frame.depth + 1, key: null, assign: (r) => { arr[idx] = r; } });
         }
         continue;
       }
@@ -238,7 +257,7 @@ export function rewriteStringLeaves(
         frame.assign(obj);
         for (const key of Object.keys(source)) {
           const k = key;
-          stack.push({ value: source[key], depth: frame.depth + 1, assign: (r) => { obj[k] = r; } });
+          stack.push({ value: source[key], depth: frame.depth + 1, key: k, assign: (r) => { obj[k] = r; } });
         }
         continue;
       }
@@ -1080,16 +1099,18 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         const firstLine = leaf.split('\n')[0] ?? '';
         if (firstLine.length >= MIN_SPAN_LINE) spanLines.push(firstLine);
       };
-      const leafFn = (leaf: string): string => {
+      const leafFn = (leaf: string, key: string | null): string => {
         let result: RedactResult;
         try {
           result = redactor(leaf);
         } catch {
+          if (isShapeLeaf(key, leaf)) return leaf;
           anyFailedClosed = true;
           recordFailedSpan(leaf);
           return REDACTION_FAILED;
         }
         if (typeof result.redacted !== 'string') {
+          if (isShapeLeaf(key, leaf)) return leaf;
           anyFailedClosed = true;
           recordFailedSpan(leaf);
           return REDACTION_FAILED;

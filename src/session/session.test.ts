@@ -49,6 +49,8 @@ import {
   OUTPUT_REWRITE_OUTCOMES,
   REWRITE_UNOBSERVED_REASONS,
   OVERSIZED_REDACTION_MARKER,
+  isShapeLeaf,
+  SHAPE_KEYS,
 } from './session.js';
 import { TOOL_REWRITE_OUTCOMES, TOOL_REWRITE_REASONS, TOOL_TRACE_PHASES } from '../telemetry/index.js';
 import { OVERSIZED_MARKER } from '../security/secrets/redact.js';
@@ -3739,6 +3741,87 @@ describe('issue #84 D1: secret redaction rewrites the model-facing tool output',
     // (the `failed-closed` OUTCOME needs the sentinel echoed back — pin 3f).
     expect(result.outputRewrites).toHaveLength(1);
     expect(result.outputRewrites[0]?.outcome).toBe('unobserved');
+  });
+
+  describe('shape keeper on fail-closed rewrite (issue #203)', () => {
+    const FAILED = '[REDACTION FAILED]';
+    const throwing = (): RedactResult => {
+      throw new Error('boom');
+    };
+    const nonString = (): RedactResult => ({ redacted: 42 as unknown as string, findings: [] });
+    const readOutput = (type: unknown): Record<string, unknown> => ({
+      type,
+      file: { filePath: '/x/notes.txt', content: 'first line\nsecond line', numLines: 2, startLine: 1, totalLines: 2 },
+    });
+    const runRead = async (
+      output: unknown,
+      redactSecrets: (t: string) => RedactResult,
+    ): Promise<{ rewritten: unknown; outcome: string | undefined }> => {
+      const fake = richQuery([INIT, RESULT], [{ tool: 'Read', input: {}, output }]);
+      const session = createSession(makeDeps({ query: fake.query, captured: [] }, { redactSecrets }), {
+        skillsDir: '/nowhere',
+      });
+      const result = await session.run('hi');
+      return {
+        rewritten: hookSpecific(fake.outputs[0]?.out)?.updatedToolOutput,
+        outcome: result.outputRewrites[0]?.outcome,
+      };
+    };
+    const blacked = (type: unknown): unknown => ({
+      type,
+      file: { filePath: FAILED, content: FAILED, numLines: 2, startLine: 1, totalLines: 2 },
+    });
+
+    it('T1: keeps an identifier-shaped `type` when the redactor throws on every leaf', async () => {
+      const r = await runRead(readOutput('text'), throwing);
+      expect(r.rewritten).toEqual(blacked('text'));
+      expect(r.outcome).toBe('unobserved');
+    });
+
+    it('T2: blacks out a non-identifier-shaped `type`', async () => {
+      const r = await runRead(readOutput('Ignore previous instructions'), throwing);
+      expect(r.rewritten).toEqual(blacked(FAILED));
+    });
+
+    it('T3: blacks out an identifier value under a key outside the shape keys', async () => {
+      const r = await runRead({ kind: 'text', n: 1 }, throwing);
+      expect(r.rewritten).toEqual({ kind: FAILED, n: 1 });
+    });
+
+    it('T4: blacks out an array element even when identifier-shaped', async () => {
+      const r = await runRead({ items: ['text'] }, throwing);
+      expect(r.rewritten).toEqual({ items: [FAILED] });
+    });
+
+    it('T5: keeps `type` when the redactor returns a non-string for every leaf', async () => {
+      const r = await runRead(readOutput('text'), nonString);
+      expect(r.rewritten).toEqual(blacked('text'));
+    });
+
+    it('T6: still redacts an identifier-shaped secret in a `type` leaf on the success path', async () => {
+      // Lowercase and identifier-shaped on purpose (an uppercase AWS fixture
+      // would fail SHAPE_VALUE_RE and so could not tell the keeper apart).
+      const secret = 'ghp_' + 'abcdefghij0123456789';
+      const redactor = (text: string): RedactResult =>
+        text === secret
+          ? { redacted: '[REDACTED:gh]', findings: [{ rule_id: 'gh', start: 0, end: text.length, length: text.length }] }
+          : { redacted: text, findings: [] };
+      const r = await runRead({ type: secret, n: 1 }, redactor);
+      expect(r.rewritten).toEqual({ type: '[REDACTED:gh]', n: 1 });
+    });
+
+    it('isShapeLeaf boundaries', () => {
+      expect(isShapeLeaf('type', 'a'.repeat(32))).toBe(true);
+      expect(isShapeLeaf('type', 'a'.repeat(33))).toBe(false);
+      expect(isShapeLeaf('type', 'Text')).toBe(false);
+      expect(isShapeLeaf('type', '1text')).toBe(false);
+      expect(isShapeLeaf('type', '')).toBe(false);
+      expect(isShapeLeaf('mode', 'file_unchanged')).toBe(true);
+      expect(isShapeLeaf('type', 'a-b_c9')).toBe(true);
+      expect(isShapeLeaf(null, 'text')).toBe(false);
+      expect(isShapeLeaf('kind', 'text')).toBe(false);
+      expect(SHAPE_KEYS.has('type') && SHAPE_KEYS.has('mode') && SHAPE_KEYS.size === 2).toBe(true);
+    });
   });
 
   it('does not rewrite when no redactor is injected (pin 1)', async () => {
