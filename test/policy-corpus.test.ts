@@ -171,22 +171,27 @@ describe('policy corpus: shape', () => {
   });
 
   it('the composition under test is the one the CLI registers (order and members)', () => {
+    // #140: the two registrations live in ONE function (registerSecurityHooks); both
+    // command sites must call it, and it must register permissions before the sandbox.
     const expected = [
       "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));",
       "hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));",
     ];
-    for (const file of ['../src/cli.ts', '../src/cli/eval-command.ts']) {
-      // Comment lines are dropped first, so a commented-out registration
-      // cannot satisfy the pin. The behavioural `rm -rf /` row (perm:user:2,
-      // where the sandbox would also refuse) pins the same order by outcome.
-      const text = readFileSync(new URL(file, import.meta.url), 'utf8')
+    // Comment lines are dropped first, so a commented-out registration
+    // cannot satisfy the pin. The behavioural `rm -rf /` row (perm:user:2,
+    // where the sandbox would also refuse) pins the same order by outcome.
+    const code = (file: string): string =>
+      readFileSync(new URL(file, import.meta.url), 'utf8')
         .split('\n')
-        .filter((line) => !line.trimStart().startsWith('//'))
+        .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
         .join('\n');
-      const first = text.indexOf(expected[0] ?? '');
-      const second = text.indexOf(expected[1] ?? '');
-      expect(first, `${file} registers permissionHook`).toBeGreaterThanOrEqual(0);
-      expect(second, `${file} registers sandboxHook after it`).toBeGreaterThan(first);
+    const shared = code('../src/cli/shared.ts');
+    const first = shared.indexOf(expected[0] ?? '');
+    const second = shared.indexOf(expected[1] ?? '');
+    expect(first, 'registerSecurityHooks registers permissionHook').toBeGreaterThanOrEqual(0);
+    expect(second, 'registerSecurityHooks registers sandboxHook after it').toBeGreaterThan(first);
+    for (const file of ['../src/cli.ts', '../src/cli/eval-command.ts']) {
+      expect(code(file), `${file} calls registerSecurityHooks`).toContain('registerSecurityHooks(hooks, security);');
     }
   });
 });

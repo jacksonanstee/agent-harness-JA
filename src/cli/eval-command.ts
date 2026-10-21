@@ -17,11 +17,7 @@ import { route } from '../router/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
-  createPermissionEvaluator,
-  createSandbox,
-  permissionHook,
   redact,
-  sandboxHook,
   scan,
 } from '../security/index.js';
 import { load as loadSkills } from '../skills/index.js';
@@ -35,6 +31,7 @@ import {
   loadSdkQuery,
   parseSafeInt,
   readPackageVersion,
+  registerSecurityHooks,
   refuseSymlinkedDir,
   sanitizeDiagnostic,
   sanitizeForTerminal,
@@ -173,8 +170,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         }
       },
     });
-    hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
-    hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+    registerSecurityHooks(hooks, security);
     return create(
       {
         query,

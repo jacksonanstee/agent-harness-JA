@@ -2,11 +2,13 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eval/index.js';
-import type { HookEventRecord } from '../hooks/index.js';
+import type { HookEventRecord, HookRuntime } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { boundEcho, loadJsonSettings } from '../internal/settings.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
+  createPermissionEvaluator,
+  createSandbox,
   hasGlobCharacter,
   hasJudgeKey,
   JudgeSettingsError,
@@ -17,7 +19,9 @@ import {
   parseSandboxSettings,
   isBlockedFirstToken,
   PermissionSettingsError,
+  permissionHook,
   SandboxSettingsError,
+  sandboxHook,
 } from '../security/index.js';
 import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
 import type { QueryFn } from '../session/index.js';
@@ -404,6 +408,23 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
     ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
   };
   return { permissions, grantPolicy, sandbox, judge: user.judge, warnings };
+}
+
+/**
+ * Registers the two security pre-tool hooks in their ONE shipped order, for
+ * every command that builds a session (`run`, `eval`). Permissions first,
+ * sandbox as the backstop: the deny outcome is identical (the runtime denies
+ * on the first throw), but rule-attributed permission reasons are more
+ * actionable, so they get first say (ADR-0015 section 4). The sandbox also
+ * runs after a grant is returned, so a sandbox deny always overrides it
+ * (ADR-0040 D3). `security.grantPolicy` is passed through unchanged.
+ */
+export function registerSecurityHooks(
+  hooks: Pick<HookRuntime, 'register'>,
+  security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox'>,
+): void {
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
+  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }
 
 /**

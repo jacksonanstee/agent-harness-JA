@@ -11,9 +11,9 @@ import type { HookEventRecord } from './hooks/index.js';
 import { DEFAULT_DB_PATH } from './memory/index.js';
 import { USAGE } from './cli/shared.js';
 import { redact, scan } from './security/index.js';
-import { createTelemetryStore, openTelemetryDatabase } from './telemetry/index.js';
+import { createTelemetryStore, HOOK_EVENT_REASON_MAX, openTelemetryDatabase } from './telemetry/index.js';
 import { MAX_SETTINGS_BYTES } from './internal/settings.js';
-import type { TelemetryEvent } from './telemetry/index.js';
+import type { HookEventKind, TelemetryEvent } from './telemetry/index.js';
 
 describe('parseRunArgs', () => {
   it('parses a bare run command with defaults', () => {
@@ -429,6 +429,10 @@ describe('parseArgs (telemetry export)', () => {
 });
 
 describe('hookRecordToTelemetryInput', () => {
+  type Assignable<A, B> = [A] extends [B] ? true : false;
+  // Compile pin: the telemetry kind union mirrors the hooks record kinds (hooks -> telemetry, at the composition root).
+  const _kindsMirror: Assignable<HookEventRecord['kind'], HookEventKind> = true;
+  void _kindsMirror;
   const ids = { sessionId: 'harness-1', turnId: 'turn-1' };
   const deps = { redactSecrets: redact };
   // Assembled from fragments so the repo's own secret scan never sees a literal
@@ -437,6 +441,13 @@ describe('hookRecordToTelemetryInput', () => {
 
   const denied = (reason: string): HookEventRecord => ({
     kind: 'denied-by-hook',
+    event: 'pre-tool',
+    handlerIndex: 2,
+    tool: 'Bash',
+    reason,
+  });
+  const granted = (reason: string): HookEventRecord => ({
+    kind: 'granted-by-rule',
     event: 'pre-tool',
     handlerIndex: 2,
     tool: 'Bash',
@@ -454,7 +465,7 @@ describe('hookRecordToTelemetryInput', () => {
     return input.payload.reason;
   };
 
-  it('maps all three HookEventRecord kinds', () => {
+  it('maps all four HookEventRecord kinds', () => {
     const fired: HookEventRecord = { kind: 'hook-fired', event: 'stop', handlersFired: 3 };
 
     expect(hookRecordToTelemetryInput(denied('blocked'), ids, deps)).toEqual({
@@ -462,6 +473,12 @@ describe('hookRecordToTelemetryInput', () => {
       sessionId: 'harness-1',
       turnId: 'turn-1',
       payload: { kind: 'denied-by-hook', event: 'pre-tool', tool: 'Bash', reason: 'blocked', handlerIndex: 2 },
+    });
+    expect(hookRecordToTelemetryInput(granted('allowed'), ids, deps)).toEqual({
+      type: 'hook-event',
+      sessionId: 'harness-1',
+      turnId: 'turn-1',
+      payload: { kind: 'granted-by-rule', event: 'pre-tool', tool: 'Bash', reason: 'allowed', handlerIndex: 2 },
     });
     expect(hookRecordToTelemetryInput(errored('observer broke'), ids, deps)).toEqual({
       type: 'hook-event',
@@ -488,6 +505,14 @@ describe('hookRecordToTelemetryInput', () => {
     expect(reason).not.toContain(AWS_KEY);
     expect(reason).not.toContain('AKIA');
     expect(reason).toContain('[REDACTED:');
+  });
+
+  // Review Focus 5 (second half): the grant row is the same retained sink.
+  it('redacts then bounds a granted-by-rule reason to HOOK_EVENT_REASON_MAX', () => {
+    const reason = reasonOf(granted('rule ' + AWS_KEY + ' ' + 'r'.repeat(HOOK_EVENT_REASON_MAX * 2)));
+    expect(reason).not.toContain(AWS_KEY);
+    expect(reason).toContain('[REDACTED:aws-access-key-id]');
+    expect(reason).toHaveLength(HOOK_EVENT_REASON_MAX);
   });
 
   it('redacts a secret in a hook-error reason on the same seam', () => {

@@ -33,7 +33,9 @@ import type {
   SdkPostToolRewriteOutput,
   SdkPostToolUseFailureInput,
   SdkPostToolUseInput,
+  SdkPreToolAllowOutput,
   SdkPreToolDenyOutput,
+  SdkPreToolOutput,
   SdkPreToolUseInput,
   SdkUserMessage,
 } from './types.js';
@@ -61,6 +63,16 @@ const _postNoExtra: NoExtraKeys<SdkPostToolUseInput, PostToolUseHookInput> = tru
 // our value flows to the SDK (view -> SDK).
 const _denyOutputAccepted: Assignable<SdkPreToolDenyOutput, HookJSONOutput> = true;
 const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
+// ADR-0040: the allow bridge is accepted by the SDK. The SDK declares FOUR
+// decisions ('allow' | 'deny' | 'ask' | 'defer'); the view declares 'allow' and
+// 'deny' and deliberately omits 'ask' and 'defer'.
+const _allowOutputAccepted: Assignable<SdkPreToolAllowOutput, HookJSONOutput> = true;
+const _allowDecisionIsSdk: Assignable<
+  SdkPreToolAllowOutput['hookSpecificOutput']['permissionDecision'],
+  NonNullable<PreToolUseHookSpecificOutput['permissionDecision']>
+> = true;
+const _viewOmitsAsk: Assignable<'ask', NonNullable<SdkPreToolOutput['hookSpecificOutput']>['permissionDecision']> = false;
+const _viewOmitsDefer: Assignable<'defer', NonNullable<SdkPreToolOutput['hookSpecificOutput']>['permissionDecision']> = false;
 // Assignability alone does NOT catch a renamed deny key: the SDK declares
 // `permissionDecision?`/`permissionDecisionReason?` optional, so a payload that
 // renames one stays assignable to `HookJSONOutput` (the rename is caught only
@@ -69,6 +81,11 @@ const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
 // too, at the contract boundary rather than only at the call site.
 const _denyPayloadNoExtra: NoExtraKeys<
   SdkPreToolDenyOutput['hookSpecificOutput'],
+  PreToolUseHookSpecificOutput
+> = true;
+// Same nested pin for the allow arm: a renamed or invented allow key reddens here.
+const _allowPayloadNoExtra: NoExtraKeys<
+  SdkPreToolAllowOutput['hookSpecificOutput'],
   PreToolUseHookSpecificOutput
 > = true;
 
@@ -92,6 +109,11 @@ describe('SDK hook-input type parity', () => {
       _denyOutputAccepted,
       _matcherNoExtra,
       _denyPayloadNoExtra,
+      _allowOutputAccepted,
+      _allowDecisionIsSdk,
+      _viewOmitsAsk,
+      _viewOmitsDefer,
+      _allowPayloadNoExtra,
       _rejectsOldField,
     ]).toBeDefined();
   });

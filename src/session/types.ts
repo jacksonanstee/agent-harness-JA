@@ -160,6 +160,19 @@ export interface SdkPreToolDenyOutput {
 }
 
 /**
+ * ADR-0040 D3: the explicit allow the session returns when the hook runtime
+ * reports a rule grant. `permissionDecisionReason` is always the one fixed
+ * harness literal (`HARNESS_RULE_ALLOW_REASON`), never the evaluator's reason.
+ */
+export interface SdkPreToolAllowOutput {
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse';
+    permissionDecision: 'allow';
+    permissionDecisionReason: string;
+  };
+}
+
+/**
  * Post-tool rewrite output (issue #84, D1/D2). On a SUCCESSFUL call either
  * channel may fire: `updatedToolOutput` replaces the model-facing copy (secret
  * redaction), `additionalContext` adds the harness injection notice. Written as
@@ -185,7 +198,13 @@ export type SdkPostToolFailureAnnotateOutput = {
 
 // Per-event output unions (D6, G-8). Each event's callback returns exactly the
 // outputs valid for that event, plus the empty no-op.
-export type SdkPreToolOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
+// ADR-0040: the pre-tool output gains the allow arm. The SDK declares four
+// decisions ('allow' | 'deny' | 'ask' | 'defer'); the view declares 'allow' and
+// 'deny'. U-8 narrowing survives because BOTH arms declare `permissionDecision`.
+export type SdkPreToolOutput =
+  | SdkPreToolDenyOutput
+  | SdkPreToolAllowOutput
+  | { hookSpecificOutput?: undefined };
 export type SdkPostToolOutput = SdkPostToolRewriteOutput | { hookSpecificOutput?: undefined };
 export type SdkPostToolFailureOutput =
   | SdkPostToolFailureAnnotateOutput

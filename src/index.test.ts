@@ -44,6 +44,11 @@ const _permissionHookIsAPreToolHandler: Assignable<ReturnType<typeof barrel.perm
 // package.json `exports` map lands (see exports-map.test.ts), so every factory
 // a SessionDeps / GoldenRunnerDeps field references must be reachable here.
 describe('root barrel (src/index.ts)', () => {
+  it('permissionHook is assignable to HookHandler<"pre-tool"> (ADR-0040; the comment in src/security/pre-tool-like.ts:3 made a pin)', () => {
+    const pin: Assignable<ReturnType<typeof barrel.permissionHook>, Root.HookHandler<'pre-tool'>> = true;
+    expect(pin).toBe(true);
+  });
+
   it('exports the security factories and hook adapters', () => {
     expect(typeof barrel.scan).toBe('function');
     expect(typeof barrel.createInjectionScanner).toBe('function');
