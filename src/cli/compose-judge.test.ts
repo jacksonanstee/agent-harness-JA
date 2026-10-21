@@ -95,4 +95,18 @@ describe('composeSecurity: grantPolicy (#140, D-8)', () => {
   it('an empty commands list does not count as configured: Bash is ungrantable', () => {
     expect([...policyFor({ commands: { allow: [] } }).ungrantableTools]).toEqual(['Bash']);
   });
+
+  const policyBoth = (user: unknown, project: unknown) =>
+    composeSecurity({
+      userDir: layer(user === undefined ? {} : { sandbox: user }),
+      projectDir: layer(project === undefined ? {} : { sandbox: project }),
+    }).grantPolicy;
+
+  it('project-only sandbox commands do not make Bash grantable (a cloned repo cannot unlock the grant)', () => {
+    expect([...policyBoth(undefined, { commands: { allow: ['curl'] } }).ungrantableTools]).toEqual(['Bash']);
+  });
+  it('user commands present: Bash is grantable, with or without a project list (the gate is the merged list)', () => {
+    expect([...policyBoth({ commands: { allow: ['git'] } }, undefined).ungrantableTools]).toEqual([]);
+    expect([...policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }).ungrantableTools]).toEqual([]);
+  });
 });

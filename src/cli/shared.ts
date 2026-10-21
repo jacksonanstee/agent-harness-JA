@@ -290,8 +290,8 @@ export class SettingsLoadError extends Error {
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
   /**
-   * Which tools a rule allow must not grant (D-8): `Bash` unless the composed
-   * sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
+   * Which tools a rule allow must not grant (D-8): `Bash` unless the
+   * USER layer's sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
    * runs before any explicit SDK allow. Computed once; both registration
    * sites pass it to permissionHook.
    */
@@ -398,8 +398,10 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
     ...globPathWarnings(user.sandbox, userPath),
     ...globPathWarnings(project.sandbox, projectPath),
   );
+  // USER layer only: the merge (intersectDimension) returns the project list when the user has
+  // none, so a cloned repo's commands list must not unlock the grant. The merged list stays the gate.
   const grantPolicy: GrantPolicy = {
-    ungrantableTools: new Set((sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
+    ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
   };
   return { permissions, grantPolicy, sandbox, judge: user.judge, warnings };
 }
