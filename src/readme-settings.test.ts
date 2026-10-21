@@ -226,7 +226,7 @@ describe('README `## Settings`: the examples load through the real composition',
     // The prose-to-code pin: the README carries the string the code produces.
     expect(section).toContain(warning ?? '');
 
-    const hook = permissionHook(createPermissionEvaluator(composed.permissions));
+    const hook = permissionHook(createPermissionEvaluator(composed.permissions), undefined, composed.grantPolicy);
     let thrown: unknown;
     try {
       await hook({ tool: 'Bash', args: { command: 'ls' } });

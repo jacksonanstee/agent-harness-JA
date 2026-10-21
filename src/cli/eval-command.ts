@@ -173,7 +173,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         }
       },
     });
-    hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+    hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
     hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
     return create(
       {

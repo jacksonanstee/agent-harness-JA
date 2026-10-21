@@ -19,7 +19,7 @@ import {
   PermissionSettingsError,
   SandboxSettingsError,
 } from '../security/index.js';
-import type { EvaluatorOptions, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
+import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -289,6 +289,13 @@ export class SettingsLoadError extends Error {
 
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
+  /**
+   * Which tools a rule allow must not grant (D-8): `Bash` unless the composed
+   * sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
+   * runs before any explicit SDK allow. Computed once; both registration
+   * sites pass it to permissionHook.
+   */
+  grantPolicy: GrantPolicy;
   sandbox: SandboxConfig;
   /**
    * The session judge (issue #96 PR-B1, spec D1), from the USER layer only;
@@ -391,7 +398,10 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
     ...globPathWarnings(user.sandbox, userPath),
     ...globPathWarnings(project.sandbox, projectPath),
   );
-  return { permissions, sandbox, judge: user.judge, warnings };
+  const grantPolicy: GrantPolicy = {
+    ungrantableTools: new Set((sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
+  };
+  return { permissions, grantPolicy, sandbox, judge: user.judge, warnings };
 }
 
 /**

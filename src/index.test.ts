@@ -7,6 +7,7 @@ import * as sessionBarrel from './session/index.js';
 import type * as Root from './index.js';
 import type {
   AdversaryFn,
+  HookHandler,
   ChallengeInput,
   JudgeCall,
   JudgeCallResult,
@@ -34,6 +35,11 @@ import type {
   Verifier,
 } from './index.js';
 
+// Spec drift pin i (#140): permissionHook's return satisfies a pre-tool HookHandler. A compile-time
+// check (typecheck is the gate), so a return type the runtime cannot read fails the build.
+type Assignable<A, B> = [A] extends [B] ? true : false;
+const _permissionHookIsAPreToolHandler: Assignable<ReturnType<typeof barrel.permissionHook>, HookHandler<'pre-tool'>> = true;
+
 // V15/V25 regression pin: the root barrel is the only supported entry once the
 // package.json `exports` map lands (see exports-map.test.ts), so every factory
 // a SessionDeps / GoldenRunnerDeps field references must be reachable here.
@@ -46,6 +52,7 @@ describe('root barrel (src/index.ts)', () => {
     expect(typeof barrel.createPermissionEvaluator).toBe('function');
     expect(typeof barrel.createSandbox).toBe('function');
     expect(typeof barrel.permissionHook).toBe('function');
+    expect(_permissionHookIsAPreToolHandler).toBe(true);
     expect(typeof barrel.sandboxHook).toBe('function');
     expect(barrel.DEFAULT_INJECTION_RULES.length).toBeGreaterThan(0);
     expect(barrel.DEFAULT_SECRET_RULES.length).toBeGreaterThan(0);

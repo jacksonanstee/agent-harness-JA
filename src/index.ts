@@ -86,6 +86,7 @@ export type {
   Verdict,
   Evaluation,
   EvaluatorOptions,
+  GrantPolicy,
   LayeredRule,
   PermissionDecision,
   PermissionEvaluator,

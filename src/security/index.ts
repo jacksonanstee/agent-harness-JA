@@ -59,6 +59,7 @@ export type { SettingSource } from './sdk-settings.js';
 export type {
   Evaluation,
   EvaluatorOptions,
+  GrantPolicy,
   LayeredRule,
   PermissionDecision,
   PermissionEvaluator,

@@ -114,7 +114,7 @@ function composedRuntime(): HookRuntime {
   const sandbox = mergeSandboxLayers(parseSandboxSettings(user), parseSandboxSettings(project));
   const hooks = createHookRuntime();
   // Same order as the composition root: permissions first, sandbox as backstop.
-  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions)));
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(permissions), undefined, { ungrantableTools: new Set(['Bash']) }));
   hooks.register('pre-tool', sandboxHook(createSandbox(sandbox)));
   return hooks;
 }
@@ -172,7 +172,7 @@ describe('policy corpus: shape', () => {
 
   it('the composition under test is the one the CLI registers (order and members)', () => {
     const expected = [
-      "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));",
+      "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));",
       "hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));",
     ];
     for (const file of ['../src/cli.ts', '../src/cli/eval-command.ts']) {

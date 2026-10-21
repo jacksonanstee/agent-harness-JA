@@ -80,3 +80,19 @@ describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2
     expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 4, withhold: 'off' });
   });
 });
+
+describe('composeSecurity: grantPolicy (#140, D-8)', () => {
+  const policyFor = (sandbox: unknown) =>
+    composeSecurity({ userDir: layer(sandbox === undefined ? {} : { sandbox }), projectDir: layer(undefined) }).grantPolicy;
+
+  it('no sandbox commands: Bash is ungrantable', () => {
+    expect([...policyFor(undefined).ungrantableTools]).toEqual(['Bash']);
+    expect([...policyFor({ paths: { allow: ['/x'] } }).ungrantableTools]).toEqual(['Bash']);
+  });
+  it('a non-empty commands list: Bash is grantable', () => {
+    expect([...policyFor({ commands: { allow: ['git'] } }).ungrantableTools]).toEqual([]);
+  });
+  it('an empty commands list does not count as configured: Bash is ungrantable', () => {
+    expect([...policyFor({ commands: { allow: [] } }).ungrantableTools]).toEqual(['Bash']);
+  });
+});

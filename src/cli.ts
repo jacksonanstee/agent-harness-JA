@@ -569,7 +569,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   // Permissions first, sandbox as the backstop: deny outcome is identical
   // (runtime denies on first throw), but rule-attributed permission reasons
   // are more actionable, so they get first say (ADR-0015 §4).
-  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 
   const session = createSession(
