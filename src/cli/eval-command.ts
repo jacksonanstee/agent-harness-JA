@@ -184,6 +184,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
       },
       {
         skillsDir: config.skillsDir,
+        settingSources: security.sdk.settingSources,
         maxTurns: config.maxTurns,
         ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
         generateId: () => sessionId,

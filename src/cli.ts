@@ -579,6 +579,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       ...runJudgeDeps(security.judge, query),
     },
     {
+      settingSources: security.sdk.settingSources,
       skillsDir,
       maxTurns,
       descriptor,

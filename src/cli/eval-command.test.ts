@@ -4,6 +4,7 @@ import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
 import { mergeLayers, parsePermissionSettings } from '../security/index.js';
+import type { SettingSource } from '../security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { USAGE } from './shared.js';
 import { buildAdversary, makeEvalSessionFactory, parseEvalArgs } from './eval-command.js';
@@ -219,7 +220,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     try {
       const factory = makeEvalSessionFactory({
         query,
-        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, warnings: [] },
+        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
         create: (deps, config) => {
@@ -270,6 +271,7 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
           grantPolicy: { ungrantableTools: new Set(['Bash']) },
           sandbox: {},
           judge: null,
+          sdk: { settingSources: [] },
           warnings: [],
         },
         telemetry: createTelemetryStore(db),
@@ -288,5 +290,40 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+// Issue #140, ADR-0040 D2: eval passes the composed list to the primary query.
+describe('the eval session carries the composed sdk.settingSources (#140, D2)', () => {
+  const run = async (settingSources: SettingSource[]) => {
+    const fake = fakeQuery([RESULT]);
+    const db = openTelemetryDatabase({ path: ':memory:' });
+    try {
+      const factory = makeEvalSessionFactory({
+        query: fake.query,
+        security: {
+          permissions: { rules: [] },
+          grantPolicy: { ungrantableTools: new Set(['Bash']) },
+          sandbox: {},
+          judge: null,
+          sdk: { settingSources },
+          warnings: [],
+        },
+        telemetry: createTelemetryStore(db),
+        memory: createMemoryStore(db),
+      });
+      await factory({ skillsDir: null, maxTurns: 1 }).run('task');
+      return fake.captured[0]?.options;
+    } finally {
+      db.close();
+    }
+  };
+
+  it('an opted-in list reaches the query and lifts strictMcpConfig', async () => {
+    expect(await run(['project'])).toMatchObject({ settingSources: ['project'], strictMcpConfig: false });
+  });
+
+  it('the composed default is isolated', async () => {
+    expect(await run([])).toMatchObject({ settingSources: [], strictMcpConfig: true });
   });
 });

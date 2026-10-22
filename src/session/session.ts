@@ -450,6 +450,10 @@ function buildSystemPrompt(skills: Skill[], nonce: string): {
  * The list is copied: the caller's array is never handed to the SDK.
  */
 function buildSessionIsolation(config: SessionConfig): Pick<QueryOptions, 'settingSources' | 'strictMcpConfig'> {
+  // Defence in depth (#140): the type says array, the runtime must not trust it.
+  if (config.settingSources !== undefined && !Array.isArray(config.settingSources)) {
+    throw new TypeError('SessionConfig.settingSources must be an array');
+  }
   const settingSources = [...(config.settingSources ?? [])];
   return { settingSources, strictMcpConfig: settingSources.length === 0 };
 }

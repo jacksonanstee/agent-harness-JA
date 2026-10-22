@@ -11,19 +11,22 @@ import {
   createSandbox,
   hasGlobCharacter,
   hasJudgeKey,
+  hasSdkKey,
   JudgeSettingsError,
   mergeLayers,
   mergeSandboxLayers,
   parseJudgeSettings,
+  parseSdkSettings,
   parsePermissionSettings,
   parseSandboxSettings,
   isBlockedFirstToken,
   PermissionSettingsError,
   permissionHook,
   SandboxSettingsError,
+  SdkSettingsError,
   sandboxHook,
 } from '../security/index.js';
-import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
+import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig, SettingSource } from '../security/index.js';
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -307,9 +310,20 @@ export interface SecurityComposition {
    * used only by `run` (D2, R5).
    */
   judge: JudgeSettings | null;
+  /**
+   * The Claude Code settings sources the SDK child may load (#140, ADR-0040
+   * D2), from the USER layer's `sdk.settingSources` only; `[]` (the default)
+   * isolates the child. Read by `run` and `eval`.
+   */
+  sdk: { settingSources: SettingSource[] };
   /** Startup notices for the operator (prompter gaps, risky allowlists, an ignored project judge key). */
   warnings: string[];
 }
+
+export const SDK_USER_INHERIT_WARNING =
+  'claude code settings: the "user" source is inherited, so the operator\'s ~/.claude settings, hooks and plugins apply to this run (ADR-0040)';
+export const SDK_PROJECT_INHERIT_WARNING =
+  'claude code settings: the "project" or "local" source is inherited, so the working directory\'s .claude files and CLAUDE.md apply to this run as trusted input (ADR-0040)';
 
 export interface ComposeSecurityDeps {
   /**
@@ -335,7 +349,7 @@ export interface ComposeSecurityDeps {
 export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
   const userPath = join(deps.userDir, '.harness', 'settings.json');
   const projectPath = join(deps.projectDir, '.harness', 'settings.json');
-  const load = (path: string, readJudge: boolean) =>
+  const load = (path: string, isUser: boolean) =>
     loadJsonSettings(
       path,
       (doc) => {
@@ -345,21 +359,26 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
             sandbox: parseSandboxSettings(doc),
             // Decision 9: the project layer's `judge` key is never parsed,
             // so a malformed one can never exit 2; it is only detected.
-            judge: readJudge ? parseJudgeSettings(doc) : null,
+            judge: isUser ? parseJudgeSettings(doc) : null,
             judgeKeyPresent: hasJudgeKey(doc),
+            // D-2: the same rule for `sdk`; the project layer's key is only
+            // detected, so a malformed one can never exit 2 or widen sources.
+            sdk: isUser ? parseSdkSettings(doc) : [],
+            sdkKeyPresent: hasSdkKey(doc),
           };
         } catch (error: unknown) {
           if (
             error instanceof PermissionSettingsError ||
             error instanceof SandboxSettingsError ||
-            error instanceof JudgeSettingsError
+            error instanceof JudgeSettingsError ||
+            error instanceof SdkSettingsError
           ) {
             throw new SettingsLoadError(error.message);
           }
           throw error;
         }
       },
-      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false },
+      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], sdkKeyPresent: false },
       SettingsLoadError,
       deps.readFile,
     );
@@ -372,6 +391,11 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   if (project.judgeKeyPresent) {
     warnings.push(`ignoring "judge" in ${projectPath}: the judge is configured only in ~/.harness/settings.json`);
   }
+  if (project.sdkKeyPresent) {
+    warnings.push(`ignoring "sdk" in ${projectPath}: Claude Code settings sources are configured only in ~/.harness/settings.json`);
+  }
+  if (user.sdk.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
+  if (user.sdk.includes('project') || user.sdk.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
   // No prompter is wired yet (no interactive mode), so every 'ask' resolves
   // to deny — fail closed, but tell the settings author (ADR-0014 §4).
   if (
@@ -407,7 +431,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   const grantPolicy: GrantPolicy = {
     ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
   };
-  return { permissions, grantPolicy, sandbox, judge: user.judge, warnings };
+  return { permissions, grantPolicy, sandbox, judge: user.judge, sdk: { settingSources: user.sdk }, warnings };
 }
 
 /**

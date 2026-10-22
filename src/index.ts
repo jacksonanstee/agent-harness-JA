@@ -63,6 +63,8 @@ export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
+  parseSdkSettings,
+  SdkSettingsError,
   SETTING_SOURCES,
 } from './security/index.js';
 export type {

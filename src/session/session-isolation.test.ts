@@ -73,4 +73,15 @@ describe('createSession isolates Claude Code settings by default (#140, ADR-0040
     await createSession(makeDeps(fake), { skillsDir: null, settingSources: [] }).run('p');
     expect(fake.captured[0]?.options).toMatchObject({ settingSources: [], strictMcpConfig: true });
   });
+
+  it.each([['a string', 'user'], ['null', null], ['an object', { 0: 'user' }]])(
+    'refuses %s as the list at runtime (defence in depth) and never calls the SDK',
+    async (_name, bad) => {
+      const fake = fakeQuery([INIT, RESULT]);
+      const attempt = async () =>
+        createSession(makeDeps(fake), { skillsDir: null, settingSources: bad as unknown as SettingSource[] }).run('p');
+      await expect(attempt()).rejects.toThrow(TypeError);
+      expect(fake.captured).toHaveLength(0);
+    },
+  );
 });
