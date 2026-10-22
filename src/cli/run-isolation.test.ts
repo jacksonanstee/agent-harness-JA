@@ -144,6 +144,15 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     );
   });
 
+  it('prints the start line once, listing the members in canonical order whatever the file order', async () => {
+    const sdk = fakeSdk();
+    const { stderr } = await runMain(runArgs().argv, { sdk: { settingSources: ['local', 'user'] } }, sdk.query);
+    expect(stderr).toMatch(
+      /^\[harness\] claude code settings: inherited \(user, local\); their permission rules, hooks, plugins, MCP servers and CLAUDE\.md files apply to this run$/m,
+    );
+    expect(stderr.match(/^\[harness\] claude code settings: inherited/gm)).toHaveLength(1);
+  });
+
   it('the opt-in in the PROJECT file only: isolated, the project warning printed', async () => {
     const sdk = fakeSdk();
     const { code, stderr } = await runMain(runArgs().argv, undefined, sdk.query, { sdk: { settingSources: ['user', 'project', 'local'] } });
@@ -152,6 +161,7 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     expect(stderr).toMatch(
       /^warning: ignoring "sdk" in .*settings\.json: Claude Code settings sources are configured only in ~\/\.harness\/settings\.json$/m,
     );
+    expect(stderr).not.toMatch(/^\[harness\] claude code settings: inherited/m);
   });
 
   it('the default prints no sdk warning', async () => {
@@ -159,6 +169,7 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     const { stderr } = await runMain(runArgs().argv, undefined, sdk.query);
     expect(stderr).not.toContain('claude code settings');
     expect(stderr).not.toContain('ignoring "sdk"');
+    expect(stderr).not.toMatch(/^\[harness\] claude code settings: inherited/m);
   });
 
   it('a malformed USER sdk value exits 2 with the settings line and never starts the SDK', async () => {

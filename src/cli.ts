@@ -23,6 +23,7 @@ import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import { formatUsd } from './internal/money.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
+import { sdkStartLine } from './cli/run-sdk.js';
 import type { CliSeams, SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
@@ -541,6 +542,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   const query = await loadSdkQuery(seams.importSdk);
   if (query === null) return 2;
   if (security.judge !== null) process.stderr.write(`${judgeStartLine(security.judge)}\n`);
+  const sdkLine = sdkStartLine(security.sdk.settingSources);
+  if (sdkLine !== null) process.stderr.write(`${sdkLine}\n`);
 
   // One shared connection: openTelemetryDatabase runs the migration runner,
   // which owns the shared-DB schema (memory's DDL is migration 001).
