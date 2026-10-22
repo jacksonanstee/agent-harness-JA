@@ -97,11 +97,11 @@
 // CLAUDE_CONFIG_DIR (user settings with a SessionStart hook and an ambient `Bash(printf *)` allow) and
 // asks the model for ONE Bash call, `printf harness-ok-<nonce>`. The three `isolated-*` legs pass
 // `settingSources: []` and FAIL on any created marker file, any plugin or MCP server, or any project
-// skill, command or agent (quokka-*, the fixture names) on the init message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
+// skill, command or agent (numbat-*, the fixture names) on the init message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
 // that contradicts the leg (floor: denied by the CLI; grant: ran, with exactly one granted-by-rule row,
 // D-8 sandbox list present; project-rule: denied, no grant row). N3: an init category that is not an
 // array is UNCHECKED, never PASS. `inherited` passes `['user','project','local']` and is the CONTROL:
-// it FAILs unless the markers, the quokka-* skill, command and agent, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
+// it FAILs unless the markers, the numbat-* skill, command and agent, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
 // isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the CLI prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
@@ -1143,17 +1143,17 @@ const isolationFixtures = (markerDir) => [
   // Shapes: a skill is <name>/SKILL.md with name + description frontmatter (sdk.d.ts: skills "match the SKILL.md `name` / directory name");
   // a command is a bare .md (name = file stem, frontmatter optional); an agent is .md with name + description frontmatter (the same shape as
   // the owner's ~/.claude/agents/*.md). The init message lists each as a plain string (sdk.d.ts SDKSystemMessage: skills, slash_commands, agents).
-  ['.claude/skills/quokka-skill/SKILL.md', '---\nname: quokka-skill\ndescription: Marker skill planted by the isolation smoke legs; never needed.\n---\n\nMarker skill body.\n'],
-  ['.claude/commands/quokka-cmd.md', '---\ndescription: Marker command planted by the isolation smoke legs.\n---\n\nMarker command body.\n'],
-  ['.claude/agents/quokka-agent.md', '---\nname: quokka-agent\ndescription: Marker agent planted by the isolation smoke legs; never needed.\n---\n\nMarker agent body.\n'],
+  ['.claude/skills/numbat-skill/SKILL.md', '---\nname: numbat-skill\ndescription: Marker skill planted by the isolation smoke legs; never needed.\n---\n\nMarker skill body.\n'],
+  ['.claude/commands/numbat-cmd.md', '---\ndescription: Marker command planted by the isolation smoke legs.\n---\n\nMarker command body.\n'],
+  ['.claude/agents/numbat-agent.md', '---\nname: numbat-agent\ndescription: Marker agent planted by the isolation smoke legs; never needed.\n---\n\nMarker agent body.\n'],
 ];
 // The init arrays a project-layer skill, command or agent would surface in, and the marker prefix the fixtures use.
 const PROJECT_SURFACE_FIELDS = ['skills', 'slash_commands', 'agents'];
-const PROJECT_SURFACE_NAMES = { skills: 'quokka-skill', slash_commands: 'quokka-cmd', agents: 'quokka-agent' };
+const PROJECT_SURFACE_NAMES = { skills: 'numbat-skill', slash_commands: 'numbat-cmd', agents: 'numbat-agent' };
 // Which marker names appear in the init message, as `<field>:<name>` (an entry is a string; an object is matched on its JSON text).
 // A missing or non-array field yields no hits here: the caller's N3 check turns that into UNCHECKED, never PASS.
 const projectSurfaceHits = (init) => init === null || init === undefined ? [] : PROJECT_SURFACE_FIELDS.flatMap((field) =>
-  (Array.isArray(init[field]) ? init[field] : []).filter((entry) => (typeof entry === 'string' ? entry : JSON.stringify(entry ?? null)).includes('quokka-')).map((entry) => `${field}:${typeof entry === 'string' ? entry : JSON.stringify(entry)}`));
+  (Array.isArray(init[field]) ? init[field] : []).filter((entry) => (typeof entry === 'string' ? entry : JSON.stringify(entry ?? null)).includes('numbat-')).map((entry) => `${field}:${typeof entry === 'string' ? entry : JSON.stringify(entry)}`));
 // [relativePath, body][] for the throwaway CLAUDE_CONFIG_DIR (the user layer; no login in it, the child
 // authenticates by ANTHROPIC_API_KEY, ADR-0037 D9).
 const configDirFixtures = (markerDir) => [
@@ -1164,8 +1164,8 @@ const configDirFixtures = (markerDir) => [
 // derived from the one table (ADR-0033, src/internal/tool-targets.ts, imported from dist above), never hand-listed.
 const COMMAND_TOOLS = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
 
-// Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (:358-359), the
-// layers merge with mergeLayers and the intersect merge mergeSandboxLayers (:387-388), and the grant policy
+// Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (parsePermissionSettings and parseSandboxSettings on each document), the
+// layers merge with mergeLayers and the intersect merge mergeSandboxLayers, and the grant policy
 // comes from the USER document's sandbox ONLY (grantPolicy in composeSecurity), so a project document can never unlock it.
 function composeIsolationSecurity({ user, project }) {
   const userParsed = { permissions: parsePermissionSettings(user), sandbox: parseSandboxSettings(user) };
@@ -1249,15 +1249,16 @@ async function isolationLoadChecks() {
       const m = /^---\n([\s\S]*?)\n---\n/.exec(files.get(rel) ?? '');
       return m === null ? null : Object.fromEntries(m[1].split('\n').map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
     };
-    const skill = frontmatter('.claude/skills/quokka-skill/SKILL.md');
-    check(skill !== null && skill.name === 'quokka-skill' && (skill.description ?? '') !== '', 'the skill fixture must be .claude/skills/quokka-skill/SKILL.md with name quokka-skill and a description in its frontmatter');
-    const agent = frontmatter('.claude/agents/quokka-agent.md');
-    check(agent !== null && agent.name === 'quokka-agent' && (agent.description ?? '') !== '', 'the agent fixture must be .claude/agents/quokka-agent.md with name quokka-agent and a description in its frontmatter');
-    check(files.has('.claude/commands/quokka-cmd.md'), 'the command fixture must be .claude/commands/quokka-cmd.md (name = file stem quokka-cmd)');
-    check(PROJECT_SURFACE_FIELDS.join(',') === 'skills,slash_commands,agents' && PROJECT_SURFACE_FIELDS.every((f) => (PROJECT_SURFACE_NAMES[f] ?? '').startsWith('quokka-')), 'the oracle must read skills, slash_commands and agents and name each marker quokka-*');
+    const skill = frontmatter('.claude/skills/numbat-skill/SKILL.md');
+    check(skill !== null && skill.name === 'numbat-skill' && (skill.description ?? '') !== '', 'the skill fixture must be .claude/skills/numbat-skill/SKILL.md with name numbat-skill and a description in its frontmatter');
+    const agent = frontmatter('.claude/agents/numbat-agent.md');
+    check(agent !== null && agent.name === 'numbat-agent' && (agent.description ?? '') !== '', 'the agent fixture must be .claude/agents/numbat-agent.md with name numbat-agent and a description in its frontmatter');
+    check(files.has('.claude/commands/numbat-cmd.md'), 'the command fixture must be .claude/commands/numbat-cmd.md (name = file stem numbat-cmd)');
+    check(!PROJECT_SURFACE_FIELDS.some((f) => CLAUDE_MD_PATTERN.test(PROJECT_SURFACE_NAMES[f] ?? '')) && !Array.from(files.keys()).filter((rel) => rel.startsWith('.claude/skills/') || rel.startsWith('.claude/commands/') || rel.startsWith('.claude/agents/')).some((rel) => CLAUDE_MD_PATTERN.test(rel) || CLAUDE_MD_PATTERN.test(files.get(rel) ?? '')), 'no surface fixture name or body may match the CLAUDE.md oracle pattern, or the model naming a fixture satisfies it in the control');
+  check(PROJECT_SURFACE_FIELDS.join(',') === 'skills,slash_commands,agents' && PROJECT_SURFACE_FIELDS.every((f) => (PROJECT_SURFACE_NAMES[f] ?? '').startsWith('numbat-')), 'the oracle must read skills, slash_commands and agents and name each marker numbat-*');
     check(projectSurfaceHits(null).length === 0 && projectSurfaceHits({ skills: ['pdf'], slash_commands: ['verify'], agents: ['Explore'] }).length === 0, 'a clean init (or none) must produce no hits');
-    check(projectSurfaceHits({ skills: ['pdf', 'quokka-skill'], slash_commands: ['quokka-cmd'], agents: ['quokka-agent', 'Explore'] }).join('|') === 'skills:quokka-skill|slash_commands:quokka-cmd|agents:quokka-agent', 'an init carrying all three markers must produce exactly those three hits');
-    check(projectSurfaceHits({ skills: [{ name: 'quokka-skill' }] }).length === 1 && projectSurfaceHits({ skills: 'quokka-skill' }).length === 0, 'an object entry is matched on its JSON text and a non-array field is no hit (N3 owns the UNCHECKED)');
+    check(projectSurfaceHits({ skills: ['pdf', 'numbat-skill'], slash_commands: ['numbat-cmd'], agents: ['numbat-agent', 'Explore'] }).join('|') === 'skills:numbat-skill|slash_commands:numbat-cmd|agents:numbat-agent', 'an init carrying all three markers must produce exactly those three hits');
+    check(projectSurfaceHits({ skills: [{ name: 'numbat-skill' }] }).length === 1 && projectSurfaceHits({ skills: 'numbat-skill' }).length === 0, 'an object entry is matched on its JSON text and a non-array field is no hit (N3 owns the UNCHECKED)');
   });
   check(INHERITED_SOURCES.every((s) => SETTING_SOURCES.includes(s)), `the inherited leg's sources ${INHERITED_SOURCES} must all be in SETTING_SOURCES ${JSON.stringify(SETTING_SOURCES)}`);
   const markerDir = '/placeholder/markers';
@@ -1409,14 +1410,15 @@ async function legInherited() {
   if (o.missingFields.length > 0) return rec('UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`);
   const absent = ['user', 'project', 'local'].filter((k) => !o.markers[k]);
   if (absent.length > 0) return rec('FAIL', `with settingSources ${INHERITED_SOURCES.join(',')} the ${absent.join(',')} marker file(s) were not created: the opt-in does not reach the child or the fixtures cannot bite, so an isolated PASS would be blind (merge blocker)`);
-  const surfaceAbsent = PROJECT_SURFACE_FIELDS.filter((f) => !o.surfaceHits.some((h) => h.startsWith(`${f}:`)));
-  if (surfaceAbsent.length > 0) return rec('FAIL', `with the project source opted in the init message lists no quokka-* entry in ${surfaceAbsent.join(',')}: the project skill, command or agent fixture cannot bite, so an isolated PASS on those surfaces would be blind (merge blocker)`);
+  // The field's OWN fixture name: the CLI also lists skills under slash_commands, so any hit in the field would let the skill stand in for the command fixture.
+  const surfaceAbsent = PROJECT_SURFACE_FIELDS.filter((f) => !o.surfaceHits.includes(`${f}:${PROJECT_SURFACE_NAMES[f]}`));
+  if (surfaceAbsent.length > 0) return rec('FAIL', `with the project source opted in the init message lists no numbat-* entry in ${surfaceAbsent.join(',')}: the project skill, command or agent fixture cannot bite, so an isolated PASS on those surfaces would be blind (merge blocker)`);
   if (o.sink.assistantTexts.length === 0) return rec('UNCHECKED', 'the model produced no assistant text, so the CLAUDE.md oracle could not be read; re-run');
   if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
   if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(printf *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
   if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
-  rec('PASS', `user, project and local markers created, a quokka-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
+  rec('PASS', `user, project and local markers created, a numbat-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
 }
 
 // ---------------------------------------------------------------------------
