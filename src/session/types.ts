@@ -161,8 +161,8 @@ export interface SdkPreToolDenyOutput {
 
 /**
  * ADR-0040 D3: the explicit allow the session returns when the hook runtime
- * reports a rule grant. `permissionDecisionReason` is always the one fixed
- * harness literal (`HARNESS_RULE_ALLOW_REASON`), never the evaluator's reason.
+ * reports a pre-tool grant (any handler may grant, so the reason is source-neutral). `permissionDecisionReason` is always the one fixed
+ * harness literal (`HARNESS_HOOK_ALLOW_REASON`), never the evaluator's reason.
  */
 export interface SdkPreToolAllowOutput {
   hookSpecificOutput: {

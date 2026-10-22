@@ -190,6 +190,8 @@ describe('policy corpus: shape', () => {
     const second = shared.indexOf(expected[1] ?? '');
     expect(first, 'registerSecurityHooks registers permissionHook').toBeGreaterThanOrEqual(0);
     expect(second, 'registerSecurityHooks registers sandboxHook after it').toBeGreaterThan(first);
+    // A text pin only. The behavioural guard for the eval site is the
+    // makeEvalSessionFactory deny test in src/cli/eval-command.test.ts (#140, I-1).
     for (const file of ['../src/cli.ts', '../src/cli/eval-command.ts']) {
       expect(code(file), `${file} calls registerSecurityHooks`).toContain('registerSecurityHooks(hooks, security);');
     }

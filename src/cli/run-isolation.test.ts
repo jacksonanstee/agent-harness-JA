@@ -54,8 +54,7 @@ function fakeSdk(preToolCalls: { tool: string; input: unknown }[] = []) {
   return { query, primary, outputs };
 }
 
-async function runMain(argv: string[], userSettings: unknown, projectSettings: unknown, query: QueryFn | undefined) {
-  void projectSettings;
+async function runMain(argv: string[], userSettings: unknown, query: QueryFn | undefined) {
   process.env.ANTHROPIC_API_KEY = 'dummy';
   const out: string[] = [];
   const err: string[] = [];
@@ -79,7 +78,7 @@ function runArgs(): { argv: string[]; db: string } {
 describe('the run path is isolated by default (#140, ADR-0040 D1; spec 6a.2, default case)', () => {
   it('main run with no settings files passes settingSources [] and strictMcpConfig true to the primary query', async () => {
     const sdk = fakeSdk();
-    const { code } = await runMain(runArgs().argv, undefined, undefined, sdk.query);
+    const { code } = await runMain(runArgs().argv, undefined, sdk.query);
     expect(code).toBe(0);
     expect(sdk.primary).toHaveLength(1);
     expect(sdk.primary[0]).toMatchObject({ settingSources: [], strictMcpConfig: true });
@@ -94,25 +93,32 @@ describe('the run path is isolated by default (#140, ADR-0040 D1; spec 6a.2, def
       permissions: { rules: [{ tool: 'Bash', match: 'git *', decision: 'allow' }] },
       sandbox: { commands: { allow: ['git'] } },
     };
-    const { code } = await runMain(argv, user, undefined, sdk.query);
+    const { code } = await runMain(argv, user, sdk.query);
     expect(code).toBe(0);
     expect(sdk.outputs).toEqual([
       {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'allow',
-          permissionDecisionReason: 'allowed by a harness permission rule (ADR-0014, user settings file)',
+          // Deliberate pin: re-typed, not imported, so a changed literal fails here.
+          permissionDecisionReason: 'allowed by a harness pre-tool hook grant (ADR-0014)',
         },
       },
     ]);
-    const store = createTelemetryStore(openTelemetryDatabase({ path: db }));
-    const rows = store.query({ type: 'hook-event' }).filter((e) => (e.payload as { kind: string }).kind === 'granted-by-rule');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.payload).toMatchObject({
-      kind: 'granted-by-rule',
-      event: 'pre-tool',
-      tool: 'Bash',
-      reason: 'permission: allow Bash [rule 0, user]',
-    });
+    const handle = openTelemetryDatabase({ path: db });
+    try {
+      const store = createTelemetryStore(handle);
+      const rows = store.query({ type: 'hook-event' }).filter((e) => (e.payload as { kind: string }).kind === 'granted-by-rule');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.payload).toEqual({
+        kind: 'granted-by-rule',
+        event: 'pre-tool',
+        tool: 'Bash',
+        reason: 'permission: allow Bash [rule 0, user]',
+        handlerIndex: 0,
+      });
+    } finally {
+      handle.close();
+    }
   });
 });

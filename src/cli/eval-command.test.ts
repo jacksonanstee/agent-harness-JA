@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
+import { mergeLayers, parsePermissionSettings } from '../security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { USAGE } from './shared.js';
 import { buildAdversary, makeEvalSessionFactory, parseEvalArgs } from './eval-command.js';
@@ -231,6 +232,59 @@ describe('R5: eval stays heuristic (pin 23)', () => {
       expect('judge' in (seen[0] ?? {})).toBe(false);
       // No `judgeCalls` assertion: `fakeQuery([RESULT])` fires no tool hook, so it could not fail (plan review P-13).
       expect(fake.captured[0]?.options?.hooks?.PostToolUse?.[0]).not.toHaveProperty('timeout');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// Issue #140 I-1: the behavioural guard for the eval path's security-hook
+// registration (test/policy-corpus.test.ts keeps only a text pin on the call).
+describe('the eval session registers the security hooks (#140, I-1)', () => {
+  it('a user-layer Bash deny rule denies the PreToolUse callback the SDK drives', async () => {
+    const outputs: unknown[] = [];
+    const query: QueryFn = (args) =>
+      (async function* () {
+        for (const matcher of args.options?.hooks?.PreToolUse ?? []) {
+          for (const cb of matcher.hooks as unknown as SdkHookCallback[]) {
+            outputs.push(
+              await cb(
+                { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status' }, tool_use_id: 'toolu_1' },
+                'toolu_1',
+                { signal: new AbortController().signal },
+              ),
+            );
+          }
+        }
+        yield RESULT;
+      })();
+    const db = openTelemetryDatabase({ path: ':memory:' });
+    try {
+      const factory = makeEvalSessionFactory({
+        query,
+        security: {
+          permissions: mergeLayers(
+            parsePermissionSettings({ permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] } }),
+            parsePermissionSettings({}),
+          ),
+          grantPolicy: { ungrantableTools: new Set(['Bash']) },
+          sandbox: {},
+          judge: null,
+          warnings: [],
+        },
+        telemetry: createTelemetryStore(db),
+        memory: createMemoryStore(db),
+      });
+      await factory({ skillsDir: null, maxTurns: 1 }).run('task');
+      expect(outputs).toEqual([
+        {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'permission: deny Bash [rule 0, user]',
+          },
+        },
+      ]);
     } finally {
       db.close();
     }

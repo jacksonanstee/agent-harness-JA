@@ -15,7 +15,7 @@ import {
   sandboxHook,
 } from '../security/index.js';
 import type { GrantPolicy, PermissionEvaluator } from '../security/index.js';
-import { createSession, HARNESS_RULE_ALLOW_REASON } from './session.js';
+import { createSession, HARNESS_HOOK_ALLOW_REASON } from './session.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkPreToolUseInput, SessionDeps, SessionResult } from './types.js';
 
 // Issue #140, ADR-0040 D3; spec 6a.3. The grant canary: a USER-layer rule allow
@@ -70,7 +70,7 @@ function makeDeps(query: QueryFn, hooks: HookRuntime): SessionDeps {
 }
 
 const allowOut = {
-  hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: HARNESS_RULE_ALLOW_REASON },
+  hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: HARNESS_HOOK_ALLOW_REASON },
 };
 const evaluatorFor = (user: unknown, project: unknown): PermissionEvaluator =>
   createPermissionEvaluator(mergeLayers(parsePermissionSettings(user), parsePermissionSettings(project)));
@@ -99,7 +99,7 @@ describe('the grant canary (#140, ADR-0040 D3; spec 6a.3)', () => {
     expect(records.map((r) => r.kind)).not.toContain('granted-by-rule');
   });
 
-  it('(b) a user-layer rule allow returns allow with HARNESS_RULE_ALLOW_REASON exactly, and one granted-by-rule record with the rule identity', async () => {
+  it('(b) a user-layer rule allow returns allow with HARNESS_HOOK_ALLOW_REASON exactly, and one granted-by-rule record with the rule identity', async () => {
     const { outputs, records } = await drive(
       [GIT],
       evaluatorFor({ permissions: { rules: [{ tool: 'Bash', match: 'git *', decision: 'allow' }] } }, {}),
@@ -144,7 +144,8 @@ describe('the grant canary (#140, ADR-0040 D3; spec 6a.3)', () => {
     const { outputs, records } = await drive([GIT], null, (hooks) => hooks.register('pre-tool', () => true as never));
     expect(outputs.get('Bash')).toEqual({});
     // Three fires: session-start, pre-tool, stop (preflight ruling 4).
-    expect(records.map((r) => r.kind)).toEqual(['hook-fired', 'hook-fired', 'hook-fired']);
+    expect(records.filter((r) => r.kind === 'hook-fired').map((r) => r.event).sort()).toEqual(['pre-tool', 'session-start', 'stop']);
+    expect(records.map((r) => r.kind)).not.toContain('granted-by-rule');
   });
 
   it('Review Focus 3: a user allow followed by the sandbox deny at the shipped order is a deny with the sandbox reason and no grant record', async () => {
@@ -166,7 +167,8 @@ describe('the grant canary (#140, ADR-0040 D3; spec 6a.3)', () => {
       evaluatorFor({ permissions: { rules: [{ tool: 'Bash', match: 'git *', decision: 'allow' }] } }, {}),
     );
     const reason = (outputs.get('Bash') as typeof allowOut).hookSpecificOutput.permissionDecisionReason;
-    expect(reason).toBe('allowed by a harness permission rule (ADR-0014, user settings file)');
+    // Deliberate pin: the literal is re-typed here so renaming the constant's value fails this test.
+    expect(reason).toBe('allowed by a harness pre-tool hook grant (ADR-0014)');
     expect(reason).not.toContain('rule 0');
   });
 

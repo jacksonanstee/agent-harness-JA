@@ -12,6 +12,7 @@ import type {
   JudgeCallVerdict,
   RecordResult,
   SkillDropPayload,
+  HookEventKind,
   SkillDropReason,
   TelemetryError,
   TelemetryEvent,
@@ -69,7 +70,15 @@ export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonl
 export const DEFAULT_DB_PATH = './.harness/telemetry.db';
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(TELEMETRY_EVENT_TYPES);
-const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(['denied-by-hook', 'granted-by-rule', 'hook-error', 'hook-fired']);
+// Exhaustive BY CONSTRUCTION over HookEventKind: a kind added to the union
+// without a row here fails to compile, so it cannot be silently dropped.
+const HOOK_EVENT_KIND_PRESENCE: Record<HookEventKind, true> = {
+  'denied-by-hook': true,
+  'granted-by-rule': true,
+  'hook-error': true,
+  'hook-fired': true,
+};
+const HOOK_EVENT_KINDS: ReadonlySet<string> = new Set(Object.keys(HOOK_EVENT_KIND_PRESENCE));
 
 /**
  * Exhaustive BY CONSTRUCTION over the telemetry MIRRORS of session's tool-trace

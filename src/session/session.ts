@@ -219,12 +219,13 @@ export const OUTPUT_REWRITE_KINDS = Object.keys(OUTPUT_REWRITE_KIND_PRESENCE) as
 
 /**
  * The ONE string the SDK ever sees as the reason for a grant (ADR-0040 D3,
- * spec section 2c). Never the evaluator's reason: that carries the rule index
- * and would reach the CLI's cleartext transcript. The bounded, ADR-0031-shaped
- * reason goes to the harness `granted-by-rule` telemetry row instead.
+ * spec section 2c). Source-neutral on purpose: any registered pre-tool handler
+ * can grant, so the session cannot know a rule was the source. Never the
+ * evaluator's reason: that carries the rule index and would reach the CLI's
+ * cleartext transcript. Attribution (the rule identity) goes, bounded and
+ * ADR-0031-shaped, to the harness `granted-by-rule` telemetry row only.
  */
-export const HARNESS_RULE_ALLOW_REASON = 'allowed by a harness permission rule (ADR-0014, user settings file)';
-
+export const HARNESS_HOOK_ALLOW_REASON = 'allowed by a harness pre-tool hook grant (ADR-0014)';
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;
@@ -457,8 +458,7 @@ function buildSessionIsolation(config: SessionConfig): Pick<QueryOptions, 'setti
  * Wires router, skills, hooks, and memory into one Claude Agent SDK session
  * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
  * is injected so tests never touch the network.
- */
-/**
+ *
  * Issue #51. The telemetry store refuses a malformed correlation id, but
  * `recordTelemetry` below catches that throw and downgrades it to one stderr
  * warning, so a caller whose id scheme is rejected would lose every row of the
@@ -1380,7 +1380,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'allow',
-            permissionDecisionReason: HARNESS_RULE_ALLOW_REASON,
+            permissionDecisionReason: HARNESS_HOOK_ALLOW_REASON,
           },
         };
       }

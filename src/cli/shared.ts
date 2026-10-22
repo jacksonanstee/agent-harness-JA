@@ -507,6 +507,10 @@ function boundReason(reason: string, deps: HookTelemetryDeps): string {
  * field is model-requested too; it is control-char sanitized by the store but
  * neither redacted nor length-bound here, outside #75's scope, named so this
  * mapper is not read as bounding every attacker-influenced string on the row.
+ *
+ * A `granted-by-rule` row is the audit trail of every `allow` the session
+ * returned to the SDK (ADR-0040 D3): the session's SDK-facing reason is one
+ * source-neutral literal, so the rule identity lives only on this row.
  */
 export function hookRecordToTelemetryInput(
   record: HookEventRecord,
