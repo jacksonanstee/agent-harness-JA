@@ -108,6 +108,7 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
 // agentic loop, the deny-all PreToolUse hook fail-closes any tool call the
 // model attempts in its one turn. Never wrapped in createSession (no memory/
 // telemetry pollution). Both controls exist in the typed QueryOptions today.
+// #140 D-4: always isolated (never the operator's settingSources), the judge's five keys.
 export const buildAdversary =
   (query: QueryFn, model: string): AdversaryFn =>
   async (prompt: string): Promise<AdversaryResult> => {
@@ -122,7 +123,16 @@ export const buildAdversary =
     let costUsd: number | null = null;
     for await (const message of query({
       prompt,
-      options: { model, maxTurns: 1, hooks: { PreToolUse: [{ hooks: [denyAll] }] } },
+      options: {
+        model,
+        maxTurns: 1,
+        settingSources: [],
+        strictMcpConfig: true,
+        tools: [],
+        skills: [],
+        persistSession: false,
+        hooks: { PreToolUse: [{ hooks: [denyAll] }] },
+      },
     })) {
       const m = message as SdkMessage;
       if (m.type === 'result') {

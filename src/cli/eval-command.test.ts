@@ -186,6 +186,18 @@ describe('buildAdversary', () => {
     expect(fake.captured[0]?.options?.maxTurns).toBe(1);
   });
 
+  it("passes the judge's five isolation keys beside the deny-all hook (#140, ADR-0040 D4)", async () => {
+    const fake = fakeQuery([RESULT]);
+    await buildAdversary(fake.query, 'claude-adversary-model')('p');
+    expect(fake.captured[0]?.options).toMatchObject({
+      settingSources: [],
+      strictMcpConfig: true,
+      tools: [],
+      skills: [],
+      persistSession: false,
+    });
+  });
+
   it('registers a PreToolUse hook that denies any tool call the adversary attempts', async () => {
     const fake = fakeQuery([RESULT]);
     const adversary = buildAdversary(fake.query, 'claude-adversary-model');
