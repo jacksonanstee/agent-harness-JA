@@ -38,6 +38,8 @@ Handlers receive a payload and may (a) observe it and (b) for `pre-tool`, deny t
 - **Typed-surface risk.** A safe mutation API must clone, re-validate, and re-scan the mutated value, and must define precedence when two handlers mutate the same field. That is a stricter typed surface than v1.0 can justify. Shipping a weak mutation API now (hand a handler the live object and hope) is worse than shipping none.
 - **Testability.** Observe + deny is a pure predicate over an immutable payload: `fire` either denies or does not, and the set of fired handlers is deterministic. Mutation makes `fire`'s output a function of handler-order-dependent edits, multiplying the test matrix.
 
+> **Note (22/10/2026, ADR-0040 D3):** a `pre-tool` handler's return value is now read as a grant (`PreToolGrant`) and becomes an explicit SDK allow. Payloads stay immutable and no return replaces one, but "handlers are trusted, config-registered extension code" (below) is now load-bearing for a grant channel as well as a deny channel.
+
 ### 2. Locked type signatures
 
 ```ts
