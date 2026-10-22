@@ -136,7 +136,12 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     const { code, stderr } = await runMain(runArgs().argv, { sdk: { settingSources: ['local', 'user'] } }, sdk.query);
     expect(code).toBe(0);
     expect(sdk.primary[0]).toMatchObject({ settingSources: ['local', 'user'], strictMcpConfig: false });
-    expect(stderr).toContain('claude code settings: the "user" source is inherited');
+    expect(stderr).toMatch(
+      /^warning: claude code settings: the "user" source is inherited, so the operator's ~\/\.claude settings, hooks and plugins apply to this run \(ADR-0040\)$/m,
+    );
+    expect(stderr).toMatch(
+      /^warning: claude code settings: the "project" or "local" source is inherited, so the working directory's \.claude files and CLAUDE\.md apply to this run as trusted input \(ADR-0040\)$/m,
+    );
   });
 
   it('the opt-in in the PROJECT file only: isolated, the project warning printed', async () => {

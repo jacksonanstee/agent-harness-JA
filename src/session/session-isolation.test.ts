@@ -80,7 +80,7 @@ describe('createSession isolates Claude Code settings by default (#140, ADR-0040
       const fake = fakeQuery([INIT, RESULT]);
       const attempt = async () =>
         createSession(makeDeps(fake), { skillsDir: null, settingSources: bad as unknown as SettingSource[] }).run('p');
-      await expect(attempt()).rejects.toThrow(TypeError);
+      await expect(attempt()).rejects.toThrow('SessionConfig.settingSources must be an array');
       expect(fake.captured).toHaveLength(0);
     },
   );
