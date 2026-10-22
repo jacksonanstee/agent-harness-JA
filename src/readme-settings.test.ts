@@ -472,7 +472,7 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
   it('the quickstart sentence and the `ask` sentence are pinned on their own lines', () => {
     const lines = readme.split('\n');
     expect(lines).toContain(
-      'Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Bash, Edit, Write, WebFetch or WebSearch is refused until your file allows it.',
+      'Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Bash, Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it.',
     );
     const ask = lines.find((line) => line.startsWith('**`ask`.**'));
     expect(ask).toMatch(/ An approved `ask` is not a grant either: the bundled CLI's own floor still applies to it \(ADR-0040\)\.$/);

