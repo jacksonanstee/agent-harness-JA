@@ -19,7 +19,7 @@ What an unisolated primary session pulled in, and what it does under `[]` (the s
 
 | Channel | Before | Under `[]` |
 |---|---|---|
-| Permission rules from `~/.claude`, `.claude/settings.json`, `.claude/settings.local.json` | Loaded. In the B2 runs they are inferred to be what let Bash run (the judged Bash rows came from clones whose `.claude` files carried grants). | Not loaded. A harness user-layer rule is the grant (D3). |
+| Permission rules from `~/.claude`, `.claude/settings.json`, `.claude/settings.local.json` | Loaded. In the B2 runs they are inferred to be what let Bash run (which file's rule granted Bash was not recorded; the operator's `~/.claude` user settings and the clones' `.claude` files both loaded). | Not loaded. A harness user-layer rule is the grant (D3). |
 | Hooks from those files | Ran inside the session child in the run observed: run 1 of the ADR-0037 smoke recorded 6 `SessionStart`, 1 `PostToolUse` and 4 `Stop` responses (ADR-0037 decision 9, observation (c)). | Not loaded. |
 | Plugins and their MCP servers | Five plugins and two plugin MCP servers in the `withheld` leg's child init (`tasks/issue-145-evidence/b2a-build/prb2-smoke-run3/withheld.json`, `childInit`). | `plugins: []` and `mcp_servers: []` in the judge child (`tasks/issue-96-evidence/prb1-smoke-run3/hostile-cwd.json`, `childInit`). |
 | `CLAUDE.md` | Loaded: the operator's `[effort: low]` tag reached a reply (`tasks/issue-145-evidence/runs-2026-10-09/run4.log:15`). | Not loaded (`sdk.d.ts:1857-1866`: "Must include `'project'` to load CLAUDE.md files"). |
