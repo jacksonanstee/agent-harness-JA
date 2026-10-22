@@ -33,12 +33,16 @@ describe('parseSdkSettings (#140, ADR-0040 D2)', () => {
     ['the SDK-internal literals', { sdk: { settingSources: ['managed'] } }, SDK_SOURCES_MESSAGE],
   ])('refuses %s with the fixed message and never echoes the value', (_name, doc, message) => {
     expect(() => parseSdkSettings(doc)).toThrowError(SdkSettingsError);
-    expect(() => parseSdkSettings(doc)).toThrow(message);
+    // Exact message equality (not substring): a message that appends or echoes the value after the fixed text must fail.
+    let caught: unknown;
     try {
       parseSdkSettings(doc);
     } catch (e) {
-      expect(String((e as Error).message)).not.toContain('MARKER-x9');
+      caught = e;
     }
+    expect(caught).toBeInstanceOf(SdkSettingsError);
+    expect((caught as Error).message).toBe(message);
+    expect((caught as Error).message).not.toContain('MARKER-x9');
   });
 
   it('hasSdkKey detects an OWN key whatever its value, and nothing else', () => {

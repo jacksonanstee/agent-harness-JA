@@ -433,6 +433,9 @@ describe('hookRecordToTelemetryInput', () => {
   // Compile pin: the telemetry kind union mirrors the hooks record kinds (hooks -> telemetry, at the composition root).
   const _kindsMirror: Assignable<HookEventRecord['kind'], HookEventKind> = true;
   void _kindsMirror;
+  // And the reverse (arch L-2): a kind added to the telemetry union alone, with no hooks record to carry it, fails to compile.
+  const _kindsMirrorReverse: Assignable<HookEventKind, HookEventRecord['kind']> = true;
+  void _kindsMirrorReverse;
   const ids = { sessionId: 'harness-1', turnId: 'turn-1' };
   const deps = { redactSecrets: redact };
   // Assembled from fragments so the repo's own secret scan never sees a literal

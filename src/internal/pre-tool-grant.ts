@@ -3,7 +3,9 @@
  * return one to say "a harness permission RULE allowed this call". Both the
  * security layer (which builds it) and the hooks runtime (which detects it)
  * import this leaf, so the literal cannot drift; security never imports hooks.
- * Zero-dependency leaf, kept off every barrel.
+ * The module is a zero-dependency leaf and not a subpath export; only the
+ * `PreToolGrant` TYPE is public, re-exported by the hooks barrel
+ * (src/hooks/index.ts).
  */
 export interface PreToolGrant {
   // A literal, not `typeof PRE_TOOL_GRANT_KIND`: the public-surface walk would then

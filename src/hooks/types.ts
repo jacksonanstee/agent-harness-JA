@@ -59,6 +59,10 @@ export interface HookPayloadMap {
 
 export type HookPayload = HookPayloadMap[HookEvent];
 
+/**
+ * A handler may return a `PreToolGrant` for any event, but only a pre-tool
+ * return is read: a value returned from any other event is ignored.
+ */
 export type HookHandler<E extends HookEvent = HookEvent> = (
   payload: Readonly<HookPayloadMap[E]>,
 ) => void | PreToolGrant | Promise<void | PreToolGrant>;

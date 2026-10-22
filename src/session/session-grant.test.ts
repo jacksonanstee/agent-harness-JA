@@ -187,4 +187,18 @@ describe('the grant canary (#140, ADR-0040 D3; spec 6a.3)', () => {
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'pre-tool hook failure' },
     });
   });
+  it('a foreign HookRuntime whose pre-tool fire resolves with no granted key can never grant: the output is {} (fail closed, ADR-0040)', async () => {
+    const hooks = createHookRuntime();
+    const real = hooks.fire.bind(hooks);
+    const foreign: HookRuntime = {
+      ...hooks,
+      fire: ((event: string, payload: unknown) =>
+        event === 'pre-tool'
+          ? Promise.resolve({ event: 'pre-tool', handlersFired: 0, errors: [], denied: false })
+          : real(event as never, payload as never)) as HookRuntime['fire'],
+    };
+    const { query, outputs } = preToolDriver([GIT]);
+    await createSession(makeDeps(query, foreign), { skillsDir: null }).run('p');
+    expect(outputs.get('Bash')).toEqual({});
+  });
 });

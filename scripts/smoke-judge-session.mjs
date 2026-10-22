@@ -96,12 +96,12 @@
 // a fixture cwd (project settings, local settings, a project plugin, a CLAUDE.md) with a throwaway
 // CLAUDE_CONFIG_DIR (user settings with a SessionStart hook and an ambient `Bash(printf *)` allow) and
 // asks the model for ONE Bash call, `printf harness-ok-<nonce>`. The three `isolated-*` legs pass
-// `settingSources: []` and FAIL on any created marker file, any plugin or MCP server on the init
-// message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
+// `settingSources: []` and FAIL on any created marker file, any plugin or MCP server, or any project
+// skill, command or agent (quokka-*, the fixture names) on the init message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
 // that contradicts the leg (floor: denied by the CLI; grant: ran, with exactly one granted-by-rule row,
 // D-8 sandbox list present; project-rule: denied, no grant row). N3: an init category that is not an
 // array is UNCHECKED, never PASS. `inherited` passes `['user','project','local']` and is the CONTROL:
-// it FAILs unless the markers, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
+// it FAILs unless the markers, the quokka-* skill, command and agent, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
 // isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the CLI prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
@@ -138,7 +138,9 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 // A missing build must be a message and exit 2, not an unhandled rejection.
 const distWithhold = join(repoRoot, 'dist', 'session', 'withhold.js');
-for (const required of [dist, distConstants, distLines, distWithhold]) {
+// The shared tool-target table is internal (not on the root barrel); the D-8 policy below derives from it, as src/cli/shared.ts does.
+const distToolTargets = join(repoRoot, 'dist', 'internal', 'tool-targets.js');
+for (const required of [dist, distConstants, distLines, distWithhold, distToolTargets]) {
   if (!existsSync(required)) {
     console.error(`${required} is missing; run npm run build first.`);
     process.exit(2);
@@ -176,6 +178,7 @@ const {
 const { JUDGE_MAX_CONCURRENT, JUDGE_HOOK_TIMEOUT_S } = await import(distConstants);
 const { JUDGE_HOOK_CANCELLED_WARNING, judgeLeakedByHookTimeoutWarning } = await import(distLines);
 const { WITHHELD_MARKER, withholdPlaceholder } = await import(distWithhold);
+const { TOOL_TARGET_FIELDS } = await import(distToolTargets);
 const withholdPlaceholderProbe = () => withholdPlaceholder('Read', '00000000');
 const evidenceDirB2 = join(repoRoot, 'tasks', 'issue-145-evidence', 'prb2-smoke');
 
@@ -1122,7 +1125,7 @@ const INHERITED_SOURCES = ['user', 'project', 'local'];
 const GRANT_REASON = 'permission: allow Bash [rule 0, user]';
 const FLOOR_DENIED_PHRASE = "haven't granted it yet";
 const BASH_RULE = { tool: 'Bash', match: 'printf *', decision: 'allow' };
-// D-8 (owner ruling 21/10/2026): a Bash rule allow is a grant ONLY when the USER layer has a non-empty
+// D-8 (owner ruling 21/10/2026, generalised to every command-kind tool 22/10/2026): a Bash (or Monitor) rule allow is a grant ONLY when the USER layer has a non-empty
 // sandbox.commands.allow. So the grant leg's user document carries both.
 const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: ['printf'] } } };
 const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
@@ -1136,23 +1139,41 @@ const isolationFixtures = (markerDir) => [
   ['.claude/plugins/marker-plugin/.claude-plugin/plugin.json', JSON.stringify({ name: 'marker-plugin', version: '0.0.1' })],
   ['.claude/plugins/marker-plugin/hooks/hooks.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/plugin-marker` }] }] } })],
   ['CLAUDE.md', `Project memory: ${CLAUDE_MD_SENTENCE}\n`],
+  // Issue #140 lens 1 (security M-1): the three project surfaces a clone controls that are prompt-injection channels.
+  // Shapes: a skill is <name>/SKILL.md with name + description frontmatter (sdk.d.ts: skills "match the SKILL.md `name` / directory name");
+  // a command is a bare .md (name = file stem, frontmatter optional); an agent is .md with name + description frontmatter (the same shape as
+  // the owner's ~/.claude/agents/*.md). The init message lists each as a plain string (sdk.d.ts SDKSystemMessage: skills, slash_commands, agents).
+  ['.claude/skills/quokka-skill/SKILL.md', '---\nname: quokka-skill\ndescription: Marker skill planted by the isolation smoke legs; never needed.\n---\n\nMarker skill body.\n'],
+  ['.claude/commands/quokka-cmd.md', '---\ndescription: Marker command planted by the isolation smoke legs.\n---\n\nMarker command body.\n'],
+  ['.claude/agents/quokka-agent.md', '---\nname: quokka-agent\ndescription: Marker agent planted by the isolation smoke legs; never needed.\n---\n\nMarker agent body.\n'],
 ];
+// The init arrays a project-layer skill, command or agent would surface in, and the marker prefix the fixtures use.
+const PROJECT_SURFACE_FIELDS = ['skills', 'slash_commands', 'agents'];
+const PROJECT_SURFACE_NAMES = { skills: 'quokka-skill', slash_commands: 'quokka-cmd', agents: 'quokka-agent' };
+// Which marker names appear in the init message, as `<field>:<name>` (an entry is a string; an object is matched on its JSON text).
+// A missing or non-array field yields no hits here: the caller's N3 check turns that into UNCHECKED, never PASS.
+const projectSurfaceHits = (init) => init === null || init === undefined ? [] : PROJECT_SURFACE_FIELDS.flatMap((field) =>
+  (Array.isArray(init[field]) ? init[field] : []).filter((entry) => (typeof entry === 'string' ? entry : JSON.stringify(entry ?? null)).includes('quokka-')).map((entry) => `${field}:${typeof entry === 'string' ? entry : JSON.stringify(entry)}`));
 // [relativePath, body][] for the throwaway CLAUDE_CONFIG_DIR (the user layer; no login in it, the child
 // authenticates by ANTHROPIC_API_KEY, ADR-0037 D9).
 const configDirFixtures = (markerDir) => [
   ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: ['Bash(printf *)'] } })],
 ];
 
+// ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): mirrors COMMAND_TOOLS in src/cli/shared.ts,
+// derived from the one table (ADR-0033, src/internal/tool-targets.ts, imported from dist above), never hand-listed.
+const COMMAND_TOOLS = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
+
 // Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (:358-359), the
 // layers merge with mergeLayers and the intersect merge mergeSandboxLayers (:387-388), and the grant policy
-// comes from the USER document's sandbox ONLY (:431-433), so a project document can never unlock it.
+// comes from the USER document's sandbox ONLY (grantPolicy in composeSecurity), so a project document can never unlock it.
 function composeIsolationSecurity({ user, project }) {
   const userParsed = { permissions: parsePermissionSettings(user), sandbox: parseSandboxSettings(user) };
   const projectParsed = { permissions: parsePermissionSettings(project), sandbox: parseSandboxSettings(project) };
   return {
     permissions: mergeLayers(userParsed.permissions, projectParsed.permissions),
     sandbox: mergeSandboxLayers(userParsed.sandbox, projectParsed.sandbox),
-    grantPolicy: { ungrantableTools: new Set((userParsed.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']) },
+    grantPolicy: { ungrantableTools: new Set((userParsed.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS) },
   };
 }
 
@@ -1207,6 +1228,36 @@ async function isolationLoadChecks() {
     check(ev.decision === 'allow' && ev.layer === 'project', `the same rule in the project document must read layer project, got ${JSON.stringify(ev)}`);
     const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
     check(grant === undefined, `a project-layer allow must not be a grant, got ${JSON.stringify(grant)}`);
+  });
+  await attempt('D-8 for every command-kind tool (lens 1 H-1)', async () => {
+    const fromTable = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
+    check(fromTable.includes('Bash') && fromTable.includes('Monitor'), `the shared table must list Bash and Monitor as command-kind tools, got ${JSON.stringify(fromTable)}`);
+    const monitorRule = { permissions: { rules: [{ tool: 'Monitor', decision: 'allow' }] } };
+    const monitorPayload = { tool: 'Monitor', args: { command: 'git status; echo y' } };
+    const ungrantable = composeIsolationSecurity({ user: monitorRule, project: {} });
+    check([...ungrantable.grantPolicy.ungrantableTools].sort().join(',') === [...fromTable].sort().join(','), `with no user sandbox list the ungrantable set must equal the command-kind names ${JSON.stringify(fromTable)}, got ${JSON.stringify([...ungrantable.grantPolicy.ungrantableTools])}`);
+    const withheld = await permissionHook(createPermissionEvaluator(ungrantable.permissions), undefined, ungrantable.grantPolicy)(monitorPayload);
+    check(withheld === undefined, `without a user sandbox.commands.allow a Monitor allow must not be a grant, got ${JSON.stringify(withheld)}`);
+    const grantable = composeIsolationSecurity({ user: { ...monitorRule, sandbox: { commands: { allow: ['git'] } } }, project: {} });
+    check(grantable.grantPolicy.ungrantableTools.size === 0, `with a user sandbox list nothing is withheld, got ${JSON.stringify([...grantable.grantPolicy.ungrantableTools])}`);
+    const projectOnly = composeIsolationSecurity({ user: monitorRule, project: { sandbox: { commands: { allow: ['git'] } } } });
+    check(projectOnly.grantPolicy.ungrantableTools.has('Monitor'), 'a project-only sandbox list must not make Monitor grantable');
+  });
+  await attempt('project surface fixtures and oracle (lens 1 security M-1)', async () => {
+    const files = new Map(isolationFixtures('/placeholder/markers'));
+    const frontmatter = (rel) => {
+      const m = /^---\n([\s\S]*?)\n---\n/.exec(files.get(rel) ?? '');
+      return m === null ? null : Object.fromEntries(m[1].split('\n').map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
+    };
+    const skill = frontmatter('.claude/skills/quokka-skill/SKILL.md');
+    check(skill !== null && skill.name === 'quokka-skill' && (skill.description ?? '') !== '', 'the skill fixture must be .claude/skills/quokka-skill/SKILL.md with name quokka-skill and a description in its frontmatter');
+    const agent = frontmatter('.claude/agents/quokka-agent.md');
+    check(agent !== null && agent.name === 'quokka-agent' && (agent.description ?? '') !== '', 'the agent fixture must be .claude/agents/quokka-agent.md with name quokka-agent and a description in its frontmatter');
+    check(files.has('.claude/commands/quokka-cmd.md'), 'the command fixture must be .claude/commands/quokka-cmd.md (name = file stem quokka-cmd)');
+    check(PROJECT_SURFACE_FIELDS.join(',') === 'skills,slash_commands,agents' && PROJECT_SURFACE_FIELDS.every((f) => (PROJECT_SURFACE_NAMES[f] ?? '').startsWith('quokka-')), 'the oracle must read skills, slash_commands and agents and name each marker quokka-*');
+    check(projectSurfaceHits(null).length === 0 && projectSurfaceHits({ skills: ['pdf'], slash_commands: ['verify'], agents: ['Explore'] }).length === 0, 'a clean init (or none) must produce no hits');
+    check(projectSurfaceHits({ skills: ['pdf', 'quokka-skill'], slash_commands: ['quokka-cmd'], agents: ['quokka-agent', 'Explore'] }).join('|') === 'skills:quokka-skill|slash_commands:quokka-cmd|agents:quokka-agent', 'an init carrying all three markers must produce exactly those three hits');
+    check(projectSurfaceHits({ skills: [{ name: 'quokka-skill' }] }).length === 1 && projectSurfaceHits({ skills: 'quokka-skill' }).length === 0, 'an object entry is matched on its JSON text and a non-array field is no hit (N3 owns the UNCHECKED)');
   });
   check(INHERITED_SOURCES.every((s) => SETTING_SOURCES.includes(s)), `the inherited leg's sources ${INHERITED_SOURCES} must all be in SETTING_SOURCES ${JSON.stringify(SETTING_SOURCES)}`);
   const markerDir = '/placeholder/markers';
@@ -1268,17 +1319,18 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     const nonceRan = traceRows.some((r) => r.payload.tool === 'Bash' && r.payload.phase === 'post-tool' && (r.payload.resultSummary ?? '').includes(`harness-ok-${nonce}`));
     const attempted = bashUses.length > 0 || sink.postTool.length > 0 || deniedSystem || deniedRows.length > 0 || grantRows.length > 0;
     const init = sink.initMessages[0] ?? null;
-    const INIT_FIELDS = ['plugins', 'mcp_servers'];
+    const INIT_FIELDS = ['plugins', 'mcp_servers', ...PROJECT_SURFACE_FIELDS];
     const missingFields = init === null ? INIT_FIELDS : INIT_FIELDS.filter((f) => !Array.isArray(init[f]));
+    const surfaceHits = projectSurfaceHits(init);
     const assistantQuoted = sink.assistantTexts.some((a) => CLAUDE_MD_PATTERN.test(a.text));
     const data = {
       nonce, settingSources, childInit: sink.initMessages, systemMessages: sink.systemMessages, assistantTexts: sink.assistantTexts,
       userResults: userResultsAsObject(sink), toolUses: sink.toolUses, resultMessages: sink.resultMessages,
       hookRows: hookRows.map((r) => ({ ...r, reason: typeof r.reason === 'string' ? redactSynth(r.reason) : r.reason })),
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
-      markers, warnings: sink.warnings,
+      markers, surfaceHits, warnings: sink.warnings,
     };
-    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, attempted, assistantQuoted, data };
+    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, attempted, assistantQuoted, surfaceHits, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1302,6 +1354,7 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.init === null) return ['UNCHECKED', 'no init message was seen from the session child, so what it loaded could not be read'];
   if (o.missingFields.length > 0) return ['UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`];
   if (o.init.plugins.length > 0 || o.init.mcp_servers.length > 0) return ['FAIL', `the init message lists ${o.init.plugins.length} plugin(s) and ${o.init.mcp_servers.length} MCP server(s) under settingSources: [] (merge blocker)`];
+  if (o.surfaceHits.length > 0) return ['FAIL', `the init message lists project-layer surface(s) ${o.surfaceHits.join(', ')} under settingSources: [] (merge blocker)`];
   if (o.init.permissionMode !== 'default') return ['FAIL', `the init permissionMode is ${o.init.permissionMode}, not default: a settings layer loaded (merge blocker)`];
   if (o.assistantQuoted) return ['FAIL', "the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)"];
   if (!o.attempted) return ['UNCHECKED', 'the model did not call Bash; re-run'];
@@ -1310,7 +1363,7 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
   const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
   if (!floorSeen) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted text, no permission_denied system message)'];
-  return ['PASS', `nothing loaded (no marker, plugin, MCP server, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${o.deniedSystem ? 'permission_denied system message' : 'isError tool_result'})`];
+  return ['PASS', `nothing loaded (no marker, plugin, MCP server, project skill, command or agent, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${o.deniedSystem ? 'permission_denied system message' : 'isError tool_result'})`];
 }
 
 async function legIsolatedFloor() {
@@ -1334,6 +1387,7 @@ async function legIsolatedGrant() {
   if (o.init === null) return rec('UNCHECKED', 'no init message was seen from the session child, so what it loaded could not be read');
   if (o.missingFields.length > 0) return rec('UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`);
   if (o.init.plugins.length > 0 || o.init.mcp_servers.length > 0) return rec('FAIL', `the init message lists ${o.init.plugins.length} plugin(s) and ${o.init.mcp_servers.length} MCP server(s) under settingSources: [] (merge blocker)`);
+  if (o.surfaceHits.length > 0) return rec('FAIL', `the init message lists project-layer surface(s) ${o.surfaceHits.join(', ')} under settingSources: [] (merge blocker)`);
   if (o.init.permissionMode !== 'default') return rec('FAIL', `the init permissionMode is ${o.init.permissionMode}, not default (merge blocker)`);
   if (o.assistantQuoted) return rec('FAIL', 'the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
@@ -1343,7 +1397,7 @@ async function legIsolatedGrant() {
   if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
   if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
   if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
-  rec('PASS', `Bash ran and printed the nonce through the harness grant: exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded under settingSources: []`);
+  rec('PASS', `Bash ran and printed the nonce through the harness grant: exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
 }
 
 // Leg 12: the CONTROL. With the three sources opted in, every fixture must show up; this is what proves an
@@ -1355,12 +1409,14 @@ async function legInherited() {
   if (o.missingFields.length > 0) return rec('UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`);
   const absent = ['user', 'project', 'local'].filter((k) => !o.markers[k]);
   if (absent.length > 0) return rec('FAIL', `with settingSources ${INHERITED_SOURCES.join(',')} the ${absent.join(',')} marker file(s) were not created: the opt-in does not reach the child or the fixtures cannot bite, so an isolated PASS would be blind (merge blocker)`);
+  const surfaceAbsent = PROJECT_SURFACE_FIELDS.filter((f) => !o.surfaceHits.some((h) => h.startsWith(`${f}:`)));
+  if (surfaceAbsent.length > 0) return rec('FAIL', `with the project source opted in the init message lists no quokka-* entry in ${surfaceAbsent.join(',')}: the project skill, command or agent fixture cannot bite, so an isolated PASS on those surfaces would be blind (merge blocker)`);
   if (o.sink.assistantTexts.length === 0) return rec('UNCHECKED', 'the model produced no assistant text, so the CLAUDE.md oracle could not be read; re-run');
   if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
   if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(printf *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
   if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
-  rec('PASS', `user, project and local markers created, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
+  rec('PASS', `user, project and local markers created, a quokka-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eva
 import type { HookEventRecord, HookRuntime } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { boundEcho, loadJsonSettings } from '../internal/settings.js';
+import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   createPermissionEvaluator,
@@ -297,8 +298,8 @@ export class SettingsLoadError extends Error {
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
   /**
-   * Which tools a rule allow must not grant (D-8): `Bash` unless the
-   * USER layer's sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
+   * Which tools a rule allow must not grant (D-8): every command-kind tool in the
+   * shared table (Bash, Monitor) unless the USER layer's sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
    * runs before any explicit SDK allow. Computed once; both registration
    * sites pass it to permissionHook.
    */
@@ -336,6 +337,12 @@ export interface ComposeSecurityDeps {
   userDir: string;
   projectDir: string;
 }
+
+// ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): withheld from the grant when the
+// USER layer has no sandbox.commands list. Derived from the one table (ADR-0033), never hand-listed.
+const COMMAND_TOOLS: readonly string[] = Object.entries(TOOL_TARGET_FIELDS)
+  .filter(([, target]) => target.kind === 'command')
+  .map(([name]) => name);
 
 /**
  * Loads and merges both security settings layers, and reads the judge from
@@ -429,7 +436,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   // USER layer only: the merge (intersectDimension) returns the project list when the user has
   // none, so a cloned repo's commands list must not unlock the grant. The merged list stays the gate.
   const grantPolicy: GrantPolicy = {
-    ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']),
+    ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS),
   };
   return { permissions, grantPolicy, sandbox, judge: user.judge, sdk: { settingSources: user.sdk }, warnings };
 }

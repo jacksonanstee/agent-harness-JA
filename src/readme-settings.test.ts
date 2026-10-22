@@ -419,14 +419,17 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
     expect(section).toContain(`a chained command such as \`${chained}\``);
   });
 
-  it('without a user commands allowlist Bash is ungrantable, and a project file\'s list never unlocks it (D-8)', () => {
-    const { firstUserDoc } = loaded();
+  it('without a user commands allowlist Bash and Monitor are ungrantable, and a project file\'s list never unlocks them (D-8)', () => {
+    const { firstUserDoc, section } = loaded();
+    // The README names both command-taking tools, as the policy derives them from the shared table.
+    expect(section).toContain('A command-taking tool (Bash or Monitor, per the table in `src/internal/tool-targets.ts`)');
     const rulesOnly = JSON.stringify({ permissions: (JSON.parse(firstUserDoc) as { permissions: object }).permissions });
     const projectCommands = JSON.stringify({ sandbox: { commands: { allow: ['git'] } } });
     for (const projectDoc of [undefined, projectCommands]) {
       const composed = compose(rulesOnly, projectDoc);
-      expect([...composed.grantPolicy.ungrantableTools]).toEqual(['Bash']);
+      expect([...composed.grantPolicy.ungrantableTools]).toEqual(['Bash', 'Monitor']);
       const evaluate = createPermissionEvaluator(composed.permissions).evaluate;
+      expect(grantFor('Monitor', { ...evaluate('Bash', { command: 'git status' }), layer: 'user' }, composed.grantPolicy)).toBeUndefined();
       expect(grantFor('Bash', evaluate('Bash', { command: 'git status' }), composed.grantPolicy)).toBeUndefined();
       expect(grantFor('Edit', evaluate('Edit', { file_path: '/repo/x.ts' }), composed.grantPolicy)).toBeDefined();
     }

@@ -204,7 +204,7 @@ export interface JudgeCallPayload {
 /**
  * Structural mirror of hooks' HookEventRecord kinds. Deliberately NOT imported
  * from src/hooks — telemetry and hooks are peer leaf modules; the adapter that
- * maps one to the other lives in the composition root (cli.ts).
+ * maps one to the other lives in the composition root (src/cli/shared.ts, `hookRecordToTelemetryInput`).
  *
  * The union is read-compatible: `granted-by-rule` joined it with ADR-0040, so
  * rows written before that never carry it and every older row still validates.

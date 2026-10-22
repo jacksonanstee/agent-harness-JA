@@ -178,7 +178,7 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     expect(code).toBe(2);
     expect(stderr).toMatch(
       new RegExp(
-        `^${escapeRegExp(join(userDir, '.harness', 'settings.json'))}: ${escapeRegExp('sdk.settingSources must be an array of distinct values from "user", "project", "local"')}`,
+        `^${escapeRegExp(join(userDir, '.harness', 'settings.json'))}: ${escapeRegExp('sdk.settingSources must be an array of distinct values from "user", "project", "local"')}$`,
         'm',
       ),
     );

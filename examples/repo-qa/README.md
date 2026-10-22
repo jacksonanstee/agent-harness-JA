@@ -42,7 +42,8 @@ while building this example — the same lesson as the harness's own
 dual-table incident, where tools missing from one gate's table bypassed it).
 Under the default isolation (ADR-0040) the deny list is defence in depth: the
 bundled CLI refuses Bash, Edit and Write in a headless run unless a rule in your
-user file allows them (for Bash, also a `sandbox.commands` list there that names
+user file allows them (for a command-taking tool, Bash or Monitor per the table in
+`src/internal/tool-targets.ts`, also a `sandbox.commands` list there that names
 the program), and the route-around above assumes such a user-file Bash grant.
 `MultiEdit` is on the list as a defensive extra: the pinned SDK (0.3.201) declares
 no such tool, so today the rule fires on nothing, but it costs nothing and starts
