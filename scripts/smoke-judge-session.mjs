@@ -106,6 +106,9 @@
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
 //
+// An unfiltered run now executes all twelve legs, and the B2a legs run isolated with no harness permissions
+// document, so failure-stdout's Bash is denied by the CLI floor; it is RECORDED, so no exit code moves.
+//
 // DO NOT import this file from a test or run it under CI.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -492,7 +495,10 @@ function observe(sink, message) {
     const blocks = Array.isArray(content) ? content : [];
     const text = blocks.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n');
     for (const b of blocks) {
-      if (b?.type === 'tool_use' && typeof b.name === 'string') sink.toolUses.push({ at, name: b.name, id: typeof b.id === 'string' ? b.id : null });
+      if (b?.type === 'tool_use' && typeof b.name === 'string') {
+        const raw = b.input?.command;
+        sink.toolUses.push({ at, name: b.name, id: typeof b.id === 'string' ? b.id : null, command: typeof raw === 'string' ? redactSynth(raw).slice(0, 200) : null });
+      }
     }
     if (text.length > 0) sink.assistantTexts.push({ at, noticeFragments: noticeFragmentsIn(text), text: redactSynth(text).slice(0, 2_000) });
   } else if (message?.type === 'user') {
@@ -1108,6 +1114,9 @@ async function legFailureStdout() {
 // Distinctive, benign, never a notice fragment. A model that was NOT given the project memory cannot
 // produce it, so it appearing in assistant text is the CLAUDE.md oracle.
 const CLAUDE_MD_SENTENCE = 'The quokka ledger closes on the fourth Thursday.';
+// (Named PATTERN, not TOKEN: the secret-scan gate reads a name containing the word token followed by an assignment as a leak.)
+// The oracle matches this word, not the full sentence: a paraphrase or a dropped full stop must not move a verdict.
+const CLAUDE_MD_PATTERN = /quokka/i;
 const INHERITED_SOURCES = ['user', 'project', 'local'];
 // The grant reason is the evaluator's own (evaluate.ts), identity under the sanitiser and bound.
 const GRANT_REASON = 'permission: allow Bash [rule 0, user]';
@@ -1118,7 +1127,7 @@ const BASH_RULE = { tool: 'Bash', match: 'printf *', decision: 'allow' };
 const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: ['printf'] } } };
 const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
 const isolationPrompt = (nonce) =>
-  `Call the Bash tool exactly once to run: printf harness-ok-${nonce}. Then, in one sentence, quote the project memory you were given, or say "no project memory" if you were given none.`;
+  `Call the Bash tool exactly once to run exactly this command, with no quotes, no backslash escapes and nothing appended: printf harness-ok-${nonce}. Then, in one sentence, quote the project memory you were given, or say "no project memory" if you were given none.`;
 
 // [relativePath, body][] for the cwd.
 const isolationFixtures = (markerDir) => [
@@ -1173,6 +1182,20 @@ async function isolationLoadChecks() {
     try { await sandboxHook(createSandbox(sec.sandbox))(payload); } catch (error) { sandboxDenied = error instanceof Error ? error.message : String(error); }
     check(sandboxDenied === null, `the sandbox backstop must allow the leg's own command, it denied: ${sandboxDenied}`);
   });
+  await attempt('chained command and real runtime (D-8, Minor 4/5)', async () => {
+    const fire = async (cmd) => {
+      const records = [];
+      const rt = createHookRuntime({ onEvent: (r) => records.push(r) });
+      registerIsolationSecurity(rt, { user: GRANT_USER_DOC, project: {} });
+      const out = await rt.fire('pre-tool', { event: 'pre-tool', tool: 'Bash', args: { command: cmd } });
+      return { out, records };
+    };
+    const ok = await fire(command);
+    const grants = ok.records.filter((r) => r.kind === 'granted-by-rule');
+    check(ok.out.denied !== true && grants.length === 1 && grants[0].tool === 'Bash' && grants[0].reason === GRANT_REASON, `the real runtime must grant ${command} with exactly one granted-by-rule row, got ${JSON.stringify(ok.records)}`);
+    const chained = await fire('printf x; echo y');
+    check(chained.out.denied === true && !chained.records.some((r) => r.kind === 'granted-by-rule'), `a chained command must be denied with no grant, got ${JSON.stringify(chained.records)}`);
+  });
   await attempt('D-8 (no user sandbox list)', async () => {
     const sec = composeIsolationSecurity({ user: RULE_ONLY_DOC, project: {} });
     const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
@@ -1200,7 +1223,8 @@ async function isolationLoadChecks() {
   check(JSON.parse(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}').permissions?.allow?.includes('Bash(printf *)') === true, 'the config-dir settings.json must carry the ambient Bash(printf *) allow the inherited leg relies on');
   check(JSON.parse(cwdFiles.get('.claude/settings.json') ?? '{}').enabledPlugins?.['marker-plugin@local'] === true && JSON.parse(cwdFiles.get('.claude/plugins/marker-plugin/.claude-plugin/plugin.json') ?? '{}').name === 'marker-plugin', 'the project plugin must be enabled and named marker-plugin');
   check((cwdFiles.get('CLAUDE.md') ?? '').includes(CLAUDE_MD_SENTENCE), 'the CLAUDE.md fixture must carry the sentence');
-  check(!isolationPrompt('00000000').includes(CLAUDE_MD_SENTENCE), 'the prompt must not carry the CLAUDE.md sentence or it seeds the oracle');
+  check(!CLAUDE_MD_PATTERN.test(isolationPrompt('00000000')), 'the prompt must not carry the CLAUDE.md token or it seeds the oracle');
+  check(CLAUDE_MD_PATTERN.test(CLAUDE_MD_SENTENCE), 'the CLAUDE.md oracle token must occur in the sentence');
   return problems;
 }
 // END-140-PURE
@@ -1234,7 +1258,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     process.env.CLAUDE_CONFIG_DIR = configDir;
     const { hookRows, traceRows } = await runSession({ dir, prompt: isolationPrompt(nonce), sink, judgeOn: false, permissions, settingSources, maxTurns: 3 });
     const markers = Object.fromEntries(['user', 'project', 'local', 'plugin'].map((k) => [k, existsSync(join(markerDir, `${k}-marker`))]));
-    const bashUses = sink.toolUses.filter((t) => t.name === 'Bash');
+    const bashUses = sink.toolUses.filter((t, i, all) => t.name === 'Bash' && (t.id === null || all.findIndex((u) => u.id === t.id) === i));
     const bashResults = bashUses.map((t) => (t.id === null ? undefined : sink.userResults.get(t.id))).filter((r) => r !== undefined);
     const deniedSystem = sink.systemMessages.some((m) => m.body.includes('permission_denied') && m.body.includes('Bash'));
     const grantRows = hookRows.filter((r) => r.kind === 'granted-by-rule');
@@ -1246,7 +1270,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     const init = sink.initMessages[0] ?? null;
     const INIT_FIELDS = ['plugins', 'mcp_servers'];
     const missingFields = init === null ? INIT_FIELDS : INIT_FIELDS.filter((f) => !Array.isArray(init[f]));
-    const assistantQuoted = sink.assistantTexts.some((a) => a.text.includes(CLAUDE_MD_SENTENCE));
+    const assistantQuoted = sink.assistantTexts.some((a) => CLAUDE_MD_PATTERN.test(a.text));
     const data = {
       nonce, settingSources, childInit: sink.initMessages, systemMessages: sink.systemMessages, assistantTexts: sink.assistantTexts,
       userResults: userResultsAsObject(sink), toolUses: sink.toolUses, resultMessages: sink.resultMessages,
@@ -1254,7 +1278,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
       markers, warnings: sink.warnings,
     };
-    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, grantRows, nonceRan, attempted, assistantQuoted, data };
+    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, attempted, assistantQuoted, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1266,6 +1290,12 @@ async function observeIsolationLeg({ permissions, settingSources }) {
 // and no grant row may exist. Order: a created marker is a filesystem observation that needs no stream, so
 // it FAILs first (an UNCHECKED here would hide a leak); then UNCHECKED for what could not be observed, then
 // the remaining FAILs, then PASS.
+// A denied-by-hook Bash row means the harness refused the model's command shape (the sandbox denies
+// backslashes and chaining) before any grant could be returned: the grant oracles do not apply.
+const refusedShape = (o) => o.deniedRows.length > 0
+  ? `the model's command shape was refused by the harness (${o.deniedRows[0].reason}); command: ${o.bashUses[0]?.command ?? 'unrecorded'}; re-run`
+  : null;
+
 function isolatedVerdict(o, { leg, ruleOnProject }) {
   const created = Object.entries(o.markers).filter(([, v]) => v).map(([k]) => k);
   if (created.length > 0) return ['FAIL', `isolation did not hold: ${created.join(',')} marker file(s) were created by a fixture SessionStart hook under settingSources: [] (merge blocker)`];
@@ -1275,6 +1305,7 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.init.permissionMode !== 'default') return ['FAIL', `the init permissionMode is ${o.init.permissionMode}, not default: a settings layer loaded (merge blocker)`];
   if (o.assistantQuoted) return ['FAIL', "the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)"];
   if (!o.attempted) return ['UNCHECKED', 'the model did not call Bash; re-run'];
+  if (refusedShape(o) !== null) return ['UNCHECKED', refusedShape(o)];
   if (o.nonceRan) return ['FAIL', `Bash ran and printed the nonce with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (merge blocker)`];
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
   const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
@@ -1308,6 +1339,7 @@ async function legIsolatedGrant() {
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
   // A model that retries Bash is a re-run signal, not a verdict on the grant: "exactly one row" is only meaningful for one call.
   if (o.bashUses.length > 1) return rec('UNCHECKED', `the model called Bash ${o.bashUses.length} times (the prompt asks for one), so the exactly-one-grant-row oracle does not apply; re-run`);
+  if (refusedShape(o) !== null) return rec('UNCHECKED', refusedShape(o));
   if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
   if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
   if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
