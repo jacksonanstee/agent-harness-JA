@@ -94,8 +94,8 @@
 // Issue #140 (ADR-0040, spec 6b, D-6) adds four legs, recorded to tasks/issue-140-evidence/<leg>.json:
 // `isolated-floor`, `isolated-grant`, `isolated-project-rule` and `inherited`. Each runs the session in
 // a fixture cwd (project settings, local settings, a project plugin, a CLAUDE.md) with a throwaway
-// CLAUDE_CONFIG_DIR (user settings with a SessionStart hook and an ambient `Bash(printf *)` allow) and
-// asks the model for ONE Bash call, `printf harness-ok-<nonce>`. The three `isolated-*` legs pass
+// CLAUDE_CONFIG_DIR (user settings with a SessionStart hook and an ambient `Bash(touch *)` allow) and
+// asks the model for ONE Bash call, `touch harness-ok-<nonce>`, observed by the file it creates in the cwd. The three `isolated-*` legs pass
 // `settingSources: []` and FAIL on any created marker file, any plugin or MCP server, or any project
 // skill, command or agent (numbat-*, the fixture names) on the init message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
 // that contradicts the leg (floor: denied by the CLI; grant: ran, with exactly one granted-by-rule row,
@@ -105,6 +105,10 @@
 // isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the harness `run` command prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
+//
+// Keyed run 1 (22/10/2026, exit 1, probe `printf harness-ok-<nonce>`): isolated-grant and inherited PASSed, but isolated-floor and isolated-project-rule FAILed because the
+// CLI's own read-only Bash validator (eXp, byte offset 215797085 of the 2.1.201 binary) accepts a literal `printf` (and `echo`) with no grant, so the floor ran a command it never refuses
+// (isolation itself held: markers false, no plugins or MCP servers). The probe is now `touch`, which only the acceptEdits mode auto-allows (GXp 215852331, jXp 215853346), never default mode.
 //
 // An unfiltered run now executes all twelve legs, and the B2a legs run isolated with no harness permissions
 // document, so failure-stdout's Bash is denied by the CLI floor (expected from the binary reading; the keyed run confirms); it is RECORDED, so no exit code moves.
@@ -1124,13 +1128,30 @@ const INHERITED_SOURCES = ['user', 'project', 'local'];
 // The grant reason is the evaluator's own (evaluate.ts), identity under the sanitiser and bound.
 const GRANT_REASON = 'permission: allow Bash [rule 0, user]';
 const FLOOR_DENIED_PHRASE = "haven't granted it yet";
-const BASH_RULE = { tool: 'Bash', match: 'printf *', decision: 'allow' };
+// The probe program. It must be a command the CLI's floor does NOT auto-allow under permissionMode default with no settings
+// (keyed run 1 showed `printf` runs ungranted). Binary readings, bundled CLI 2.1.201 (node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude):
+//  - read-only Bash validator eXp @215797085 returns true for the sets QJp (pwd whoami alias), ZJp (claude -h, node -v, ip addr ...), zJp = wwo @215823135
+//    (G3n @213177668 docker ps / docker images, cal uptime cat head tail wc stat strings hexdump od nl id uname free df du locale groups nproc basename dirname
+//    realpath cut paste tr column tac rev fold expand unexpand fmt comm cmp numfmt readlink diff true false sleep which type expr seq tsort pr), for echo,
+//    a literal printf, [[, ls, cd, find (without -exec/-delete), history, arch, ifconfig; tXp @215823703 adds uniq, jq, claude, node, python, python3, ip;
+//    nXp adds sha256sum sha1sum md5sum grep egrep fgrep; GJp @215823071 lists echo printf wc grep egrep fgrep head tail.
+//  - `touch` is in none of those. Its only auto-allow is jXp @215853346 = [mkdir touch rm rmdir mv cp sed], used by GXp @215852331 ONLY when mode === "acceptEdits"
+//    (hYa @215852678); in default mode it returns passthrough. The path validator OJp @215780236 returns only ask, deny or passthrough, never allow.
+const READ_ONLY_PROBE_DENYLIST = new Set([
+  'echo', 'printf', 'pwd', 'whoami', 'alias', 'cal', 'uptime', 'cat', 'head', 'tail', 'wc', 'stat', 'strings', 'hexdump', 'od', 'nl', 'id', 'uname', 'free', 'df', 'du',
+  'locale', 'groups', 'nproc', 'basename', 'dirname', 'realpath', 'cut', 'paste', 'tr', 'column', 'tac', 'rev', 'fold', 'expand', 'unexpand', 'fmt', 'comm', 'cmp',
+  'numfmt', 'readlink', 'diff', 'true', 'false', 'sleep', 'which', 'type', 'expr', 'seq', 'tsort', 'pr', '[[', 'ls', 'cd', 'find', 'history', 'arch', 'ifconfig',
+  'uniq', 'jq', 'claude', 'node', 'python', 'python3', 'ip', 'sha256sum', 'sha1sum', 'md5sum', 'grep', 'egrep', 'fgrep', 'docker',
+]);
+const PROBE_PROGRAM = 'touch';
+const probeCommand = (nonce) => `${PROBE_PROGRAM} harness-ok-${nonce}`;
+const BASH_RULE = { tool: 'Bash', match: `${PROBE_PROGRAM} *`, decision: 'allow' };
 // D-8 (owner ruling 21/10/2026, generalised to every command-kind tool 22/10/2026): a Bash (or Monitor) rule allow is a grant ONLY when the USER layer has a non-empty
 // sandbox.commands.allow. So the grant leg's user document carries both.
-const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: ['printf'] } } };
+const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: [PROBE_PROGRAM] } } };
 const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
 const isolationPrompt = (nonce) =>
-  `Call the Bash tool exactly once to run exactly this command, with no quotes, no backslash escapes and nothing appended: printf harness-ok-${nonce}. Then, in one sentence, quote the project memory you were given, or say "no project memory" if you were given none.`;
+  `Call the Bash tool exactly once to run exactly this command, with no quotes, no backslash escapes and nothing appended: ${probeCommand(nonce)}. Then, in one sentence, quote the project memory you were given, or say "no project memory" if you were given none.`;
 
 // [relativePath, body][] for the cwd.
 const isolationFixtures = (markerDir) => [
@@ -1157,7 +1178,7 @@ const projectSurfaceHits = (init) => init === null || init === undefined ? [] : 
 // [relativePath, body][] for the throwaway CLAUDE_CONFIG_DIR (the user layer; no login in it, the child
 // authenticates by ANTHROPIC_API_KEY, ADR-0037 D9).
 const configDirFixtures = (markerDir) => [
-  ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: ['Bash(printf *)'] } })],
+  ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: [`Bash(${PROBE_PROGRAM} *)`] } })],
 ];
 
 // ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): mirrors COMMAND_TOOLS in src/cli/shared.ts,
@@ -1190,7 +1211,8 @@ function registerIsolationSecurity(hooks, { user, project }) {
 async function isolationLoadChecks() {
   const problems = [];
   const check = (ok, what) => { if (!ok) problems.push(what); };
-  const command = 'printf harness-ok-x';
+  const command = probeCommand('x');
+  check(!READ_ONLY_PROBE_DENYLIST.has(PROBE_PROGRAM) && command.split(' ')[0] === PROBE_PROGRAM, `the probe program ${PROBE_PROGRAM} must not be on the CLI read-only denylist (the floor would run it ungranted)`);
   const payload = { tool: 'Bash', args: { command } };
   const attempt = async (what, fn) => { try { await fn(); } catch (error) { problems.push(`${what} threw: ${error instanceof Error ? error.message : String(error)}`); } };
   await attempt('isolated-grant documents', async () => {
@@ -1214,7 +1236,7 @@ async function isolationLoadChecks() {
     const ok = await fire(command);
     const grants = ok.records.filter((r) => r.kind === 'granted-by-rule');
     check(ok.out.denied !== true && grants.length === 1 && grants[0].tool === 'Bash' && grants[0].reason === GRANT_REASON, `the real runtime must grant ${command} with exactly one granted-by-rule row, got ${JSON.stringify(ok.records)}`);
-    const chained = await fire('printf x; echo y');
+    const chained = await fire(`${command}; echo y`);
     check(chained.out.denied === true && !chained.records.some((r) => r.kind === 'granted-by-rule'), `a chained command must be denied with no grant, got ${JSON.stringify(chained.records)}`);
   });
   await attempt('D-8 (no user sandbox list)', async () => {
@@ -1272,7 +1294,7 @@ async function isolationLoadChecks() {
     check(cwdFiles.has(rel) && sessionStartCommand(cwdFiles.get(rel)) === `touch ${markerDir}/${marker}`, `fixture ${rel} must carry the SessionStart command that touches ${marker}`);
   }
   check(sessionStartCommand(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}') === `touch ${markerDir}/user-marker`, 'the config-dir settings.json must carry the user-marker SessionStart command');
-  check(JSON.parse(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}').permissions?.allow?.includes('Bash(printf *)') === true, 'the config-dir settings.json must carry the ambient Bash(printf *) allow the inherited leg relies on');
+  check(JSON.parse(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}').permissions?.allow?.includes(`Bash(${PROBE_PROGRAM} *)`) === true, `the config-dir settings.json must carry the ambient Bash(${PROBE_PROGRAM} *) allow the inherited leg relies on`);
   check(JSON.parse(cwdFiles.get('.claude/settings.json') ?? '{}').enabledPlugins?.['marker-plugin@local'] === true && JSON.parse(cwdFiles.get('.claude/plugins/marker-plugin/.claude-plugin/plugin.json') ?? '{}').name === 'marker-plugin', 'the project plugin must be enabled and named marker-plugin');
   check((cwdFiles.get('CLAUDE.md') ?? '').includes(CLAUDE_MD_SENTENCE), 'the CLAUDE.md fixture must carry the sentence');
   check(!CLAUDE_MD_PATTERN.test(isolationPrompt('00000000')), 'the prompt must not carry the CLAUDE.md token or it seeds the oracle');
@@ -1315,9 +1337,9 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     const deniedSystem = sink.systemMessages.some((m) => m.body.includes('permission_denied') && m.body.includes('Bash'));
     const grantRows = hookRows.filter((r) => r.kind === 'granted-by-rule');
     const deniedRows = hookRows.filter((r) => r.kind === 'denied-by-hook' && r.tool === 'Bash');
-    // The post-tool phase only: a failure row's summary is the error text, and only a successful Bash run
-    // prints the nonce.
-    const nonceRan = traceRows.some((r) => r.payload.tool === 'Bash' && r.payload.phase === 'post-tool' && (r.payload.resultSummary ?? '').includes(`harness-ok-${nonce}`));
+    // The probe is `touch harness-ok-<nonce>`: it prints nothing, so the oracle is the file in the cwd, a filesystem
+    // effect that needs no trust in the model's text or the stream (checked before the finally removes the cwd).
+    const nonceRan = existsSync(join(dir, `harness-ok-${nonce}`));
     const attempted = bashUses.length > 0 || sink.postTool.length > 0 || deniedSystem || deniedRows.length > 0 || grantRows.length > 0;
     const init = sink.initMessages[0] ?? null;
     const INIT_FIELDS = ['plugins', 'mcp_servers', ...PROJECT_SURFACE_FIELDS];
@@ -1360,7 +1382,7 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.assistantQuoted) return ['FAIL', "the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)"];
   if (!o.attempted) return ['UNCHECKED', 'the model did not call Bash; re-run'];
   if (refusedShape(o) !== null) return ['UNCHECKED', refusedShape(o)];
-  if (o.nonceRan) return ['FAIL', `Bash ran and printed the nonce with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (merge blocker)`];
+  if (o.nonceRan) return ['FAIL', `Bash ran (the nonce file exists) with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (merge blocker)`];
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
   const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
   if (!floorSeen) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted text, no permission_denied system message)'];
@@ -1398,7 +1420,7 @@ async function legIsolatedGrant() {
   if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
   if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
   if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
-  rec('PASS', `Bash ran and printed the nonce through the harness grant: exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
+  rec('PASS', `Bash ran through the harness grant (the nonce file exists): exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
 }
 
 // Leg 12: the CONTROL. With the three sources opted in, every fixture must show up; this is what proves an
@@ -1416,7 +1438,7 @@ async function legInherited() {
   if (o.sink.assistantTexts.length === 0) return rec('UNCHECKED', 'the model produced no assistant text, so the CLAUDE.md oracle could not be read; re-run');
   if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
-  if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(printf *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
+  if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(touch *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
   if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
   rec('PASS', `user, project and local markers created, a numbat-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
 }

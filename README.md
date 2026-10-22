@@ -66,7 +66,7 @@ node dist/cli.js permissions list      # read-only: the permission rules a run w
 node dist/cli.js skills lint skills       # read-only: static checks over a skills directory (exit 0 clean, 1 findings, 2 cannot lint)
 ```
 
-Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Bash, Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it.
+Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it, and so is one that needs a Bash command the CLI's own read-only validator does not accept (keyed run 1 on 22/10/2026 showed it still runs the ones it does accept, for example a literal `printf` or `echo`).
 
 Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
 
