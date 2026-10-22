@@ -102,12 +102,12 @@
 // D-8 sandbox list present; project-rule: denied, no grant row). N3: an init category that is not an
 // array is UNCHECKED, never PASS. `inherited` passes `['user','project','local']` and is the CONTROL:
 // it FAILs unless the markers, the numbat-* skill, command and agent, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
-// isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the CLI prints is
+// isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the harness `run` command prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
 //
 // An unfiltered run now executes all twelve legs, and the B2a legs run isolated with no harness permissions
-// document, so failure-stdout's Bash is denied by the CLI floor; it is RECORDED, so no exit code moves.
+// document, so failure-stdout's Bash is denied by the CLI floor (expected from the binary reading; the keyed run confirms); it is RECORDED, so no exit code moves.
 //
 // DO NOT import this file from a test or run it under CI.
 import { execFile } from 'node:child_process';
