@@ -17,11 +17,7 @@ import { route } from '../router/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
-  createPermissionEvaluator,
-  createSandbox,
-  permissionHook,
   redact,
-  sandboxHook,
   scan,
 } from '../security/index.js';
 import { load as loadSkills } from '../skills/index.js';
@@ -35,6 +31,7 @@ import {
   loadSdkQuery,
   parseSafeInt,
   readPackageVersion,
+  registerSecurityHooks,
   refuseSymlinkedDir,
   sanitizeDiagnostic,
   sanitizeForTerminal,
@@ -111,6 +108,7 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
 // agentic loop, the deny-all PreToolUse hook fail-closes any tool call the
 // model attempts in its one turn. Never wrapped in createSession (no memory/
 // telemetry pollution). Both controls exist in the typed QueryOptions today.
+// #140 D-4: always isolated (never the operator's settingSources), the judge's five keys.
 export const buildAdversary =
   (query: QueryFn, model: string): AdversaryFn =>
   async (prompt: string): Promise<AdversaryResult> => {
@@ -125,7 +123,16 @@ export const buildAdversary =
     let costUsd: number | null = null;
     for await (const message of query({
       prompt,
-      options: { model, maxTurns: 1, hooks: { PreToolUse: [{ hooks: [denyAll] }] } },
+      options: {
+        model,
+        maxTurns: 1,
+        settingSources: [],
+        strictMcpConfig: true,
+        tools: [],
+        skills: [],
+        persistSession: false,
+        hooks: { PreToolUse: [{ hooks: [denyAll] }] },
+      },
     })) {
       const m = message as SdkMessage;
       if (m.type === 'result') {
@@ -173,8 +180,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         }
       },
     });
-    hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
-    hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+    registerSecurityHooks(hooks, security);
     return create(
       {
         query,
@@ -188,6 +194,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
       },
       {
         skillsDir: config.skillsDir,
+        settingSources: security.sdk.settingSources,
         maxTurns: config.maxTurns,
         ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
         generateId: () => sessionId,

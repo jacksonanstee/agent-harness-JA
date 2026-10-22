@@ -19,7 +19,9 @@ import type {
   SDKMessage,
   SDKResultMessage,
   SDKUserMessage,
+  SettingSource as SettingSource_SDK,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { SettingSource } from '../security/index.js';
 import type {
   QueryOptions,
   SdkHookCallback,
@@ -31,7 +33,9 @@ import type {
   SdkPostToolRewriteOutput,
   SdkPostToolUseFailureInput,
   SdkPostToolUseInput,
+  SdkPreToolAllowOutput,
   SdkPreToolDenyOutput,
+  SdkPreToolOutput,
   SdkPreToolUseInput,
   SdkUserMessage,
 } from './types.js';
@@ -59,6 +63,16 @@ const _postNoExtra: NoExtraKeys<SdkPostToolUseInput, PostToolUseHookInput> = tru
 // our value flows to the SDK (view -> SDK).
 const _denyOutputAccepted: Assignable<SdkPreToolDenyOutput, HookJSONOutput> = true;
 const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
+// ADR-0040: the allow bridge is accepted by the SDK. The SDK declares FOUR
+// decisions ('allow' | 'deny' | 'ask' | 'defer'); the view declares 'allow' and
+// 'deny' and deliberately omits 'ask' and 'defer'.
+const _allowOutputAccepted: Assignable<SdkPreToolAllowOutput, HookJSONOutput> = true;
+const _allowDecisionIsSdk: Assignable<
+  SdkPreToolAllowOutput['hookSpecificOutput']['permissionDecision'],
+  NonNullable<PreToolUseHookSpecificOutput['permissionDecision']>
+> = true;
+const _viewOmitsAsk: Assignable<'ask', NonNullable<SdkPreToolOutput['hookSpecificOutput']>['permissionDecision']> = false;
+const _viewOmitsDefer: Assignable<'defer', NonNullable<SdkPreToolOutput['hookSpecificOutput']>['permissionDecision']> = false;
 // Assignability alone does NOT catch a renamed deny key: the SDK declares
 // `permissionDecision?`/`permissionDecisionReason?` optional, so a payload that
 // renames one stays assignable to `HookJSONOutput` (the rename is caught only
@@ -67,6 +81,11 @@ const _matcherNoExtra: NoExtraKeys<SdkHookMatcher, HookCallbackMatcher> = true;
 // too, at the contract boundary rather than only at the call site.
 const _denyPayloadNoExtra: NoExtraKeys<
   SdkPreToolDenyOutput['hookSpecificOutput'],
+  PreToolUseHookSpecificOutput
+> = true;
+// Same nested pin for the allow arm: a renamed or invented allow key reddens here.
+const _allowPayloadNoExtra: NoExtraKeys<
+  SdkPreToolAllowOutput['hookSpecificOutput'],
   PreToolUseHookSpecificOutput
 > = true;
 
@@ -90,6 +109,11 @@ describe('SDK hook-input type parity', () => {
       _denyOutputAccepted,
       _matcherNoExtra,
       _denyPayloadNoExtra,
+      _allowOutputAccepted,
+      _allowDecisionIsSdk,
+      _viewOmitsAsk,
+      _viewOmitsDefer,
+      _allowPayloadNoExtra,
       _rejectsOldField,
     ]).toBeDefined();
   });
@@ -155,7 +179,8 @@ const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMe
 // Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks},
 // the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6), and
 // since PR-B1 `abortController` (spec D4), used by the judge call only.
-// Ten keys. The SESSION's primary query still passes its four.
+// Ten keys. The judge passes all five; since ADR-0040 the SESSION passes
+// `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
 const _seamExact: ExactKeys<
   QueryOptions,
   | 'model'
@@ -190,6 +215,9 @@ const _settingSourcesMirrorsSdk: Assignable<
   NonNullable<QueryOptions['settingSources']>,
   NonNullable<Options['settingSources']>
 > = true;
+// ADR-0040: the harness's own SettingSource literal union equals the SDK's, both directions.
+const _settingSourceToSdk: Assignable<SettingSource, SettingSource_SDK> = true;
+const _settingSourceFromSdk: Assignable<SettingSource_SDK, SettingSource> = true;
 const _strictMcpConfigMirrorsSdk: Assignable<
   NonNullable<QueryOptions['strictMcpConfig']>,
   NonNullable<Options['strictMcpConfig']>
@@ -238,6 +266,8 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _matcherTimeoutMirrorsSdk,
       _seamCarriesNoBudget,
       _settingSourcesMirrorsSdk,
+      _settingSourceToSdk,
+      _settingSourceFromSdk,
       _strictMcpConfigMirrorsSdk,
       _toolsMirrorsSdk,
       _skillsMirrorsSdk,

@@ -11,6 +11,7 @@ import {
   hookRecordToTelemetryInput,
   loadSdkQuery,
   parseSafeInt,
+  registerSecurityHooks,
   sanitizeDiagnostic,
   sanitizeForTerminal,
   SettingsLoadError,
@@ -22,6 +23,7 @@ import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import { formatUsd } from './internal/money.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
+import { sdkStartLine } from './cli/run-sdk.js';
 import type { CliSeams, SecurityComposition } from './cli/shared.js';
 import { parseEvalArgs, runEval } from './cli/eval-command.js';
 import type { EvalArgs } from './cli/eval-command.js';
@@ -42,11 +44,7 @@ import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.
 import { createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
 import type { SessionRefusal } from './session/index.js';
 import {
-  createPermissionEvaluator,
-  createSandbox,
-  permissionHook,
   redact,
-  sandboxHook,
   scan,
 } from './security/index.js';
 import { load as loadSkills } from './skills/index.js';
@@ -544,6 +542,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   const query = await loadSdkQuery(seams.importSdk);
   if (query === null) return 2;
   if (security.judge !== null) process.stderr.write(`${judgeStartLine(security.judge)}\n`);
+  const sdkLine = sdkStartLine(security.sdk.settingSources);
+  if (sdkLine !== null) process.stderr.write(`${sdkLine}\n`);
 
   // One shared connection: openTelemetryDatabase runs the migration runner,
   // which owns the shared-DB schema (memory's DDL is migration 001).
@@ -566,11 +566,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       }
     },
   });
-  // Permissions first, sandbox as the backstop: deny outcome is identical
-  // (runtime denies on first throw), but rule-attributed permission reasons
-  // are more actionable, so they get first say (ADR-0015 §4).
-  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions)));
-  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+  // Order (permissions, then sandbox) lives in registerSecurityHooks.
+  registerSecurityHooks(hooks, security);
 
   const session = createSession(
     {
@@ -585,6 +582,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       ...runJudgeDeps(security.judge, query),
     },
     {
+      settingSources: security.sdk.settingSources,
       skillsDir,
       maxTurns,
       descriptor,

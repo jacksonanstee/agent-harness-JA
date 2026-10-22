@@ -3,7 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { JudgeCall, RedactResult, ScanResult } from '../security/index.js';
+import type { JudgeCall, RedactResult, ScanResult, SettingSource } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -160,6 +160,19 @@ export interface SdkPreToolDenyOutput {
 }
 
 /**
+ * ADR-0040 D3: the explicit allow the session returns when the hook runtime
+ * reports a pre-tool grant (any handler may grant, so the reason is source-neutral). `permissionDecisionReason` is always the one fixed
+ * harness literal (`HARNESS_HOOK_ALLOW_REASON`), never the evaluator's reason.
+ */
+export interface SdkPreToolAllowOutput {
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse';
+    permissionDecision: 'allow';
+    permissionDecisionReason: string;
+  };
+}
+
+/**
  * Post-tool rewrite output (issue #84, D1/D2). On a SUCCESSFUL call either
  * channel may fire: `updatedToolOutput` replaces the model-facing copy (secret
  * redaction), `additionalContext` adds the harness injection notice. Written as
@@ -185,7 +198,13 @@ export type SdkPostToolFailureAnnotateOutput = {
 
 // Per-event output unions (D6, G-8). Each event's callback returns exactly the
 // outputs valid for that event, plus the empty no-op.
-export type SdkPreToolOutput = SdkPreToolDenyOutput | { hookSpecificOutput?: undefined };
+// ADR-0040: the pre-tool output gains the allow arm. The SDK declares four
+// decisions ('allow' | 'deny' | 'ask' | 'defer'); the view declares 'allow' and
+// 'deny'. U-8 narrowing survives because BOTH arms declare `permissionDecision`.
+export type SdkPreToolOutput =
+  | SdkPreToolDenyOutput
+  | SdkPreToolAllowOutput
+  | { hookSpecificOutput?: undefined };
 export type SdkPostToolOutput = SdkPostToolRewriteOutput | { hookSpecificOutput?: undefined };
 export type SdkPostToolFailureOutput =
   | SdkPostToolFailureAnnotateOutput
@@ -241,8 +260,9 @@ export interface QueryOptions {
   // The SDK's isolation keys (issue #96, ADR-0036 D3; G-1/G-2): structural
   // mirrors of `Options` in the pinned SDK, parity-pinned one per key in
   // sdk-types.test.ts. The array types are MUTABLE as the SDK declares them
-  // (G-5). The judge passes all five; the session passes none of them today
-  // (issue #140 decides `settingSources` for the session and the adversary).
+  // (G-5). The judge passes all five; the session passes `settingSources`
+  // and `strictMcpConfig` from `buildSessionIsolation` (ADR-0040) and none of
+  // `tools`, `skills`, `persistSession`.
   /** `[]` disables every filesystem settings layer (SDK isolation mode). */
   settingSources?: ('user' | 'project' | 'local')[];
   /** `true` ignores `.mcp.json`, settings-declared and plugin MCP servers. */
@@ -389,6 +409,8 @@ export interface SessionConfig {
    * `randomBytes(4)` per call. Held in memory only, like the verifier's spans.
    */
   generateWithholdNonce?: () => string;
+  /** Claude Code settings sources the SDK child may load (ADR-0040). Absent or `[]` is isolated; the CLI passes the user file's `sdk.settingSources`. Copied, never held by reference. */
+  settingSources?: SettingSource[];
 }
 
 export interface DeniedToolCall {

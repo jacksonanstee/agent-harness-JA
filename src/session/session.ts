@@ -19,6 +19,7 @@ import type {
   OutputRewrite,
   OutputRewriteKind,
   OutputRewriteOutcome,
+  QueryOptions,
   SdkAssistantMessage,
   SdkHookCallback,
   SdkHookOutputFor,
@@ -216,6 +217,15 @@ export const OUTPUT_REWRITE_OUTCOMES = Object.keys(
 const OUTPUT_REWRITE_KIND_PRESENCE: Record<OutputRewriteKind, true> = { redact: true, withhold: true };
 export const OUTPUT_REWRITE_KINDS = Object.keys(OUTPUT_REWRITE_KIND_PRESENCE) as readonly OutputRewriteKind[];
 
+/**
+ * The ONE string the SDK ever sees as the reason for a grant (ADR-0040 D3,
+ * spec section 2c). Source-neutral on purpose: any registered pre-tool handler
+ * can grant, so the session cannot know a rule was the source. Never the
+ * evaluator's reason: that carries the rule index and would reach the CLI's
+ * cleartext transcript. Attribution (the rule identity) goes, bounded and
+ * ADR-0031-shaped, to the harness `granted-by-rule` telemetry row only.
+ */
+export const HARNESS_HOOK_ALLOW_REASON = 'allowed by a harness pre-tool hook grant (ADR-0014)';
 
 function truncate(value: string | null): string | null {
   if (value === null) return null;
@@ -432,11 +442,27 @@ function buildSystemPrompt(skills: Skill[], nonce: string): {
 }
 
 /**
+ * ADR-0040 D1, D3: the primary session's isolation keys, built in ONE place
+ * so the keyless canary asserts one object and the null mutation has one
+ * target. `[]` (the default) loads no user, project or local Claude Code
+ * settings file into the child; `strictMcpConfig` follows the list, so an
+ * isolated child also ignores `.mcp.json` and settings-declared servers.
+ * The list is copied: the caller's array is never handed to the SDK.
+ */
+function buildSessionIsolation(config: SessionConfig): Pick<QueryOptions, 'settingSources' | 'strictMcpConfig'> {
+  // Defence in depth (#140): the type says array, the runtime must not trust it.
+  if (config.settingSources !== undefined && !Array.isArray(config.settingSources)) {
+    throw new TypeError('SessionConfig.settingSources must be an array');
+  }
+  const settingSources = [...(config.settingSources ?? [])];
+  return { settingSources, strictMcpConfig: settingSources.length === 0 };
+}
+
+/**
  * Wires router, skills, hooks, and memory into one Claude Agent SDK session
  * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
  * is injected so tests never touch the network.
- */
-/**
+ *
  * Issue #51. The telemetry store refuses a malformed correlation id, but
  * `recordTelemetry` below catches that throw and downgrades it to one stderr
  * warning, so a caller whose id scheme is rejected would lose every row of the
@@ -1303,6 +1329,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const inputRedaction = runSecretRedaction(tool, input.tool_input);
 
       let deniedReason: string | null = null;
+      let granted = false;
       try {
         const fireResult = await deps.hooks.fire('pre-tool', {
           event: 'pre-tool',
@@ -1311,6 +1338,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           redactions: inputRedaction?.findings ?? null,
         });
         if (fireResult.denied) deniedReason = fireResult.reason;
+        else granted = fireResult.granted === true;
       } catch (error: unknown) {
         // fire() itself failing must fail closed, not SDK-defined. The reason
         // sent to the model is generic; the detail goes to warnings only.
@@ -1347,6 +1375,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
             permissionDecisionReason: deniedReason,
+          },
+        };
+      }
+      // A fire() rejection sets deniedReason above, so a failure can never grant.
+      if (granted) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: HARNESS_HOOK_ALLOW_REASON,
           },
         };
       }
@@ -1566,6 +1604,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           model: modelChoice.model,
           systemPrompt,
           maxTurns: config.maxTurns,
+          ...buildSessionIsolation(config),
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],

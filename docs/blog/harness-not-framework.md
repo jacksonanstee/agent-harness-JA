@@ -98,6 +98,8 @@ output: formatting rules I'd written for an entirely different context,
 riding along inside the bundled runtime. Nothing in the harness put them
 there, and nothing in the harness can take them out.
 
+*(22/10/2026: this changed. The session now passes `settingSources: []` by default, so the user, project and local Claude Code settings no longer load into a run, and the harness can take them out; see [ADR-0040](../decisions/0040-session-isolates-claude-code-settings-by-default.md). The paragraph stays as written because it is what I saw then.)*
+
 A framework could pretend to own that surface. A harness has to name it: the
 gates are pre-execution and data-plane
 (the [security model](../security-model.md) §1 says exactly this), and the
@@ -135,6 +137,8 @@ So far it has held.
 > the argument is R-11: the bundled Claude Code runtime carries ambient config
 > the harness cannot inspect or suppress. The thesis holds; this example did
 > not, and the honest thing is to say so rather than rewrite the history.
+
+> **Update, 22/10/2026:** R-11 is narrowed, not closed. The session child no longer loads the operator's user, project or local settings by default ([ADR-0040](../decisions/0040-session-isolates-claude-code-settings-by-default.md)); managed, policy and flag settings, the OAuth login and the CLI's bundled skills, commands and agents still reach it.
 
 > **Update, 2026-09-08:** the deferred rewrite shipped for the deterministic
 > half (issue #84, [ADR-0035](../decisions/0035-model-facing-enforcement-via-rewrite-channels.md)).

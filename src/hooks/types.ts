@@ -1,3 +1,5 @@
+import type { PreToolGrant } from '../internal/pre-tool-grant.js';
+
 export type HookEvent = 'pre-tool' | 'post-tool' | 'session-start' | 'stop';
 
 export interface PreToolPayload {
@@ -57,9 +59,13 @@ export interface HookPayloadMap {
 
 export type HookPayload = HookPayloadMap[HookEvent];
 
+/**
+ * A handler may return a `PreToolGrant` for any event, but only a pre-tool
+ * return is read: a value returned from any other event is ignored.
+ */
 export type HookHandler<E extends HookEvent = HookEvent> = (
   payload: Readonly<HookPayloadMap[E]>,
-) => void | Promise<void>;
+) => void | PreToolGrant | Promise<void | PreToolGrant>;
 
 export type Unsubscribe = () => void;
 
@@ -85,7 +91,16 @@ export interface FireResultBase {
 }
 
 export type FireResult =
-  | (FireResultBase & { denied: false })
+  | (FireResultBase & {
+      denied: false;
+      /**
+       * Present on pre-tool fires only. Consumers read `granted === true`, so
+       * absence (any other event) fails closed.
+       */
+      granted?: boolean;
+      /** Present on pre-tool fires only: sanitized reason of the first grant, else null. */
+      grantReason?: string | null;
+    })
   | (FireResultBase & {
       denied: true;
       /** Snapshot-relative index of the denying handler (see HookHandlerError.handlerIndex). */
@@ -103,6 +118,14 @@ export type FireResult =
 export type HookEventRecord =
   | {
       kind: 'denied-by-hook';
+      event: 'pre-tool';
+      handlerIndex: number;
+      tool: string;
+      reason: string;
+    }
+  | {
+      /** A pre-tool handler returned a PreToolGrant and no handler threw; recorded once, for the first granting handler. */
+      kind: 'granted-by-rule';
       event: 'pre-tool';
       handlerIndex: number;
       tool: string;

@@ -29,6 +29,7 @@ export type {
   SdkPostToolRewriteOutput,
   SdkPostToolUseFailureInput,
   SdkPostToolUseInput,
+  SdkPreToolAllowOutput,
   SdkPreToolDenyOutput,
   SdkPreToolOutput,
   SdkPreToolUseInput,

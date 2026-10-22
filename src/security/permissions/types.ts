@@ -64,6 +64,14 @@ export interface Evaluation {
   readonly reason: string;
 }
 
+/**
+ * Which tools a rule allow must NOT turn into an SDK grant (#140, D-8). Data
+ * computed by the composition root, so this module never imports the sandbox.
+ */
+export interface GrantPolicy {
+  readonly ungrantableTools: ReadonlySet<string>;
+}
+
 export interface PermissionEvaluator {
   evaluate(tool: string, args: unknown): Evaluation;
 }

@@ -63,6 +63,9 @@ export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
+  parseSdkSettings,
+  SdkSettingsError,
+  SETTING_SOURCES,
 } from './security/index.js';
 export type {
   Confidence,
@@ -85,6 +88,7 @@ export type {
   Verdict,
   Evaluation,
   EvaluatorOptions,
+  GrantPolicy,
   LayeredRule,
   PermissionDecision,
   PermissionEvaluator,
@@ -104,6 +108,7 @@ export type {
   SecretPrecision,
   SecretRedactor,
   SecretRule,
+  SettingSource,
 } from './security/index.js';
 export {
   createTelemetryStore,

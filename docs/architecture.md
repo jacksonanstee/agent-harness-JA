@@ -79,7 +79,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `security/permissions`
 
 - **Owns:** allow / ask / deny decisions for tool invocations, plus the settings-file loader (`~/.harness/settings.json` under `<cwd>/.harness/settings.json`).
-- **Public API:** `createPermissionEvaluator(opts).evaluate(tool, args): Evaluation`; `permissionHook(evaluator, prompter?)` (a pre-tool handler that throws `PermissionDenied` on deny); `loadSettingsFile` / `mergeLayers` / `parsePermissionSettings`.
+- **Public API:** `createPermissionEvaluator(opts).evaluate(tool, args): Evaluation`; `permissionHook(evaluator, prompter | undefined, grantPolicy)` (a pre-tool handler that throws `PermissionDenied` on deny, and returns a `PreToolGrant` for a user-layer rule allow unless the policy withholds that tool, ADR-0040 D3 and D-8); `loadSettingsFile` / `mergeLayers` / `parsePermissionSettings`.
 - **Depends on:** `internal/settings` for its settings-file loader (which reads through `internal/guarded-read` since ADR-0034); the composition root composes the layers and registers the hook (injected, not imported).
 - **Design notes:** Rules are `{ tool, match?, decision }` with trailing-`*` prefix globs only. Precedence is specificity (match > tool > wildcard) then severity (deny > ask > allow), so merged layers evaluate order-independently and a user deny survives a project allow (sticky deny). Unmatched tools get `defaultDecision` (default allow). Harden with a wildcard deny RULE plus explicit allows, not a deny default: sticky deny protects user rules, and the default is consulted only when no rule in either layer matches, so a project allow rule beats a user deny default (issue #100, by execution). `ask` fails closed without a prompter; malformed settings fail loud at startup. Shipped ([ADR-0014](./decisions/0014-declarative-permission-model.md)).
 
@@ -109,7 +109,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `harness/hooks`
 
 - **Owns:** event-driven extension points around tool execution and session lifecycle.
-- **Public API:** `register(event: HookEvent, handler: HookHandler)`, `fire(event: HookEvent, payload: HookPayload)`.
+- **Public API:** `register(event: HookEvent, handler: HookHandler)`, `fire(event: HookEvent, payload: HookPayload)`. A pre-tool handler may return a `PreToolGrant`; the runtime reads a return value for `pre-tool` only (ADR-0040 D3).
 - **Events:** `pre-tool`, `post-tool`, `session-start`, `stop`.
 - **Depends on:** nothing.
 - **Design notes:** Handlers are async, sequential, and can short-circuit (e.g. a pre-tool hook can deny execution by throwing a typed error).
@@ -131,7 +131,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `harness/session`
 
 - **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
-- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`; `buildJudge(query, model)`, the S-5 injection judge's single isolated model call, which takes the injected `query` and imports no SDK ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) D2). `SessionDeps.judge` (`{ call, maxCallsPerRun, withhold? }`) turns the judge on for a session, and `SessionResult.judge` reports its per-run summary, and `SessionResult.outputRewrites` carries a `kind: 'withhold'` row per withheld result ([ADR-0039](./decisions/0039-judge-withholding-off-by-default.md)); `createSession` refuses a judge without `scanInjection` and `redactSecrets` at construction ([ADR-0037](./decisions/0037-s5-judge-wired-into-the-session.md) D3, D7).
+- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`; `buildJudge(query, model)`, the S-5 injection judge's single isolated model call, which takes the injected `query` and imports no SDK ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) D2). `SessionDeps.judge` (`{ call, maxCallsPerRun, withhold? }`) turns the judge on for a session, and `SessionResult.judge` reports its per-run summary, and `SessionResult.outputRewrites` carries a `kind: 'withhold'` row per withheld result ([ADR-0039](./decisions/0039-judge-withholding-off-by-default.md)); `SessionConfig.settingSources` (absent or `[]` isolates the child from Claude Code's user, project and local settings; the opt-in is the user settings file's `sdk.settingSources`, [ADR-0040](./decisions/0040-session-isolates-claude-code-settings-by-default.md)); `createSession` refuses a judge without `scanInjection` and `redactSecrets` at construction ([ADR-0037](./decisions/0037-s5-judge-wired-into-the-session.md) D3, D7).
 - **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, the `security/*` layer through `src/security/index.ts` (a runtime edge since the judge: `judged-scan.ts`, `judged-scan-validate.ts`), `harness/telemetry` (runtime, `session.ts`), and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
 - **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)). Each assistant text block passes the injected redactor before `onText` (fail-closed to the sentinel, issue #91); `resultText` on the returned result is raw and is redacted only at the memory write.
 
@@ -291,7 +291,7 @@ Configuration is fully optional — every module ships sensible defaults. The st
 ### Error handling
 
 - All public APIs return tagged results (`{ ok: true, value } | { ok: false, error }`) rather than throwing, except for programmer errors (invalid arguments, contract violations) which throw. Aggregate/batch operations may instead return an un-tagged result carrying both successes and per-item errors (e.g. `LoadResult { skills, errors }`) — partial failure is not a failure of the operation itself; see the ADR-0006 amendment.
-- Hook handlers that throw deny tool execution and record a `denied-by-hook` telemetry event.
+- Hook handlers that throw deny tool execution and record a `denied-by-hook` telemetry event; a pre-tool handler that returns a `PreToolGrant` records a `granted-by-rule` event instead (ADR-0040 D3, read for `pre-tool` only).
 - The eval layer treats any uncaught per-task exception as a failed row with a `failureKind` (infra flakes distinguishable from capability regressions) and reports a redacted, truncated failure reason in the scorecard — never a raw stack.
 
 ### Logging vs telemetry

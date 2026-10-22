@@ -251,7 +251,7 @@ describe('createSession', () => {
       { tool: 'Read', input: { file_path: '/tmp/ok' }, output: 'contents' },
     ]);
     const hooks = createHookRuntime();
-    hooks.register('pre-tool', permissionHook(evaluator));
+    hooks.register('pre-tool', permissionHook(evaluator, undefined, { ungrantableTools: new Set() }));
     const postFired: string[] = [];
     hooks.register('post-tool', (payload) => {
       postFired.push(payload.tool);
