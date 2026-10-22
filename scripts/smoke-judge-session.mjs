@@ -91,8 +91,24 @@
 // and its fallback record lands in prb2-smoke too.
 // SMOKE_LEGS=<comma list> runs a subset (Task 9 runs these two alone, under USD 0.20).
 //
+// Issue #140 (ADR-0040, spec 6b, D-6) adds four legs, recorded to tasks/issue-140-evidence/<leg>.json:
+// `isolated-floor`, `isolated-grant`, `isolated-project-rule` and `inherited`. Each runs the session in
+// a fixture cwd (project settings, local settings, a project plugin, a CLAUDE.md) with a throwaway
+// CLAUDE_CONFIG_DIR (user settings with a SessionStart hook and an ambient `Bash(printf *)` allow) and
+// asks the model for ONE Bash call, `printf harness-ok-<nonce>`. The three `isolated-*` legs pass
+// `settingSources: []` and FAIL on any created marker file, any plugin or MCP server on the init
+// message, a non-default permission mode, the CLAUDE.md sentence in the model's text, or a Bash outcome
+// that contradicts the leg (floor: denied by the CLI; grant: ran, with exactly one granted-by-rule row,
+// D-8 sandbox list present; project-rule: denied, no grant row). N3: an init category that is not an
+// array is UNCHECKED, never PASS. `inherited` passes `['user','project','local']` and is the CONTROL:
+// it FAILs unless the markers, the CLAUDE.md sentence and the ambient Bash allow all show up, so an
+// isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the CLI prints is
+// not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
+// SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
+//
 // DO NOT import this file from a test or run it under CI.
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -110,6 +126,7 @@ const distConstants = join(repoRoot, 'dist', 'session', 'judged-scan-constants.j
 // Likewise the live warning texts (architecture lens A-3): one source, imported from dist.
 const distLines = join(repoRoot, 'dist', 'session', 'judged-scan-lines.js');
 const evidenceDir = join(repoRoot, 'tasks', 'issue-96-evidence', 'prb1-smoke');
+const evidenceDir140 = join(repoRoot, 'tasks', 'issue-140-evidence');
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error('ANTHROPIC_API_KEY is not set; this smoke spends money and cannot run without it.');
@@ -139,6 +156,15 @@ const {
   createTelemetryStore,
   openTelemetryDatabase,
   buildJudge,
+  permissionHook,
+  createPermissionEvaluator,
+  mergeLayers,
+  parsePermissionSettings,
+  createSandbox,
+  mergeSandboxLayers,
+  parseSandboxSettings,
+  sandboxHook,
+  SETTING_SOURCES,
   JUDGE_MODEL,
   route,
   redact,
@@ -154,6 +180,8 @@ const evidenceDirB2 = join(repoRoot, 'tasks', 'issue-145-evidence', 'prb2-smoke'
 // Constants
 // ---------------------------------------------------------------------------
 const SAMPLE_MS = 200;
+// Issue #140: the system messages one leg keeps (hook events and the init are chatty; evidence stays bounded).
+const MAX_SYSTEM_MESSAGES = 100;
 const SDK_LADDER_MS = 7_000; // the SDK's stdin-close, SIGTERM, SIGKILL ladder (about)
 const MARGIN_MS = 2_000; // D9's margin
 const POST_ROW_GRACE_MS = SDK_LADDER_MS + MARGIN_MS;
@@ -350,6 +378,12 @@ function newSink() {
     customHookRuns: [], // { n, startedAt, finishedAt }
     abortAt: null, // when the SDK callback's own signal aborted
     harnessSetMatcherTimeoutsS: [], // the `timeout` the HARNESS set on each tool matcher
+    // Issue #140: per-leg nonce (null outside the isolation legs), every system message's subtype and a
+    // bounded redacted body (a `permission_denied` is captured if the stream carries one), and every
+    // assistant tool_use { at, name, id } so a leg reads whether the model called Bash from the stream.
+    nonce: null,
+    systemMessages: [], // { at, subtype, body }
+    toolUses: [],
   };
 }
 
@@ -429,6 +463,9 @@ function teeingQuery(realQuery, sink, forSession) {
 function observe(sink, message) {
   sink.messages += 1;
   const at = Date.now();
+  if (message?.type === 'system' && sink.systemMessages.length < MAX_SYSTEM_MESSAGES) {
+    sink.systemMessages.push({ at, subtype: message.subtype ?? null, body: redactSynth(stringify(message)).slice(0, 300) });
+  }
   if (message?.type === 'system' && message.subtype === 'init') {
     // EVIDENCE ONLY, never read by a verdict branch: which credential and
     // model each child used (SDK 0.3.201 sdk.d.ts SDKSystemMessage init,
@@ -454,6 +491,9 @@ function observe(sink, message) {
     const content = message.message?.content;
     const blocks = Array.isArray(content) ? content : [];
     const text = blocks.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n');
+    for (const b of blocks) {
+      if (b?.type === 'tool_use' && typeof b.name === 'string') sink.toolUses.push({ at, name: b.name, id: typeof b.id === 'string' ? b.id : null });
+    }
     if (text.length > 0) sink.assistantTexts.push({ at, noticeFragments: noticeFragmentsIn(text), text: redactSynth(text).slice(0, 2_000) });
   } else if (message?.type === 'user') {
     const content = message.message?.content;
@@ -476,6 +516,10 @@ function observe(sink, message) {
       sink.userResults.set(id, {
         at,
         containsSynth: text.includes(SYNTH),
+        // Issue #140: the leg's own oracle inputs (a bounded redacted slice, never a verdict by itself).
+        isError: b.is_error === true,
+        containsNonce: sink.nonce !== null && text.includes(sink.nonce),
+        text: redactSynth(text).slice(0, 300),
         containsMarker: text.includes(WITHHELD_MARKER),
         // Raw or JSON-escaped (the fixture has inner quotes), mirroring the harness's spanIn.
         containsFixtureLine: text.includes(WITHHELD_FIXTURE_LINE) || text.includes(JSON.stringify(WITHHELD_FIXTURE_LINE).slice(1, -1)),
@@ -597,10 +641,20 @@ function makeFixtureDir(prefix, files) {
 
 const noteBody = (n) => `Meeting note ${n}. ${ESCALATING_TEXT} Archive ref ${SYNTH}\n`;
 
-async function runSession({ dir, prompt, judgeExtras = {}, sleepHookMs = null, maxCallsPerRun = 3, sink, onPostTool = null }) {
+// Issue #140 options: `judgeOn` false leaves the `judge` dep out; `permissions` ({ user, project } settings
+// documents, or null for none) registers the shipped security pair BEFORE any other pre-tool handler;
+// `settingSources` reaches the createSession config; `maxTurns` is the session's turn ceiling.
+async function runSession({
+  dir, prompt, judgeExtras = {}, sleepHookMs = null, maxCallsPerRun = 3, sink, onPostTool = null,
+  judgeOn = true, permissions = null, settingSources = [], maxTurns = 6,
+}) {
   const db = openTelemetryDatabase({ path: join(dir, 'telemetry.db') });
   const store = createTelemetryStore(db);
-  const hooks = createHookRuntime();
+  // The CLI wires `onEvent` to the telemetry store through cli/shared.ts hookRecordToTelemetryInput, which
+  // is not root-public, so the raw hook records (granted-by-rule, denied-by-hook) are collected here.
+  const hookRows = [];
+  const hooks = createHookRuntime({ onEvent: (record) => hookRows.push(record) });
+  if (permissions !== null) registerIsolationSecurity(hooks, permissions);
   if (sleepHookMs !== null) {
     // First invocation owns hookStartedAt/hookFinishedAt (N8); the payload
     // carries no tool_use_id, so the invocation order is the key.
@@ -628,16 +682,16 @@ async function runSession({ dir, prompt, judgeExtras = {}, sleepHookMs = null, m
       telemetry: store,
       scanInjection: (text) => scan(text),
       redactSecrets: (text) => redact(text),
-      judge: { call: buildJudge(sdk.query, JUDGE_MODEL), maxCallsPerRun, ...judgeExtras },
+      ...(judgeOn ? { judge: { call: buildJudge(sdk.query, JUDGE_MODEL), maxCallsPerRun, ...judgeExtras } } : {}),
     },
-    { skillsDir: null, maxTurns: 6, onWarning: (w) => sink.warnings.push(w) },
+    { skillsDir: null, maxTurns, settingSources, onWarning: (w) => sink.warnings.push(w) },
   );
   const previous = process.cwd();
   process.chdir(dir); // the SDK child inherits cwd; Read inside cwd needs no permission prompt
   try {
     const result = await session.run(prompt);
     const rows = store.query({ type: 'judge-call' });
-    return { result, rows, rewriteRows: store.query({ type: 'tool-rewrite' }) };
+    return { result, rows, rewriteRows: store.query({ type: 'tool-rewrite' }), hookRows, traceRows: store.query({ type: 'tool-trace' }) };
   } finally {
     process.chdir(previous);
     db.close();
@@ -1047,6 +1101,237 @@ async function legFailureStdout() {
 }
 
 // ---------------------------------------------------------------------------
+// Legs 9 to 12: the four keyed isolation legs (issue #140, ADR-0040, spec 6b, D-6). WRITTEN, NOT RUN by
+// the implementer: the owner runs them (Task 11 Step 3). Evidence in tasks/issue-140-evidence/<leg>.json.
+// ---------------------------------------------------------------------------
+// BEGIN-140-PURE (keyless; the load-time block below and a throwaway harness exercise exactly this region)
+// Distinctive, benign, never a notice fragment. A model that was NOT given the project memory cannot
+// produce it, so it appearing in assistant text is the CLAUDE.md oracle.
+const CLAUDE_MD_SENTENCE = 'The quokka ledger closes on the fourth Thursday.';
+const INHERITED_SOURCES = ['user', 'project', 'local'];
+// The grant reason is the evaluator's own (evaluate.ts), identity under the sanitiser and bound.
+const GRANT_REASON = 'permission: allow Bash [rule 0, user]';
+const FLOOR_DENIED_PHRASE = "haven't granted it yet";
+const BASH_RULE = { tool: 'Bash', match: 'printf *', decision: 'allow' };
+// D-8 (owner ruling 21/10/2026): a Bash rule allow is a grant ONLY when the USER layer has a non-empty
+// sandbox.commands.allow. So the grant leg's user document carries both.
+const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: ['printf'] } } };
+const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
+const isolationPrompt = (nonce) =>
+  `Call the Bash tool exactly once to run: printf harness-ok-${nonce}. Then, in one sentence, quote the project memory you were given, or say "no project memory" if you were given none.`;
+
+// [relativePath, body][] for the cwd.
+const isolationFixtures = (markerDir) => [
+  ['.claude/settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/project-marker` }] }] }, enabledPlugins: { 'marker-plugin@local': true } })],
+  ['.claude/settings.local.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/local-marker` }] }] } })],
+  ['.claude/plugins/marker-plugin/.claude-plugin/plugin.json', JSON.stringify({ name: 'marker-plugin', version: '0.0.1' })],
+  ['.claude/plugins/marker-plugin/hooks/hooks.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/plugin-marker` }] }] } })],
+  ['CLAUDE.md', `Project memory: ${CLAUDE_MD_SENTENCE}\n`],
+];
+// [relativePath, body][] for the throwaway CLAUDE_CONFIG_DIR (the user layer; no login in it, the child
+// authenticates by ANTHROPIC_API_KEY, ADR-0037 D9).
+const configDirFixtures = (markerDir) => [
+  ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: ['Bash(printf *)'] } })],
+];
+
+// Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (:358-359), the
+// layers merge with mergeLayers and the intersect merge mergeSandboxLayers (:387-388), and the grant policy
+// comes from the USER document's sandbox ONLY (:431-433), so a project document can never unlock it.
+function composeIsolationSecurity({ user, project }) {
+  const userParsed = { permissions: parsePermissionSettings(user), sandbox: parseSandboxSettings(user) };
+  const projectParsed = { permissions: parsePermissionSettings(project), sandbox: parseSandboxSettings(project) };
+  return {
+    permissions: mergeLayers(userParsed.permissions, projectParsed.permissions),
+    sandbox: mergeSandboxLayers(userParsed.sandbox, projectParsed.sandbox),
+    grantPolicy: { ungrantableTools: new Set((userParsed.sandbox.commands?.allow.length ?? 0) > 0 ? [] : ['Bash']) },
+  };
+}
+
+// Mirrors registerSecurityHooks (src/cli/shared.ts, not root-public) with root-public exports: permissions
+// first with no prompter and the grant policy, then the sandbox backstop, both before any other handler.
+function registerIsolationSecurity(hooks, { user, project }) {
+  const security = composeIsolationSecurity({ user, project });
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
+  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
+}
+
+// Keyless proof that each leg's input takes the intended branch BEFORE any money is spent (lesson
+// 2026-10-02). Returns the list of problems; empty means every check held.
+async function isolationLoadChecks() {
+  const problems = [];
+  const check = (ok, what) => { if (!ok) problems.push(what); };
+  const command = 'printf harness-ok-x';
+  const payload = { tool: 'Bash', args: { command } };
+  const attempt = async (what, fn) => { try { await fn(); } catch (error) { problems.push(`${what} threw: ${error instanceof Error ? error.message : String(error)}`); } };
+  await attempt('isolated-grant documents', async () => {
+    const sec = composeIsolationSecurity({ user: GRANT_USER_DOC, project: {} });
+    const ev = createPermissionEvaluator(sec.permissions).evaluate('Bash', { command });
+    check(ev.decision === 'allow' && ev.layer === 'user' && ev.reason === GRANT_REASON, `the grant document must evaluate allow/user/${GRANT_REASON}, got ${JSON.stringify(ev)}`);
+    const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
+    check(grant !== undefined && grant.grant === 'rule' && grant.reason === GRANT_REASON, `permissionHook must return the rule grant for the grant document, got ${JSON.stringify(grant)}`);
+    let sandboxDenied = null;
+    try { await sandboxHook(createSandbox(sec.sandbox))(payload); } catch (error) { sandboxDenied = error instanceof Error ? error.message : String(error); }
+    check(sandboxDenied === null, `the sandbox backstop must allow the leg's own command, it denied: ${sandboxDenied}`);
+  });
+  await attempt('D-8 (no user sandbox list)', async () => {
+    const sec = composeIsolationSecurity({ user: RULE_ONLY_DOC, project: {} });
+    const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
+    check(grant === undefined, `without a user sandbox.commands.allow the Bash allow must not be a grant, got ${JSON.stringify(grant)}`);
+  });
+  await attempt('isolated-project-rule documents', async () => {
+    const sec = composeIsolationSecurity({ user: {}, project: RULE_ONLY_DOC });
+    const ev = createPermissionEvaluator(sec.permissions).evaluate('Bash', { command });
+    check(ev.decision === 'allow' && ev.layer === 'project', `the same rule in the project document must read layer project, got ${JSON.stringify(ev)}`);
+    const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
+    check(grant === undefined, `a project-layer allow must not be a grant, got ${JSON.stringify(grant)}`);
+  });
+  check(INHERITED_SOURCES.every((s) => SETTING_SOURCES.includes(s)), `the inherited leg's sources ${INHERITED_SOURCES} must all be in SETTING_SOURCES ${JSON.stringify(SETTING_SOURCES)}`);
+  const markerDir = '/placeholder/markers';
+  const cwdFiles = new Map(isolationFixtures(markerDir));
+  const sessionStartCommand = (body) => {
+    const doc = JSON.parse(body);
+    const entry = doc.hooks?.SessionStart?.[0]?.hooks?.[0];
+    return entry?.type === 'command' ? entry.command : null;
+  };
+  for (const [rel, marker] of [['.claude/settings.json', 'project-marker'], ['.claude/settings.local.json', 'local-marker'], ['.claude/plugins/marker-plugin/hooks/hooks.json', 'plugin-marker']]) {
+    check(cwdFiles.has(rel) && sessionStartCommand(cwdFiles.get(rel)) === `touch ${markerDir}/${marker}`, `fixture ${rel} must carry the SessionStart command that touches ${marker}`);
+  }
+  check(sessionStartCommand(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}') === `touch ${markerDir}/user-marker`, 'the config-dir settings.json must carry the user-marker SessionStart command');
+  check(JSON.parse(new Map(configDirFixtures(markerDir)).get('settings.json') ?? '{}').permissions?.allow?.includes('Bash(printf *)') === true, 'the config-dir settings.json must carry the ambient Bash(printf *) allow the inherited leg relies on');
+  check(JSON.parse(cwdFiles.get('.claude/settings.json') ?? '{}').enabledPlugins?.['marker-plugin@local'] === true && JSON.parse(cwdFiles.get('.claude/plugins/marker-plugin/.claude-plugin/plugin.json') ?? '{}').name === 'marker-plugin', 'the project plugin must be enabled and named marker-plugin');
+  check((cwdFiles.get('CLAUDE.md') ?? '').includes(CLAUDE_MD_SENTENCE), 'the CLAUDE.md fixture must carry the sentence');
+  check(!isolationPrompt('00000000').includes(CLAUDE_MD_SENTENCE), 'the prompt must not carry the CLAUDE.md sentence or it seeds the oracle');
+  return problems;
+}
+// END-140-PURE
+
+const isolationSettingsFiles = (dir, files) => {
+  for (const [rel, body] of files) {
+    const target = join(dir, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, body);
+  }
+};
+
+// Runs one isolation leg's session and returns every observation the oracles read. CLAUDE_CONFIG_DIR is set
+// to the throwaway user layer BEFORE runSession (the child is spawned inside session.run, so it inherits
+// it) and restored in `finally`; all three directories are removed there too.
+async function observeIsolationLeg({ permissions, settingSources }) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set: the isolation legs authenticate the child by key (ADR-0037 D9)');
+  const nonce = randomBytes(4).toString('hex');
+  const sink = newSink();
+  sink.nonce = nonce;
+  const dir = mkdtempSync(join(tmpdir(), 'smoke-140-cwd-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'smoke-140-cfg-'));
+  const markerDir = mkdtempSync(join(tmpdir(), 'smoke-140-mark-'));
+  const hadConfigDir = Object.hasOwn(process.env, 'CLAUDE_CONFIG_DIR');
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  try {
+    // The fixture hook commands are unquoted `touch <markerDir>/<name>`.
+    if (/\s/.test(markerDir)) throw new Error(`the marker directory ${markerDir} contains whitespace, which the unquoted fixture commands cannot carry`);
+    isolationSettingsFiles(dir, isolationFixtures(markerDir));
+    isolationSettingsFiles(configDir, configDirFixtures(markerDir));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const { hookRows, traceRows } = await runSession({ dir, prompt: isolationPrompt(nonce), sink, judgeOn: false, permissions, settingSources, maxTurns: 3 });
+    const markers = Object.fromEntries(['user', 'project', 'local', 'plugin'].map((k) => [k, existsSync(join(markerDir, `${k}-marker`))]));
+    const bashUses = sink.toolUses.filter((t) => t.name === 'Bash');
+    const bashResults = bashUses.map((t) => (t.id === null ? undefined : sink.userResults.get(t.id))).filter((r) => r !== undefined);
+    const deniedSystem = sink.systemMessages.some((m) => m.body.includes('permission_denied') && m.body.includes('Bash'));
+    const grantRows = hookRows.filter((r) => r.kind === 'granted-by-rule');
+    const deniedRows = hookRows.filter((r) => r.kind === 'denied-by-hook' && r.tool === 'Bash');
+    // The post-tool phase only: a failure row's summary is the error text, and only a successful Bash run
+    // prints the nonce.
+    const nonceRan = traceRows.some((r) => r.payload.tool === 'Bash' && r.payload.phase === 'post-tool' && (r.payload.resultSummary ?? '').includes(`harness-ok-${nonce}`));
+    const attempted = bashUses.length > 0 || sink.postTool.length > 0 || deniedSystem || deniedRows.length > 0 || grantRows.length > 0;
+    const init = sink.initMessages[0] ?? null;
+    const INIT_FIELDS = ['plugins', 'mcp_servers'];
+    const missingFields = init === null ? INIT_FIELDS : INIT_FIELDS.filter((f) => !Array.isArray(init[f]));
+    const assistantQuoted = sink.assistantTexts.some((a) => a.text.includes(CLAUDE_MD_SENTENCE));
+    const data = {
+      nonce, settingSources, childInit: sink.initMessages, systemMessages: sink.systemMessages, assistantTexts: sink.assistantTexts,
+      userResults: userResultsAsObject(sink), toolUses: sink.toolUses, resultMessages: sink.resultMessages,
+      hookRows: hookRows.map((r) => ({ ...r, reason: typeof r.reason === 'string' ? redactSynth(r.reason) : r.reason })),
+      traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
+      markers, warnings: sink.warnings,
+    };
+    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, grantRows, nonceRan, attempted, assistantQuoted, data };
+  } finally {
+    if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    else delete process.env.CLAUDE_CONFIG_DIR;
+    for (const d of [dir, configDir, markerDir]) rmSync(d, { recursive: true, force: true });
+  }
+}
+
+// Leg 9 and 11 share the floor oracle: Bash must be DENIED by the CLI's own floor, nothing may have loaded,
+// and no grant row may exist. Order: a created marker is a filesystem observation that needs no stream, so
+// it FAILs first (an UNCHECKED here would hide a leak); then UNCHECKED for what could not be observed, then
+// the remaining FAILs, then PASS.
+function isolatedVerdict(o, { leg, ruleOnProject }) {
+  const created = Object.entries(o.markers).filter(([, v]) => v).map(([k]) => k);
+  if (created.length > 0) return ['FAIL', `isolation did not hold: ${created.join(',')} marker file(s) were created by a fixture SessionStart hook under settingSources: [] (merge blocker)`];
+  if (o.init === null) return ['UNCHECKED', 'no init message was seen from the session child, so what it loaded could not be read'];
+  if (o.missingFields.length > 0) return ['UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`];
+  if (o.init.plugins.length > 0 || o.init.mcp_servers.length > 0) return ['FAIL', `the init message lists ${o.init.plugins.length} plugin(s) and ${o.init.mcp_servers.length} MCP server(s) under settingSources: [] (merge blocker)`];
+  if (o.init.permissionMode !== 'default') return ['FAIL', `the init permissionMode is ${o.init.permissionMode}, not default: a settings layer loaded (merge blocker)`];
+  if (o.assistantQuoted) return ['FAIL', "the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)"];
+  if (!o.attempted) return ['UNCHECKED', 'the model did not call Bash; re-run'];
+  if (o.nonceRan) return ['FAIL', `Bash ran and printed the nonce with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (merge blocker)`];
+  if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
+  const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
+  if (!floorSeen) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted text, no permission_denied system message)'];
+  return ['PASS', `nothing loaded (no marker, plugin, MCP server, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${o.deniedSystem ? 'permission_denied system message' : 'isError tool_result'})`];
+}
+
+async function legIsolatedFloor() {
+  const o = await observeIsolationLeg({ permissions: null, settingSources: [] });
+  const [status, detail] = isolatedVerdict(o, { leg: 'isolated-floor', ruleOnProject: false });
+  recordLeg('isolated-floor', status, detail, o.data, evidenceDir140);
+}
+
+async function legIsolatedProjectRule() {
+  const o = await observeIsolationLeg({ permissions: { user: {}, project: RULE_ONLY_DOC }, settingSources: [] });
+  const [status, detail] = isolatedVerdict(o, { leg: 'isolated-project-rule', ruleOnProject: true });
+  recordLeg('isolated-project-rule', status, detail, o.data, evidenceDir140);
+}
+
+// Leg 10: the grant. The user document carries the Bash rule AND the sandbox list (D-8); settingSources: [].
+async function legIsolatedGrant() {
+  const o = await observeIsolationLeg({ permissions: { user: GRANT_USER_DOC, project: {} }, settingSources: [] });
+  const rec = (status, detail) => recordLeg('isolated-grant', status, detail, o.data, evidenceDir140);
+  const created = Object.entries(o.markers).filter(([, v]) => v).map(([k]) => k);
+  if (created.length > 0) return rec('FAIL', `isolation did not hold: ${created.join(',')} marker file(s) were created under settingSources: [] (merge blocker)`);
+  if (o.init === null) return rec('UNCHECKED', 'no init message was seen from the session child, so what it loaded could not be read');
+  if (o.missingFields.length > 0) return rec('UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`);
+  if (o.init.plugins.length > 0 || o.init.mcp_servers.length > 0) return rec('FAIL', `the init message lists ${o.init.plugins.length} plugin(s) and ${o.init.mcp_servers.length} MCP server(s) under settingSources: [] (merge blocker)`);
+  if (o.init.permissionMode !== 'default') return rec('FAIL', `the init permissionMode is ${o.init.permissionMode}, not default (merge blocker)`);
+  if (o.assistantQuoted) return rec('FAIL', 'the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)');
+  if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
+  // A model that retries Bash is a re-run signal, not a verdict on the grant: "exactly one row" is only meaningful for one call.
+  if (o.bashUses.length > 1) return rec('UNCHECKED', `the model called Bash ${o.bashUses.length} times (the prompt asks for one), so the exactly-one-grant-row oracle does not apply; re-run`);
+  if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
+  if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
+  if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
+  rec('PASS', `Bash ran and printed the nonce through the harness grant: exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded under settingSources: []`);
+}
+
+// Leg 12: the CONTROL. With the three sources opted in, every fixture must show up; this is what proves an
+// isolated PASS is not a leg whose fixtures were never able to bite.
+async function legInherited() {
+  const o = await observeIsolationLeg({ permissions: null, settingSources: INHERITED_SOURCES });
+  const rec = (status, detail) => recordLeg('inherited', status, detail, o.data, evidenceDir140);
+  if (o.init === null) return rec('UNCHECKED', 'no init message was seen from the session child, so the control could not be read');
+  if (o.missingFields.length > 0) return rec('UNCHECKED', `the init message carried no array for ${o.missingFields.join(',')} (N3), so those categories could not be read`);
+  const absent = ['user', 'project', 'local'].filter((k) => !o.markers[k]);
+  if (absent.length > 0) return rec('FAIL', `with settingSources ${INHERITED_SOURCES.join(',')} the ${absent.join(',')} marker file(s) were not created: the opt-in does not reach the child or the fixtures cannot bite, so an isolated PASS would be blind (merge blocker)`);
+  if (o.sink.assistantTexts.length === 0) return rec('UNCHECKED', 'the model produced no assistant text, so the CLAUDE.md oracle could not be read; re-run');
+  if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
+  if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
+  if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(printf *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
+  if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
+  rec('PASS', `user, project and local markers created, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
+}
+
+// ---------------------------------------------------------------------------
 // Load-time assertion (A2), before any session: no string this script writes
 // where the model can read it may carry a notice fragment, or leg 5's echo
 // oracle would be seeded. Covers every prompt, every note body the legs write
@@ -1061,6 +1346,9 @@ async function legFailureStdout() {
     ['failure prompt', failurePrompt(placeholderPath)],
     ['withheld fixture', WITHHELD_FIXTURE_LINE],
     ['failure fixture', FAILURE_FIXTURE_LINE],
+    ['isolation prompt', isolationPrompt('00000000')],
+    ['isolation sentence', CLAUDE_MD_SENTENCE],
+    ...isolationFixtures('/placeholder/markers').map(([rel, body]) => [`isolation fixture ${rel}`, body]),
     ['leg 3 prompt', parallelReadPrompt([1, 2, 3, 4, 5, 6].map((n) => `/placeholder/note-${n}.txt`))],
     ...[1, 2, 3, 4, 5, 6].map((n) => [`note body ${n}`, noteBody(n)]),
     ...hostileFixtureFiles('/placeholder/HOSTILE-HOOK-RAN').map(([rel, body]) => [`hostile fixture ${rel}`, body]),
@@ -1119,6 +1407,13 @@ async function legFailureStdout() {
     console.error('the withheld fixture line cannot serve as the verifier span (too short, or a placeholder substring); refusing to run.');
     process.exit(2);
   }
+  // Issue #140: each isolation leg's input takes its intended branch (keyless, no query).
+  const isolationProblems = await isolationLoadChecks();
+  if (isolationProblems.length > 0) {
+    for (const problem of isolationProblems) console.error(`isolation legs pre-flight: ${problem}`);
+    console.error('refusing to run.');
+    process.exit(2);
+  }
   // Leg 5's budget (C1): the judge timer plus the hook plus a margin must sit
   // inside the leg's own matcher timeout, or an honest run reads as killed.
   if (!(HOOK_TIMER_MS + INSIDE_HOOK_MS + LEG5_BUDGET_MARGIN_MS < LEG5_HOOK_TIMEOUT_S * 1000)) {
@@ -1139,9 +1434,13 @@ await guarded('hook-inside-timeout', legHookInsideTimeout);
 await guarded('hostile-cwd', legHostileCwd);
 await guarded('withheld', legWithheld, evidenceDirB2);
 await guarded('failure-stdout', legFailureStdout, evidenceDirB2);
+await guarded('isolated-floor', legIsolatedFloor, evidenceDir140);
+await guarded('isolated-grant', legIsolatedGrant, evidenceDir140);
+await guarded('isolated-project-rule', legIsolatedProjectRule, evidenceDir140);
+await guarded('inherited', legInherited, evidenceDir140);
 
 const count = (s) => legs.filter((l) => l.status === s).length;
-console.log(`smoke-judge-session: ${count('PASS')} PASS, ${count('FAIL')} FAIL, ${count('UNCHECKED')} UNCHECKED, ${count('RECORDED')} RECORDED; evidence in ${evidenceDir} (the withheld and failure-stdout legs: ${evidenceDirB2})`);
+console.log(`smoke-judge-session: ${count('PASS')} PASS, ${count('FAIL')} FAIL, ${count('UNCHECKED')} UNCHECKED, ${count('RECORDED')} RECORDED; evidence in ${evidenceDir} (the withheld and failure-stdout legs: ${evidenceDirB2}; the four isolation legs: ${evidenceDir140})`);
 console.log('NOT VERIFIABLE HERE: API-side billing of an aborted request (record as UNVERIFIED in ADR-0037).');
 // Exit releases what the legs leave behind: each `:memory:` memory database,
 // and any session stream whose `for await` ended on a rejected next() (that
