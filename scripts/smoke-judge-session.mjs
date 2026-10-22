@@ -47,10 +47,12 @@
 // each flag is its own argv token (space-separated in `ps -o command=`), never
 // the `--flag=value` form (`--setting-sources=` is the only `=` flag). The SDK
 // sends the system prompt in the initialize control message, not on argv. The
-// session's own child carries `--max-turns 6` and `--model`, but neither
-// isolation flag (src/session/session.ts passes only model, systemPrompt,
-// maxTurns and hooks; src/session/types.ts: the session passes none of the
-// isolation keys), so it never matches. If a later SDK moves these markers off
+// session's own child carries `--max-turns 6`, `--model`, `--strict-mcp-config`
+// and `--setting-sources=` (ADR-0040: src/session/session.ts passes
+// `settingSources: []` and `strictMcpConfig: true` through
+// `buildSessionIsolation`), but neither `--max-turns 1` nor
+// `--no-session-persistence` (the session passes no `persistSession`), so the
+// four-marker identity still excludes it. If a later SDK moves these markers off
 // the command line, the child legs report UNCHECKED rather than PASS.
 //
 // FIXTURE: the note bodies carry a MEDIUM-rule sentence (heuristic ask and
@@ -65,13 +67,16 @@
 // + 5 s margin < 60 s, exit 2) means an honest leg 5 run cannot be cut by its
 // own budget and read as killed.
 //
-// RESIDUAL ROUTES, NOT FIXABLE FROM THIS SCRIPT: the session child runs with
-// the SDK's default settingSources, so the user's own ~/.claude settings and
-// CLAUDE.md sit in the model's context; a notice fragment planted there, or a
-// model that hallucinates the exact 61-character `prefixRead` string, would satisfy
-// leg 5's echo oracle. The script asserts only over the strings it writes
-// itself (prompts, note bodies, hostile fixtures) and records the full echo in
-// assistantTexts so a reader can check it.
+// RESIDUAL ROUTES, closed by default under ADR-0040: the session child used to
+// run with the SDK's default settingSources, so the user's own ~/.claude settings
+// and CLAUDE.md sat in the model's context, and a notice fragment planted there,
+// or a model that hallucinated the exact 61-character `prefixRead` string, would
+// satisfy leg 5's echo oracle. The session now passes `settingSources: []`, so
+// those routes are closed unless an operator opts in; the `inherited` leg (Task
+// 11 of issue #140) is the one leg that re-opens them on purpose. The script
+// still asserts only over the strings it writes itself (prompts, note bodies,
+// hostile fixtures) and records the full echo in assistantTexts so a reader can
+// check it.
 //
 // Issue #145 B2a (spec D11) adds two legs, recorded to tasks/issue-145-evidence/prb2-smoke/<leg>.json:
 // `withheld` (the B2a MERGE BLOCKER, Jackson 16/10/2026): a Read of a fixture whose body is corpus case

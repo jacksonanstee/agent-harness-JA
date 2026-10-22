@@ -144,3 +144,12 @@ Three design questions:
   over SDK callback hooks is unresolved keylessly, which is why the judge path
   sets the matcher timeout explicitly rather than inheriting it, and the CLI's
   fail-open on a hook timeout is recorded in ADR-0037 as a negative.
+
+  **Added 22/10/2026 (issue #140, ADR-0040):** the session's primary query now
+  passes six keys: `model`, `systemPrompt`, `maxTurns`, `hooks`, and the two
+  isolation keys `settingSources` and `strictMcpConfig`, both built by
+  `buildSessionIsolation` in `src/session/session.ts` (default `[]` and
+  `true`). It still passes none of `tools`, `skills` or `persistSession`.
+  `QueryOptions` mirrors the same ten keys and the exact-keys pin is
+  unchanged, so the earlier "passes its four" sentences were true when written
+  and are left as they were.
