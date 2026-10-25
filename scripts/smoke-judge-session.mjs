@@ -107,8 +107,9 @@
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
 //
 // Keyed run 1 (22/10/2026, exit 1, probe `printf harness-ok-<nonce>`): isolated-grant and inherited PASSed, but isolated-floor and isolated-project-rule FAILed because the
-// CLI's own read-only Bash validator (eXp, byte offset 215797085 of the 2.1.201 binary) accepts a literal `printf` (and `echo`) with no grant, so the floor ran a command it never refuses
-// (isolation itself held: markers false, no plugins or MCP servers). The probe is now `touch`, which only the acceptEdits mode auto-allows (GXp 215852331, jXp 215853346), never default mode.
+// floor ran a literal `printf` with no grant; by the binary reading, the CLI's own read-only Bash validator (eXp, byte offset 215797085 of the 2.1.201 binary) accepts it, and `echo`
+// (isolation itself held: markers false, no plugins or MCP servers). The probe is now `touch`, which by the binary reading only the acceptEdits mode auto-allows (GXp 215852331,
+// jXp 215853346); unverified until keyed run 2.
 //
 // An unfiltered run now executes all twelve legs, and the B2a legs run isolated with no harness permissions
 // document, so failure-stdout's Bash is denied by the CLI floor (expected from the binary reading; the keyed run confirms); it is RECORDED, so no exit code moves.
@@ -1133,8 +1134,8 @@ const FLOOR_DENIED_PHRASE = "haven't granted it yet";
 //  - read-only Bash validator eXp @215797085 returns true for the sets QJp (pwd whoami alias), ZJp (claude -h, node -v, ip addr ...), zJp = wwo @215823135
 //    (G3n @213177668 docker ps / docker images, cal uptime cat head tail wc stat strings hexdump od nl id uname free df du locale groups nproc basename dirname
 //    realpath cut paste tr column tac rev fold expand unexpand fmt comm cmp numfmt readlink diff true false sleep which type expr seq tsort pr), for echo,
-//    a literal printf, [[, ls, cd, find (without -exec/-delete), history, arch, ifconfig; tXp @215823703 adds uniq, jq, claude, node, python, python3, ip;
-//    nXp adds sha256sum sha1sum md5sum grep egrep fgrep; GJp @215823071 lists echo printf wc grep egrep fgrep head tail.
+//    a literal printf, [[, ls, cd, find (without -exec/-delete), history, arch, ifconfig; tXp @215823841 (a Set of regexes) adds uniq, jq, claude, node, python, python3, ip;
+//    nXp @215824747 adds sha256sum sha1sum md5sum grep egrep fgrep; GJp @215823071 lists echo printf wc grep egrep fgrep head tail.
 //  - `touch` is in none of those. Its only auto-allow is jXp @215853346 = [mkdir touch rm rmdir mv cp sed], used by GXp @215852331 ONLY when mode === "acceptEdits"
 //    (hYa @215852678); in default mode it returns passthrough. The path validator OJp @215780236 returns only ask, deny or passthrough, never allow.
 const READ_ONLY_PROBE_DENYLIST = new Set([
