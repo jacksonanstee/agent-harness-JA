@@ -42,7 +42,7 @@ import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
 import { createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
-import type { SessionRefusal } from './session/index.js';
+import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session/index.js';
 import {
   redact,
   scan,
@@ -445,6 +445,44 @@ export function formatRefusalLine(
   );
 }
 
+/**
+ * The `run` summary line (stdout). Pure so the field order is testable.
+ * `cli-denied` sits right after `denied` on purpose (issue #209): `denied` is
+ * the harness's own pre-tool denials, `cli-denied` the Claude Code CLI's own
+ * refusals read from the result's `permission_denials`, and an operator
+ * reading `denied=0` alone would take a CLI-blocked run for an unblocked one.
+ */
+export function formatRunSummaryLine(
+  result: Pick<SessionResult, 'modelChoice' | 'refusal' | 'numTurns' | 'costUsd' | 'denied' | 'cliDenied' | 'memoryEntryId'>,
+): string {
+  const cost = result.costUsd === null ? 'n/a' : formatUsd(result.costUsd);
+  return (
+    `\n[harness] model=${formatModelClaim(result.modelChoice.model, result.refusal)} ` +
+    `(rule=${result.modelChoice.rule_id}) ` +
+    `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
+    `denied=${result.denied.length} cli-denied=${result.cliDenied.length} ` +
+    `memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`
+  );
+}
+
+/**
+ * One stderr warning when the Claude Code CLI refused tool calls (issue #209),
+ * or null when it refused none. Names the tools (deduplicated, first-seen
+ * order) and never a tool input or id: the parse already dropped the input,
+ * and the names go through the same diagnostic sanitiser as every other
+ * warning. Pure for the same reason as `formatRefusalLine`.
+ */
+export function formatCliDeniedWarning(cliDenied: readonly CliDeniedToolCall[]): string | null {
+  if (cliDenied.length === 0) return null;
+  const tools = [...new Set(cliDenied.map((call) => call.tool))].join(', ');
+  return (
+    `${WARNING_PREFIX}${sanitizeDiagnostic(
+      `${cliDenied.length} tool call(s) refused by the Claude Code CLI's own permission check ` +
+        `(not a harness hook; see ADR-0040): ${tools}`,
+    )}`
+  );
+}
+
 export async function main(argv: string[], seams: CliSeams = {}): Promise<number> {
   const parsed = parseArgs(argv);
   if (!parsed.ok) {
@@ -596,13 +634,10 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
 
   const result = await session.run(prompt);
 
-  const cost = result.costUsd === null ? 'n/a' : formatUsd(result.costUsd);
-  process.stdout.write(
-    `\n[harness] model=${formatModelClaim(result.modelChoice.model, result.refusal)} ` +
-      `(rule=${result.modelChoice.rule_id}) ` +
-      `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
-      `denied=${result.denied.length} memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`,
-  );
+  process.stdout.write(formatRunSummaryLine(result));
+
+  const cliDeniedWarning = formatCliDeniedWarning(result.cliDenied);
+  if (cliDeniedWarning !== null) process.stderr.write(`${cliDeniedWarning}\n`);
 
   // ADR-0025: a refusal must never read as an empty success. This can fire
   // alongside exit 0, when a fallback swap produced a genuine answer.
