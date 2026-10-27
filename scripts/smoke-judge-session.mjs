@@ -1129,6 +1129,10 @@ const INHERITED_SOURCES = ['user', 'project', 'local'];
 // The grant reason is the evaluator's own (evaluate.ts), identity under the sanitiser and bound.
 const GRANT_REASON = 'permission: allow Bash [rule 0, user]';
 const FLOOR_DENIED_PHRASE = "haven't granted it yet";
+// Keyed run 2 (27/10/2026, 6fac88a) OBSERVED the floor's refusal of the in-cwd touch as the Bash path validator's ask (OJp @215780236): MVt does not allow a
+// write in default mode, so OJp returns ask with `${cmd} in '<path>' was blocked. For security, Claude Code may only ...` and bashAllowRuleOverridable true
+// (a rule allow overrides it: the inherited leg shows Bash(touch *) running). Headless, that ask is the refusal and its message is the tool_result text.
+const FLOOR_PATH_ASK_PHRASE = 'was blocked. For security, Claude Code may only';
 // The probe program. It must be a command the CLI's floor does NOT auto-allow under permissionMode default with no settings
 // (keyed run 1 showed `printf` runs ungranted). Binary readings, bundled CLI 2.1.201 (node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude):
 //  - read-only Bash validator eXp @215797085 returns true for the sets QJp (pwd whoami alias), ZJp (claude -h, node -v, ip addr ...), zJp = wwo @215823135
@@ -1391,9 +1395,11 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (refusedShape(o) !== null) return ['UNCHECKED', refusedShape(o)];
   if (o.nonceRan) return ['FAIL', `the nonce file exists with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (Bash tool_use with the probe: ${o.bashRanProbe}; other tools called: ${o.otherTools.join(',') || 'none'}) (merge blocker)`];
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
-  const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
-  if (!floorSeen) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted text, no permission_denied system message)'];
-  return ['PASS', `nothing loaded (no marker, plugin, MCP server, project skill, command or agent, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${o.deniedSystem ? 'permission_denied system message' : 'isError tool_result'})`];
+  const notGranted = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE));
+  const pathAsk = o.bashResults.some((r) => r.isError && r.containsNonce && r.text.startsWith(`${PROBE_PROGRAM} in '`) && r.text.includes(FLOOR_PATH_ASK_PHRASE));
+  if (!notGranted && !pathAsk && !o.deniedSystem) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted or path-validator text, no permission_denied system message)'];
+  const how = o.deniedSystem ? 'permission_denied system message' : notGranted ? 'isError tool_result, not-granted text' : 'isError tool_result, path-validator ask on the nonce path';
+  return ['PASS', `nothing loaded (no marker, plugin, MCP server, project skill, command or agent, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${how})`];
 }
 
 async function legIsolatedFloor() {
