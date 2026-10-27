@@ -1425,10 +1425,12 @@ async function legIsolatedGrant() {
   if (o.bashUses.length > 1) return rec('UNCHECKED', `the model called Bash ${o.bashUses.length} times (the prompt asks for one), so the exactly-one-grant-row oracle does not apply; re-run`);
   if (refusedShape(o) !== null) return rec('UNCHECKED', refusedShape(o));
   if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
+  // Command-independent FAILs first, so the attribution UNCHECKED below cannot hide them; only "zero rows" can follow from a non-probe command.
+  if (o.grantRows.length > 1 || o.grantRows.some((r) => r.reason !== GRANT_REASON)) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
+  if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the nonce file exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
   if (!o.bashRanProbe) return rec('UNCHECKED', `the nonce file exists but no Bash tool_use carried exactly "${probeCommand(o.nonce)}" (other tools called: ${o.otherTools.join(',') || 'none'}), so the file cannot be attributed to the granted Bash call; re-run`);
-  if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
-  if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
-  rec('PASS', `Bash ran through the harness grant (the nonce file exists): exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
+  if (o.grantRows.length !== 1) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got 0 although Bash ran the probe (merge blocker)`);
+  rec('PASS', `Bash ran through the harness grant (the nonce file exists and the Bash tool_use carried the probe): exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
 }
 
 // Leg 12: the CONTROL. With the three sources opted in, every fixture must show up; this is what proves an
@@ -1447,8 +1449,8 @@ async function legInherited() {
   if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
   if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(touch *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
-  if (!o.bashRanProbe) return rec('UNCHECKED', `the nonce file exists but no Bash tool_use carried exactly "${probeCommand(o.nonce)}" (other tools called: ${o.otherTools.join(',') || 'none'}), so the ambient Bash allow is not shown to be what made it; re-run`);
   if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
+  if (!o.bashRanProbe) return rec('UNCHECKED', `the nonce file exists but no Bash tool_use carried exactly "${probeCommand(o.nonce)}" (other tools called: ${o.otherTools.join(',') || 'none'}), so the ambient Bash allow is not shown to be what made it; re-run`);
   rec('PASS', `user, project and local markers created, a numbat-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
 }
 
