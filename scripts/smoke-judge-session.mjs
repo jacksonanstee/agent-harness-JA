@@ -117,7 +117,7 @@
 // DO NOT import this file from a test or run it under CI.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1132,6 +1132,9 @@ const FLOOR_DENIED_PHRASE = "haven't granted it yet";
 // Keyed run 2 (27/10/2026, 6fac88a) OBSERVED the floor's refusal of the in-cwd touch as the Bash path validator's ask (OJp @215780236): MVt does not allow a
 // write in default mode, so OJp returns ask with `${cmd} in '<path>' was blocked. For security, Claude Code may only ...` and bashAllowRuleOverridable true
 // (a rule allow overrides it: the inherited leg shows Bash(touch *) running). Headless, that ask is the refusal and its message is the tool_result text.
+// Only the IN-CWD form is overridable (isInWorkingDir), so the verdict matches the exact canonical nonce path, not any path carrying the nonce.
+// OJp does not special-case a deny rule (f.type === 'rule'): a loaded Edit deny on the nonce path yields the same text with behavior deny. These legs rely
+// on the fixtures planting no deny rules (allows and SessionStart hooks only), and a fixture layer that loaded trips the marker or nonce-file FAIL first.
 const FLOOR_PATH_ASK_PHRASE = 'was blocked. For security, Claude Code may only';
 // The probe program. It must be a command the CLI's floor does NOT auto-allow under permissionMode default with no settings
 // (keyed run 1 showed `printf` runs ungranted). Binary readings, bundled CLI 2.1.201 (node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude):
@@ -1350,6 +1353,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     const nonceRan = existsSync(join(dir, `harness-ok-${nonce}`));
     // The file says the command's effect happened, not which tool caused it: a PASS that says "Bash ran" also needs a Bash tool_use carrying exactly the probe.
     const bashRanProbe = bashUses.some((u) => u.command === probeCommand(nonce));
+    const probePath = join(realpathSync(dir), `harness-ok-${nonce}`);
     const otherTools = [...new Set(sink.toolUses.filter((t) => t.name !== 'Bash').map((t) => t.name))];
     const attempted = bashUses.length > 0 || sink.postTool.length > 0 || deniedSystem || deniedRows.length > 0 || grantRows.length > 0;
     const init = sink.initMessages[0] ?? null;
@@ -1364,7 +1368,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
       markers, surfaceHits, warnings: sink.warnings,
     };
-    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, otherTools, attempted, assistantQuoted, surfaceHits, data };
+    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1396,9 +1400,9 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.nonceRan) return ['FAIL', `the nonce file exists with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (Bash tool_use with the probe: ${o.bashRanProbe}; other tools called: ${o.otherTools.join(',') || 'none'}) (merge blocker)`];
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
   const notGranted = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE));
-  const pathAsk = o.bashResults.some((r) => r.isError && r.containsNonce && r.text.startsWith(`${PROBE_PROGRAM} in '`) && r.text.includes(FLOOR_PATH_ASK_PHRASE));
+  const pathAsk = o.bashRanProbe && o.bashResults.some((r) => r.isError && r.text.startsWith(`${PROBE_PROGRAM} in '${o.probePath}' ${FLOOR_PATH_ASK_PHRASE}`));
   if (!notGranted && !pathAsk && !o.deniedSystem) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted or path-validator text, no permission_denied system message)'];
-  const how = o.deniedSystem ? 'permission_denied system message' : notGranted ? 'isError tool_result, not-granted text' : 'isError tool_result, path-validator ask on the nonce path';
+  const how = o.deniedSystem ? 'permission_denied system message' : notGranted ? 'isError tool_result, not-granted text' : 'isError tool_result, path-validator ask on the in-cwd nonce path';
   return ['PASS', `nothing loaded (no marker, plugin, MCP server, project skill, command or agent, non-default mode or CLAUDE.md text), no granted-by-rule row, and the CLI floor denied Bash (${how})`];
 }
 
