@@ -3,6 +3,7 @@ export {
   canonicalizePathPattern,
   createPermissionEvaluator,
   extractMatchTarget,
+  grantFor,
   matchesGlob,
   PermissionDenied,
   permissionHook,
@@ -17,6 +18,7 @@ export {
 export type {
   Evaluation,
   EvaluatorOptions,
+  GrantPolicy,
   LayeredRule,
   PermissionDecision,
   PermissionEvaluator,

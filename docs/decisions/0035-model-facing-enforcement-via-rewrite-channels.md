@@ -121,7 +121,7 @@ The annotation channel is NOISY on this repo by design (the 16 block / 12 ask sw
 
 Custom post-tool hooks now ALSO fire for failed calls, with the error string as `result` and `failed: true`. The field is additive and optional, so a handler written before this change compiles unchanged, but a handler that assumed post-tool meant success must now read `failed`: absent or false is a successful call, true is a failed one whose `result` is an error string, not a tool-output structure.
 
-Two issues to file, named here so they are not re-derived: the omitted `settingSources` (every run loads operator settings, hooks, plugins and CLAUDE.md, so a competing operator rewrite has an undocumented merge order, cross-ref R-11), and the runtime's transcript under the user profile as a cleartext retained sink the harness's redaction never touches.
+Two issues to file, named here so they are not re-derived: the omitted `settingSources` (every run loads operator settings, hooks, plugins and CLAUDE.md, so a competing operator rewrite has an undocumented merge order, cross-ref R-11), and the runtime's transcript under the user profile as a cleartext retained sink the harness's redaction never touches. *(22/10/2026: the first is now [ADR-0040](./0040-session-isolates-claude-code-settings-by-default.md), which isolates the session's Claude Code settings by default, so the competing-rewrite merge order is moot unless an operator opts in with `sdk.settingSources`. The second stays as written.)*
 
 ## Revisit if
 

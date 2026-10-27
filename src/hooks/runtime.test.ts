@@ -493,3 +493,90 @@ describe('hooks: unrepresentable throws', () => {
     expect(JSON.stringify(records)).not.toContain(secret);
   });
 });
+
+describe('hooks: pre-tool grant (#140, ADR-0040 D3; spec section 3 pins ii, iii)', () => {
+  const GRANT = { grant: 'rule', reason: 'permission: allow Bash [rule 0, user]' } as const;
+
+  it('pin ii: only an own grant:"rule" with a string reason grants; true, {grant:"allow"} and a reasonless object do not', async () => {
+    for (const returned of [true, { grant: 'allow', reason: 'x' }, { grant: 'rule' }, 'rule', null] as const) {
+      const { runtime, records } = withSink();
+      runtime.register('pre-tool', () => returned as never);
+      const result = await runtime.fire('pre-tool', preTool);
+      expect(result.denied).toBe(false);
+      if (result.denied) throw new Error('unreachable');
+      expect(result.granted).toBe(false);
+      expect(result.grantReason).toBeNull();
+      expect(records.map((r) => r.kind)).toEqual(['hook-fired']);
+    }
+    for (const returned of [GRANT, Promise.resolve(GRANT)]) {
+      const { runtime, records } = withSink();
+      runtime.register('pre-tool', () => returned as never);
+      const result = await runtime.fire('pre-tool', preTool);
+      if (result.denied) throw new Error('unreachable');
+      expect(result.granted).toBe(true);
+      expect(result.grantReason).toBe(GRANT.reason);
+      expect(records).toEqual([
+        { kind: 'granted-by-rule', event: 'pre-tool', handlerIndex: 0, tool: 'Read', reason: GRANT.reason },
+        { kind: 'hook-fired', event: 'pre-tool', handlersFired: 1 },
+      ]);
+    }
+  });
+
+  it('pin iii (regression pin, green before and after; M10 binds it): a grant followed by a denying handler is a deny, with no grant record and no granted key', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => GRANT);
+    runtime.register('pre-tool', () => {
+      throw new HookDenial('sandbox');
+    });
+    const result = await runtime.fire('pre-tool', preTool);
+    expect(result.denied).toBe(true);
+    expect('granted' in result).toBe(false);
+    expect(records.map((r) => r.kind)).toEqual(['denied-by-hook']);
+  });
+
+  it('Review Focus 1: a grant returned by a post-tool or stop handler is ignored and leaves those results unchanged', async () => {
+    for (const [event, payload] of [
+      ['post-tool', postTool],
+      ['stop', stop],
+    ] as const) {
+      const { runtime, records } = withSink();
+      runtime.register(event, () => GRANT as never);
+      const result = await runtime.fire(event, payload as never);
+      expect(result).toStrictEqual({ event, handlersFired: 1, errors: [], denied: false });
+      expect(records).toEqual([{ kind: 'hook-fired', event, handlersFired: 1 }]);
+    }
+  });
+
+  it('Review Focus 2: two granting handlers produce ONE record carrying the first index and reason', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => GRANT);
+    runtime.register('pre-tool', () => ({ grant: 'rule', reason: 'second' }));
+    const result = await runtime.fire('pre-tool', preTool);
+    if (result.denied) throw new Error('unreachable');
+    expect(result.grantReason).toBe(GRANT.reason);
+    expect(records.filter((r) => r.kind === 'granted-by-rule')).toEqual([
+      { kind: 'granted-by-rule', event: 'pre-tool', handlerIndex: 0, tool: 'Read', reason: GRANT.reason },
+    ]);
+  });
+
+  it('Review Focus 5 (runtime half): control characters are replaced in the grant reason in the record and the result', async () => {
+    const { runtime, records } = withSink();
+    runtime.register('pre-tool', () => ({ grant: 'rule', reason: 'ok\u001b[2J\u0007text' }));
+    const result = await runtime.fire('pre-tool', preTool);
+    if (result.denied) throw new Error('unreachable');
+    expect(result.grantReason).toBe('ok [2J text');
+    expect(records[0]).toMatchObject({ kind: 'granted-by-rule', reason: 'ok [2J text' });
+  });
+
+  it('a grant whose reason getter throws is a deny (the read sits inside the handler try)', async () => {
+    const { runtime } = withSink();
+    runtime.register('pre-tool', () => ({
+      grant: 'rule',
+      get reason(): string {
+        throw new Error('nope');
+      },
+    }));
+    const result = await runtime.fire('pre-tool', preTool);
+    expect(result.denied).toBe(true);
+  });
+});

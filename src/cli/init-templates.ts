@@ -129,14 +129,18 @@ Watch a request get denied, attributed to the rule and layer that fired:
 
     agent-harness-ja run "Fetch https://example.com and summarise it"
 
-Know the route-around: with Bash allowed, an agent can still reach the
-network with \`curl\`. A deny-list is not a boundary until the alternate
-routes are closed. To close this one, add a rule:
+Know the route-around: once YOUR user file grants Bash (an allow rule plus a
+\`sandbox.commands\` list there that names \`curl\`), an agent can still reach
+the network with \`curl\`. A deny-list is not a boundary until the
+alternate routes are closed. To close this one, add a rule:
 
     { "tool": "Bash", "decision": "deny" }
 
-This starter leaves Bash open so your first prompts work unhindered; tighten
-the policy the moment your use case does not need shell access.
+This starter's task needs no tool. Shell, edit and write access come from an
+allow rule in your own ~/.harness/settings.json, and for shell also a
+\`sandbox.commands\` allowlist in that file (see the harness README, Settings); the same holds for
+Monitor, the other command-taking tool (the table in src/internal/tool-targets.ts).
+Without them the bundled CLI refuses them in a headless run.
 
 ## The eval, and what a failure means
 

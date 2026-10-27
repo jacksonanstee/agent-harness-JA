@@ -5,11 +5,13 @@ import {
   canonicalizePath,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
+import { PRE_TOOL_GRANT_KIND, type PreToolGrant } from '../../internal/pre-tool-grant.js';
 import type { PreToolLike } from '../pre-tool-like.js';
 import { collapseBlanks, firstShellWord, trimWordSeparators } from '../shell-words.js';
 import type {
   Evaluation,
   EvaluatorOptions,
+  GrantPolicy,
   LayeredRule,
   PermissionDecision,
   PermissionEvaluator,
@@ -249,17 +251,42 @@ export class PermissionDenied extends Error {
 }
 
 /**
+ * The one place that decides "a rule allow is an SDK grant" (#140, D-7, D-8;
+ * reused by #105 and #189). Only a USER-layer RULE allow qualifies: a project
+ * allow and a defaultDecision allow (layer null) are not grants. A tool the
+ * policy lists as ungrantable never is. The reason is the ADR-0031 shape (no
+ * glob) and reaches telemetry only, never the SDK. Evaluation stays the
+ * list/telemetry read model; it does not carry a grant.
+ */
+export function grantFor(
+  tool: string,
+  evaluation: Evaluation,
+  policy: GrantPolicy,
+): PreToolGrant | undefined {
+  if (evaluation.decision !== 'allow' || evaluation.layer !== 'user') return undefined;
+  if (policy.ungrantableTools.has(tool)) return undefined;
+  return { grant: PRE_TOOL_GRANT_KIND, reason: evaluation.reason };
+}
+
+/**
  * Pre-tool hook enforcing the permission model. Throws PermissionDenied on
  * deny; 'ask' resolves via the prompter and fails closed without one, or when
  * the prompter throws/rejects (ADR-0014 §4).
+ *
+ * An allow resolves through grantFor: a USER-layer rule allow is the SDK grant
+ * (ADR-0040 D3, D-7) unless the policy withholds it for that tool (D-8);
+ * anything else resolves void, which the session maps to `{}` so the CLI's own
+ * floor decides. Deny and ask are unchanged, and an approved ask is not a
+ * grant. The policy is REQUIRED so a caller cannot forget it.
  */
 export function permissionHook(
   evaluator: PermissionEvaluator,
-  prompter?: Prompter,
-): (payload: PreToolLike) => Promise<void> {
+  prompter: Prompter | undefined,
+  grantPolicy: GrantPolicy,
+): (payload: PreToolLike) => Promise<void | PreToolGrant> {
   return async (payload) => {
     const result = evaluator.evaluate(payload.tool, payload.args);
-    if (result.decision === 'allow') return;
+    if (result.decision === 'allow') return grantFor(payload.tool, result, grantPolicy);
     if (result.decision === 'deny') {
       throw new PermissionDenied(result.reason);
     }
@@ -275,5 +302,6 @@ export function permissionHook(
     if (!approved) {
       throw new PermissionDenied(`${result.reason} — declined by prompter`);
     }
+    return undefined;
   };
 }

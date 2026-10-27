@@ -77,6 +77,33 @@ const HOOK_EVENT: TelemetryEventInput = {
   payload: { kind: 'denied-by-hook', event: 'pre-tool', tool: 'Bash', reason: 'nope', handlerIndex: 0 },
 };
 
+const GRANT_EVENT: TelemetryEventInput = {
+  type: 'hook-event',
+  sessionId: 's1',
+  turnId: 't1',
+  payload: { kind: 'granted-by-rule', event: 'pre-tool', tool: 'Bash', reason: 'permission: allow Bash [rule 0, user]', handlerIndex: 0 },
+};
+
+describe('createTelemetryStore.record: granted-by-rule (#140, ADR-0040 D3)', () => {
+  it('records a granted-by-rule hook-event and reads it back with that kind', () => {
+    const { store } = openStore();
+    const result = store.record(GRANT_EVENT);
+    expect(result.ok).toBe(true);
+    const rows = store.query();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload).toEqual(GRANT_EVENT.payload);
+    expect(rows[0]?.payload).toMatchObject({ kind: 'granted-by-rule' });
+  });
+
+  it('rejects the near-miss kind granted-by-hook', () => {
+    const { store } = openStore();
+    expect(() =>
+      store.record({ ...GRANT_EVENT, payload: { ...GRANT_EVENT.payload, kind: 'granted-by-hook' } as never }),
+    ).toThrow(/not a valid hook-event payload/);
+    expect(store.query()).toHaveLength(0);
+  });
+});
+
 describe('createTelemetryStore.record', () => {
   it('round-trips each event type and fills id/ts', () => {
     const { store } = openStore();

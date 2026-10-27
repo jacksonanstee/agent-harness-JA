@@ -4,10 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createHookRuntime } from '../hooks/index.js';
+import { mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
-import { apiKeyMissingMessage, loadSdkQuery, parseSafeInt, readPackageVersion, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
+import { apiKeyMissingMessage, loadSdkQuery, parseSafeInt, readPackageVersion, registerSecurityHooks, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
 
 /** The router table's model ids, deduplicated in first-appearance order: the
  *  same derivation the `--judge-model` usage list must use (issue #96, U-6). */
@@ -307,5 +309,46 @@ describe('parseSafeInt (issue #128)', () => {
     for (const bad of ['', '-1', '+1', '4.5', '5abc', 'abc', ' 5', '5 ', '1e3', '0x10', '9007199254740992', '99999999999999999999']) {
       expect(parseSafeInt(bad), JSON.stringify(bad)).toBeUndefined();
     }
+  });
+});
+
+describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site for run and eval)', () => {
+  const bashRule = (decision: 'allow' | 'deny') => ({ permissions: { rules: [{ tool: 'Bash', match: 'git *', decision }] } });
+  const compose = (user: unknown, ungrantable: string[], sandbox: unknown = {}) => ({
+    permissions: mergeLayers(parsePermissionSettings(user), parsePermissionSettings({})),
+    grantPolicy: { ungrantableTools: new Set(ungrantable) },
+    sandbox: mergeSandboxLayers(parseSandboxSettings(sandbox), parseSandboxSettings({})),
+  });
+  const payload = { event: 'pre-tool' as const, tool: 'Bash', args: { command: 'git status' }, redactions: null };
+
+  it('registers permissionHook then sandboxHook: when both would deny, the permission reason is the one reported', async () => {
+    const hooks = createHookRuntime();
+    registerSecurityHooks(hooks, compose(bashRule('deny'), [], { sandbox: { commands: { allow: ['ls'] } } }));
+    const result = await hooks.fire('pre-tool', payload);
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
+  });
+
+  it('registers exactly two pre-tool handlers (permissions, sandbox)', async () => {
+    const hooks = createHookRuntime();
+    registerSecurityHooks(hooks, compose({}, []));
+    const result = await hooks.fire('pre-tool', payload);
+    expect(result.denied).toBe(false);
+    expect(result.handlersFired).toBe(2);
+  });
+
+  it('passes grantPolicy through: the same allow grants with an empty policy and does not when Bash is ungrantable', async () => {
+    const open = createHookRuntime();
+    registerSecurityHooks(open, compose(bashRule('allow'), []));
+    const granted = await open.fire('pre-tool', payload);
+    expect(granted.denied).toBe(false);
+    expect(granted.denied === false && granted.granted).toBe(true);
+
+    const closed = createHookRuntime();
+    registerSecurityHooks(closed, compose(bashRule('allow'), ['Bash']));
+    const withheld = await closed.fire('pre-tool', payload);
+    expect(withheld.denied).toBe(false);
+    expect(withheld.denied === false && withheld.granted).toBe(false);
   });
 });

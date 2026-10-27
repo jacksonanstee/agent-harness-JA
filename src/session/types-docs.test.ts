@@ -20,6 +20,13 @@ describe('session public doc comments (U-9)', () => {
     expect(source).toMatch(/ADR-0039/);
   });
 
+  it('the isolation-keys comment no longer says the session passes none of them and names ADR-0040 (#140)', () => {
+    expect(source).not.toMatch(/the session passes none of them today/);
+    // Anchored to the comment's own sentence (comment prefixes flattened): other ADR-0040 mentions in the file cannot satisfy it.
+    const flat = source.replace(/\n\s*\/\/ /g, ' ');
+    expect(flat).toMatch(/the session passes `settingSources` and `strictMcpConfig` from `buildSessionIsolation` \(ADR-0040\)/);
+  });
+
   it('the QueryFn alias and the abortController key both state the consumer contract', () => {
     expect(source).toMatch(/must honour `options\.abortController`/);
     expect(source).toMatch(/A consumer-supplied `QueryFn` must honour it/);

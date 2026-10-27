@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import { composeSecurity, SettingsLoadError } from './shared.js';
 
 const created: string[] = [];
@@ -78,5 +79,42 @@ describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2
       projectDir: layer({ judge: { mode: 'off' } }),
     });
     expect(s.judge).toEqual({ mode: 'always', maxCallsPerRun: 4, withhold: 'off' });
+  });
+});
+
+describe('composeSecurity: grantPolicy (#140, D-8)', () => {
+  const policyFor = (sandbox: unknown) =>
+    composeSecurity({ userDir: layer(sandbox === undefined ? {} : { sandbox }), projectDir: layer(undefined) }).grantPolicy;
+
+  it('no sandbox commands: Bash and Monitor (every command-kind tool) are ungrantable', () => {
+    expect([...policyFor(undefined).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+    expect([...policyFor({ paths: { allow: ['/x'] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  });
+  it('the ungrantable set equals the command-kind names in the shared table (a future command tool is covered)', () => {
+    const fromTable = Object.entries(TOOL_TARGET_FIELDS)
+      .filter(([, target]) => target.kind === 'command')
+      .map(([name]) => name);
+    expect(fromTable).toContain('Monitor');
+    expect([...policyFor(undefined).ungrantableTools].sort()).toEqual([...fromTable].sort());
+  });
+  it('a non-empty commands list: Bash is grantable', () => {
+    expect([...policyFor({ commands: { allow: ['git'] } }).ungrantableTools]).toEqual([]);
+  });
+  it('an empty commands list does not count as configured: Bash and Monitor are ungrantable', () => {
+    expect([...policyFor({ commands: { allow: [] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  });
+
+  const policyBoth = (user: unknown, project: unknown) =>
+    composeSecurity({
+      userDir: layer(user === undefined ? {} : { sandbox: user }),
+      projectDir: layer(project === undefined ? {} : { sandbox: project }),
+    }).grantPolicy;
+
+  it('project-only sandbox commands make neither Bash nor Monitor grantable (a cloned repo cannot unlock the grant)', () => {
+    expect([...policyBoth(undefined, { commands: { allow: ['curl'] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  });
+  it('user commands present: Bash and Monitor are grantable, with or without a project list (the gate is the merged list)', () => {
+    expect([...policyBoth({ commands: { allow: ['git'] } }, undefined).ungrantableTools]).toEqual([]);
+    expect([...policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }).ungrantableTools]).toEqual([]);
   });
 });

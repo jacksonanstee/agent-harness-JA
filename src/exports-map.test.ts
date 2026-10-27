@@ -42,6 +42,10 @@ describe('package.json exports map (self-reference)', () => {
     expect(resolutionErrorCode('agent-harness-ja/dist/internal/sanitize.js')).toBe(
       'ERR_PACKAGE_PATH_NOT_EXPORTED',
     );
+    // Pins the exports map staying closed to src/internal, not the leaf's existence.
+    expect(resolutionErrorCode('agent-harness-ja/dist/internal/pre-tool-grant.js')).toBe(
+      'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    );
     expect(resolutionErrorCode('agent-harness-ja/dist/security/index.js')).toBe(
       'ERR_PACKAGE_PATH_NOT_EXPORTED',
     );

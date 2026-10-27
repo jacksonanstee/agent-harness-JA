@@ -1,4 +1,5 @@
 export { HOOK_EVENTS, HookDenial, createHookRuntime, fire, register } from './runtime.js';
+export type { PreToolGrant } from '../internal/pre-tool-grant.js';
 export type {
   FireResult,
   FireResultBase,

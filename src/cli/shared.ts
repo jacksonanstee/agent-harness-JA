@@ -2,24 +2,32 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eval/index.js';
-import type { HookEventRecord } from '../hooks/index.js';
+import type { HookEventRecord, HookRuntime } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { boundEcho, loadJsonSettings } from '../internal/settings.js';
+import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
+  createPermissionEvaluator,
+  createSandbox,
   hasGlobCharacter,
   hasJudgeKey,
+  hasSdkKey,
   JudgeSettingsError,
   mergeLayers,
   mergeSandboxLayers,
   parseJudgeSettings,
+  parseSdkSettings,
   parsePermissionSettings,
   parseSandboxSettings,
   isBlockedFirstToken,
   PermissionSettingsError,
+  permissionHook,
   SandboxSettingsError,
+  SdkSettingsError,
+  sandboxHook,
 } from '../security/index.js';
-import type { EvaluatorOptions, JudgeSettings, RedactResult, SandboxConfig } from '../security/index.js';
+import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig, SettingSource } from '../security/index.js';
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -289,6 +297,13 @@ export class SettingsLoadError extends Error {
 
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
+  /**
+   * Which tools a rule allow must not grant (D-8): every command-kind tool in the
+   * shared table (Bash, Monitor) unless the USER layer's sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
+   * runs before any explicit SDK allow. Computed once; both registration
+   * sites pass it to permissionHook.
+   */
+  grantPolicy: GrantPolicy;
   sandbox: SandboxConfig;
   /**
    * The session judge (issue #96 PR-B1, spec D1), from the USER layer only;
@@ -296,9 +311,20 @@ export interface SecurityComposition {
    * used only by `run` (D2, R5).
    */
   judge: JudgeSettings | null;
+  /**
+   * The Claude Code settings sources the SDK child may load (#140, ADR-0040
+   * D2), from the USER layer's `sdk.settingSources` only; `[]` (the default)
+   * isolates the child. Read by `run` and `eval`.
+   */
+  sdk: { settingSources: SettingSource[] };
   /** Startup notices for the operator (prompter gaps, risky allowlists, an ignored project judge key). */
   warnings: string[];
 }
+
+export const SDK_USER_INHERIT_WARNING =
+  'claude code settings: the "user" source is inherited, so the operator\'s ~/.claude settings, hooks and plugins apply to this run (ADR-0040)';
+export const SDK_PROJECT_INHERIT_WARNING =
+  'claude code settings: the "project" or "local" source is inherited, so the working directory\'s .claude files and CLAUDE.md apply to this run as trusted input (ADR-0040)';
 
 export interface ComposeSecurityDeps {
   /**
@@ -312,6 +338,12 @@ export interface ComposeSecurityDeps {
   projectDir: string;
 }
 
+// ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): withheld from the grant when the
+// USER layer has no sandbox.commands list. Derived from the one table (ADR-0033), never hand-listed.
+const COMMAND_TOOLS: readonly string[] = Object.entries(TOOL_TARGET_FIELDS)
+  .filter(([, target]) => target.kind === 'command')
+  .map(([name]) => name);
+
 /**
  * Loads and merges both security settings layers, and reads the judge from
  * the user layer only (spec D1). Each file is read ONCE and its parsed doc
@@ -324,7 +356,7 @@ export interface ComposeSecurityDeps {
 export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition {
   const userPath = join(deps.userDir, '.harness', 'settings.json');
   const projectPath = join(deps.projectDir, '.harness', 'settings.json');
-  const load = (path: string, readJudge: boolean) =>
+  const load = (path: string, isUser: boolean) =>
     loadJsonSettings(
       path,
       (doc) => {
@@ -334,21 +366,26 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
             sandbox: parseSandboxSettings(doc),
             // Decision 9: the project layer's `judge` key is never parsed,
             // so a malformed one can never exit 2; it is only detected.
-            judge: readJudge ? parseJudgeSettings(doc) : null,
+            judge: isUser ? parseJudgeSettings(doc) : null,
             judgeKeyPresent: hasJudgeKey(doc),
+            // D-2: the same rule for `sdk`; the project layer's key is only
+            // detected, so a malformed one can never exit 2 or widen sources.
+            sdk: isUser ? parseSdkSettings(doc) : [],
+            sdkKeyPresent: hasSdkKey(doc),
           };
         } catch (error: unknown) {
           if (
             error instanceof PermissionSettingsError ||
             error instanceof SandboxSettingsError ||
-            error instanceof JudgeSettingsError
+            error instanceof JudgeSettingsError ||
+            error instanceof SdkSettingsError
           ) {
             throw new SettingsLoadError(error.message);
           }
           throw error;
         }
       },
-      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false },
+      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], sdkKeyPresent: false },
       SettingsLoadError,
       deps.readFile,
     );
@@ -361,6 +398,11 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   if (project.judgeKeyPresent) {
     warnings.push(`ignoring "judge" in ${projectPath}: the judge is configured only in ~/.harness/settings.json`);
   }
+  if (project.sdkKeyPresent) {
+    warnings.push(`ignoring "sdk" in ${projectPath}: Claude Code settings sources are configured only in ~/.harness/settings.json`);
+  }
+  if (user.sdk.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
+  if (user.sdk.includes('project') || user.sdk.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
   // No prompter is wired yet (no interactive mode), so every 'ask' resolves
   // to deny — fail closed, but tell the settings author (ADR-0014 §4).
   if (
@@ -391,7 +433,29 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
     ...globPathWarnings(user.sandbox, userPath),
     ...globPathWarnings(project.sandbox, projectPath),
   );
-  return { permissions, sandbox, judge: user.judge, warnings };
+  // USER layer only: the merge (intersectDimension) returns the project list when the user has
+  // none, so a cloned repo's commands list must not unlock the grant. The merged list stays the gate.
+  const grantPolicy: GrantPolicy = {
+    ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS),
+  };
+  return { permissions, grantPolicy, sandbox, judge: user.judge, sdk: { settingSources: user.sdk }, warnings };
+}
+
+/**
+ * Registers the two security pre-tool hooks in their ONE shipped order, for
+ * every command that builds a session (`run`, `eval`). Permissions first,
+ * sandbox as the backstop: the deny outcome is identical (the runtime denies
+ * on the first throw), but rule-attributed permission reasons are more
+ * actionable, so they get first say (ADR-0015 section 4). The sandbox also
+ * runs after a grant is returned, so a sandbox deny always overrides it
+ * (ADR-0040 D3). `security.grantPolicy` is passed through unchanged.
+ */
+export function registerSecurityHooks(
+  hooks: Pick<HookRuntime, 'register'>,
+  security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox'>,
+): void {
+  hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
+  hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }
 
 /**
@@ -474,6 +538,10 @@ function boundReason(reason: string, deps: HookTelemetryDeps): string {
  * field is model-requested too; it is control-char sanitized by the store but
  * neither redacted nor length-bound here, outside #75's scope, named so this
  * mapper is not read as bounding every attacker-influenced string on the row.
+ *
+ * A `granted-by-rule` row is the audit trail of every `allow` the session
+ * returned to the SDK (ADR-0040 D3): the session's SDK-facing reason is one
+ * source-neutral literal, so the rule identity lives only on this row.
  */
 export function hookRecordToTelemetryInput(
   record: HookEventRecord,
@@ -481,7 +549,7 @@ export function hookRecordToTelemetryInput(
   deps: HookTelemetryDeps,
 ): TelemetryEventInput {
   const base = { type: 'hook-event' as const, sessionId: ids.sessionId, turnId: ids.turnId };
-  if (record.kind === 'denied-by-hook') {
+  if (record.kind === 'denied-by-hook' || record.kind === 'granted-by-rule') {
     return {
       ...base,
       payload: {
