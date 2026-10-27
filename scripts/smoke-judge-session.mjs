@@ -1138,6 +1138,8 @@ const FLOOR_DENIED_PHRASE = "haven't granted it yet";
 //    nXp @215824747 adds sha256sum sha1sum md5sum grep egrep fgrep; GJp @215823071 lists echo printf wc grep egrep fgrep head tail.
 //  - `touch` is in none of those. Its only auto-allow is jXp @215853346 = [mkdir touch rm rmdir mv cp sed], used by GXp @215852331 ONLY when mode === "acceptEdits"
 //    (hYa @215852678); in default mode it returns passthrough. The path validator OJp @215780236 returns only ask, deny or passthrough, never allow.
+//  - This denylist copies the eXp/tXp/nXp/GJp sets only, NOT the whole validator: the VJp route (WJp(): git read-only subcommands, rg, xargs forms) and
+//    tXp's regex-only forms are not listed. Irrelevant for touch; re-read the binary before changing the probe to a git, rg or xargs command.
 const READ_ONLY_PROBE_DENYLIST = new Set([
   'echo', 'printf', 'pwd', 'whoami', 'alias', 'cal', 'uptime', 'cat', 'head', 'tail', 'wc', 'stat', 'strings', 'hexdump', 'od', 'nl', 'id', 'uname', 'free', 'df', 'du',
   'locale', 'groups', 'nproc', 'basename', 'dirname', 'realpath', 'cut', 'paste', 'tr', 'column', 'tac', 'rev', 'fold', 'expand', 'unexpand', 'fmt', 'comm', 'cmp',
@@ -1299,6 +1301,7 @@ async function isolationLoadChecks() {
   check(JSON.parse(cwdFiles.get('.claude/settings.json') ?? '{}').enabledPlugins?.['marker-plugin@local'] === true && JSON.parse(cwdFiles.get('.claude/plugins/marker-plugin/.claude-plugin/plugin.json') ?? '{}').name === 'marker-plugin', 'the project plugin must be enabled and named marker-plugin');
   check((cwdFiles.get('CLAUDE.md') ?? '').includes(CLAUDE_MD_SENTENCE), 'the CLAUDE.md fixture must carry the sentence');
   check(!CLAUDE_MD_PATTERN.test(isolationPrompt('00000000')), 'the prompt must not carry the CLAUDE.md token or it seeds the oracle');
+  check(isolationPrompt('00000000').includes(probeCommand('00000000')), 'the isolation prompt must ask for exactly the probe command the rule, sandbox list and oracle name');
   check(CLAUDE_MD_PATTERN.test(CLAUDE_MD_SENTENCE), 'the CLAUDE.md oracle token must occur in the sentence');
   return problems;
 }
@@ -1341,6 +1344,9 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     // The probe is `touch harness-ok-<nonce>`: it prints nothing, so the oracle is the file in the cwd, a filesystem
     // effect that needs no trust in the model's text or the stream (checked before the finally removes the cwd).
     const nonceRan = existsSync(join(dir, `harness-ok-${nonce}`));
+    // The file says the command's effect happened, not which tool caused it: a PASS that says "Bash ran" also needs a Bash tool_use carrying exactly the probe.
+    const bashRanProbe = bashUses.some((u) => u.command === probeCommand(nonce));
+    const otherTools = [...new Set(sink.toolUses.filter((t) => t.name !== 'Bash').map((t) => t.name))];
     const attempted = bashUses.length > 0 || sink.postTool.length > 0 || deniedSystem || deniedRows.length > 0 || grantRows.length > 0;
     const init = sink.initMessages[0] ?? null;
     const INIT_FIELDS = ['plugins', 'mcp_servers', ...PROJECT_SURFACE_FIELDS];
@@ -1354,7 +1360,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
       markers, surfaceHits, warnings: sink.warnings,
     };
-    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, attempted, assistantQuoted, surfaceHits, data };
+    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, otherTools, attempted, assistantQuoted, surfaceHits, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1383,7 +1389,7 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
   if (o.assistantQuoted) return ['FAIL', "the model quoted the project CLAUDE.md sentence under settingSources: [] (merge blocker)"];
   if (!o.attempted) return ['UNCHECKED', 'the model did not call Bash; re-run'];
   if (refusedShape(o) !== null) return ['UNCHECKED', refusedShape(o)];
-  if (o.nonceRan) return ['FAIL', `Bash ran (the nonce file exists) with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (merge blocker)`];
+  if (o.nonceRan) return ['FAIL', `the nonce file exists with no harness grant${ruleOnProject ? ' (the rule is in the PROJECT layer only)' : ''}: an ambient or project allow reached the CLI (Bash tool_use with the probe: ${o.bashRanProbe}; other tools called: ${o.otherTools.join(',') || 'none'}) (merge blocker)`];
   if (o.grantRows.length > 0) return ['FAIL', `${o.grantRows.length} granted-by-rule row(s) exist${ruleOnProject ? ' for a rule that sits in the PROJECT layer only' : ''}: the harness granted what ${leg} says it must not (merge blocker)`];
   const floorSeen = o.bashResults.some((r) => r.isError && r.text.includes(FLOOR_DENIED_PHRASE)) || o.deniedSystem;
   if (!floorSeen) return ['UNCHECKED', 'Bash did not run and no grant row exists, but the CLI floor was not observed on the stream (no isError tool_result carrying the not-granted text, no permission_denied system message)'];
@@ -1419,6 +1425,7 @@ async function legIsolatedGrant() {
   if (o.bashUses.length > 1) return rec('UNCHECKED', `the model called Bash ${o.bashUses.length} times (the prompt asks for one), so the exactly-one-grant-row oracle does not apply; re-run`);
   if (refusedShape(o) !== null) return rec('UNCHECKED', refusedShape(o));
   if (!o.nonceRan) return rec('FAIL', `Bash did not run with a user-layer rule allow and a user sandbox list (granted-by-rule rows ${o.grantRows.length}, permission_denied seen ${o.deniedSystem}): the grant is missing or was downgraded (merge blocker)`);
+  if (!o.bashRanProbe) return rec('UNCHECKED', `the nonce file exists but no Bash tool_use carried exactly "${probeCommand(o.nonce)}" (other tools called: ${o.otherTools.join(',') || 'none'}), so the file cannot be attributed to the granted Bash call; re-run`);
   if (o.grantRows.length !== 1 || o.grantRows[0].reason !== GRANT_REASON) return rec('FAIL', `expected exactly one granted-by-rule row with reason "${GRANT_REASON}", got ${o.grantRows.length} (${o.grantRows.map((r) => r.reason).join(' | ')}) (merge blocker)`);
   if (o.deniedSystem) return rec('FAIL', 'a permission_denied system message names Bash although the grant row exists: the hook allow was downgraded (requireCanUseTool) (merge blocker)');
   rec('PASS', `Bash ran through the harness grant (the nonce file exists): exactly one granted-by-rule row ("${GRANT_REASON}"), no permission_denied, nothing loaded (including project skills, commands and agents) under settingSources: []`);
@@ -1440,6 +1447,7 @@ async function legInherited() {
   if (!o.assistantQuoted) return rec('FAIL', 'with the project source opted in the model did not quote the CLAUDE.md sentence: the CLAUDE.md fixture cannot bite (merge blocker)');
   if (!o.attempted) return rec('UNCHECKED', 'the model did not call Bash; re-run');
   if (!o.nonceRan) return rec('FAIL', 'with the user source opted in the ambient Bash(touch *) allow did not let Bash run: the permission fixture cannot bite (merge blocker)');
+  if (!o.bashRanProbe) return rec('UNCHECKED', `the nonce file exists but no Bash tool_use carried exactly "${probeCommand(o.nonce)}" (other tools called: ${o.otherTools.join(',') || 'none'}), so the ambient Bash allow is not shown to be what made it; re-run`);
   if (o.grantRows.length > 0) return rec('FAIL', `${o.grantRows.length} granted-by-rule row(s) exist with no permissions document: the harness granted without a rule (merge blocker)`);
   rec('PASS', `user, project and local markers created, a numbat-* project skill, command and agent listed on the init message, CLAUDE.md sentence quoted, ambient Bash allow ran Bash, no granted-by-rule row; plugin marker ${o.markers.plugin ? 'created' : 'NOT created'} (recorded, not judged: a project-local plugin's hook loading is UNVERIFIED on 2.1.201); the start line is the CLI's and is not observable through createSession (keyless pin, Task 6)`);
 }
