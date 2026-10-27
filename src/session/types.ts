@@ -63,8 +63,11 @@ export interface SdkResultMessage {
    */
   stop_reason?: string | null;
   /**
-   * By the 2.1.201 binary reading, every non-allow outcome of the CLI's
-   * canUseTool check (unobserved; issue #209), declared on BOTH result variants. Declared optional here so drift yields an
+   * Declared on BOTH result variants. The owner's keyed capture of 27/10/2026
+   * (46899fd) observed it carrying the CLI floor's `ask` refusal of a Bash call
+   * (isolated-floor) AND the harness's own PreToolUse hook denial of a Bash call
+   * under the same tool_use_id (cli-denied-overlap): the array is a union, not
+   * only the CLI's refusals (issue #209). Declared optional here so drift yields an
    * empty list; the parse additionally tolerates a non-array or malformed
    * entries at runtime, since the stream is untrusted.
    */
@@ -501,10 +504,11 @@ export interface SessionResult {
   /**
    * Tool calls the CLI's own permission check refused, from the last result
    * message's `permission_denials` (issue #209). Separate from `denied`, which
-   * counts only the harness's own pre-tool denials. PreToolUse hook denials
-   * bypass canUseTool (sdk.d.ts:3900), and by the binary reading (bundled CLI
-   * 2.1.201) the array is filled only there, so the two should not overlap; the
-   * keyed overlap leg checks it. Empty means "the result named none", not "the
+   * counts only the harness's own pre-tool denials. The raw array is a union of
+   * the CLI's refusals and the harness's own hook denials (observed, keyed
+   * capture 46899fd, 27/10/2026), so the session drops every entry whose
+   * tool_use_id it denied itself; an entry with no id cannot be matched and is
+   * kept. Empty means "the result named none", not "the
    * CLI blocked nothing": a stream with no result message or a CLI that omits
    * the array reads the same. Not persisted to memory. `tool_input`'s absence is
    * asserted on the result, the memory row and the warnings only.
