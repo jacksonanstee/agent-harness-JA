@@ -432,7 +432,7 @@ describe('formatCliDeniedWarning', () => {
   it('runs the tool names through the diagnostic sanitiser', () => {
     const line = formatCliDeniedWarning([{ tool: 'Ba\u001b[31msh\u202E', toolUseId: null }]);
     expect(line).not.toContain('\u001b');
-    expect(line).not.toContain('‮');
+    expect(line).not.toContain('\u202E');
   });
 });
 
