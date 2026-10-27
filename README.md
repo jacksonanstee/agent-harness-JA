@@ -66,7 +66,9 @@ node dist/cli.js permissions list      # read-only: the permission rules a run w
 node dist/cli.js skills lint skills       # read-only: static checks over a skills directory (exit 0 clean, 1 findings, 2 cannot lint)
 ```
 
-Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it, and so is one that needs a Bash command the CLI's own read-only validator does not accept (keyed run 1 on 22/10/2026 showed it still runs a literal `printf`; by the binary reading, `echo` and the validator's other accepted commands run too). The `run` summary line reports those refusals as `cli-denied=N`, next to `denied=` (which counts only this harness's own pre-tool denials), and one stderr warning names the refused tools. The count comes from the `permission_denials` array on the SDK's result message; that it includes headless refusals is a reading of the bundled CLI's binary, not yet observed, so treat `cli-denied=0` as unconfirmed.
+Under the default isolation (ADR-0040) the bundled CLI grants nothing a rule in your user file does not name, except reads inside the working directory: a prompt that needs Edit, Write, NotebookEdit, WebFetch or WebSearch is refused until your file allows it, and so is one that needs a Bash command the CLI's own read-only validator does not accept (keyed run 1 on 22/10/2026 showed it still runs a literal `printf`; by the binary reading, `echo` and the validator's other accepted commands run too).
+
+The `run` summary line reports those refusals as `cli-denied=N`, next to `denied=` (which counts only this harness's own pre-tool denials), and one stderr warning names the refused tools. The count comes from the `permission_denials` array on the SDK's result message; that it includes headless refusals is a reading of the bundled CLI's binary, not yet observed, so treat `cli-denied=0` as unconfirmed.
 
 Once the v0.1.0 release is published, the same commands run without a clone: `npx agent-harness-ja init my-agent`, or `npm i -g agent-harness-ja` and then `agent-harness-ja <command>` in place of `node dist/cli.js <command>`.
 
@@ -213,7 +215,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0040 |
-| Tests | 2778 at the 2026-10-22 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 2798 at the 2026-10-27 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 
