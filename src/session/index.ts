@@ -6,6 +6,7 @@ export { buildJudge, JUDGE_MODEL } from './judge.js';
 // The judge session-state tuple only (pin 31); the fixed constants stay module exports.
 export { JUDGE_SESSION_STATES } from './judged-scan.js';
 export type {
+  CliDeniedToolCall,
   DeniedToolCall,
   DroppedSkill,
   JudgeSessionState,
@@ -35,6 +36,7 @@ export type {
   SdkPreToolUseInput,
   SdkMessage,
   SdkModelRefusalMessage,
+  SdkPermissionDenial,
   SdkResultMessage,
   SdkSystemMessage,
   SdkTextBlock,

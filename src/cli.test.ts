@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { composeSecurity, formatModelClaim, formatRefusalLine, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
+import { composeSecurity, formatCliDeniedWarning, formatModelClaim, formatRefusalLine, formatRunSummaryLine, hookRecordToTelemetryInput, main, parseArgs, parseRedteamArgs, parseRunArgs, refuseSymlinkedDir, sanitizeForTerminal, scorecardFilename, SettingsLoadError, writeScorecard } from './cli.js';
 import { CORPUS, EvalUsageError, normalizeForBaseline, REDTEAM_ARM_LABEL, runRedteam, toCanonicalJson } from './eval/index.js';
 import type { GoldenScorecard } from './eval/index.js';
 import type { HookEventRecord } from './hooks/index.js';
@@ -371,6 +371,77 @@ describe('formatModelClaim', () => {
       fallbackModel: 'evil\u001b[31m',
     });
     expect(claim).not.toContain('\u001b');
+  });
+});
+
+// Issue #209. The `run` path cannot execute in-suite (it loads the real SDK),
+// so the run line and the CLI-denial warning are pure functions tested here.
+describe('formatRunSummaryLine', () => {
+  const base: Parameters<typeof formatRunSummaryLine>[0] = {
+    modelChoice: { model: 'claude-sonnet-5', rule_id: 'r1', reason: 'test' },
+    refusal: null,
+    numTurns: 2,
+    costUsd: 0.05,
+    denied: [{ tool: 'Bash', reason: 'blocked' }],
+    cliDenied: [],
+    memoryEntryId: 'session-abc',
+  };
+
+  it('prints cli-denied=N immediately after denied=N and before memory=', () => {
+    const line = formatRunSummaryLine({
+      ...base,
+      cliDenied: [
+        { tool: 'Bash', toolUseId: 'toolu_a' },
+        { tool: 'Write', toolUseId: null },
+      ],
+    });
+    expect(line).toContain(' denied=1 cli-denied=2 memory=session-abc');
+    expect(line).toContain('model=claude-sonnet-5 (rule=r1) turns=2 cost=$0.0500');
+  });
+
+  it('prints cli-denied=0 when the result named none', () => {
+    expect(formatRunSummaryLine(base)).toContain(' denied=1 cli-denied=0 memory=');
+  });
+
+  it('keeps n/a and none placeholders', () => {
+    const line = formatRunSummaryLine({ ...base, numTurns: null, costUsd: null, memoryEntryId: null });
+    expect(line).toContain('turns=n/a cost=n/a');
+    expect(line).toContain('memory=none');
+  });
+});
+
+describe('formatCliDeniedWarning', () => {
+  it('returns null when the CLI denied nothing', () => {
+    expect(formatCliDeniedWarning([])).toBeNull();
+  });
+
+  it('names the tools once each, quoted, in first-seen order, and never an input', () => {
+    const line = formatCliDeniedWarning([
+      { tool: 'Bash', toolUseId: 'toolu_a' },
+      { tool: 'Write', toolUseId: 'toolu_b' },
+      { tool: 'Bash', toolUseId: 'toolu_c' },
+    ]);
+    expect(line).toMatch(/^warning: /);
+    expect(line).toContain('3 tool call(s)');
+    expect(line).toContain('"Bash", "Write"');
+    expect(line).not.toMatch(/Bash.*Write.*Bash/);
+    expect(line).not.toContain('toolu_');
+    expect(line).not.toContain('\n');
+  });
+
+  it('quotes each name so a tool called denied=5 cannot read like a run-line field', () => {
+    const line = formatCliDeniedWarning([{ tool: 'denied=5', toolUseId: null }]);
+    expect(line).toContain('"denied=5"');
+    const outsideQuotes = (line ?? '').replace(/"[^"]*"/g, '""');
+    expect(outsideQuotes).not.toContain('denied=');
+  });
+
+  it('runs the tool names through the diagnostic sanitiser', () => {
+    const line = formatCliDeniedWarning([{ tool: 'Ba\u001b[31msh\u202E', toolUseId: null }]);
+    expect(line).not.toContain('\u001b');
+    expect(line).not.toContain('\u202E');
+    // The tool name text must survive, so a dropped line cannot satisfy the absences above.
+    expect(line).toContain('sh');
   });
 });
 

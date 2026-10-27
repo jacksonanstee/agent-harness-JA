@@ -33,6 +33,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     costUsd: null,
     numTurns: null,
     denied: [],
+    cliDenied: [],
     memoryEntryId: null,
     skillErrors: [],
     droppedSkills: [],

@@ -13,6 +13,7 @@ import {
 import type { TelemetryEventInput } from '../telemetry/index.js';
 import type { ScanResult } from '../security/index.js';
 import type {
+  CliDeniedToolCall,
   DeniedToolCall,
   DroppedSkill,
   OutputAnnotation,
@@ -242,6 +243,43 @@ function truncate(value: string | null): string | null {
 function cleanSdkId(raw: string): string | null {
   const clean = cleanSdkToken(raw);
   return clean === '' ? null : clean;
+}
+
+/**
+ * Reads the result message's `permission_denials` (issue #209) into tool name
+ * and id only. `tool_input` is never read: it is untrusted and may carry
+ * secrets. The stream is untrusted too, so a non-array is treated as absent and
+ * a malformed entry (not an object, or a `tool_name` that is not a string or
+ * cleans to nothing) is skipped, never thrown on. Deduplicated by id, first
+ * wins; an entry with no usable id is kept and never merged with another.
+ *
+ * The array is the UNION of the CLI's own refusals and the harness's own hook
+ * denials (keyed capture 46899fd, 27/10/2026: one harness-denied Bash call
+ * appeared in it under the same tool_use_id). Entries whose RAW id exactly
+ * equals one in `harnessDeniedIds` are dropped (exact, so ids that only clean
+ * alike cannot hide a CLI refusal), so `cliDenied` counts only what the harness
+ * did not itself deny. A null-id entry cannot be matched, so it is KEPT: it
+ * cannot be shown to be a harness denial, and keeping it errs towards
+ * reporting a refusal (a possible overcount) over hiding one.
+ */
+function parseCliDenials(raw: unknown, harnessDeniedIds: ReadonlySet<string>): CliDeniedToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  const seenIds = new Set<string>();
+  const denials: CliDeniedToolCall[] = [];
+  for (const entry of raw as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { tool_name: rawTool, tool_use_id: rawId } = entry as Record<string, unknown>;
+    const tool = typeof rawTool === 'string' ? cleanSdkId(rawTool) : null;
+    if (tool === null) continue;
+    if (typeof rawId === 'string' && harnessDeniedIds.has(rawId)) continue;
+    const toolUseId = typeof rawId === 'string' ? cleanSdkId(rawId) : null;
+    if (toolUseId !== null) {
+      if (seenIds.has(toolUseId)) continue;
+      seenIds.add(toolUseId);
+    }
+    denials.push({ tool, toolUseId });
+  }
+  return denials;
 }
 
 function isSystemInit(message: SdkMessage): message is SdkSystemMessage {
@@ -595,6 +633,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const turnId = config.turnId ?? randomUUID();
     let sdkSessionId: string | null = null;
     const denied: DeniedToolCall[] = [];
+    // The cleaned tool_use_id of every call the harness itself denied, so the
+    // CLI's `permission_denials` (a union that includes them) can be reduced
+    // to the CLI's own refusals. Cleaned with `cleanSdkId`, as the parse is.
+    const harnessDeniedIds = new Set<string>();
 
     // Model-facing enforcement state (issue #84), per run() only (G-11): never
     // persisted, logged, thrown, or placed on the result beyond the structural
@@ -1315,7 +1357,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
-    const preToolCallback: SdkHookCallback<SdkPreToolUseInput> = async (input) => {
+    const preToolCallback: SdkHookCallback<SdkPreToolUseInput> = async (input, toolUseID) => {
       // `tool_name` is required on both union members; the `?? 'unknown'` guards
       // only a non-conforming injected `deps.query` (a fake, or a future SDK
       // shape), not the real SDK, which always sends it.
@@ -1370,6 +1412,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
       if (deniedReason !== null) {
         denied.push({ tool, reason: deniedReason });
+        // The RAW SDK id, compared exactly: two ids that only clean to the same
+        // string must not let a harness deny hide a different CLI refusal.
+        const rawDeniedId = toolUseID ?? input.tool_use_id;
+        if (typeof rawDeniedId === 'string' && rawDeniedId.length > 0) harnessDeniedIds.add(rawDeniedId);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
@@ -1588,6 +1634,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let resultText: string | null = null;
     let resultSubtype: string | null = null;
     let stopReason: string | null = null;
+    let cliDenied: CliDeniedToolCall[] = [];
     let refusal: SessionRefusal | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
@@ -1657,6 +1704,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
+          // Last result wins, like cost and usage above (issue #209).
+          cliDenied = parseCliDenials(message.permission_denials, harnessDeniedIds);
           // Second, independent channel: works on CLIs old enough to omit the
           // banner. Never downgrades a banner record, which carries strictly
           // more (category, fallback model).
@@ -1803,6 +1852,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       costUsd,
       numTurns,
       denied,
+      cliDenied,
       memoryEntryId,
       skillErrors: loadResult.errors,
       droppedSkills,

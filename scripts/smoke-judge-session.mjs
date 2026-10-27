@@ -105,6 +105,14 @@
 // isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the harness `run` command prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
+// Issue #209: `cli-denied-overlap` (opt-in, named in SMOKE_LEGS; an unfiltered run skips it) denies Bash by a user-layer
+// harness rule and checks the harness denial's tool_use_id is in the raw permission_denials (the union the keyed capture of
+// 27/10/2026 observed) but NOT in SessionResult.cliDenied. The #209 capture is SMOKE_LEGS=isolated-floor,cli-denied-overlap.
+// Issue #209: the isolation legs also record each result message's `permission_denials` (tool names and ids only, never
+// `tool_input`) and the two floor legs append a RECORDED or UNCHECKED observation to their detail saying whether it named Bash.
+// It is an observation, never a verdict on the floor legs: an absent array is UNCHECKED and no state of it can FAIL them.
+// The keyed capture of 27/10/2026 (46899fd) observed Bash named there on isolated-floor (the CLI floor's ask-denial). The
+// floor legs also record whether SessionResult.cliDenied names Bash (expected yes: the harness denied nothing there).
 //
 // Keyed run 1 (22/10/2026, exit 1, probe `printf harness-ok-<nonce>`): isolated-grant and inherited PASSed, but isolated-floor and isolated-project-rule FAILed because the
 // floor ran a literal `printf` with no grant; by the binary reading, the CLI's own read-only Bash validator (eXp, byte offset 215797085 of the 2.1.201 binary) accepts it, and `echo`
@@ -395,6 +403,10 @@ function newSink() {
     nonce: null,
     systemMessages: [], // { at, subtype, body }
     toolUses: [],
+    // Issue #209: each result message's `permission_denials` as { at, entries } where entries is null when the
+    // field was absent or not an array, else [{ tool, toolUseId }]. Names and ids ONLY: `tool_input` is never
+    // read here (untrusted, may carry secrets). Unobserved until the owner's keyed capture.
+    permissionDenials: [],
   };
 }
 
@@ -496,6 +508,17 @@ function observe(sink, message) {
     // error_* kind, `is_error`, the `result` text or `errors` list).
     const text = message.subtype === 'success' ? stringify(message.result) : stringify(message.errors ?? message.result ?? '');
     sink.resultMessages.push({ at, subtype: message.subtype ?? null, is_error: message.is_error ?? null, text: redactSynth(text).slice(0, 500) });
+    const denials = message.permission_denials;
+    sink.permissionDenials.push({
+      at,
+      // The raw length, so a verdict can tell a complete parse from one that dropped malformed entries.
+      rawCount: Array.isArray(denials) ? denials.length : null,
+      entries: Array.isArray(denials)
+        ? denials
+          .filter((d) => d !== null && typeof d === 'object' && typeof d.tool_name === 'string')
+          .map((d) => ({ tool: redactSynth(d.tool_name).slice(0, 100), toolUseId: typeof d.tool_use_id === 'string' ? redactSynth(d.tool_use_id).slice(0, 100) : null }))
+        : null,
+    });
   } else if (message?.type === 'system' && message.subtype === 'hook_response') {
     sink.hookResponses.push({ at, event: message.hook_event, hook_name: message.hook_name ?? null, outcome: message.outcome, output: redactSynth(stringify(message.output)).slice(0, 300) });
   } else if (message?.type === 'assistant') {
@@ -1249,6 +1272,16 @@ async function isolationLoadChecks() {
     const chained = await fire(`${command}; echo y`);
     check(chained.out.denied === true && !chained.records.some((r) => r.kind === 'granted-by-rule'), `a chained command must be denied with no grant, got ${JSON.stringify(chained.records)}`);
   });
+  await attempt('cli-denied-overlap document (issue #209)', async () => {
+    const sec = composeIsolationSecurity({ user: DENY_BASH_USER_DOC, project: {} });
+    const ev = createPermissionEvaluator(sec.permissions).evaluate('Bash', { command });
+    check(ev.decision === 'deny' && ev.layer === 'user', `the overlap document must evaluate deny/user for the probe, got ${JSON.stringify(ev)}`);
+    const records = [];
+    const rt = createHookRuntime({ onEvent: (r) => records.push(r) });
+    registerIsolationSecurity(rt, { user: DENY_BASH_USER_DOC, project: {} });
+    const out = await rt.fire('pre-tool', { event: 'pre-tool', tool: 'Bash', args: { command } });
+    check(out.denied === true && records.some((r) => r.kind === 'denied-by-hook' && r.tool === 'Bash') && !records.some((r) => r.kind === 'granted-by-rule'), `the real runtime must deny the probe with a denied-by-hook Bash row and no grant, got ${JSON.stringify(records)}`);
+  });
   await attempt('D-8 (no user sandbox list)', async () => {
     const sec = composeIsolationSecurity({ user: RULE_ONLY_DOC, project: {} });
     const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
@@ -1341,7 +1374,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
     isolationSettingsFiles(dir, isolationFixtures(markerDir));
     isolationSettingsFiles(configDir, configDirFixtures(markerDir));
     process.env.CLAUDE_CONFIG_DIR = configDir;
-    const { hookRows, traceRows } = await runSession({ dir, prompt: isolationPrompt(nonce), sink, judgeOn: false, permissions, settingSources, maxTurns: 3 });
+    const { result, hookRows, traceRows } = await runSession({ dir, prompt: isolationPrompt(nonce), sink, judgeOn: false, permissions, settingSources, maxTurns: 3 });
     const markers = Object.fromEntries(['user', 'project', 'local', 'plugin'].map((k) => [k, existsSync(join(markerDir, `${k}-marker`))]));
     const bashUses = sink.toolUses.filter((t, i, all) => t.name === 'Bash' && (t.id === null || all.findIndex((u) => u.id === t.id) === i));
     const bashResults = bashUses.map((t) => (t.id === null ? undefined : sink.userResults.get(t.id))).filter((r) => r !== undefined);
@@ -1367,8 +1400,20 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       hookRows: hookRows.map((r) => ({ ...r, reason: typeof r.reason === 'string' ? redactSynth(r.reason) : r.reason })),
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
       markers, surfaceHits, warnings: sink.warnings,
+      permissionDenials: sink.permissionDenials, permissionDenialsObservation: permissionDenialsObservation(sink),
     };
-    return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
+    // The LAST result message, as the session reads it: an earlier array must not stand in for a final result that carried none.
+    const finalRecord = sink.permissionDenials.at(-1) ?? null;
+    const lastRecord = finalRecord !== null && finalRecord.entries !== null ? finalRecord : null;
+    const lastDenials = lastRecord?.entries ?? null;
+    const permissionDenialIds = lastDenials === null ? null : lastDenials.map((e) => e.toolUseId).filter((id) => id !== null);
+    // Complete = every raw entry parsed and carries an id; otherwise an absent id proves nothing about overlap.
+    const permissionDenialsComplete = lastRecord !== null && lastRecord.rawCount === lastDenials.length && lastDenials.every((e) => e.toolUseId !== null);
+    const sessionCliDenied = result.cliDenied.map((c) => ({ tool: redactSynth(c.tool).slice(0, 100), toolUseId: c.toolUseId === null ? null : redactSynth(c.toolUseId).slice(0, 100) }));
+    data.sessionCliDenied = sessionCliDenied;
+    const sessionCliDeniedNamesBash = sessionCliDenied.some((c) => c.tool === 'Bash');
+    data.sessionCliDeniedNamesBash = sessionCliDeniedNamesBash;
+    return { sessionCliDenied, sessionCliDeniedNamesBash, permissionDenialIds, permissionDenialsComplete, nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1382,6 +1427,22 @@ async function observeIsolationLeg({ permissions, settingSources }) {
 // the remaining FAILs, then PASS.
 // A denied-by-hook Bash row means the harness refused the model's command shape (the sandbox denies
 // backslashes and chaining) before any grant could be returned: the grant oracles do not apply.
+// Issue #209: what the result message's `permission_denials` said, as an OBSERVATION and never a verdict. The
+// array has not been seen filled live (the bundled-CLI reading is that it holds headless `ask` refusals too),
+// so this smoke is the capture: no result message, or no array on any of them, is UNCHECKED (the field was not
+// observed); otherwise RECORDED with the tool names and whether Bash is among them. Neither state can FAIL a
+// leg or move the exit code. The last result message wins, as the session does.
+function permissionDenialsObservation(sink) {
+  const withArray = sink.permissionDenials.filter((r) => r.entries !== null);
+  if (withArray.length === 0) {
+    return { state: 'UNCHECKED', namedBash: null, tools: [], detail: `permission_denials UNCHECKED: ${sink.permissionDenials.length === 0 ? 'no result message was seen' : 'no result message carried the array'}` };
+  }
+  // C0/C1 controls are stripped from the names before they are joined into a printed detail line.
+  const tools = [...new Set(withArray[withArray.length - 1].entries.map((e) => e.tool.replace(/[\x00-\x1F\x7F-\x9F]/g, '')))];
+  const namedBash = tools.includes('Bash');
+  return { state: 'RECORDED', namedBash, tools, detail: `permission_denials RECORDED: ${tools.length === 0 ? 'empty array' : tools.join(',')}; named Bash: ${namedBash}` };
+}
+
 const refusedShape = (o) => o.deniedRows.length > 0
   ? `the model's command shape was refused by the harness (${o.deniedRows[0].reason}); command: ${o.bashUses[0]?.command ?? 'unrecorded'}; re-run`
   : null;
@@ -1409,13 +1470,41 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
 async function legIsolatedFloor() {
   const o = await observeIsolationLeg({ permissions: null, settingSources: [] });
   const [status, detail] = isolatedVerdict(o, { leg: 'isolated-floor', ruleOnProject: false });
-  recordLeg('isolated-floor', status, detail, o.data, evidenceDir140);
+  recordLeg('isolated-floor', status, `${detail}; ${o.data.permissionDenialsObservation.detail}; SessionResult.cliDenied names Bash: ${o.sessionCliDeniedNamesBash}`, o.data, evidenceDir140);
+}
+
+// Issue #209, the overlap leg. A USER-layer harness document DENIES Bash, so the model's probe is refused by a
+// PreToolUse hook (the harness's own `denied=`). The owner's keyed capture of 27/10/2026 (46899fd) OBSERVED that
+// result.permission_denials then names the same call under the same tool_use_id: the array is the UNION of the CLI's
+// refusals and the harness's own hook denials. The session therefore subtracts the ids it denied itself, and this leg
+// tests that OUTPUT (SessionResult.cliDenied), not the raw array. The denied-by-hook row carries no tool_use_id, so the
+// call is identified by the stream's Bash tool_use id (one call asked for; more than one is UNCHECKED).
+// PASS: a harness denial row exists, the raw permission_denials contains the Bash id (the observed union), and
+// cliDenied does NOT. FAIL: cliDenied contains it (the subtraction did not hold). UNCHECKED: no harness denial row, no
+// usable Bash id, no array, a malformed entry in the array, or the raw array did not contain the id this time.
+// Not in an unfiltered run: it runs only when named in SMOKE_LEGS.
+const DENY_BASH_USER_DOC = { permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] } };
+function overlapVerdict(o) {
+  if (o.deniedRows.length === 0) return ['UNCHECKED', 'no denied-by-hook Bash row exists, so there is no harness denial to compare against; re-run'];
+  if (o.bashUses.length !== 1 || o.bashUses[0].id === null) return ['UNCHECKED', `the stream showed ${o.bashUses.length} Bash call(s) and the id is ${o.bashUses[0]?.id ?? 'null'}; the harness denial cannot be tied to one tool_use_id; re-run`];
+  if (o.permissionDenialIds === null) return ['UNCHECKED', 'no result message carried a permission_denials array, so the overlap could not be read'];
+  if (!o.permissionDenialsComplete) return ['UNCHECKED', 'the permission_denials array had an entry with no string tool_name or tool_use_id, so an absent id does not prove there is no overlap'];
+  const id = o.bashUses[0].id;
+  if (o.sessionCliDenied.some((c) => c.toolUseId === id)) return ['FAIL', `SessionResult.cliDenied still contains the harness-denied tool_use_id ${id}: the session did not subtract its own denial, a double count (merge blocker for #209)`];
+  if (!o.permissionDenialIds.includes(id)) return ['UNCHECKED', `the raw permission_denials (${o.permissionDenialIds.length} id(s)) did not contain the harness-denied tool_use_id ${id} this time, so there was nothing to subtract; re-run`];
+  return ['PASS', `the raw permission_denials contained the harness-denied tool_use_id ${id} (the observed union) and SessionResult.cliDenied (${o.sessionCliDenied.length} entr${o.sessionCliDenied.length === 1 ? 'y' : 'ies'}) does not: the harness subtracted its own denial`];
+}
+
+async function legCliDeniedOverlap() {
+  const o = await observeIsolationLeg({ permissions: { user: DENY_BASH_USER_DOC, project: {} }, settingSources: [] });
+  const [status, detail] = overlapVerdict(o);
+  recordLeg('cli-denied-overlap', status, `${detail}; ${o.data.permissionDenialsObservation.detail}`, o.data, evidenceDir140);
 }
 
 async function legIsolatedProjectRule() {
   const o = await observeIsolationLeg({ permissions: { user: {}, project: RULE_ONLY_DOC }, settingSources: [] });
   const [status, detail] = isolatedVerdict(o, { leg: 'isolated-project-rule', ruleOnProject: true });
-  recordLeg('isolated-project-rule', status, detail, o.data, evidenceDir140);
+  recordLeg('isolated-project-rule', status, `${detail}; ${o.data.permissionDenialsObservation.detail}; SessionResult.cliDenied names Bash: ${o.sessionCliDeniedNamesBash}`, o.data, evidenceDir140);
 }
 
 // Leg 10: the grant. The user document carries the Bash rule AND the sandbox list (D-8); settingSources: [].
@@ -1571,6 +1660,8 @@ await guarded('isolated-floor', legIsolatedFloor, evidenceDir140);
 await guarded('isolated-grant', legIsolatedGrant, evidenceDir140);
 await guarded('isolated-project-rule', legIsolatedProjectRule, evidenceDir140);
 await guarded('inherited', legInherited, evidenceDir140);
+// Issue #209: opt-in. An unfiltered run skips it; name it in SMOKE_LEGS to run it.
+if (only.has('cli-denied-overlap')) await guarded('cli-denied-overlap', legCliDeniedOverlap, evidenceDir140);
 
 const count = (s) => legs.filter((l) => l.status === s).length;
 console.log(`smoke-judge-session: ${count('PASS')} PASS, ${count('FAIL')} FAIL, ${count('UNCHECKED')} UNCHECKED, ${count('RECORDED')} RECORDED; evidence in ${evidenceDir} (the withheld and failure-stdout legs: ${evidenceDirB2}; the four isolation legs: ${evidenceDir140})`);
