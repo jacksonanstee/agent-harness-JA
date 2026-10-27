@@ -415,7 +415,7 @@ describe('formatCliDeniedWarning', () => {
     expect(formatCliDeniedWarning([])).toBeNull();
   });
 
-  it('names the tools once each, in first-seen order, and never an input', () => {
+  it('names the tools once each, quoted, in first-seen order, and never an input', () => {
     const line = formatCliDeniedWarning([
       { tool: 'Bash', toolUseId: 'toolu_a' },
       { tool: 'Write', toolUseId: 'toolu_b' },
@@ -423,16 +423,25 @@ describe('formatCliDeniedWarning', () => {
     ]);
     expect(line).toMatch(/^warning: /);
     expect(line).toContain('3 tool call(s)');
-    expect(line).toContain('Bash, Write');
+    expect(line).toContain('"Bash", "Write"');
     expect(line).not.toMatch(/Bash.*Write.*Bash/);
     expect(line).not.toContain('toolu_');
     expect(line).not.toContain('\n');
+  });
+
+  it('quotes each name so a tool called denied=5 cannot read like a run-line field', () => {
+    const line = formatCliDeniedWarning([{ tool: 'denied=5', toolUseId: null }]);
+    expect(line).toContain('"denied=5"');
+    const outsideQuotes = (line ?? '').replace(/"[^"]*"/g, '""');
+    expect(outsideQuotes).not.toContain('denied=');
   });
 
   it('runs the tool names through the diagnostic sanitiser', () => {
     const line = formatCliDeniedWarning([{ tool: 'Ba\u001b[31msh\u202E', toolUseId: null }]);
     expect(line).not.toContain('\u001b');
     expect(line).not.toContain('\u202E');
+    // The tool name text must survive, so a dropped line cannot satisfy the absences above.
+    expect(line).toContain('sh');
   });
 });
 

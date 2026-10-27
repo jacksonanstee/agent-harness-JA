@@ -468,13 +468,14 @@ export function formatRunSummaryLine(
 /**
  * One stderr warning when the Claude Code CLI refused tool calls (issue #209),
  * or null when it refused none. Names the tools (deduplicated, first-seen
- * order) and never a tool input or id: the parse already dropped the input,
+ * order, each QUOTED so a tool named `denied=5` cannot read like a run-line
+ * field) and never a tool input or id: the parse already dropped the input,
  * and the names go through the same diagnostic sanitiser as every other
  * warning. Pure for the same reason as `formatRefusalLine`.
  */
 export function formatCliDeniedWarning(cliDenied: readonly CliDeniedToolCall[]): string | null {
   if (cliDenied.length === 0) return null;
-  const tools = [...new Set(cliDenied.map((call) => call.tool))].join(', ');
+  const tools = [...new Set(cliDenied.map((call) => call.tool))].map(formatTokenField).join(', ');
   return (
     `${WARNING_PREFIX}${sanitizeDiagnostic(
       `${cliDenied.length} tool call(s) refused by the Claude Code CLI's own permission check ` +

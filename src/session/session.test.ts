@@ -3040,6 +3040,18 @@ describe('CLI permission denials (issue #209)', () => {
     ]);
   });
 
+  it('dedupes on the CLEANED id: two raw ids differing only by characters the cleaning removes are one entry', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([
+        { tool_name: 'Bash', tool_use_id: 'toolu_a' },
+        { tool_name: 'Write', tool_use_id: 'toolu_\u200Ba' },
+        { tool_name: 'Edit', tool_use_id: 'toolu_a\u202E' },
+      ]),
+    ]);
+    expect(result.cliDenied).toEqual([{ tool: 'Bash', toolUseId: 'toolu_a' }]);
+  });
+
   it('cleans and bounds the vendor strings like the sibling SDK tokens', async () => {
     const { result } = await runWith([
       INIT,

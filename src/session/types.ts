@@ -63,8 +63,8 @@ export interface SdkResultMessage {
    */
   stop_reason?: string | null;
   /**
-   * Every non-allow outcome of the CLI's own permission check (issue #209),
-   * declared on BOTH result variants. Declared optional here so drift yields an
+   * By the 2.1.201 binary reading, every non-allow outcome of the CLI's
+   * canUseTool check (unobserved; issue #209), declared on BOTH result variants. Declared optional here so drift yields an
    * empty list; the parse additionally tolerates a non-array or malformed
    * entries at runtime, since the stream is untrusted.
    */
@@ -501,10 +501,13 @@ export interface SessionResult {
   /**
    * Tool calls the CLI's own permission check refused, from the last result
    * message's `permission_denials` (issue #209). Separate from `denied`, which
-   * counts only the harness's own pre-tool denials; PreToolUse hook denials
-   * bypass the CLI's check, so the two do not overlap. Empty means "the result
-   * named none", not "the CLI blocked nothing": a stream with no result message
-   * or an old CLI that omits the array reads the same. Not persisted to memory.
+   * counts only the harness's own pre-tool denials. PreToolUse hook denials
+   * bypass canUseTool (sdk.d.ts:3900), and by the binary reading (bundled CLI
+   * 2.1.201) the array is filled only there, so the two should not overlap; the
+   * keyed overlap leg checks it. Empty means "the result named none", not "the
+   * CLI blocked nothing": a stream with no result message or a CLI that omits
+   * the array reads the same. Not persisted to memory. `tool_input`'s absence is
+   * asserted on the result, the memory row and the warnings only.
    */
   cliDenied: readonly CliDeniedToolCall[];
   memoryEntryId: string | null;
