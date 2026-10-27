@@ -17,7 +17,10 @@ import type {
   PreToolUseHookSpecificOutput,
   SDKAPIRetryMessage,
   SDKMessage,
+  SDKPermissionDenial,
+  SDKResultError,
   SDKResultMessage,
+  SDKResultSuccess,
   SDKUserMessage,
   SettingSource as SettingSource_SDK,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -28,6 +31,7 @@ import type {
   SdkHookInput,
   SdkHookMatcher,
   SdkHookOutputFor,
+  SdkPermissionDenial,
   SdkResultMessage,
   SdkPostToolFailureAnnotateOutput,
   SdkPostToolRewriteOutput,
@@ -370,6 +374,54 @@ describe('issue #84 D6 rewrite/failure/user-message type parity', () => {
       _bareIsWidest,
       _bareNarrows,
       _postCannotDeny,
+    ]).toBeDefined();
+  });
+});
+
+// ---- Issue #209 parity pins --------------------------------------------------
+//
+// The CLI's own denials are read from the result message's `permission_denials`
+// (sdk.d.ts SDKPermissionDenial, on BOTH result variants). The view models the
+// tool name and id only: `tool_input` is untrusted and may carry secrets, so it
+// is absent from the view on purpose and the type forbids reading it. Direction
+// is SDK -> view (the SDK value flows to the harness), one pin per key.
+const _denialAssignable: Assignable<SDKPermissionDenial, SdkPermissionDenial> = true;
+const _denialNoExtra: NoExtraKeys<SdkPermissionDenial, SDKPermissionDenial> = true;
+const _denialSdkHasToolName: Assignable<'tool_name', keyof SDKPermissionDenial> = true;
+const _denialSdkHasToolUseId: Assignable<'tool_use_id', keyof SDKPermissionDenial> = true;
+const _denialSdkHasToolInput: Assignable<'tool_input', keyof SDKPermissionDenial> = true;
+const _denialViewOmitsToolInput: Assignable<'tool_input', keyof SdkPermissionDenial> = false;
+const _denialNameIsString: Assignable<SDKPermissionDenial['tool_name'], SdkPermissionDenial['tool_name']> = true;
+const _denialIdIsString: Assignable<SDKPermissionDenial['tool_use_id'], SdkPermissionDenial['tool_use_id']> = true;
+// Both result variants declare the array, and the view's field accepts each.
+const _successDenialsToView: Assignable<
+  SDKResultSuccess['permission_denials'],
+  NonNullable<SdkResultMessage['permission_denials']>
+> = true;
+const _errorDenialsToView: Assignable<
+  SDKResultError['permission_denials'],
+  NonNullable<SdkResultMessage['permission_denials']>
+> = true;
+// The field is NOT optional in the SDK; the view declares it optional so drift
+// yields an empty list. Pinned so a future SDK that makes it optional is noticed.
+const _sdkDenialsRequiredOnSuccess: Assignable<undefined, SDKResultSuccess['permission_denials']> = false;
+const _sdkDenialsRequiredOnError: Assignable<undefined, SDKResultError['permission_denials']> = false;
+
+describe('issue #209 permission_denials type parity', () => {
+  it('holds at compile time', () => {
+    expect([
+      _denialAssignable,
+      _denialNoExtra,
+      _denialSdkHasToolName,
+      _denialSdkHasToolUseId,
+      _denialSdkHasToolInput,
+      _denialViewOmitsToolInput,
+      _denialNameIsString,
+      _denialIdIsString,
+      _successDenialsToView,
+      _errorDenialsToView,
+      _sdkDenialsRequiredOnSuccess,
+      _sdkDenialsRequiredOnError,
     ]).toBeDefined();
   });
 });
