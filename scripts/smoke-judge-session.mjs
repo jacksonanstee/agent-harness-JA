@@ -510,6 +510,8 @@ function observe(sink, message) {
     const denials = message.permission_denials;
     sink.permissionDenials.push({
       at,
+      // The raw length, so a verdict can tell a complete parse from one that dropped malformed entries.
+      rawCount: Array.isArray(denials) ? denials.length : null,
       entries: Array.isArray(denials)
         ? denials
           .filter((d) => d !== null && typeof d === 'object' && typeof d.tool_name === 'string')
@@ -1399,9 +1401,12 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       markers, surfaceHits, warnings: sink.warnings,
       permissionDenials: sink.permissionDenials, permissionDenialsObservation: permissionDenialsObservation(sink),
     };
-    const lastDenials = sink.permissionDenials.filter((r) => r.entries !== null).at(-1)?.entries ?? null;
+    const lastRecord = sink.permissionDenials.filter((r) => r.entries !== null).at(-1) ?? null;
+    const lastDenials = lastRecord?.entries ?? null;
     const permissionDenialIds = lastDenials === null ? null : lastDenials.map((e) => e.toolUseId).filter((id) => id !== null);
-    return { permissionDenialIds, nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
+    // Complete = every raw entry parsed and carries an id; otherwise an absent id proves nothing about overlap.
+    const permissionDenialsComplete = lastRecord !== null && lastRecord.rawCount === lastDenials.length && lastDenials.every((e) => e.toolUseId !== null);
+    return { permissionDenialIds, permissionDenialsComplete, nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
   } finally {
     if (hadConfigDir) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     else delete process.env.CLAUDE_CONFIG_DIR;
@@ -1473,6 +1478,7 @@ function overlapVerdict(o) {
   if (o.deniedRows.length === 0) return ['UNCHECKED', 'no denied-by-hook Bash row exists, so there is no harness denial to compare against; re-run'];
   if (o.bashUses.length !== 1 || o.bashUses[0].id === null) return ['UNCHECKED', `the stream showed ${o.bashUses.length} Bash call(s) and the id is ${o.bashUses[0]?.id ?? 'null'}; the harness denial cannot be tied to one tool_use_id; re-run`];
   if (o.permissionDenialIds === null) return ['UNCHECKED', 'no result message carried a permission_denials array, so the overlap could not be read'];
+  if (!o.permissionDenialsComplete) return ['UNCHECKED', 'the permission_denials array had an entry with no string tool_name or tool_use_id, so an absent id does not prove there is no overlap'];
   const id = o.bashUses[0].id;
   if (o.permissionDenialIds.includes(id)) return ['FAIL', `the same tool_use_id ${id} is in both the harness denied-by-hook row and permission_denials: a double count (merge blocker for #209)`];
   return ['PASS', `the harness denied Bash by hook and permission_denials (${o.permissionDenialIds.length} id(s)) does not contain its tool_use_id ${id}: no double count`];
