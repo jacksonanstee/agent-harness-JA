@@ -105,6 +105,10 @@
 // isolated PASS cannot be a leg whose fixtures were never able to bite. The start line the harness `run` command prints is
 // not observable through createSession; the keyless pin in Task 6 is its only proof. Run them alone:
 // SMOKE_LEGS=isolated-floor,isolated-grant,isolated-project-rule,inherited (Task 11 Step 3, the owner).
+// Issue #209: the isolation legs also record each result message's `permission_denials` (tool names and ids only, never
+// `tool_input`) and the two floor legs append a RECORDED or UNCHECKED observation to their detail saying whether it named Bash.
+// It is an observation, never a verdict: the array is unobserved (the bundled-CLI reading is that it holds headless `ask`
+// refusals), so an absent array is UNCHECKED and no state of it can FAIL a leg. This is the owner's keyed capture for #209.
 //
 // Keyed run 1 (22/10/2026, exit 1, probe `printf harness-ok-<nonce>`): isolated-grant and inherited PASSed, but isolated-floor and isolated-project-rule FAILed because the
 // floor ran a literal `printf` with no grant; by the binary reading, the CLI's own read-only Bash validator (eXp, byte offset 215797085 of the 2.1.201 binary) accepts it, and `echo`
@@ -395,6 +399,10 @@ function newSink() {
     nonce: null,
     systemMessages: [], // { at, subtype, body }
     toolUses: [],
+    // Issue #209: each result message's `permission_denials` as { at, entries } where entries is null when the
+    // field was absent or not an array, else [{ tool, toolUseId }]. Names and ids ONLY: `tool_input` is never
+    // read here (untrusted, may carry secrets). Unobserved until the owner's keyed capture.
+    permissionDenials: [],
   };
 }
 
@@ -496,6 +504,15 @@ function observe(sink, message) {
     // error_* kind, `is_error`, the `result` text or `errors` list).
     const text = message.subtype === 'success' ? stringify(message.result) : stringify(message.errors ?? message.result ?? '');
     sink.resultMessages.push({ at, subtype: message.subtype ?? null, is_error: message.is_error ?? null, text: redactSynth(text).slice(0, 500) });
+    const denials = message.permission_denials;
+    sink.permissionDenials.push({
+      at,
+      entries: Array.isArray(denials)
+        ? denials
+          .filter((d) => d !== null && typeof d === 'object' && typeof d.tool_name === 'string')
+          .map((d) => ({ tool: redactSynth(d.tool_name).slice(0, 100), toolUseId: typeof d.tool_use_id === 'string' ? redactSynth(d.tool_use_id).slice(0, 100) : null }))
+        : null,
+    });
   } else if (message?.type === 'system' && message.subtype === 'hook_response') {
     sink.hookResponses.push({ at, event: message.hook_event, hook_name: message.hook_name ?? null, outcome: message.outcome, output: redactSynth(stringify(message.output)).slice(0, 300) });
   } else if (message?.type === 'assistant') {
@@ -1367,6 +1384,7 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       hookRows: hookRows.map((r) => ({ ...r, reason: typeof r.reason === 'string' ? redactSynth(r.reason) : r.reason })),
       traceRows: traceRows.map((r) => ({ tool: r.payload.tool, phase: r.payload.phase, resultSummary: redactSynth(r.payload.resultSummary ?? '') })),
       markers, surfaceHits, warnings: sink.warnings,
+      permissionDenials: sink.permissionDenials, permissionDenialsObservation: permissionDenialsObservation(sink),
     };
     return { nonce, sink, init, missingFields, markers, bashUses, bashResults, deniedSystem, deniedRows, grantRows, nonceRan, bashRanProbe, probePath, otherTools, attempted, assistantQuoted, surfaceHits, data };
   } finally {
@@ -1382,6 +1400,21 @@ async function observeIsolationLeg({ permissions, settingSources }) {
 // the remaining FAILs, then PASS.
 // A denied-by-hook Bash row means the harness refused the model's command shape (the sandbox denies
 // backslashes and chaining) before any grant could be returned: the grant oracles do not apply.
+// Issue #209: what the result message's `permission_denials` said, as an OBSERVATION and never a verdict. The
+// array has not been seen filled live (the bundled-CLI reading is that it holds headless `ask` refusals too),
+// so this smoke is the capture: no result message, or no array on any of them, is UNCHECKED (the field was not
+// observed); otherwise RECORDED with the tool names and whether Bash is among them. Neither state can FAIL a
+// leg or move the exit code. The last result message wins, as the session does.
+function permissionDenialsObservation(sink) {
+  const withArray = sink.permissionDenials.filter((r) => r.entries !== null);
+  if (withArray.length === 0) {
+    return { state: 'UNCHECKED', namedBash: null, tools: [], detail: `permission_denials UNCHECKED: ${sink.permissionDenials.length === 0 ? 'no result message was seen' : 'no result message carried the array'}` };
+  }
+  const tools = [...new Set(withArray[withArray.length - 1].entries.map((e) => e.tool))];
+  const namedBash = tools.includes('Bash');
+  return { state: 'RECORDED', namedBash, tools, detail: `permission_denials RECORDED: ${tools.length === 0 ? 'empty array' : tools.join(',')}; named Bash: ${namedBash}` };
+}
+
 const refusedShape = (o) => o.deniedRows.length > 0
   ? `the model's command shape was refused by the harness (${o.deniedRows[0].reason}); command: ${o.bashUses[0]?.command ?? 'unrecorded'}; re-run`
   : null;
@@ -1409,13 +1442,13 @@ function isolatedVerdict(o, { leg, ruleOnProject }) {
 async function legIsolatedFloor() {
   const o = await observeIsolationLeg({ permissions: null, settingSources: [] });
   const [status, detail] = isolatedVerdict(o, { leg: 'isolated-floor', ruleOnProject: false });
-  recordLeg('isolated-floor', status, detail, o.data, evidenceDir140);
+  recordLeg('isolated-floor', status, `${detail}; ${o.data.permissionDenialsObservation.detail}`, o.data, evidenceDir140);
 }
 
 async function legIsolatedProjectRule() {
   const o = await observeIsolationLeg({ permissions: { user: {}, project: RULE_ONLY_DOC }, settingSources: [] });
   const [status, detail] = isolatedVerdict(o, { leg: 'isolated-project-rule', ruleOnProject: true });
-  recordLeg('isolated-project-rule', status, detail, o.data, evidenceDir140);
+  recordLeg('isolated-project-rule', status, `${detail}; ${o.data.permissionDenialsObservation.detail}`, o.data, evidenceDir140);
 }
 
 // Leg 10: the grant. The user document carries the Bash rule AND the sandbox list (D-8); settingSources: [].
