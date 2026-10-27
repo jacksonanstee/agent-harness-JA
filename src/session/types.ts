@@ -34,6 +34,18 @@ export interface SdkUsage {
   cache_read_input_tokens?: number;
 }
 
+/**
+ * Minimal structural view of the SDK's `SDKPermissionDenial` (sdk.d.ts:3893),
+ * read from the result message's `permission_denials` (issue #209, ADR-0040).
+ * `tool_input` is deliberately NOT modelled: it is untrusted and may carry
+ * secrets, and the harness drops it at the parse, so the type forbids reading
+ * it. Parity-pinned in sdk-types.test.ts.
+ */
+export interface SdkPermissionDenial {
+  tool_name: string;
+  tool_use_id: string;
+}
+
 export interface SdkResultMessage {
   type: 'result';
   subtype: string;
@@ -50,6 +62,13 @@ export interface SdkResultMessage {
    * value this harness branches on (ADR-0025).
    */
   stop_reason?: string | null;
+  /**
+   * Every non-allow outcome of the CLI's own permission check (issue #209),
+   * declared on BOTH result variants. Declared optional here so drift yields an
+   * empty list; the parse additionally tolerates a non-array or malformed
+   * entries at runtime, since the stream is untrusted.
+   */
+  permission_denials?: SdkPermissionDenial[];
 }
 
 /**
@@ -419,6 +438,18 @@ export interface DeniedToolCall {
 }
 
 /**
+ * A tool call the Claude Code CLI's own permission check refused (issue #209,
+ * ADR-0040), read from the result message's `permission_denials`. Tool name and
+ * id only: the SDK's `tool_input` is dropped at the parse. Both strings are
+ * cleaned and bounded like the other SDK tokens.
+ */
+export interface CliDeniedToolCall {
+  tool: string;
+  /** Null when the SDK sent no usable id (absent, non-string, or cleaned to nothing). */
+  toolUseId: string | null;
+}
+
+/**
  * Which channel the refusal was detected on. `system-event` is the richer one
  * (it can carry a category and a fallback model); `result-stop-reason` is the
  * fallback channel that still works on CLIs old enough to omit the banner.
@@ -467,6 +498,15 @@ export interface SessionResult {
   costUsd: number | null;
   numTurns: number | null;
   denied: DeniedToolCall[];
+  /**
+   * Tool calls the CLI's own permission check refused, from the last result
+   * message's `permission_denials` (issue #209). Separate from `denied`, which
+   * counts only the harness's own pre-tool denials; PreToolUse hook denials
+   * bypass the CLI's check, so the two do not overlap. Empty means "the result
+   * named none", not "the CLI blocked nothing": a stream with no result message
+   * or an old CLI that omits the array reads the same. Not persisted to memory.
+   */
+  cliDenied: readonly CliDeniedToolCall[];
   memoryEntryId: string | null;
   skillErrors: SkillError[];
   /**

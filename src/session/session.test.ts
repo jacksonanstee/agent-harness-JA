@@ -2934,6 +2934,152 @@ describe('createSession', () => {
 // telemetry. A telemetry-side version of this file is not a style preference,
 // it fails `npm run lint`. Not in layering.test.ts either: that file's mandate
 // is proving the eslint rules fire, not asserting cross-module constants.
+// Issue #209 / ADR-0040. The CLI's own permission denials arrive on the RESULT
+// message's `permission_denials`, not through a hook the harness decides, so
+// they are counted apart from `denied`. `tool_input` is untrusted and may
+// carry secrets: it is dropped at the parse, never stored, logged or returned.
+describe('CLI permission denials (issue #209)', () => {
+  const SECRET = 'AKIAIOSFODNN7EXAMPLE-tool-input-secret';
+
+  function resultWith(denials: unknown): SdkMessage {
+    return { ...RESULT, permission_denials: denials } as SdkMessage;
+  }
+
+  async function runWith(messages: SdkMessage[], warnings: string[] = []) {
+    const memory = createMemoryStore(openMemoryDatabase({ path: ':memory:' }));
+    const session = createSession(makeDeps(fakeQuery(messages), { memory }), {
+      skillsDir: null,
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('hi');
+    return { result, memory, warnings };
+  }
+
+  it('keeps tool name and tool_use_id, and drops tool_input everywhere', async () => {
+    const { result, memory, warnings } = await runWith([
+      INIT,
+      resultWith([{ tool_name: 'Bash', tool_use_id: 'toolu_a', tool_input: { command: SECRET } }]),
+    ]);
+
+    expect(result.cliDenied).toEqual([{ tool: 'Bash', toolUseId: 'toolu_a' }]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(memory.read({})[0]?.content ?? '').not.toContain(SECRET);
+    expect(warnings.join('\n')).not.toContain(SECRET);
+  });
+
+  it('is an empty list when the result carries no permission_denials', async () => {
+    const { result } = await runWith([INIT, RESULT]);
+    expect(result.cliDenied).toEqual([]);
+  });
+
+  it('is an empty list when there is no result message at all', async () => {
+    const { result } = await runWith([INIT]);
+    expect(result.cliDenied).toEqual([]);
+  });
+
+  it.each([
+    ['a string', 'Bash'],
+    ['an object', { tool_name: 'Bash', tool_use_id: 'toolu_a' }],
+    ['null', null],
+    ['a number', 3],
+  ])('treats %s in place of the array as absent, never throwing', async (_label, value) => {
+    const { result } = await runWith([INIT, resultWith(value)]);
+    expect(result.cliDenied).toEqual([]);
+  });
+
+  it('skips malformed entries and keeps the well-formed one among them', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([
+        null,
+        7,
+        'Bash',
+        [],
+        {},
+        { tool_name: 42, tool_use_id: 'toolu_x' },
+        { tool_name: '', tool_use_id: 'toolu_y' },
+        { tool_name: '\u200B\u202E', tool_use_id: 'toolu_z' },
+        { tool_name: 'Write', tool_use_id: 'toolu_ok' },
+      ]),
+    ]);
+    expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_ok' }]);
+  });
+
+  it('keeps an entry whose id is missing, non-string or cleans to nothing, with a null id', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([
+        { tool_name: 'Bash' },
+        { tool_name: 'Edit', tool_use_id: 9 },
+        { tool_name: 'Write', tool_use_id: '\u200B' },
+      ]),
+    ]);
+    expect(result.cliDenied).toEqual([
+      { tool: 'Bash', toolUseId: null },
+      { tool: 'Edit', toolUseId: null },
+      { tool: 'Write', toolUseId: null },
+    ]);
+  });
+
+  it('dedupes by tool_use_id (first wins) but never merges entries with no id', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([
+        { tool_name: 'Bash', tool_use_id: 'toolu_a' },
+        { tool_name: 'Write', tool_use_id: 'toolu_a' },
+        { tool_name: 'Bash', tool_use_id: 'toolu_b' },
+        { tool_name: 'Bash' },
+        { tool_name: 'Bash' },
+      ]),
+    ]);
+    expect(result.cliDenied).toEqual([
+      { tool: 'Bash', toolUseId: 'toolu_a' },
+      { tool: 'Bash', toolUseId: 'toolu_b' },
+      { tool: 'Bash', toolUseId: null },
+      { tool: 'Bash', toolUseId: null },
+    ]);
+  });
+
+  it('cleans and bounds the vendor strings like the sibling SDK tokens', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([
+        { tool_name: `Ba\u202Esh\u200B ${'x'.repeat(300)}`, tool_use_id: ` toolu\u202E_a\n${'y'.repeat(300)}` },
+      ]),
+    ]);
+    // cleanSdkToken keeps 100 characters and appends an ellipsis.
+    const [entry] = result.cliDenied;
+    expect(entry?.tool).toMatch(/^Ba_sh_x+…$/);
+    expect(entry?.tool.length).toBe(101);
+    expect(entry?.toolUseId).toMatch(/^toolu__a_y+…$/);
+    expect(entry?.toolUseId?.length).toBe(101);
+  });
+
+  it('reads the denials from the last result message, as cost and usage do', async () => {
+    const { result } = await runWith([
+      INIT,
+      resultWith([{ tool_name: 'Bash', tool_use_id: 'toolu_first' }]),
+      resultWith([{ tool_name: 'Write', tool_use_id: 'toolu_last' }]),
+    ]);
+    expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_last' }]);
+  });
+
+  it('counts CLI denials separately from the harness hook denials', async () => {
+    const fake = fakeQuery(
+      [INIT, resultWith([{ tool_name: 'Write', tool_use_id: 'toolu_a' }])],
+      [{ tool: 'Bash', input: { command: 'x' }, output: 'never' }],
+    );
+    const hooks = createHookRuntime();
+    hooks.register('pre-tool', (payload) => {
+      if (payload.tool === 'Bash') throw new HookDenial('bash is blocked');
+    });
+    const session = createSession(makeDeps(fake, { hooks }), { skillsDir: null });
+    const result = await session.run('hi');
+    expect(result.denied).toHaveLength(1);
+    expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_a' }]);
+  });
+});
+
 describe('SkillDropChannel drift guards', () => {
   // Sibling of store.test.ts's 'TELEMETRY_EVENT_TYPES covers every member of
   // the union'. Unlike that one, this asserts IN ORDER rather than sorted:

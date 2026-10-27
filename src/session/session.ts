@@ -13,6 +13,7 @@ import {
 import type { TelemetryEventInput } from '../telemetry/index.js';
 import type { ScanResult } from '../security/index.js';
 import type {
+  CliDeniedToolCall,
   DeniedToolCall,
   DroppedSkill,
   OutputAnnotation,
@@ -242,6 +243,33 @@ function truncate(value: string | null): string | null {
 function cleanSdkId(raw: string): string | null {
   const clean = cleanSdkToken(raw);
   return clean === '' ? null : clean;
+}
+
+/**
+ * Reads the result message's `permission_denials` (issue #209) into tool name
+ * and id only. `tool_input` is never read: it is untrusted and may carry
+ * secrets. The stream is untrusted too, so a non-array is treated as absent and
+ * a malformed entry (not an object, or a `tool_name` that is not a string or
+ * cleans to nothing) is skipped, never thrown on. Deduplicated by id, first
+ * wins; an entry with no usable id is kept and never merged with another.
+ */
+function parseCliDenials(raw: unknown): CliDeniedToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  const seenIds = new Set<string>();
+  const denials: CliDeniedToolCall[] = [];
+  for (const entry of raw as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { tool_name: rawTool, tool_use_id: rawId } = entry as Record<string, unknown>;
+    const tool = typeof rawTool === 'string' ? cleanSdkId(rawTool) : null;
+    if (tool === null) continue;
+    const toolUseId = typeof rawId === 'string' ? cleanSdkId(rawId) : null;
+    if (toolUseId !== null) {
+      if (seenIds.has(toolUseId)) continue;
+      seenIds.add(toolUseId);
+    }
+    denials.push({ tool, toolUseId });
+  }
+  return denials;
 }
 
 function isSystemInit(message: SdkMessage): message is SdkSystemMessage {
@@ -1588,6 +1616,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let resultText: string | null = null;
     let resultSubtype: string | null = null;
     let stopReason: string | null = null;
+    let cliDenied: CliDeniedToolCall[] = [];
     let refusal: SessionRefusal | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
@@ -1657,6 +1686,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
+          // Last result wins, like cost and usage above (issue #209).
+          cliDenied = parseCliDenials(message.permission_denials);
           // Second, independent channel: works on CLIs old enough to omit the
           // banner. Never downgrades a banner record, which carries strictly
           // more (category, fallback model).
@@ -1803,6 +1834,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       costUsd,
       numTurns,
       denied,
+      cliDenied,
       memoryEntryId,
       skillErrors: loadResult.errors,
       droppedSkills,
