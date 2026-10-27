@@ -1402,7 +1402,9 @@ async function observeIsolationLeg({ permissions, settingSources }) {
       markers, surfaceHits, warnings: sink.warnings,
       permissionDenials: sink.permissionDenials, permissionDenialsObservation: permissionDenialsObservation(sink),
     };
-    const lastRecord = sink.permissionDenials.filter((r) => r.entries !== null).at(-1) ?? null;
+    // The LAST result message, as the session reads it: an earlier array must not stand in for a final result that carried none.
+    const finalRecord = sink.permissionDenials.at(-1) ?? null;
+    const lastRecord = finalRecord !== null && finalRecord.entries !== null ? finalRecord : null;
     const lastDenials = lastRecord?.entries ?? null;
     const permissionDenialIds = lastDenials === null ? null : lastDenials.map((e) => e.toolUseId).filter((id) => id !== null);
     // Complete = every raw entry parsed and carries an id; otherwise an absent id proves nothing about overlap.

@@ -479,7 +479,7 @@ export function formatCliDeniedWarning(cliDenied: readonly CliDeniedToolCall[]):
   return (
     `${WARNING_PREFIX}${sanitizeDiagnostic(
       `${cliDenied.length} tool call(s) refused by the Claude Code CLI's own permission check ` +
-        `(not a harness hook; see ADR-0040): ${tools}`,
+        `(not this harness's hooks; with inherited settings, the operator's own hooks may count here; see ADR-0040): ${tools}`,
     )}`
   );
 }

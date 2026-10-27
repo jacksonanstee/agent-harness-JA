@@ -3105,26 +3105,38 @@ describe('CLI permission denials (issue #209)', () => {
       expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_cli' }]);
     });
 
-    it('compares on the cleaned id: a padded id from the SDK still matches its cleaned entry', async () => {
+    // Exact raw match only: a near-miss over-counts (safe) and can never hide a different CLI refusal.
+    const runWithIds = (callbackId: string, entries: unknown[]) => {
       const query: QueryFn = (args) =>
         (async function* () {
           const cb = args.options?.hooks?.PreToolUse?.[0]?.hooks[0] as SdkHookCallback;
           await cb(
             { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'ignored' },
-            '  toolu_9\n',
+            callbackId,
             { signal: new AbortController().signal },
           );
           yield INIT;
-          yield resultWith([{ tool_name: 'Bash', tool_use_id: 'toolu_9' }]);
+          yield resultWith(entries);
         })();
       const hooks = createHookRuntime();
       hooks.register('pre-tool', () => {
         throw new HookDenial('blocked');
       });
-      const session = createSession(makeDeps({ query, captured: [] }, { hooks }), { skillsDir: null });
-      const result = await session.run('hi');
+      return createSession(makeDeps({ query, captured: [] }, { hooks }), { skillsDir: null }).run('hi');
+    };
+
+    it('compares on the RAW id: a padded callback id does not match a clean entry, so it over-counts', async () => {
+      const result = await runWithIds('  toolu_9\n', [{ tool_name: 'Bash', tool_use_id: 'toolu_9' }]);
       expect(result.denied).toHaveLength(1);
-      expect(result.cliDenied).toEqual([]);
+      expect(result.cliDenied).toEqual([{ tool: 'Bash', toolUseId: 'toolu_9' }]);
+    });
+
+    it('never hides a CLI refusal whose id only CLEANS to the harness-denied one', async () => {
+      const result = await runWithIds('toolu_X\u200b', [
+        { tool_name: 'Bash', tool_use_id: 'toolu_X\u200b' },
+        { tool_name: 'Write', tool_use_id: 'toolu_X' },
+      ]);
+      expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_X' }]);
     });
 
     it('keeps a null-id entry: it cannot be shown to be a harness denial', async () => {

@@ -255,8 +255,9 @@ function cleanSdkId(raw: string): string | null {
  *
  * The array is the UNION of the CLI's own refusals and the harness's own hook
  * denials (keyed capture 46899fd, 27/10/2026: one harness-denied Bash call
- * appeared in it under the same tool_use_id). Entries whose id is in
- * `harnessDeniedIds` are dropped, so `cliDenied` counts only what the harness
+ * appeared in it under the same tool_use_id). Entries whose RAW id exactly
+ * equals one in `harnessDeniedIds` are dropped (exact, so ids that only clean
+ * alike cannot hide a CLI refusal), so `cliDenied` counts only what the harness
  * did not itself deny. A null-id entry cannot be matched, so it is KEPT: it
  * cannot be shown to be a harness denial, and keeping it errs towards
  * reporting a refusal (a possible overcount) over hiding one.
@@ -270,9 +271,9 @@ function parseCliDenials(raw: unknown, harnessDeniedIds: ReadonlySet<string>): C
     const { tool_name: rawTool, tool_use_id: rawId } = entry as Record<string, unknown>;
     const tool = typeof rawTool === 'string' ? cleanSdkId(rawTool) : null;
     if (tool === null) continue;
+    if (typeof rawId === 'string' && harnessDeniedIds.has(rawId)) continue;
     const toolUseId = typeof rawId === 'string' ? cleanSdkId(rawId) : null;
     if (toolUseId !== null) {
-      if (harnessDeniedIds.has(toolUseId)) continue;
       if (seenIds.has(toolUseId)) continue;
       seenIds.add(toolUseId);
     }
@@ -1411,9 +1412,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
       if (deniedReason !== null) {
         denied.push({ tool, reason: deniedReason });
-        const rawDeniedId = resolveToolUseId(toolUseID, input.tool_use_id);
-        const deniedId = rawDeniedId === null ? null : cleanSdkId(rawDeniedId);
-        if (deniedId !== null) harnessDeniedIds.add(deniedId);
+        // The RAW SDK id, compared exactly: two ids that only clean to the same
+        // string must not let a harness deny hide a different CLI refusal.
+        const rawDeniedId = toolUseID ?? input.tool_use_id;
+        if (typeof rawDeniedId === 'string' && rawDeniedId.length > 0) harnessDeniedIds.add(rawDeniedId);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
