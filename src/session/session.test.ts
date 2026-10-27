@@ -3076,6 +3076,90 @@ describe('CLI permission denials (issue #209)', () => {
     expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_last' }]);
   });
 
+  describe('the harness subtracts its own denied ids (keyed capture 46899fd, 27/10/2026)', () => {
+    // fakeQuery drives every tool call with the id 'toolu_1' (callback arg and input field).
+    async function runDenying(denials: unknown, denyTool: string | null = 'Bash') {
+      const fake = fakeQuery([INIT, resultWith(denials)], [{ tool: 'Bash', input: { command: 'x' }, output: 'never' }]);
+      const hooks = createHookRuntime();
+      if (denyTool !== null) {
+        hooks.register('pre-tool', (payload) => {
+          if (payload.tool === denyTool) throw new HookDenial('blocked');
+        });
+      }
+      const session = createSession(makeDeps(fake, { hooks }), { skillsDir: null });
+      return session.run('hi');
+    }
+
+    it('drops the entry for a call the harness itself denied, keeping denied at 1', async () => {
+      const result = await runDenying([{ tool_name: 'Bash', tool_use_id: 'toolu_1' }]);
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([]);
+    });
+
+    it('keeps a CLI-only id beside a harness-denied one', async () => {
+      const result = await runDenying([
+        { tool_name: 'Bash', tool_use_id: 'toolu_1' },
+        { tool_name: 'Write', tool_use_id: 'toolu_cli' },
+      ]);
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_cli' }]);
+    });
+
+    it('compares on the cleaned id: a padded id from the SDK still matches its cleaned entry', async () => {
+      const query: QueryFn = (args) =>
+        (async function* () {
+          const cb = args.options?.hooks?.PreToolUse?.[0]?.hooks[0] as SdkHookCallback;
+          await cb(
+            { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'ignored' },
+            '  toolu_9\n',
+            { signal: new AbortController().signal },
+          );
+          yield INIT;
+          yield resultWith([{ tool_name: 'Bash', tool_use_id: 'toolu_9' }]);
+        })();
+      const hooks = createHookRuntime();
+      hooks.register('pre-tool', () => {
+        throw new HookDenial('blocked');
+      });
+      const session = createSession(makeDeps({ query, captured: [] }, { hooks }), { skillsDir: null });
+      const result = await session.run('hi');
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([]);
+    });
+
+    it('keeps a null-id entry: it cannot be shown to be a harness denial', async () => {
+      const result = await runDenying([{ tool_name: 'Bash' }]);
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([{ tool: 'Bash', toolUseId: null }]);
+    });
+
+    it('changes nothing when the harness denied a call no entry matches', async () => {
+      const result = await runDenying([{ tool_name: 'Write', tool_use_id: 'toolu_other' }]);
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([{ tool: 'Write', toolUseId: 'toolu_other' }]);
+    });
+
+    it('changes nothing when the harness denied nothing', async () => {
+      const result = await runDenying([{ tool_name: 'Bash', tool_use_id: 'toolu_1' }], null);
+      expect(result.denied).toEqual([]);
+      expect(result.cliDenied).toEqual([{ tool: 'Bash', toolUseId: 'toolu_1' }]);
+    });
+
+    it('subtracts the fail-closed deny when fire() itself rejects', async () => {
+      const fake = fakeQuery(
+        [INIT, resultWith([{ tool_name: 'Bash', tool_use_id: 'toolu_1' }])],
+        [{ tool: 'Bash', input: { command: 'x' }, output: 'never' }],
+      );
+      const hooks = createHookRuntime();
+      const realFire = hooks.fire.bind(hooks);
+      hooks.fire = (event, payload) => (event === 'pre-tool' ? Promise.reject(new Error('boom')) : realFire(event, payload));
+      const session = createSession(makeDeps(fake, { hooks }), { skillsDir: null, onWarning: () => undefined });
+      const result = await session.run('hi');
+      expect(result.denied).toHaveLength(1);
+      expect(result.cliDenied).toEqual([]);
+    });
+  });
+
   it('counts CLI denials separately from the harness hook denials', async () => {
     const fake = fakeQuery(
       [INIT, resultWith([{ tool_name: 'Write', tool_use_id: 'toolu_a' }])],
