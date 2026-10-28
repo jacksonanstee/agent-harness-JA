@@ -33,6 +33,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     sessionId: 's-1',
     modelChoice: { model: 'claude-sonnet-5', rule_id: 'r1', reason: 'test' },
     usage: null,
+    maxBudgetUsd: 1,
     costUsd: 0.01,
     numTurns: 2,
     denied: [],

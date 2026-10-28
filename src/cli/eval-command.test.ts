@@ -232,7 +232,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     try {
       const factory = makeEvalSessionFactory({
         query,
-        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, warnings: [] },
+        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, budget: { maxUsd: null }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
         create: (deps, config) => {
@@ -284,6 +284,7 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
           sandbox: {},
           judge: null,
           sdk: { settingSources: [] },
+          budget: { maxUsd: null },
           warnings: [],
         },
         telemetry: createTelemetryStore(db),
@@ -319,6 +320,7 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
           sandbox: {},
           judge: null,
           sdk: { settingSources },
+          budget: { maxUsd: null },
           warnings: [],
         },
         telemetry: createTelemetryStore(db),

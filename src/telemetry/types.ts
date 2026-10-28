@@ -62,6 +62,19 @@ export interface TurnCostPayload {
   estimateOutputDefaulted?: boolean;
   /** The `checked` date of the price row used (`PriceRow.checked`). */
   estimatePriceChecked?: string | null;
+  /**
+   * The dollar ceiling the run passed the SDK (issue #187, ADR-0041). A run
+   * the cap stopped has `resultSubtype` 'error_max_budget_usd'. OPTIONAL only
+   * so rows written before #187 still validate on read; the session always
+   * writes it.
+   */
+  maxBudgetUsd?: number;
+  /**
+   * True when the caller cancelled the run (Ctrl-C at the CLI, issue #187 D5).
+   * Optional for the same reason; `costUsd` is usually null on such a row,
+   * because the SDK reports no cost for an aborted run (probe 29/10/2026).
+   */
+  interrupted?: boolean;
 }
 
 /**

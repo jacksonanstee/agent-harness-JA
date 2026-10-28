@@ -5,6 +5,7 @@ import { EvalUsageError, toCanonicalJson, UNKNOWN_HARNESS_VERSION } from '../eva
 import type { HookEventRecord, HookRuntime } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { boundEcho, loadJsonSettings } from '../internal/settings.js';
+import { isBudgetUsd } from '../internal/limits.js';
 import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
@@ -31,6 +32,7 @@ import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, Sandbo
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
+import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from './budget-settings.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
@@ -70,7 +72,7 @@ export const WARNING_PREFIX = 'warning: ';
 export const JUDGE_MODEL_IDS: readonly string[] = [...new Set(DEFAULT_ROUTING_TABLE.map((rule) => rule.model))];
 
 export const USAGE =
-  `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>] [--expected-output-tokens <n>]\n` +
+  `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>] [--expected-output-tokens <n>] [--max-budget-usd <usd>]\n` +
   '       agent-harness-ja eval [taskDir] [--challenge] [--max-tasks <n>]\n' +
   `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${JUDGE_MODEL_IDS.join('|')}>] [--holdout <path>] [--samples <n>]\n` +
   `       agent-harness-ja telemetry export [--db <path>] [--out <file>] [--session <id>] [--type <${TELEMETRY_EVENT_TYPES.join('|')}>] [--scrub-prefix <abs-path>]...\n` +
@@ -95,6 +97,18 @@ export function parseSafeInt(value: string): number | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/**
+ * The `--max-budget-usd` parse (issue #187): plain decimal digits only (no
+ * sign, exponent, leading or trailing dot), then the shared `isBudgetUsd`
+ * rule, so `0`, `1e3` and a digit run that overflows to Infinity are all
+ * refused. Returns `undefined` for anything else; the caller words the error.
+ */
+export function parseUsd(value: string): number | undefined {
+  if (!/^\d+(\.\d+)?$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return isBudgetUsd(parsed) ? parsed : undefined;
 }
 
 // TERMINAL_UNSAFE itself now lives in src/internal/sanitize.ts, beside the
@@ -247,6 +261,8 @@ export interface CliSeams {
   importSdk?: ImportSdk;
   /** The eval scorecard directory; defaults to `EVAL_OUT_DIR`. A vitest worker cannot chdir, so a test redirects the write here. */
   evalOutDir?: string;
+  /** Installs the `run` interrupt handler; defaults to `installSigintHandler`. A test triggers the handler directly instead of signalling the worker. */
+  onInterrupt?: (handler: () => void) => () => void;
 }
 
 const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;
@@ -317,6 +333,11 @@ export interface SecurityComposition {
    * isolates the child. Read by `run` and `eval`.
    */
   sdk: { settingSources: SettingSource[] };
+  /**
+   * The run's dollar ceiling (#187, ADR-0041 D3), from the USER layer's
+   * `budget.maxUsd` only; null means the session default. Read by `run`.
+   */
+  budget: { maxUsd: number | null };
   /** Startup notices for the operator (prompter gaps, risky allowlists, an ignored project judge key). */
   warnings: string[];
 }
@@ -372,20 +393,24 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
             // detected, so a malformed one can never exit 2 or widen sources.
             sdk: isUser ? parseSdkSettings(doc) : [],
             sdkKeyPresent: hasSdkKey(doc),
+            // #187 D3: the same rule for `budget`; a project cap is never parsed.
+            budget: isUser ? parseBudgetSettings(doc) : null,
+            budgetKeyPresent: hasBudgetKey(doc),
           };
         } catch (error: unknown) {
           if (
             error instanceof PermissionSettingsError ||
             error instanceof SandboxSettingsError ||
             error instanceof JudgeSettingsError ||
-            error instanceof SdkSettingsError
+            error instanceof SdkSettingsError ||
+            error instanceof BudgetSettingsError
           ) {
             throw new SettingsLoadError(error.message);
           }
           throw error;
         }
       },
-      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], sdkKeyPresent: false },
+      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], sdkKeyPresent: false, budget: null, budgetKeyPresent: false },
       SettingsLoadError,
       deps.readFile,
     );
@@ -400,6 +425,9 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   }
   if (project.sdkKeyPresent) {
     warnings.push(`ignoring "sdk" in ${projectPath}: Claude Code settings sources are configured only in ~/.harness/settings.json`);
+  }
+  if (project.budgetKeyPresent) {
+    warnings.push(`ignoring "budget" in ${projectPath}: the budget is configured only in ~/.harness/settings.json`);
   }
   if (user.sdk.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
   if (user.sdk.includes('project') || user.sdk.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
@@ -438,7 +466,15 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   const grantPolicy: GrantPolicy = {
     ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS),
   };
-  return { permissions, grantPolicy, sandbox, judge: user.judge, sdk: { settingSources: user.sdk }, warnings };
+  return {
+    permissions,
+    grantPolicy,
+    sandbox,
+    judge: user.judge,
+    sdk: { settingSources: user.sdk },
+    budget: { maxUsd: user.budget },
+    warnings,
+  };
 }
 
 /**

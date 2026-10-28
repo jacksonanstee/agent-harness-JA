@@ -48,6 +48,7 @@ import {
   truncateTailWellFormed,
   truncateWellFormed,
 } from '../internal/sanitize.js';
+import { isBudgetUsd } from '../internal/limits.js';
 
 /**
  * Exhaustive BY CONSTRUCTION. The previous
@@ -343,7 +344,9 @@ function isTurnCostPayload(value: unknown): value is TurnCostPayload {
     (value.estimateTurns === undefined || isNonNegativeOrNull(value.estimateTurns)) &&
     (value.estimateOutputCount === undefined || isNonNegativeOrNull(value.estimateOutputCount)) &&
     (value.estimateOutputDefaulted === undefined || typeof value.estimateOutputDefaulted === 'boolean') &&
-    isOptionalStringOrNull(value.estimatePriceChecked)
+    isOptionalStringOrNull(value.estimatePriceChecked) &&
+    (value.maxBudgetUsd === undefined || isBudgetUsd(value.maxBudgetUsd)) &&
+    (value.interrupted === undefined || typeof value.interrupted === 'boolean')
   );
 }
 

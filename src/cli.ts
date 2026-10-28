@@ -11,6 +11,7 @@ import {
   hookRecordToTelemetryInput,
   loadSdkQuery,
   parseSafeInt,
+  parseUsd,
   registerSecurityHooks,
   sanitizeDiagnostic,
   sanitizeForTerminal,
@@ -22,6 +23,7 @@ import { DEFAULT_MAX_TURNS } from './internal/limits.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
 import { formatUsd } from './internal/money.js';
+import { installSigintHandler } from './cli/interrupt.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './cli/run-judge.js';
 import { sdkStartLine } from './cli/run-sdk.js';
 import type { CliSeams, SecurityComposition } from './cli/shared.js';
@@ -83,6 +85,8 @@ export interface RunArgs {
   descriptor: TaskDescriptor;
   /** `--expected-output-tokens`: CLI-only guess for the cost estimate (#192); key absent when not given. */
   outputGuess?: number;
+  /** `--max-budget-usd` (#187); key absent when not given, so user settings, then the session default, apply. */
+  maxBudgetUsd?: number;
 }
 
 export interface TelemetryExportArgs {
@@ -190,9 +194,10 @@ function parseTelemetryArgs(argv: string[]): ParseResult {
 }
 
 export function parseRunArgs(argv: string[]): ParseResult {
-  // Hand-written if-ladder on purpose, not a parser library: 6 flags, all
+  // Hand-written if-ladder on purpose, not a parser library: 8 flags, all
   // value flags in one branch, plus the prompt positional. Revisit at 10 flags
-  // in one parser. Integers go through parseSafeInt (#128), floors per flag.
+  // in one parser. Integers go through parseSafeInt (#128), floors per flag;
+  // the dollar cap through parseUsd (#187).
   const [command, ...rest] = argv;
   if (command !== 'run') {
     return { ok: false, error: `Unknown command '${command ?? ''}'. ${USAGE}` };
@@ -208,6 +213,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
   let sensitivity = DEFAULT_DESCRIPTOR.sensitivity;
   let expectedTokens = DEFAULT_DESCRIPTOR.expected_tokens;
   let outputGuess: number | undefined;
+  let maxBudgetUsd: number | undefined;
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
@@ -219,7 +225,8 @@ export function parseRunArgs(argv: string[]): ParseResult {
       arg === '--shape' ||
       arg === '--sensitivity' ||
       arg === '--expected-tokens' ||
-      arg === '--expected-output-tokens'
+      arg === '--expected-output-tokens' ||
+      arg === '--max-budget-usd'
     ) {
       const value = rest[i + 1];
       if (value === undefined) {
@@ -266,6 +273,13 @@ export function parseRunArgs(argv: string[]): ParseResult {
         }
         outputGuess = parsed;
       }
+      if (arg === '--max-budget-usd') {
+        const parsed = parseUsd(value);
+        if (parsed === undefined) {
+          return { ok: false, error: `--max-budget-usd must be a number of US dollars greater than 0, such as 2.50. ${USAGE}` };
+        }
+        maxBudgetUsd = parsed;
+      }
       i += 1;
     } else if (arg.startsWith('--')) {
       return { ok: false, error: `Unknown flag '${arg}'. ${USAGE}` };
@@ -290,6 +304,7 @@ export function parseRunArgs(argv: string[]): ParseResult {
       maxTurns,
       descriptor: { shape, sensitivity, expected_tokens: expectedTokens },
       ...(outputGuess === undefined ? {} : { outputGuess }),
+      ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     },
   };
 }
@@ -466,6 +481,30 @@ export function formatRunSummaryLine(
 }
 
 /**
+ * The stderr line naming why a run ended without success (issue #187, D4 and
+ * D7), or null for success or no result. A budget stop names the cap and the
+ * SDK's own cost figure, which can exceed the cap: the SDK checks it after
+ * each turn, and prices some models above list (#212).
+ */
+export function formatStopLine(result: Pick<SessionResult, 'resultSubtype' | 'costUsd' | 'maxBudgetUsd'>): string | null {
+  if (result.resultSubtype === null || result.resultSubtype === 'success') return null;
+  if (result.resultSubtype === 'error_max_budget_usd') {
+    const cost = result.costUsd === null ? 'n/a' : formatUsd(result.costUsd);
+    return (
+      `[harness] budget: run stopped at the ${formatUsd(result.maxBudgetUsd)} cap after the turn that crossed it ` +
+      `(SDK-reported cost ${cost}; the cap is checked after each turn, ADR-0041)`
+    );
+  }
+  return `[harness] stopped: the run ended without success (result=${formatTokenField(result.resultSubtype)})`;
+}
+
+/** The `run` line for a Ctrl-C (issue #187 D5); exit 130 is the shell's code for SIGINT. */
+export const INTERRUPTED_LINE =
+  '[harness] interrupted: the run was stopped; its turn-cost row is recorded with cost unknown ' +
+  '(the SDK reports no cost for an aborted run)';
+const EXIT_INTERRUPTED = 130;
+
+/**
  * One stderr warning when the Claude Code CLI refused tool calls (issue #209),
  * or null when it refused none. Names the tools (deduplicated, first-seen
  * order, each QUOTED so a tool named `denied=5` cannot read like a run-line
@@ -532,7 +571,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     return 2;
   }
 
-  const { prompt, skillsDir, dbPath, maxTurns, descriptor, outputGuess } = parsed.value;
+  const { prompt, skillsDir, dbPath, maxTurns, descriptor, outputGuess, maxBudgetUsd: flagBudget } = parsed.value;
 
   // A malicious clone can commit its skills directory as a symlink whose
   // target escapes the project; load() realpaths the root and scans the
@@ -608,6 +647,11 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   // Order (permissions, then sandbox) lives in registerSecurityHooks.
   registerSecurityHooks(hooks, security);
 
+  // #187 D3: flag > user settings > the session's default. Only absence
+  // falls through: both sources are already validated by isBudgetUsd.
+  const maxBudgetUsd = flagBudget ?? security.budget.maxUsd ?? undefined;
+  const interrupt = new AbortController();
+
   const session = createSession(
     {
       query,
@@ -626,6 +670,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       maxTurns,
       descriptor,
       ...(outputGuess === undefined ? {} : { outputGuess }),
+      ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
+      signal: interrupt.signal,
       generateId: () => harnessSessionId,
       turnId,
       onText: (text) => process.stdout.write(`${sanitizeForTerminal(text)}\n`),
@@ -633,9 +679,23 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     },
   );
 
-  const result = await session.run(prompt);
+  // #187 D5: the first Ctrl-C aborts the run (stop hook and turn-cost row
+  // still written); a second one kills the process (installSigintHandler).
+  const uninstallInterrupt = (seams.onInterrupt ?? installSigintHandler)(() => interrupt.abort());
+  let result: SessionResult;
+  try {
+    result = await session.run(prompt);
+  } catch (error: unknown) {
+    if (!interrupt.signal.aborted) throw error;
+    process.stderr.write(`${INTERRUPTED_LINE}\n`);
+    return EXIT_INTERRUPTED;
+  } finally {
+    uninstallInterrupt();
+  }
 
   process.stdout.write(formatRunSummaryLine(result));
+  const stopLine = formatStopLine(result);
+  if (stopLine !== null) process.stderr.write(`${stopLine}\n`);
 
   const cliDeniedWarning = formatCliDeniedWarning(result.cliDenied);
   if (cliDeniedWarning !== null) process.stderr.write(`${cliDeniedWarning}\n`);

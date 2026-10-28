@@ -296,10 +296,16 @@ export interface QueryOptions {
   /** `false` writes no transcript under `CLAUDE_CONFIG_DIR`. */
   persistSession?: boolean;
   /**
-   * The SDK's cancellation channel (issue #96 PR-B1, spec D4), used for the
-   * judge call only: `buildJudge` always passes one, linked to the scanner's
-   * per-call signal. The session's primary query passes none (H-7 for the
-   * whole run stays deferred). A consumer-supplied `QueryFn` must honour it
+   * The SDK's dollar ceiling for the query (issue #187, ADR-0041). The
+   * session's primary query always passes one (`SessionConfig.maxBudgetUsd`,
+   * else `DEFAULT_MAX_BUDGET_USD`); the judge and the eval adversary pass none.
+   */
+  maxBudgetUsd?: number;
+  /**
+   * The SDK's cancellation channel (issue #96 PR-B1, spec D4). `buildJudge`
+   * always passes one, linked to the scanner's per-call signal; since #187
+   * the session's primary query passes one too, linked to
+   * `SessionConfig.signal` (ADR-0041). A consumer-supplied `QueryFn` must honour it
    * for the judge's abort to take effect; one that ignores it gets PR-A's
    * behaviour (the call is abandoned, not stopped), and because a judge slot
    * is released only when its call settles, four such hung calls stop all
@@ -387,6 +393,19 @@ export interface SessionConfig {
   skillsDir: string | null;
   descriptor?: TaskDescriptor;
   maxTurns?: number;
+  /**
+   * The run's dollar ceiling, passed to the SDK as `maxBudgetUsd` (issue #187,
+   * ADR-0041). Absent means `DEFAULT_MAX_BUDGET_USD`; any other value must be
+   * a finite number greater than 0, or `createSession` throws.
+   */
+  maxBudgetUsd?: number;
+  /**
+   * Cancels the run (issue #187, D5): aborting it aborts the SDK query; the
+   * turn-cost row is still recorded (`interrupted: true`, cost usually null:
+   * the SDK reports none for an aborted run), the stop hook fires, and `run`
+   * rejects with the SDK's abort error.
+   */
+  signal?: AbortSignal;
   /**
    * Operator's guess at total output tokens for the run, used only by the
    * pre-run cost estimate (#192). Distinct from `descriptor.expected_tokens`,
@@ -499,6 +518,8 @@ export interface SessionResult {
   modelChoice: ModelChoice;
   usage: SdkUsage | null;
   costUsd: number | null;
+  /** The dollar ceiling this run passed the SDK (issue #187): the config's, else the default. */
+  maxBudgetUsd: number;
   numTurns: number | null;
   denied: DeniedToolCall[];
   /**
