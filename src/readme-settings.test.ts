@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, WARNING_PREFIX } from './cli/shared.js';
+import { parseBudgetSettings } from './cli/budget-settings.js';
 import { sdkStartLine } from './cli/run-sdk.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
@@ -77,6 +78,7 @@ function loaded(): {
   judgeDoc: string;
   firstUserDoc: string;
   sdkDoc: string;
+  budgetDoc: string;
 } {
   const section = settingsSection();
   const blocks = fencedJson(section);
@@ -88,14 +90,15 @@ function loaded(): {
     judgeDoc: blocks[2] ?? '{}',
     firstUserDoc: blocks[3] ?? '{}',
     sdkDoc: blocks[4] ?? '{}',
+    budgetDoc: blocks[5] ?? '{}',
   };
 }
 
 describe('README `## Settings`: the examples load through the real composition', () => {
 
-  it('has exactly five fenced JSON examples: the user file, the project file, the judge block, the first user file, the sdk block', () => {
+  it('has exactly six fenced JSON examples: the user file, the project file, the judge block, the first user file, the sdk block, the budget block', () => {
     const { blocks } = loaded();
-    expect(blocks).toHaveLength(5);
+    expect(blocks).toHaveLength(6);
   });
 
   it('every example parses under BOTH real parsers (the init-templates precedent)', () => {
@@ -106,6 +109,7 @@ describe('README `## Settings`: the examples load through the real composition',
       expect(() => parseSandboxSettings(parsed)).not.toThrow();
       expect(() => parseJudgeSettings(parsed)).not.toThrow();
       expect(() => parseSdkSettings(parsed)).not.toThrow();
+      expect(() => parseBudgetSettings(parsed)).not.toThrow();
     }
   });
 
@@ -462,6 +466,26 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
       `ignoring "sdk" in ${path}: Claude Code settings sources are configured only in ~/.harness/settings.json`,
     ]);
     expect(section).toContain(`ignoring "sdk" in <path>: Claude Code settings sources are configured only in ~/.harness/settings.json`);
+  });
+
+  it('the budget block composes to its cap with no warning (#187)', () => {
+    const { budgetDoc } = loaded();
+    expect(parseBudgetSettings(JSON.parse(budgetDoc))).toBe(2.5);
+    const composed = compose(budgetDoc, undefined);
+    expect(composed.budget.maxUsd).toBe(2.5);
+    expect(composed.warnings).toEqual([]);
+  });
+
+  it('the budget block as a PROJECT file is ignored with the one warning the section quotes (#187)', () => {
+    const { budgetDoc, section } = loaded();
+    const projectDir = layerDir('project', budgetDoc);
+    const composed = composeSecurity({ userDir: layerDir('user', undefined), projectDir });
+    const path = join(projectDir, '.harness', 'settings.json');
+    expect(composed.budget.maxUsd).toBeNull();
+    expect(composed.warnings).toEqual([
+      `ignoring "budget" in ${path}: the budget is configured only in ~/.harness/settings.json`,
+    ]);
+    expect(section).toContain('ignoring "budget" in <path>: the budget is configured only in ~/.harness/settings.json');
   });
 
   it('the section quotes the start line and both inherit warnings verbatim from the code that emits them', () => {
