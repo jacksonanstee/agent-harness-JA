@@ -1657,8 +1657,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let numTurns: number | null = null;
     let streamError: unknown = null;
     // D7 (issue #187): the SDK throws "Claude Code returned an error result"
-    // after EVERY error_* result (probe 29/10/2026, sdk.mjs readMessages).
+    // after every is_error result (probe 29/10/2026, sdk.mjs readMessages).
+    // Armed only by a result whose CLEANED subtype names an error; a missing
+    // or garbled subtype leaves the follow-up throw to surface (review fold).
     let errorResultArrived = false;
+    // D5: the CALLER's intent, snapshotted when the stream ends, so an abort
+    // during the stop hook is not an interrupt and a future session-internal
+    // ceiling aborting the same controller is never one either.
+    let interrupted: boolean;
     // D1/D5: the primary query's own controller, linked to the caller's
     // signal, so the SDK never holds the caller's controller.
     const abortController = new AbortController();
@@ -1731,7 +1737,6 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           usage = message.usage ?? null;
           costUsd = message.total_cost_usd ?? null;
           numTurns = message.num_turns ?? null;
-          errorResultArrived = message.subtype !== 'success';
           // Last result wins, like cost and usage above (issue #209).
           cliDenied = parseCliDenials(message.permission_denials, harnessDeniedIds);
           // Second, independent channel: works on CLIs old enough to omit the
@@ -1741,14 +1746,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
             refusal = { source: 'result-stop-reason', category: null, fallbackModel: null };
             warn('model refused the turn (stop_reason=refusal; no refusal banner on this stream)');
           }
+          // Last, so a throw from anything above in this branch is not
+          // mistaken for the SDK's follow-up (D7). Last result wins.
+          errorResultArrived = resultSubtype !== null && resultSubtype !== 'success';
         }
       }
     } catch (error: unknown) {
-      // D7: once an error result has arrived, the SDK's follow-up throw only
-      // repeats it, so the run completed and the result is returned. A
+      // D7: once an error result has arrived, ANY later throw is taken as the
+      // SDK's follow-up to it (keyed on "a result arrived", not on the
+      // message text), so the run completed and the result is returned. A
       // caller's interrupt always rethrows, even after an error result.
-      if (!errorResultArrived || abortController.signal.aborted) streamError = error;
+      if (!errorResultArrived || config.signal?.aborted === true) streamError = error;
     } finally {
+      interrupted = config.signal?.aborted === true;
       config.signal?.removeEventListener('abort', onCallerAbort);
       // D4 stream-end flush (S-15): every rewrite the stream never resolved is
       // `unobserved`, recorded here — after the stream, before the stop hook —
@@ -1815,7 +1825,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         refusalCategory: refusal?.category ?? null,
         refusalFallbackModel: refusal?.fallbackModel ?? null,
         maxBudgetUsd,
-        interrupted: abortController.signal.aborted,
+        interrupted,
         // #192: the pre-run estimate and its inputs. maxTurns is a ceiling on
         // the turns taken, so the estimate leans high on cache reads. An unset
         // maxTurns, a maxTurns below 1, or no system prompt (no skills) gives
@@ -1885,6 +1895,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       usage,
       costUsd,
       maxBudgetUsd,
+      interrupted,
       numTurns,
       denied,
       cliDenied,

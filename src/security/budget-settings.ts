@@ -2,6 +2,8 @@
 // parser below validates the USER file's `budget.maxUsd`; the project
 // layer's `budget` key is only detected (`hasBudgetKey`), never parsed, so a
 // cloned repo can neither raise nor lower the operator's cap.
+// It lives beside sdk-settings.ts and judge-settings.ts, its two models,
+// because the security model files the cap under DoS (R-21, ASI08).
 import { isBudgetUsd } from '../internal/limits.js';
 import { unknownKeyMessage, unknownKeys } from '../internal/settings.js';
 

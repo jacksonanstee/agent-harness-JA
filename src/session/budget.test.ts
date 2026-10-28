@@ -221,3 +221,79 @@ describe('cancellation through the caller signal (D5)', () => {
     await expect(run).rejects.toThrow('aborted by user');
   });
 });
+
+describe('review fold (#187): D7 keys on a cleaned error subtype; interrupted is the caller signal at stream end', () => {
+  it('rethrows the follow-up throw when the result has no subtype', async () => {
+    const noSubtype = { type: 'result', session_id: 'sdk-187', total_cost_usd: 0.1 } as SdkMessage;
+    const fake = scripted([INIT, noSubtype], new Error(SDK_ERROR_RESULT_THROW));
+    await expect(createSession(deps(fake.query), config()).run('hi')).rejects.toThrow(SDK_ERROR_RESULT_THROW);
+  });
+
+  it('rethrows when the subtype cleans to nothing', async () => {
+    const blank = { ...BUDGET_RESULT, subtype: '\u200b' } as SdkMessage;
+    const fake = scripted([INIT, blank], new Error(SDK_ERROR_RESULT_THROW));
+    await expect(createSession(deps(fake.query), config()).run('hi')).rejects.toThrow(SDK_ERROR_RESULT_THROW);
+  });
+
+  it('rethrows after error-then-success results: the last result wins', async () => {
+    const fake = scripted([INIT, BUDGET_RESULT, { ...BUDGET_RESULT, subtype: 'success', result: 'ok' }], new Error('late crash'));
+    await expect(createSession(deps(fake.query), config()).run('hi')).rejects.toThrow('late crash');
+  });
+
+  it('a caller abort that races the end of the stream returns interrupted: true on the result and the row', async () => {
+    const t = telemetry();
+    const caller = new AbortController();
+    const query: QueryFn = () =>
+      (async function* () {
+        yield INIT;
+        yield { ...BUDGET_RESULT, subtype: 'success', result: 'ok' };
+        caller.abort(); // the stream then ends with no throw
+      })();
+    const result = await createSession(deps(query, { telemetry: t }), config({ signal: caller.signal })).run('hi');
+    expect(result.interrupted).toBe(true);
+    expect(turnCost(t.events).interrupted).toBe(true);
+  });
+
+  it('a caller abort during the stop hook (after the stream ended) is NOT an interrupt', async () => {
+    const t = telemetry();
+    const caller = new AbortController();
+    const hooks = createHookRuntime();
+    hooks.register('stop', () => {
+      caller.abort();
+    });
+    const fake = scripted([INIT, { ...BUDGET_RESULT, subtype: 'success', result: 'ok' }]);
+    const result = await createSession(deps(fake.query, { telemetry: t, hooks }), config({ signal: caller.signal })).run('hi');
+    expect(result.interrupted).toBe(false);
+    expect(turnCost(t.events).interrupted).toBe(false);
+  });
+
+  // An aborter other than the caller (the SDK's WebSocket transport aborts the
+  // controller it is handed; a future wall-clock ceiling would too) is not an
+  // interrupt: only the caller's signal is the operator's intent (architecture M2).
+  it('a query that aborts its own controller is not recorded as interrupted', async () => {
+    const t = telemetry();
+    const caller = new AbortController();
+    const query: QueryFn = (args) =>
+      (async function* () {
+        yield INIT;
+        args.options?.abortController?.abort();
+        throw new Error('transport closed');
+      })();
+    await expect(
+      createSession(deps(query, { telemetry: t }), config({ signal: caller.signal })).run('hi'),
+    ).rejects.toThrow('transport closed');
+    expect(turnCost(t.events).interrupted).toBe(false);
+  });
+
+  it('a normal run returns interrupted: false', async () => {
+    const fake = scripted([INIT, { ...BUDGET_RESULT, subtype: 'success', result: 'ok' }]);
+    expect((await createSession(deps(fake.query), config()).run('hi')).interrupted).toBe(false);
+  });
+
+  it('the default and the predicate are on the public barrel', async () => {
+    const barrel = await import('../index.js');
+    expect(barrel.DEFAULT_MAX_BUDGET_USD).toBe(1);
+    expect(typeof barrel.parseBudgetSettings).toBe('function');
+    expect(typeof barrel.BudgetSettingsError).toBe('function');
+  });
+});

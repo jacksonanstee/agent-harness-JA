@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, WARNING_PREFIX } from './cli/shared.js';
-import { parseBudgetSettings } from './cli/budget-settings.js';
+import { parseBudgetSettings } from './security/index.js';
 import { sdkStartLine } from './cli/run-sdk.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {

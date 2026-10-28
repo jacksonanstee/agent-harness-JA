@@ -1,4 +1,6 @@
 export { createSession, DEFAULT_DESCRIPTOR } from './session.js';
+// #187: the default a caller who names no cap runs under (ADR-0041 D2).
+export { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 // The judge BUILDER and its fixed model (issue #96, ADR-0036 D2; PR-B1 D1). Its wire internals
 // (buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse, ParsedJudgeWire)
 // stay off every barrel, as the verifier's do (ADR-0023).

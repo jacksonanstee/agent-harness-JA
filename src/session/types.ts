@@ -403,7 +403,9 @@ export interface SessionConfig {
    * Cancels the run (issue #187, D5): aborting it aborts the SDK query; the
    * turn-cost row is still recorded (`interrupted: true`, cost usually null:
    * the SDK reports none for an aborted run), the stop hook fires, and `run`
-   * rejects with the SDK's abort error.
+   * rejects with the SDK's abort error, unless the stream had already ended,
+   * in which case it returns a result with `interrupted: true`. An abort after
+   * the stream ended (during the stop hook) is not an interrupt.
    */
   signal?: AbortSignal;
   /**
@@ -520,6 +522,13 @@ export interface SessionResult {
   costUsd: number | null;
   /** The dollar ceiling this run passed the SDK (issue #187): the config's, else the default. */
   maxBudgetUsd: number;
+  /**
+   * True when `SessionConfig.signal` had aborted by the time the stream ended
+   * (issue #187 D5). Usually the run then rejects instead of returning; a
+   * returned result carries `true` only when the abort raced the end of the
+   * stream.
+   */
+  interrupted: boolean;
   numTurns: number | null;
   denied: DeniedToolCall[];
   /**

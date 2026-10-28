@@ -480,7 +480,11 @@ indistinguishable from a clean one at every harness sink (H-8). Since #187
 query through the session's `abortController`, the stop hook fires and the
 turn-cost row is recorded with `interrupted: true` and a null cost (the SDK
 reports no cost for an aborted run, so its spend is not traced), and the
-command exits 130; a second Ctrl-C kills the process as before. Cost hygiene on the same basis as the pack bounds above; tracked as
+command exits 130 when the harness sees the interrupt before the bundled CLI
+child's own SIGINT exit (otherwise `error:` and exit 1, row still written;
+ADR-0041 D5); a second Ctrl-C kills the process as before. A model-authored
+write to `~/.harness/settings.json` can still raise the cap for later runs
+(#188); `run` names any non-default cap at start. Cost hygiene on the same basis as the pack bounds above; tracked as
 R-21.
 
 ### Elevation of privilege — doing more than policy allows

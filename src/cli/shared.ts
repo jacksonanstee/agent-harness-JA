@@ -32,7 +32,7 @@ import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, Sandbo
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
-import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from './budget-settings.js';
+import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are

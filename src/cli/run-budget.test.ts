@@ -234,7 +234,7 @@ describe('Ctrl-C (D5)', () => {
     const { code, stderr, db } = await pending;
 
     expect(code).toBe(130);
-    expect(stderr).toContain('[harness] interrupted: the run was stopped; its turn-cost row is recorded with cost unknown');
+    expect(stderr).toContain('[harness] interrupted: the run was stopped; its turn-cost row is recorded (cost unknown)');
     expect(stderr).not.toContain('error:');
     expect(uninstall).toHaveBeenCalledTimes(1);
     expect(turnCostPayload(db).interrupted).toBe(true);
@@ -273,5 +273,39 @@ describe('installSigintHandler (the default onInterrupt)', () => {
     const uninstall = installSigintHandler(() => undefined);
     uninstall();
     expect(process.listenerCount('SIGINT')).toBe(before);
+  });
+});
+
+describe('review fold (#187)', () => {
+  it('exits 130 when the interrupt raced the end of the stream and the run returned', async () => {
+    let handler: (() => void) | undefined;
+    const query: QueryFn = () =>
+      (async function* () {
+        yield INIT;
+        yield SUCCESS;
+        handler?.();
+      })();
+    const { code, stderr, stdout } = await runMain([], query, {
+      onInterrupt: (h) => {
+        handler = h;
+        return () => undefined;
+      },
+    });
+    expect(code).toBe(130);
+    expect(stdout).toContain('cost=$0.0100');
+    expect(stderr).toContain('[harness] interrupted: the run was stopped; its turn-cost row is recorded (cost $0.0100)');
+  });
+
+  it.each([
+    [['--max-budget-usd', '0.25'], undefined, '[harness] budget: cap $0.2500 per run (from --max-budget-usd)'],
+    [[], { budget: { maxUsd: 4 } }, '[harness] budget: cap $4.0000 per run (from ~/.harness/settings.json)'],
+  ])('prints the cap at start when it is not the default (%j)', async (argv, user, line) => {
+    const { stderr } = await runMain(argv, scripted([INIT, SUCCESS]).query, { user });
+    expect(stderr).toContain(`${line}\n`);
+  });
+
+  it('prints no cap line at the default', async () => {
+    const { stderr } = await runMain([], scripted([INIT, SUCCESS]).query);
+    expect(stderr).not.toContain('[harness] budget: cap');
   });
 });

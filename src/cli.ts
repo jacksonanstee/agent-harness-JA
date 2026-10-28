@@ -498,10 +498,15 @@ export function formatStopLine(result: Pick<SessionResult, 'resultSubtype' | 'co
   return `[harness] stopped: the run ended without success (result=${formatTokenField(result.resultSubtype)})`;
 }
 
-/** The `run` line for a Ctrl-C (issue #187 D5); exit 130 is the shell's code for SIGINT. */
-export const INTERRUPTED_LINE =
-  '[harness] interrupted: the run was stopped; its turn-cost row is recorded with cost unknown ' +
-  '(the SDK reports no cost for an aborted run)';
+/**
+ * The `run` line for a Ctrl-C (issue #187 D5); exit 130 is the shell's code
+ * for SIGINT. The cost is unknown when the run rejected, because the SDK
+ * reports no cost for an aborted run.
+ */
+export function formatInterruptedLine(costUsd: number | null): string {
+  const cost = costUsd === null ? 'cost unknown' : `cost ${formatUsd(costUsd)}`;
+  return `[harness] interrupted: the run was stopped; its turn-cost row is recorded (${cost})`;
+}
 const EXIT_INTERRUPTED = 130;
 
 /**
@@ -650,6 +655,11 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   // #187 D3: flag > user settings > the session's default. Only absence
   // falls through: both sources are already validated by isBudgetUsd.
   const maxBudgetUsd = flagBudget ?? security.budget.maxUsd ?? undefined;
+  // Security fold (#187): a raised cap is visible in every transcript.
+  if (maxBudgetUsd !== undefined) {
+    const source = flagBudget !== undefined ? '--max-budget-usd' : '~/.harness/settings.json';
+    process.stderr.write(`[harness] budget: cap ${formatUsd(maxBudgetUsd)} per run (from ${source})\n`);
+  }
   const interrupt = new AbortController();
 
   const session = createSession(
@@ -687,7 +697,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     result = await session.run(prompt);
   } catch (error: unknown) {
     if (!interrupt.signal.aborted) throw error;
-    process.stderr.write(`${INTERRUPTED_LINE}\n`);
+    process.stderr.write(`${formatInterruptedLine(null)}\n`);
     return EXIT_INTERRUPTED;
   } finally {
     uninstallInterrupt();
@@ -696,6 +706,9 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   process.stdout.write(formatRunSummaryLine(result));
   const stopLine = formatStopLine(result);
   if (stopLine !== null) process.stderr.write(`${stopLine}\n`);
+  // The interrupt raced the end of the stream: the run returned, but it was
+  // still the operator's Ctrl-C, so the exit says so (review fold).
+  const interruptedLine = result.interrupted ? formatInterruptedLine(result.costUsd) : null;
 
   const cliDeniedWarning = formatCliDeniedWarning(result.cliDenied);
   if (cliDeniedWarning !== null) process.stderr.write(`${cliDeniedWarning}\n`);
@@ -740,6 +753,10 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     if (lines.capWarning !== null) process.stderr.write(`${WARNING_PREFIX}${lines.capWarning}\n`);
   }
 
+  if (interruptedLine !== null) {
+    process.stderr.write(`${interruptedLine}\n`);
+    return EXIT_INTERRUPTED;
+  }
   return result.resultSubtype === 'success' ? 0 : 1;
 }
 
