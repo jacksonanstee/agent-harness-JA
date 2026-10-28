@@ -160,6 +160,6 @@ Three design questions:
   eleven SDK keys and the exact-keys pin moved to eleven. `run` now installs a
   one-shot SIGINT handler, so the first Ctrl-C reaches decision 3's `finally`:
   the stop hook fires and the turn-cost row is written. A second Ctrl-C is
-  still a signal death that skips both. The sentences above that say the
+  still a signal death that skips whatever cleanup has not yet run. The sentences above that say the
   harness installs no signal handler were true when written and are left as
   they were.

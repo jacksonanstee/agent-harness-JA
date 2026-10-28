@@ -498,10 +498,15 @@ export function formatStopLine(result: Pick<SessionResult, 'resultSubtype' | 'co
   return `[harness] stopped: the run ended without success (result=${formatTokenField(result.resultSubtype)})`;
 }
 
+/** The `run` start line naming a cap taken from the flag or the settings file (issue #187). */
+export function formatBudgetStartLine(maxBudgetUsd: number, source: '--max-budget-usd' | '~/.harness/settings.json'): string {
+  return `[harness] budget: cap ${formatUsd(maxBudgetUsd)} per run (from ${source})`;
+}
+
 /**
  * The `run` line for a Ctrl-C (issue #187 D5); exit 130 is the shell's code
- * for SIGINT. The cost is unknown when the run rejected, because the SDK
- * reports no cost for an aborted run.
+ * for SIGINT. When the run rejected, the CLI has no cost to print; the
+ * turn-cost row may still hold one (an error result can precede the abort).
  */
 export function formatInterruptedLine(costUsd: number | null): string {
   const cost = costUsd === null ? 'cost unknown' : `cost ${formatUsd(costUsd)}`;
@@ -655,10 +660,11 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   // #187 D3: flag > user settings > the session's default. Only absence
   // falls through: both sources are already validated by isBudgetUsd.
   const maxBudgetUsd = flagBudget ?? security.budget.maxUsd ?? undefined;
-  // Security fold (#187): a raised cap is visible in every transcript.
+  // Security fold (#187): a cap from the flag or the settings file is named
+  // in every `run` transcript (eval applies the settings cap silently).
   if (maxBudgetUsd !== undefined) {
     const source = flagBudget !== undefined ? '--max-budget-usd' : '~/.harness/settings.json';
-    process.stderr.write(`[harness] budget: cap ${formatUsd(maxBudgetUsd)} per run (from ${source})\n`);
+    process.stderr.write(`${formatBudgetStartLine(maxBudgetUsd, source)}\n`);
   }
   const interrupt = new AbortController();
 

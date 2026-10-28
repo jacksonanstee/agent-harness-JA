@@ -299,12 +299,12 @@ describe('review fold (#187)', () => {
   it.each([
     [['--max-budget-usd', '0.25'], undefined, '[harness] budget: cap $0.2500 per run (from --max-budget-usd)'],
     [[], { budget: { maxUsd: 4 } }, '[harness] budget: cap $4.0000 per run (from ~/.harness/settings.json)'],
-  ])('prints the cap at start when it is not the default (%j)', async (argv, user, line) => {
+  ])('prints the cap at start when the flag or the settings file sets it (%j)', async (argv, user, line) => {
     const { stderr } = await runMain(argv, scripted([INIT, SUCCESS]).query, { user });
     expect(stderr).toContain(`${line}\n`);
   });
 
-  it('prints no cap line at the default', async () => {
+  it('prints no cap line when no cap is set', async () => {
     const { stderr } = await runMain([], scripted([INIT, SUCCESS]).query);
     expect(stderr).not.toContain('[harness] budget: cap');
   });

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, WARNING_PREFIX } from './cli/shared.js';
 import { parseBudgetSettings } from './security/index.js';
+import { formatBudgetStartLine, formatStopLine } from './cli.js';
 import { sdkStartLine } from './cli/run-sdk.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
 import {
@@ -474,6 +475,13 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
     const composed = compose(budgetDoc, undefined);
     expect(composed.budget.maxUsd).toBe(2.5);
     expect(composed.warnings).toEqual([]);
+  });
+
+  it('the section quotes the budget start and stop lines verbatim from the code that emits them (#187)', () => {
+    const { section } = loaded();
+    expect(section).toContain(formatBudgetStartLine(2.5, '~/.harness/settings.json'));
+    const stop = formatStopLine({ resultSubtype: 'error_max_budget_usd', costUsd: null, maxBudgetUsd: 1 });
+    expect(section).toContain(stop?.split(' (SDK-reported cost')[0]);
   });
 
   it('the budget block as a PROJECT file is ignored with the one warning the section quotes (#187)', () => {

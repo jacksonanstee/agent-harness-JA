@@ -266,9 +266,9 @@ as specified except for four points that surfaced during implementation:
   task limit can still cost more than an operator would accept; `--max-tasks`
   bounds count, not price.
   **Partly met 29/10/2026 (issue #187, ADR-0041):** every golden task session
-  now runs under the session's default dollar ceiling (USD 1.00 per task,
-  checked by the SDK after each turn). That bounds each task, not the pack,
-  and `eval` has no flag to change it yet.
+  now runs under a dollar ceiling (the user settings file's `budget.maxUsd`,
+  else USD 1.00 per task, checked by the SDK after each turn). That bounds
+  each task, not the pack, and `eval` has no flag for it.
 - The SDK grows an abort channel on `QueryFn` — implement per-task
   wall-clock timeout support then.
   **FIRED 2026-09-07 (issue #101), action deferred to H-7:** the condition

@@ -1656,8 +1656,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let costUsd: number | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
-    // D7 (issue #187): the SDK throws "Claude Code returned an error result"
-    // after every is_error result (probe 29/10/2026, sdk.mjs readMessages).
+    // D7 (issue #187): when its read loop fails after an is_error result, the
+    // SDK replaces the failure with "Claude Code returned an error result"
+    // (sdk.mjs readMessages; seen after error_max_budget_usd, probe 29/10/2026).
     // Armed only by a result whose CLEANED subtype names an error; a missing
     // or garbled subtype leaves the follow-up throw to surface (review fold).
     let errorResultArrived = false;

@@ -335,7 +335,7 @@ export interface SecurityComposition {
   sdk: { settingSources: SettingSource[] };
   /**
    * The run's dollar ceiling (#187, ADR-0041 D3), from the USER layer's
-   * `budget.maxUsd` only; null means the session default. Read by `run`.
+   * `budget.maxUsd` only; null means the session default. Read by `run` and `eval`.
    */
   budget: { maxUsd: number | null };
   /** Startup notices for the operator (prompter gaps, risky allowlists, an ignored project judge key). */
