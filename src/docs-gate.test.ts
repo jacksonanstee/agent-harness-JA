@@ -432,12 +432,24 @@ describe('check-docs.sh — derived ADR constants', () => {
   });
 
   it('REPORTS rather than silently skipping a count it cannot spell', () => {
-    // 41 ADRs: outside the twenty/thirty mapping. A skip here would be the
+    // 61 ADRs: outside the twenty-to-fifty mapping. A skip here would be the
     // proxy-check pattern, going quiet exactly when the repo outgrew it.
     expectFinding(
-      fixture({ ...adrTree(41), 'README.md': '# R\n\nTwenty-eight ADRs (0001-0041).\n' }),
+      fixture({ ...adrTree(61), 'README.md': '# R\n\nTwenty-eight ADRs (0001-0061).\n' }),
       'extend the mapping',
     );
+  });
+
+  // #188: the repo passed 39, so "Forty-one ADRs" went unchecked; the mapping now covers forty and fifty.
+  it('REJECTS a spelled forty-something count that does not match', () => {
+    expectFinding(
+      fixture({ ...adrTree(42), 'README.md': '# R\n\nForty-one ADRs (0001-0042).\n' }),
+      "spells the ADR count 'Forty-one'",
+    );
+  });
+
+  it('accepts a spelled forty-something count that matches', () => {
+    expectClean(fixture({ ...adrTree(42), 'README.md': '# R\n\nForty-two ADRs (0001-0042).\n' }));
   });
 
   it('REPORTS a README that discusses ADRs but carries no recognisable count', () => {

@@ -48,6 +48,7 @@ import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session
 import {
   redact,
   scan,
+  buildProtectedRoots,
 } from './security/index.js';
 import { load as loadSkills } from './skills/index.js';
 import {
@@ -654,8 +655,15 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       }
     },
   });
-  // Order (permissions, then sandbox) lives in registerSecurityHooks.
-  registerSecurityHooks(hooks, security);
+  // Order (self-protection, permissions, then sandbox) lives in
+  // registerSecurityHooks. #188: the run's own state is protected.
+  const protectedRoots = buildProtectedRoots({
+    userDir: seams.userDir ?? homedir(),
+    projectDir: process.cwd(),
+    skillsDir,
+    dbPath,
+  });
+  registerSecurityHooks(hooks, security, protectedRoots);
 
   // #187 D3: flag > user settings > the session's default. Only absence
   // falls through: both sources are already validated by isBudgetUsd.

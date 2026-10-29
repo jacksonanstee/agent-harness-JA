@@ -32,7 +32,8 @@ import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, Sandbo
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
-import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from '../security/index.js';
+import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings, selfProtectionHook } from '../security/index.js';
+import type { ProtectedRoots } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
 /** Default scorecard output directory, shared by eval and redteam (both are
@@ -478,9 +479,12 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 }
 
 /**
- * Registers the two security pre-tool hooks in their ONE shipped order, for
- * every command that builds a session (`run`, `eval`). Permissions first,
- * sandbox as the backstop: the deny outcome is identical (the runtime denies
+ * Registers the security pre-tool hooks in their ONE shipped order, for every
+ * command that builds a session (`run`, `eval`). The built-in self-protection
+ * deny comes first (#188, ADR-0042): it reads no settings, so no rule, grant
+ * or absent sandbox dimension can let a call it denies through, and its
+ * reason is the one reported. Then permissions, then the sandbox as the
+ * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more
  * actionable, so they get first say (ADR-0015 section 4). The sandbox also
  * runs after a grant is returned, so a sandbox deny always overrides it
@@ -489,7 +493,9 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 export function registerSecurityHooks(
   hooks: Pick<HookRuntime, 'register'>,
   security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox'>,
+  protectedRoots: ProtectedRoots,
 ): void {
+  hooks.register('pre-tool', selfProtectionHook(protectedRoots));
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }

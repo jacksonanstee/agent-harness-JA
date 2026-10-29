@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings } from '../security/index.js';
+import { buildProtectedRoots, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
@@ -320,33 +320,50 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     sandbox: mergeSandboxLayers(parseSandboxSettings(sandbox), parseSandboxSettings({})),
   });
   const payload = { event: 'pre-tool' as const, tool: 'Bash', args: { command: 'git status' }, redactions: null };
+  // #188: a real roots set over a throwaway home and project.
+  const spHome = mkdtempSync(join(tmpdir(), 'rsh-home-'));
+  const spProject = mkdtempSync(join(tmpdir(), 'rsh-proj-'));
+  const roots = buildProtectedRoots({ userDir: spHome, projectDir: spProject, skillsDir: null, dbPath: ':memory:' });
 
   it('registers permissionHook then sandboxHook: when both would deny, the permission reason is the one reported', async () => {
     const hooks = createHookRuntime();
-    registerSecurityHooks(hooks, compose(bashRule('deny'), [], { sandbox: { commands: { allow: ['ls'] } } }));
+    registerSecurityHooks(hooks, compose(bashRule('deny'), [], { sandbox: { commands: { allow: ['ls'] } } }), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(true);
     if (!result.denied) throw new Error('unreachable');
     expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
   });
 
-  it('registers exactly two pre-tool handlers (permissions, sandbox)', async () => {
+  it('registers exactly three pre-tool handlers (self-protection, permissions, sandbox; #188)', async () => {
     const hooks = createHookRuntime();
-    registerSecurityHooks(hooks, compose({}, []));
+    registerSecurityHooks(hooks, compose({}, []), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(false);
-    expect(result.handlersFired).toBe(2);
+    expect(result.handlersFired).toBe(3);
+  });
+
+  // #188 D5: first, so no rule, grant or absent sandbox can let a policy write through.
+  it.each([
+    ['Write', { file_path: join(spHome, '.harness', 'settings.json') }],
+    ['Bash', { command: 'echo {} > ~/.harness/settings.json' }],
+  ])('a user allow-everything rule cannot grant a %s to the harness policy; the self-protection reason is reported', async (tool, args) => {
+    const hooks = createHookRuntime();
+    registerSecurityHooks(hooks, compose({ permissions: { rules: [{ tool: '*', decision: 'allow' }] } }, []), roots);
+    const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool, args, redactions: null });
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe(SELF_PROTECTION_REASON);
   });
 
   it('passes grantPolicy through: the same allow grants with an empty policy and does not when Bash is ungrantable', async () => {
     const open = createHookRuntime();
-    registerSecurityHooks(open, compose(bashRule('allow'), []));
+    registerSecurityHooks(open, compose(bashRule('allow'), []), roots);
     const granted = await open.fire('pre-tool', payload);
     expect(granted.denied).toBe(false);
     expect(granted.denied === false && granted.granted).toBe(true);
 
     const closed = createHookRuntime();
-    registerSecurityHooks(closed, compose(bashRule('allow'), ['Bash']));
+    registerSecurityHooks(closed, compose(bashRule('allow'), ['Bash']), roots);
     const withheld = await closed.fire('pre-tool', payload);
     expect(withheld.denied).toBe(false);
     expect(withheld.denied === false && withheld.granted).toBe(false);

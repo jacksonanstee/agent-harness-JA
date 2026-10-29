@@ -68,6 +68,10 @@ export {
   SETTING_SOURCES,
   parseBudgetSettings,
   BudgetSettingsError,
+  buildProtectedRoots,
+  selfProtectionHook,
+  SelfProtectionViolation,
+  SELF_PROTECTION_REASON,
 } from './security/index.js';
 export type {
   Confidence,
@@ -111,6 +115,9 @@ export type {
   SecretRedactor,
   SecretRule,
   SettingSource,
+  ProtectedRoot,
+  ProtectedRoots,
+  ProtectedRootsInput,
 } from './security/index.js';
 export {
   createTelemetryStore,

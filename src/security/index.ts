@@ -56,6 +56,8 @@ export {
 export type { PreToolLike } from './pre-tool-like.js';
 export { hasSdkKey, parseSdkSettings, SDK_SETTING_SOURCES_MESSAGE, SdkSettingsError, SETTING_SOURCES } from './sdk-settings.js';
 export type { SettingSource } from './sdk-settings.js';
+export { buildProtectedRoots, SELF_PROTECTION_REASON, selfProtectionHook, SelfProtectionViolation } from './self-protection.js';
+export type { ProtectedRoot, ProtectedRoots, ProtectedRootsInput } from './self-protection.js';
 export { BUDGET_MAX_USD_MESSAGE, BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from './budget-settings.js';
 export type {
   Evaluation,

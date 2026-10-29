@@ -19,6 +19,7 @@ import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } 
 import {
   redact,
   scan,
+  buildProtectedRoots,
 } from '../security/index.js';
 import { load as loadSkills } from '../skills/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
@@ -154,6 +155,8 @@ export interface EvalSessionFactoryDeps {
   memory: MemoryStore;
   /** Test seam: the session factory (R5 pin). Default `createSession`. */
   create?: typeof createSession;
+  /** Where the protected `.harness` directories are (#188); each task adds its own skills root. */
+  selfProtection: { userDir: string; projectDir: string };
 }
 
 /**
@@ -180,7 +183,10 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         }
       },
     });
-    registerSecurityHooks(hooks, security);
+    // #188: eval's DB is in memory; the project .harness (the operator's real
+    // telemetry DB, scorecards) is protected as a directory anyway.
+    const protectedRoots = buildProtectedRoots({ ...deps.selfProtection, skillsDir: config.skillsDir, dbPath: null });
+    registerSecurityHooks(hooks, security, protectedRoots);
     return create(
       {
         query,
@@ -277,7 +283,13 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     const telemetry = createTelemetryStore(db);
     const memory = createMemoryStore(db);
 
-    const createTaskSession = makeEvalSessionFactory({ query, security, telemetry, memory });
+    const createTaskSession = makeEvalSessionFactory({
+      query,
+      security,
+      telemetry,
+      memory,
+      selfProtection: { userDir: seams.userDir ?? homedir(), projectDir: process.cwd() },
+    });
 
     const runner = createGoldenRunner({
       createTaskSession,
