@@ -424,15 +424,17 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
     expect(section).toContain(`a chained command such as \`${chained}\``);
   });
 
-  it('without a user commands allowlist Bash and Monitor are ungrantable, and a project file\'s list never unlocks them (D-8)', () => {
+  it('without user sandbox lists every code-executing tool is ungrantable, and a project file\'s lists never unlock them (D-8, #211)', () => {
     const { firstUserDoc, section } = loaded();
-    // The README names both command-taking tools, as the policy derives them from the shared table.
-    expect(section).toContain('A command-taking tool (Bash or Monitor, per the table in `src/internal/tool-targets.ts`)');
+    // The README names the set the policy reads, and each tool's condition.
+    expect(section).toContain('A tool that runs code (`CODE_EXECUTING_TOOLS` in `src/internal/tool-targets.ts`: Bash, Monitor, Workflow and REPL)');
+    expect(section).toContain('A `Workflow` allow is never a grant');
+    expect(section).toContain('the harness refuses every REPL call before reading any rule');
     const rulesOnly = JSON.stringify({ permissions: (JSON.parse(firstUserDoc) as { permissions: object }).permissions });
-    const projectCommands = JSON.stringify({ sandbox: { commands: { allow: ['git'] } } });
-    for (const projectDoc of [undefined, projectCommands]) {
+    const projectLists = JSON.stringify({ sandbox: { commands: { allow: ['git'] }, paths: { allow: ['.'] } } });
+    for (const projectDoc of [undefined, projectLists]) {
       const composed = compose(rulesOnly, projectDoc);
-      expect([...composed.grantPolicy.ungrantableTools]).toEqual(['Bash', 'Monitor']);
+      expect([...composed.grantPolicy.ungrantableTools].sort()).toEqual(['Bash', 'Monitor', 'REPL', 'Workflow']);
       const evaluate = createPermissionEvaluator(composed.permissions).evaluate;
       expect(grantFor('Monitor', { ...evaluate('Bash', { command: 'git status' }), layer: 'user' }, composed.grantPolicy)).toBeUndefined();
       expect(grantFor('Bash', evaluate('Bash', { command: 'git status' }), composed.grantPolicy)).toBeUndefined();

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ACKNOWLEDGED_NON_TARGET_FIELDS, TOOL_TARGET_FIELDS } from './tool-targets.js';
+import { ACKNOWLEDGED_NON_TARGET_FIELDS, CODE_EXECUTING_TOOLS, TOOL_TARGET_FIELDS } from './tool-targets.js';
 
 // Derived gate for the tool table (issue #86, ADR-0033). The pin test next
 // door pins the table to ITSELF, which catches an accidental edit and nothing
@@ -24,7 +24,10 @@ import { ACKNOWLEDGED_NON_TARGET_FIELDS, TOOL_TARGET_FIELDS } from './tool-targe
 //            gates (bound by the sandbox and evaluate pins instead); a tool
 //            whose dangerous dimension is not a path or a command (`WebFetch.url`
 //            network egress is R-3; `REPL.code` is arbitrary code execution,
-//            outside the path/command axis, no residual row of its own yet); and
+//            outside the path/command axis, so no configurable gate checks
+//            it; CODE_EXECUTING_TOOLS marks it `denied`, the block below pins
+//            that a `denied` tool has no table entry, and
+//            code-execution-deny.test.ts pins REPL itself, #211); and
 //            anything at production time, because this is a test.
 //
 // Proxy-parser caveat (the same shape as src/ci-drift.test.ts): there is no
@@ -52,6 +55,29 @@ const SDK_TOOLS_DTS = join(
  */
 const TARGET_FIELD_NAME = /path|file|command|cmd|cwd|dir/i;
 const COMMAND_FIELD_NAME = /command|cmd/i;
+/**
+ * A field is execution-shaped when its name, or one WORD of it (camelCase,
+ * snake_case, kebab-case; an all-caps run such as `JS` in `runJS` is one word),
+ * says it carries something the SDK runs (issue #211).
+ * Words, not substrings: `description` contains `script`. Each word is
+ * lower-cased and loses a plural `s` and trailing digits, so `CMD`, `scripts`
+ * and `code2` read as hits. Left out because the pinned SDK uses them for
+ * non-code fields (`ts` too: a timestamp suffix such as `created_ts` is likely): `run` (`run_in_background`, `resumeFromRunId`), `shell`
+ * (`TaskStop.shell_id`), `source` (`NotebookEdit.new_source`). Same reach
+ * caveat as TARGET_FIELD_NAME: a code field named outside this list is unseen.
+ */
+const EXECUTION_WORDS: ReadonlySet<string> = new Set([
+  'command', 'cmd', 'script', 'code', 'exec', 'eval', 'javascript', 'js', 'typescript', 'python', 'sql',
+  'program', 'expression', 'expr', 'snippet', 'statement',
+]);
+const normaliseWord = (word: string): string => {
+  const lower = word.toLowerCase().replace(/\d+$/, '');
+  return lower.length > 3 && lower.endsWith('s') ? lower.slice(0, -1) : lower;
+};
+const isExecutionShaped = (name: string): boolean =>
+  [name, ...name.split(/_|-|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)].some((word) =>
+    EXECUTION_WORDS.has(normaliseWord(word)),
+  );
 
 /** SDK interfaces whose name is not `<Tool>Input`; each is asserted to exist. */
 const INTERFACE_TO_TOOL: Readonly<Record<string, string>> = {
@@ -277,5 +303,61 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
       .map(([tool]) => tool)
       .sort();
     expect(cwdDefaulting).toEqual(['Glob', 'Grep']);
+  });
+});
+
+describe('CODE_EXECUTING_TOOLS is derived from the installed SDK declarations (issue #211, ADR-0040 D-8)', () => {
+  let sdkTools: SdkTool[] = [];
+  const members = Object.keys(CODE_EXECUTING_TOOLS);
+
+  beforeAll(() => {
+    sdkTools = loadSdkTools();
+  });
+
+  it('the execution vocabulary is pinned (a widened or emptied list would make the checks below vacuous)', () => {
+    for (const name of ['command', 'script', 'scriptPath', 'code', 'shell_command', 'sourceCode', 'CMD', 'SCRIPT', 'commands', 'scripts', 'code2', 'jsCode', 'exec', 'eval', 'program', 'expression', 'runJS', 'shellCMD', 'exprs']) {
+      expect(isExecutionShaped(name), `${name} must read as execution-shaped`).toBe(true);
+    }
+    // One literal row per word (not a loop over EXECUTION_WORDS, which would shrink with it), so
+    // removing any word from the list turns this red.
+    for (const name of ['command', 'cmd', 'script', 'code', 'exec', 'eval', 'javascript', 'js', 'typescript', 'python', 'sql', 'program', 'expression', 'expr', 'snippet', 'statement']) {
+      expect(isExecutionShaped(name), `${name} must read as execution-shaped`).toBe(true);
+    }
+    // The last four are real non-code fields of the pinned SDK: the reason run, shell and source are not words.
+    for (const name of ['file_path', 'path', 'content', 'query', 'name', 'description', 'prompt', 'url', 'encoding', 'run_in_background', 'resumeFromRunId', 'shell_id', 'new_source']) {
+      expect(isExecutionShaped(name), `${name} must not read as execution-shaped`).toBe(false);
+    }
+  });
+
+  it('every SDK tool with an execution-shaped field is a member (completeness direction)', () => {
+    const missing = sdkTools
+      .filter((tool) => tool.fields.some((field) => isExecutionShaped(field.name)))
+      .filter((tool) => CODE_EXECUTING_TOOLS[tool.tool] === undefined)
+      .map((tool) => `${tool.tool} (${tool.fields.filter((f) => isExecutionShaped(f.name)).map((f) => f.name).join(', ')})`);
+    expect(missing, 'SDK tools that run a command or script but that a user rule allow could still grant unconditionally').toEqual([]);
+  });
+
+  it('every member is a tool the SDK declares (map -> SDK direction)', () => {
+    const declared = new Set(sdkTools.map((tool) => tool.tool));
+    expect(members.filter((name) => !declared.has(name))).toEqual([]);
+  });
+
+  it('`commands` is exactly the command-kind table entries: no other dimension constrains what runs', () => {
+    const commandKind = Object.entries(TOOL_TARGET_FIELDS)
+      .filter(([, target]) => target.kind === 'command')
+      .map(([name]) => name)
+      .sort();
+    const commandsGated = Object.entries(CODE_EXECUTING_TOOLS)
+      .filter(([, gate]) => gate === 'commands')
+      .map(([name]) => name)
+      .sort();
+    expect(commandKind.length).toBeGreaterThan(0);
+    expect(commandsGated).toEqual(commandKind);
+  });
+
+  it('a `denied` member has no table entry: no configurable gate sees it, so the built-in deny is its only check', () => {
+    const denied = Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate === 'denied');
+    expect(denied.length).toBeGreaterThan(0);
+    expect(denied.filter(([name]) => TOOL_TARGET_FIELDS[name] !== undefined).map(([name]) => name)).toEqual([]);
   });
 });

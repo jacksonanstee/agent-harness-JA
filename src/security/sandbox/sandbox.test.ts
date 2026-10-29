@@ -299,6 +299,10 @@ describe('sandboxHook', () => {
     await expect(hook(preTool('Workflow', { script: 'export const meta = {}' }))).rejects.toThrow(
       /Workflow has no scriptPath; this mode has no path target/,
     );
+    // A predefined workflow by name is the other no-scriptPath mode, denied the same way.
+    await expect(hook(preTool('Workflow', { name: 'deploy' }))).rejects.toThrow(
+      /Workflow has no scriptPath; this mode has no path target/,
+    );
     await expect(
       hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, ws: { url: 'wss://x' } })),
     ).rejects.toThrow(/Monitor has no command; this mode has no command target/);

@@ -139,8 +139,9 @@ alternate routes are closed. To close this one, add a rule:
 This starter's task needs no tool. Shell, edit and write access come from an
 allow rule in your own ~/.harness/settings.json, and for shell also a
 \`sandbox.commands\` allowlist in that file (see the harness README, Settings); the same holds for
-Monitor, the other command-taking tool (the table in src/internal/tool-targets.ts).
-Without them the bundled CLI refuses them in a headless run.
+Monitor, the other command-taking tool (CODE_EXECUTING_TOOLS in src/internal/tool-targets.ts).
+Without them the bundled CLI refuses them in a headless run. Workflow scripts are never
+granted by a rule, and REPL is always refused.
 
 ## The eval, and what a failure means
 

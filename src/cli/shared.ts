@@ -6,7 +6,7 @@ import type { HookEventRecord, HookRuntime } from '../hooks/index.js';
 import { GuardedReadError, refuseSymlink } from '../internal/guarded-read.js';
 import { boundEcho, loadJsonSettings } from '../internal/settings.js';
 import { isBudgetUsd } from '../internal/limits.js';
-import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
+import { CODE_EXECUTING_TOOLS } from '../internal/tool-targets.js';
 import { stripBidi, stripInvisibles, TERMINAL_UNSAFE } from '../internal/sanitize.js';
 import {
   createPermissionEvaluator,
@@ -32,7 +32,7 @@ import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, Sandbo
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
-import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings, selfProtectionHook } from '../security/index.js';
+import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings, codeExecutionDenyHook, selfProtectionHook } from '../security/index.js';
 import type { ProtectedRoots } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -315,9 +315,10 @@ export class SettingsLoadError extends Error {
 export interface SecurityComposition {
   permissions: EvaluatorOptions;
   /**
-   * Which tools a rule allow must not grant (D-8): every command-kind tool in the
-   * shared table (Bash, Monitor) unless the USER layer's sandbox has a non-empty `commands` allowlist, so ADR-0015's argv parser
-   * runs before any explicit SDK allow. Computed once; both registration
+   * Which tools a rule allow must not grant (D-8, #211): every CODE_EXECUTING_TOOLS
+   * member, except the `commands`-gated ones (Bash, Monitor) while the USER layer's
+   * sandbox has a non-empty `commands` list, so the argv check runs before any
+   * explicit SDK allow. Computed once; both registration
    * sites pass it to permissionHook.
    */
   grantPolicy: GrantPolicy;
@@ -360,11 +361,16 @@ export interface ComposeSecurityDeps {
   projectDir: string;
 }
 
-// ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): withheld from the grant when the
-// USER layer has no sandbox.commands list. Derived from the one table (ADR-0033), never hand-listed.
-const COMMAND_TOOLS: readonly string[] = Object.entries(TOOL_TARGET_FIELDS)
-  .filter(([, target]) => target.kind === 'command')
-  .map(([name]) => name);
+// ADR-0040 D-8 (#211): every CODE_EXECUTING_TOOLS member is withheld from the grant unless its gate is
+// `commands` and the USER layer has a non-empty sandbox.commands list. The gates are documented there.
+function ungrantableTools(userSandbox: SandboxConfig): ReadonlySet<string> {
+  const commandsConfigured = (userSandbox.commands?.allow.length ?? 0) > 0;
+  return new Set(
+    Object.entries(CODE_EXECUTING_TOOLS)
+      .filter(([, gate]) => gate !== 'commands' || !commandsConfigured)
+      .map(([name]) => name),
+  );
+}
 
 /**
  * Loads and merges both security settings layers, and reads the judge from
@@ -465,7 +471,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   // USER layer only: the merge (intersectDimension) returns the project list when the user has
   // none, so a cloned repo's commands list must not unlock the grant. The merged list stays the gate.
   const grantPolicy: GrantPolicy = {
-    ungrantableTools: new Set((user.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS),
+    ungrantableTools: ungrantableTools(user.sandbox),
   };
   return {
     permissions,
@@ -483,7 +489,8 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
  * command that builds a session (`run`, `eval`). The built-in self-protection
  * deny comes first (#188, ADR-0042): it reads no settings, so no rule, grant
  * or absent sandbox dimension can let a call it denies through, and its
- * reason is the one reported. Then permissions, then the sandbox as the
+ * reason is the one reported. The built-in code-execution deny (#211) is
+ * second, for the same reason. Then permissions, then the sandbox as the
  * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more
  * actionable, so they get first say (ADR-0015 section 4). The sandbox also
@@ -496,6 +503,7 @@ export function registerSecurityHooks(
   protectedRoots: ProtectedRoots,
 ): void {
   hooks.register('pre-tool', selfProtectionHook(protectedRoots));
+  hooks.register('pre-tool', codeExecutionDenyHook());
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }
