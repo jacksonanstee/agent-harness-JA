@@ -211,6 +211,8 @@ describe('negative controls', () => {
       'grep -r "update the skills list" docs',
       'ls -la',
       'git log -n5',
+      'tar -xzf a.tgz',
+      'gcc -O2 -Wall -o out main.c',
     ]) {
       await allowed('Bash', { command });
     }
@@ -286,6 +288,8 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     'tar -xf a.tar -C.harness',
     'cp -t.harness x',
     'cp -tskills x',
+    'cp -rt.harness x',
+    'tar -xfC.harness a',
     // A path glued to an earlier token by a comma inside quoted code (parity M2).
     `python3 -c "import shutil; shutil.copy('/tmp/x','.harness/settings.json')"`,
     `python3 -c "import os; os.symlink('/tmp/x','skills/evil')"`,

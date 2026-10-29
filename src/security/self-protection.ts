@@ -228,7 +228,7 @@ function shellWords(command: string): string[] {
  * The candidate paths in a command. A word with a `/` is a path, and so is
  * each piece of it split at spaces, commas, quotes, brackets, `;` and braces
  * (code inside one quoted argument), each `=`-separated piece, and the value
- * of a short option glued to it (`-C.harness`). A word with no space and no
+ * glued to a short option or a flag cluster (`-C.harness`, `-rt.harness`). A word with no space and no
  * `/`, quoted or not, is an argument, so a bare `skills` or `.harness` counts
  * as that folder (owner ruling, revised 29/10/2026: `cp -r x skills` writes);
  * quoted text with a space in it (`-m "add skills"`) is not.
@@ -238,8 +238,10 @@ function candidatePaths(command: string): string[] {
   for (const word of shellWords(command)) {
     const bareArgument = !/\s/u.test(word) && !word.includes('/');
     for (const piece of word.split(/[\s,'"()[\]{};]+/u)) {
-      // A short option glued to its value (`-o.harness/x`, `-C.harness`).
-      const glued = /^-[A-Za-z]./u.test(piece) ? [piece.slice(2)] : [];
+      // A value glued to a short option, alone or after a flag cluster
+      // (`-o.harness/x`, `-C.harness`, `-rt.harness`): every suffix after a letter.
+      const letters = /^-([A-Za-z]+)./u.exec(piece)?.[1]?.length ?? 0;
+      const glued = Array.from({ length: letters }, (_, k) => piece.slice(k + 2));
       for (const part of [piece, ...piece.split('='), ...glued]) {
         if (part !== '' && (part.includes('/') || bareArgument)) out.push(part);
       }
