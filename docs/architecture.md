@@ -87,8 +87,8 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 - **Owns:** the built-in, non-configurable deny on agent writes to the harness's own state: both `.harness` directories, the run's skills root and an outside `--db` with its sidecars (ADR-0042).
 - **Public API:** `buildProtectedRoots({ userDir, projectDir, skillsDir, dbPath }): ProtectedRoots`; `selfProtectionHook(roots)` (pre-tool handler throwing `SelfProtectionViolation` with the fixed `SELF_PROTECTION_REASON`).
-- **Depends on:** `internal/tool-targets` (the shared table's `writes` flag and `canonicalizePath`) and `node:fs` for real-path resolution; reads no settings.
-- **Design notes:** Registered FIRST by `registerSecurityHooks`, so the pre-tool stack is three deep: self-protection, permissions, sandbox. Writer targets are compared as written and by real path, walking raw components so links (dangling ones too) are followed before `..`; Bash and Monitor are denied on any path-shaped mention after a light normalisation. Defence in depth for commands (R-23). Shipped ([ADR-0042](./decisions/0042-built-in-self-protection-deny.md)).
+- **Depends on:** `internal/tool-targets` (the shared table's `writes` flag, `canonicalizePath` and `CASE_INSENSITIVE_PLATFORM`), the `security/pre-tool-like` payload type, and `node:fs` for real-path resolution; reads no settings.
+- **Design notes:** Registered FIRST by `registerSecurityHooks`, so the pre-tool stack is three deep: self-protection, permissions, sandbox. Writer targets are compared as written and by real path, walking raw components so links (dangling ones too) are followed before `..`, 40 hops in total; Bash and Monitor are denied when a shell-style word (an unquoted bare `skills` or `.harness` included) or an absolute mention names a protected path, after `HOME` and `~` spellings are expanded. Defence in depth for commands (R-23). Shipped ([ADR-0042](./decisions/0042-built-in-self-protection-deny.md)).
 
 #### `security/sandbox`
 

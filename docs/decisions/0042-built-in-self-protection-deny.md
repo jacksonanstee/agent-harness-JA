@@ -40,23 +40,24 @@ A tool outside the table passes this guard untouched, as it passes the configura
 - each existing symlink is followed, a dangling one too, since `open(O_CREAT)` follows a dangling link and creates its target;
 - a `..` is applied to the prefix already resolved, never textually first, so `<link>/../x` goes where the kernel goes. `guarded-read.ts` documents the same rule for the settings reader;
 - a component that does not exist is kept as written;
-- a target that cannot be resolved (more than 40 hops, or a link that vanishes while it is read) is denied.
+- the links followed are counted against ONE budget of 40 for the whole path, nested links included, as Linux counts them. A path that needs more is denied, as are a link that vanishes while it is read and a loop. A per-nesting limit would not do: a doubling link tree (`Ln -> L(n-1)/L(n-1)`), which the agent can build with plain `ln -s`, is exponential in total hops and hung the hook in review.
 
-Each protected root is resolved this way once, when the session is built. Each writer target is resolved on every call. A call is denied if its target, in either form (as written or by real path), is under any form of a root.
+Each protected root is resolved this way once, when the session is built. Each writer target is resolved on every call, so a link that already exists when a later call is checked is followed. A call is denied if its target, in either form (as written or by real path), is under any form of a root.
 
-A relative target is resolved against the session's project directory, the working directory the SDK child inherits, never `process.cwd()`. A `~` or `~/` target is expanded against the user directory, in case the SDK expands it. On macOS and Windows both sides are case-folded and NFC-normalised, as in the paths gate.
+A relative target is resolved against the session's project directory, the working directory the SDK child inherits, never `process.cwd()`. A `~` or `~/` target is expanded against the user directory, in case the SDK expands it. Both sides are NFC-normalised on every platform; on macOS and Windows they are also case-folded, as in the paths gate. The walk splits on the platform separator and is not exercised on Windows, which is not in CI.
 
-**D4. Bash and Monitor: any path-shaped mention.** The command is first normalised for matching only:
-- quotes and backslashes are removed;
-- `$HOME`, `${HOME}` and `${HOME:-…}` (and the other parameter forms) are replaced by the user directory, and so is a `~` that starts a word.
+**D4. Bash and Monitor: any mention that names a protected path.** The command is first rewritten for matching only:
+- the `$` of ANSI-C `$'…'` quoting is dropped;
+- `$HOME` and every `${HOME…}` form, to one level of nesting (`${HOME%/}`, `${HOME:-${HOME}}`), become the user directory;
+- a `~` that starts a word becomes the user directory, and `~+` the working directory.
 
-The command is denied if either check matches:
-- **A path-shaped word.** It is split into words at whitespace and shell operators, keeping only what follows the last `=` in a word (so `of=…` and `--target-directory=…` count). Every word that contains a `/` goes through D3's test. This catches `"$HOME"/.harness/settings.json`, `$HOME//.harness`, `~/./.harness`, `.//skills/x`, `of=.harness/telemetry.db` and `<link>/../.harness/settings.json`.
-- **An absolute mention anywhere.** Any form of a protected root that appears anywhere in the normalised command counts, inside a quoted `python -c "…"` too, when it is followed by the end of the command, a `/`, whitespace, a quote, a shell operator or a glob or brace character. So `rm -rf ~/.harness*` is a mention.
+It is then split into shell-style words: quoted parts join their neighbours (`"$HOME"/.harness` is one word), quotes and backslashes are removed, and unquoted whitespace and shell operators separate words. The candidate paths are:
+- every word that contains a `/`, and every piece of it split at spaces, commas, quotes, brackets and `=`, so `of=.harness/telemetry.db`, `skills/x=1/SKILL.md` and `shutil.copy('/tmp/x','.harness/settings.json')` inside one quoted argument all count;
+- every word with no space and no `/`, which is an argument, so a bare `skills` or `.harness` counts as that folder (owner ruling, revised 29/10/2026). `cp -r /tmp/evil skills`, `tar -C .harness` and `cp x 'skills'` write there and are denied. Quoted text with a space in it is not an argument, so `git commit -m "add skills"` passes, and so does a word that is not the folder's name (`build:skills`, `myskills`, `.harnessrc`).
 
-A bare word is not a path (owner ruling, 29/10/2026). `skills`, `.harness` or `harness` on their own do not match, so `git commit -m "add skills"`, `grep skills README.md` and `echo .harness` work. The cost is that `rm -rf skills` and `cd .harness` are not caught.
+Each candidate goes through D3's test. Separately, any form of a protected root that appears anywhere in the rewritten command is a match when it is followed by the end, a `/`, whitespace, a quote, a shell operator or a glob or brace character, so `rm -rf ~/.harness*` is denied.
 
-Reads are denied like writes: `cat ~/.harness/settings.json` in Bash is refused, although the `Read` tool may read the same file. A command that is present but not a string is denied. An absent command, which is Monitor's websocket mode, has nothing to match and passes.
+Reads are denied like writes: `cat ~/.harness/settings.json`, `ls skills` and `grep skills README.md` are refused, although the `Read` tool may read the same files. A command that is present but not a string is denied. An absent command, which is Monitor's websocket mode, has nothing to match and passes.
 
 **D5. Order and configurability.** `registerSecurityHooks` registers the guard first, before the permission hook and the sandbox. That is the one registration site for `run` and `eval`, and both now pass it the protected roots (`tsc` enforces the argument). Its reason is therefore the one reported. Because the guard throws before the permission hook runs, no rule can grant past it: not a user `{"tool": "*", "decision": "allow"}`, not an absent sandbox. No settings key reads or removes it.
 
@@ -66,25 +67,26 @@ The guard belongs to the CLI's composition, not to `createSession`. A library ca
 
 ## Consequences
 
-- **The Bash and Monitor half is defence in depth, not containment.** It matches text after a light normalisation, so anything that builds the path at run time gets past it:
+- **The Bash and Monitor half is defence in depth, not containment.** It reads text after a light rewrite, so anything that builds the path at run time, or spells it in a form D4 does not rewrite, gets past it:
   - a variable other than `HOME` (`H=~/.har; cp x "${H}ness/settings.json"`), a glob (`~/.harnes?/s*`), brace expansion, or `printf` and `base64` tricks;
-  - `cd` into a parent and a bare name from there, or a bare `rm -rf skills` (D4's ruling);
-  - `~user/…`, which is not expanded;
+  - `cd` somewhere else and a relative name from there (`cd .. && cp x proj/.harness/x`);
+  - `~user/…` and `~-/…`, which are not expanded;
   - an interpreter computing the path, or a script written by one call and run by another;
   - anything an allowed program does internally (`git` hooks, `find -exec`).
 
   These are ADR-0015 decision 3's limits; the real fix is an OS sandbox. R-23 records them.
-- **Aliases created after the check, and hard links, are not caught.** The check runs at pre-tool time, and the SDK writes later. A link made between the two (TOCTOU), or one made by an earlier Bash call that got past D4, is not seen. A hard link has its own real path, and only an inode comparison would catch one. The guarded settings read (ADR-0034) still refuses a symlinked settings file at the next load.
-- **Over-matching is accepted.** A command that names a protected path for an innocent reason (`grep x ~/.harness/settings.json`, `ls ./skills`) is denied, and so is a write under a real-path alias of a protected directory. Failing closed is the intended direction, and the operator can always edit the files themselves.
-- **Per-call filesystem reads.** Each writer target, and each path-shaped word in a command, is resolved with `lstat`/`readlink` calls, one per component plus one per link hop. That is bounded by the path's length and 40 hops.
+- **A link made in the gap between the check and the write, and hard links, are not caught.** The check runs at pre-tool time, and the SDK writes later. A link that appears between the two (TOCTOU), for example one made by a background process an earlier call started, is not seen. A hard link has its own real path, and only an inode comparison would catch one. The guarded settings read (ADR-0034 decisions 3 and 5) still refuses a symlinked settings file at the next load.
+- **Over-matching is accepted.** On the default layout, any unquoted `skills` argument is the folder, so `ls skills` and `grep skills README.md` are denied, as is a command that names a protected path for an innocent reason (`grep x ~/.harness/settings.json`). A write under a real-path alias of a protected directory is denied too. Failing closed is the intended direction, and the operator can always edit the files themselves.
+- **Per-call filesystem reads.** Each writer target and each candidate path in a command is resolved with one `lstat` per component plus one `readlink` per link, at most 40 links per path in total.
 - **Telemetry shifts by one handler.** The permission hook is now handler 1, not 0, and the sandbox handler 2. So `handlerIndex` in `granted-by-rule` and `denied-by-hook` rows moves by one for them; a pre-tool handler never produces a `hook-error` row. A self-protection deny is a `denied-by-hook` row with `handlerIndex` 0 and the fixed reason. Nothing in the harness keys on these indices (ADR-0008 defines them as registration order).
-- **ADR-0041's later-run gap is closed for the named paths.** A model-authored `Write` or `Edit` to `~/.harness/settings.json`, through any alias set up beforehand, is now denied, and so is a Bash command that names it in a static spelling. A path built at run time in Bash is still the residual above. The budget start line ADR-0041 added stays as the visible backstop on `run`.
+- **ADR-0041's later-run gap is closed for the named paths.** A model-authored `Write` or `Edit` to `~/.harness/settings.json`, through any alias that exists when the call is checked, is now denied, and so is a Bash command that names it in a form D4 rewrites. A path built at run time, or a spelling D4 does not rewrite, is still the residual above. The budget start line ADR-0041 added stays as the visible backstop on `run`.
 
 ## Alternatives considered
 
 - **Protect only the named files.** That leaves the holdout, old telemetry databases and the scorecards writable, and needs a sidecar list per file. Rejected (owner ruling).
 - **Lexical comparison only, like the paths gate.** Any symlink alias set up beforehand gets straight past. Rejected (owner ruling). ADR-0015 rejected `realpath` for the general gate because it is impure and racy. Here it is applied only to a small fixed set computed once, with the race documented.
-- **Bare relative words as mentions.** The first cut denied any word `skills` or `.harness`, which blocked ordinary git and grep work on the default layout. Rejected on review (owner ruling, 29/10/2026: path-shaped only).
+- **Any word `skills` or `.harness`, quoted or not.** The first cut did this, which blocked `git commit -m "add skills"`. Rejected on review.
+- **Path-shaped words only.** The next ruling counted a bare word only with a `/`. The security re-check showed the cost: a bare destination (`cp -r /tmp/evil skills`) is a one-command skill injection. Rejected (owner ruling, revised 29/10/2026: an unquoted bare argument is the folder).
 - **Detect write intent in Bash.** Parsing `cp`, `mv`, `tee`, `sed -i`, redirections and `dd of=` is more code, and it fails open on every form the parser misses. Rejected for "any mention" (owner ruling).
 - **No Bash check.** With the default settings, Bash writes would stay wide open. Rejected.
 - **Register last.** The deny would still hold, but a permission or sandbox reason could be reported instead, hiding why. Rejected (owner ruling).

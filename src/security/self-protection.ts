@@ -12,10 +12,11 @@
 // followed (a dangling one too) BEFORE a later `..` is applied, so an alias
 // set up before the call is caught. It cannot close a link created between
 // the check and the write, nor a hard link: TOCTOU and inode aliasing are the
-// documented limits (R-23). The Bash/Monitor check normalises the command
-// (quotes, backslashes, `$HOME`, `${HOME…}`, `~`) and checks every
-// path-shaped word with the same real-path test, plus any absolute mention;
-// it is defence in depth, bypassable by a path built at run time.
+// documented limits (R-23). The Bash/Monitor check expands `HOME` and `~`
+// spellings, splits the command into shell-style words and runs every
+// candidate path (a word with a `/`, its pieces, and an unquoted bare
+// argument) through the same real-path test, plus any absolute mention; it is
+// defence in depth, bypassable by a path built at run time.
 import { lstatSync, readlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 

@@ -482,9 +482,9 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
  * Registers the security pre-tool hooks in their ONE shipped order, for every
  * command that builds a session (`run`, `eval`). The built-in self-protection
  * deny comes first (#188, ADR-0042): it reads no settings, so no rule, grant
- * or absent sandbox dimension can let a write to the harness's own state
- * through, and its reason is the one reported. Then permissions first,
- * sandbox as the backstop: the deny outcome is identical (the runtime denies
+ * or absent sandbox dimension can let a call it denies through, and its
+ * reason is the one reported. Then permissions, then the sandbox as the
+ * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more
  * actionable, so they get first say (ADR-0015 section 4). The sandbox also
  * runs after a grant is returned, so a sandbox deny always overrides it
