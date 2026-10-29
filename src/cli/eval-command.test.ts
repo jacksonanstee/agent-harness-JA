@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
@@ -232,7 +233,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     try {
       const factory = makeEvalSessionFactory({
         query,
-        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, warnings: [] },
+        security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, budget: { maxUsd: null }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
         create: (deps, config) => {
@@ -284,6 +285,7 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
           sandbox: {},
           judge: null,
           sdk: { settingSources: [] },
+          budget: { maxUsd: null },
           warnings: [],
         },
         telemetry: createTelemetryStore(db),
@@ -319,6 +321,7 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
           sandbox: {},
           judge: null,
           sdk: { settingSources },
+          budget: { maxUsd: null },
           warnings: [],
         },
         telemetry: createTelemetryStore(db),
@@ -337,5 +340,42 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
 
   it('the composed default is isolated', async () => {
     expect(await run([])).toMatchObject({ settingSources: [], strictMcpConfig: true });
+  });
+});
+
+// Issue #187 fold (architecture H1): eval honours the user file's
+// budget.maxUsd like run does; with none, the session default applies.
+describe('the eval session carries the composed budget.maxUsd (#187)', () => {
+  const run = async (maxUsd: number | null) => {
+    const fake = fakeQuery([RESULT]);
+    const db = openTelemetryDatabase({ path: ':memory:' });
+    try {
+      const factory = makeEvalSessionFactory({
+        query: fake.query,
+        security: {
+          permissions: { rules: [] },
+          grantPolicy: { ungrantableTools: new Set(['Bash']) },
+          sandbox: {},
+          judge: null,
+          sdk: { settingSources: [] },
+          budget: { maxUsd },
+          warnings: [],
+        },
+        telemetry: createTelemetryStore(db),
+        memory: createMemoryStore(db),
+      });
+      await factory({ skillsDir: null, maxTurns: 1 }).run('task');
+      return fake.captured[0]?.options;
+    } finally {
+      db.close();
+    }
+  };
+
+  it('a user cap reaches the query', async () => {
+    expect((await run(7.5))?.maxBudgetUsd).toBe(7.5);
+  });
+
+  it('no user cap leaves the session default', async () => {
+    expect((await run(null))?.maxBudgetUsd).toBe(DEFAULT_MAX_BUDGET_USD);
   });
 });

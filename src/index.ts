@@ -66,6 +66,8 @@ export {
   parseSdkSettings,
   SdkSettingsError,
   SETTING_SOURCES,
+  parseBudgetSettings,
+  BudgetSettingsError,
 } from './security/index.js';
 export type {
   Confidence,

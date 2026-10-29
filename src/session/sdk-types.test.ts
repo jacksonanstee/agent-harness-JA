@@ -134,11 +134,10 @@ describe('SDK hook-input type parity', () => {
 //   1. The SDK really declares what the rows say it declares. If a future SDK
 //      pin drops `abortController` or `maxBudgetUsd`, or changes the shape of
 //      its retry report, the rows' rationale is stale and typecheck reddens here.
-//   2. The harness seam (`QueryOptions`) carries exactly the keys pinned below (ten
-//      since issue #96 PR-B1). The day H-7 lands, the seam grows a key, this reddens,
-//      and the row's "today" sentence is rewritten in the same change. A pin on
-//      an absence is unusual; it exists so a roadmap row cannot silently
-//      outlive the gap it records.
+//   2. The harness seam (`QueryOptions`) carries exactly the keys pinned below
+//      (eleven since issue #187 added `maxBudgetUsd`, ADR-0041). Any further
+//      channel (a token or wall-clock ceiling, H-7's remainder; retries, H-8)
+//      grows the seam, this reddens, and the row is rewritten in the same change.
 
 // True only if T has exactly the keys K: none missing, none extra.
 type ExactKeys<T, K extends PropertyKey> = [Exclude<keyof T, K>] extends [never]
@@ -182,9 +181,10 @@ const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMe
 
 // Harness side: the seam is exactly {model, systemPrompt, maxTurns, hooks},
 // the judge's five isolation keys (issue #96, ADR-0036, G-1/G-2/G-6), and
-// since PR-B1 `abortController` (spec D4), used by the judge call only.
-// Ten keys. The judge passes all five; since ADR-0040 the SESSION passes
-// `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
+// `abortController` (PR-B1 spec D4 for the judge; since #187 the primary
+// query too) and `maxBudgetUsd` (#187, ADR-0041, primary query only).
+// Eleven keys. The judge passes all five isolation keys; since ADR-0040 the
+// SESSION passes `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
 const _seamExact: ExactKeys<
   QueryOptions,
   | 'model'
@@ -197,6 +197,7 @@ const _seamExact: ExactKeys<
   | 'skills'
   | 'persistSession'
   | 'abortController'
+  | 'maxBudgetUsd'
 > = true;
 // PR-B1 (spec D4, pin 12): the abort key mirrors the SDK's type, harness -> SDK.
 const _abortMirrorsSdk: Assignable<
@@ -208,8 +209,12 @@ const _matcherTimeoutMirrorsSdk: Assignable<
   NonNullable<SdkHookMatcher['timeout']>,
   NonNullable<HookCallbackMatcher['timeout']>
 > = true;
-// H-6 stays deferred: the seam carries no budget key.
-const _seamCarriesNoBudget: Assignable<'maxBudgetUsd', keyof QueryOptions> = false;
+// #187 (ADR-0041): the seam carries the dollar budget, mirroring the SDK's type.
+const _seamCarriesBudget: Assignable<'maxBudgetUsd', keyof QueryOptions> = true;
+const _budgetMirrorsSdk: Assignable<
+  NonNullable<QueryOptions['maxBudgetUsd']>,
+  NonNullable<Options['maxBudgetUsd']>
+> = true;
 // Each new key is a structural mirror of the SDK's field, pinned one per key
 // in the harness -> SDK direction (a union on the LEFT of Assignable is an
 // AND, so members are written out). The array-typed keys must be MUTABLE as
@@ -249,7 +254,7 @@ const _judgeIsolationLiteral: QueryOptions = {
 const _seamScalarsMatchSdk: Assignable<Omit<QueryOptions, 'hooks'>, Options> = true;
 
 describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
-  it('hold at compile time: the SDK declares the channels; the seam carries abortController for the judge and no budget', () => {
+  it('hold at compile time: the SDK declares the channels; the seam carries abortController and the budget', () => {
     expect([
       _sdkDeclaresAbort,
       _sdkAbortIsController,
@@ -268,7 +273,8 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _seamScalarsMatchSdk,
       _abortMirrorsSdk,
       _matcherTimeoutMirrorsSdk,
-      _seamCarriesNoBudget,
+      _seamCarriesBudget,
+      _budgetMirrorsSdk,
       _settingSourcesMirrorsSdk,
       _settingSourceToSdk,
       _settingSourceFromSdk,

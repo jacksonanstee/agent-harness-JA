@@ -162,14 +162,25 @@ describe('process/01-requirements.md structure', () => {
 });
 
 describe('the roadmap rows from issue #101', () => {
-  it('H-7 records token and wall-clock ceilings with cancellation, deferred to v1.x', () => {
+  // Issue #187 (ADR-0041) promoted H-6 and H-7 and met cancellation; the
+  // token and wall-clock half of H-7 stays open and must keep saying so.
+  it('H-6 is a SHOULD met by the default-on dollar ceiling (#187)', () => {
+    const h6 = row('H-6');
+    expect(h6.priority).toBe('SHOULD');
+    expect(h6.note).toMatch(/issue #187/);
+    expect(h6.verification).toContain('ADR-0041');
+  });
+
+  it('H-7 records token and wall-clock ceilings with cancellation: cancellation met, the ceilings open (#187)', () => {
     const h7 = row('H-7');
-    expect(h7.priority).toBe('COULD');
+    expect(h7.priority).toBe('SHOULD');
     expect(h7.requirement).toMatch(/token/);
     expect(h7.requirement).toMatch(/wall-clock/);
     expect(h7.requirement).toMatch(/cancel/);
     expect(h7.note).toMatch(/issue #101/);
-    expect(h7.verification).toContain('Deferred to v1.x');
+    expect(h7.note).toMatch(/issue #187/);
+    expect(h7.verification).toMatch(/^Partly met/);
+    expect(h7.verification).toContain('token and wall-clock ceilings are open');
   });
 
   it('H-8 records the retry and timeout policy for the SDK call, deferred to v1.x', () => {

@@ -47,7 +47,7 @@ import {
   sanitizeControlChars,
   truncateWellFormed,
 } from '../internal/sanitize.js';
-import { MAX_SKILL_PROMPT_CHARS } from '../internal/limits.js';
+import { DEFAULT_MAX_BUDGET_USD, isBudgetUsd, MAX_SKILL_PROMPT_CHARS } from '../internal/limits.js';
 import { buildRunEstimate } from '../internal/pricing.js';
 import {
   cleanSkillText,
@@ -497,6 +497,18 @@ function buildSessionIsolation(config: SessionConfig): Pick<QueryOptions, 'setti
 }
 
 /**
+ * The run's dollar ceiling (issue #187, ADR-0041): only ABSENCE means the
+ * default; any other value, `null` included, must pass `isBudgetUsd`.
+ */
+function resolveMaxBudgetUsd(config: SessionConfig): number {
+  if (config.maxBudgetUsd === undefined) return DEFAULT_MAX_BUDGET_USD;
+  if (!isBudgetUsd(config.maxBudgetUsd)) {
+    throw new RangeError('SessionConfig.maxBudgetUsd must be a finite number of US dollars greater than 0');
+  }
+  return config.maxBudgetUsd;
+}
+
+/**
  * Wires router, skills, hooks, and memory into one Claude Agent SDK session
  * (architecture data-flow steps 2, 3, 4, 5-14, 15). The SDK `query` function
  * is injected so tests never touch the network.
@@ -523,6 +535,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
   const warn = config.onWarning ?? (() => undefined);
   if (config.turnId !== undefined) assertValidCorrelationId(config.turnId, 'config.turnId');
   validateSessionJudge(deps);
+  const maxBudgetUsd = resolveMaxBudgetUsd(config);
+  if (config.signal !== undefined && !(config.signal instanceof AbortSignal)) {
+    throw new TypeError('SessionConfig.signal must be an AbortSignal');
+  }
 
   async function run(prompt: string): Promise<SessionResult> {
     // Step 2: model selection.
@@ -1640,6 +1656,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let costUsd: number | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
+    // D7 (issue #187): when its read loop fails after an is_error result, the
+    // SDK replaces the failure with "Claude Code returned an error result"
+    // (sdk.mjs readMessages; seen after error_max_budget_usd, probe 29/10/2026).
+    // Armed only by a result whose CLEANED subtype names an error; a missing
+    // or garbled subtype leaves the follow-up throw to surface (review fold).
+    let errorResultArrived = false;
+    // D5: the CALLER's intent, snapshotted when the stream ends, so an abort
+    // during the stop hook is not an interrupt and a future session-internal
+    // ceiling aborting the same controller is never one either.
+    let interrupted: boolean;
+    // D1/D5: the primary query's own controller, linked to the caller's
+    // signal, so the SDK never holds the caller's controller.
+    const abortController = new AbortController();
+    const onCallerAbort = (): void => abortController.abort(config.signal?.reason);
+    if (config.signal?.aborted === true) onCallerAbort();
+    else config.signal?.addEventListener('abort', onCallerAbort, { once: true });
 
     try {
       // Spec D5: the explicit hook budget, set only when a judge is on.
@@ -1651,6 +1683,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           model: modelChoice.model,
           systemPrompt,
           maxTurns: config.maxTurns,
+          maxBudgetUsd,
+          abortController,
           ...buildSessionIsolation(config),
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
@@ -1713,11 +1747,20 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
             refusal = { source: 'result-stop-reason', category: null, fallbackModel: null };
             warn('model refused the turn (stop_reason=refusal; no refusal banner on this stream)');
           }
+          // Last, so a throw from anything above in this branch is not
+          // mistaken for the SDK's follow-up (D7). Last result wins.
+          errorResultArrived = resultSubtype !== null && resultSubtype !== 'success';
         }
       }
     } catch (error: unknown) {
-      streamError = error;
+      // D7: once an error result has arrived, ANY later throw is taken as the
+      // SDK's follow-up to it (keyed on "a result arrived", not on the
+      // message text), so the run completed and the result is returned. A
+      // caller's interrupt always rethrows, even after an error result.
+      if (!errorResultArrived || config.signal?.aborted === true) streamError = error;
     } finally {
+      interrupted = config.signal?.aborted === true;
+      config.signal?.removeEventListener('abort', onCallerAbort);
       // D4 stream-end flush (S-15): every rewrite the stream never resolved is
       // `unobserved`, recorded here — after the stream, before the stop hook —
       // so a thrown stream still flushes. Wrapped so a telemetry throw here
@@ -1782,6 +1825,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         refusalSource: refusal?.source ?? null,
         refusalCategory: refusal?.category ?? null,
         refusalFallbackModel: refusal?.fallbackModel ?? null,
+        maxBudgetUsd,
+        interrupted,
         // #192: the pre-run estimate and its inputs. maxTurns is a ceiling on
         // the turns taken, so the estimate leans high on cache reads. An unset
         // maxTurns, a maxTurns below 1, or no system prompt (no skills) gives
@@ -1850,6 +1895,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       modelChoice,
       usage,
       costUsd,
+      maxBudgetUsd,
+      interrupted,
       numTurns,
       denied,
       cliDenied,

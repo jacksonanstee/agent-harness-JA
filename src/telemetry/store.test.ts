@@ -496,6 +496,23 @@ describe('createTelemetryStore.query', () => {
       expect(() => rec({ estimatePriceChecked: 5 })).toThrow(/not a valid/);
     });
 
+    it('accepts the budget fields, both optional, and rejects wrong types (#187)', () => {
+      const { store } = openStore();
+      const base = {
+        model: 'm', ruleId: 'r', costUsd: null, numTurns: null, usage: null, sdkSessionId: null, resultSubtype: null,
+      };
+      const rec = (extra: Record<string, unknown>) =>
+        store.record({ type: 'turn-cost', sessionId: 's', turnId: `t${Math.random()}`, payload: { ...base, ...extra } as never });
+      expect(rec({ maxBudgetUsd: 1, interrupted: false }).ok).toBe(true);
+      expect(rec({ maxBudgetUsd: 0.25, interrupted: true }).ok).toBe(true);
+      expect(rec({}).ok).toBe(true); // pre-#187 rows carry neither key
+      for (const bad of [0, -1, Number.NaN, '1', null]) {
+        expect(() => rec({ maxBudgetUsd: bad }), String(bad)).toThrow(/not a valid turn-cost payload/);
+      }
+      expect(() => rec({ interrupted: 1 })).toThrow(/not a valid/);
+      expect(() => rec({ interrupted: null })).toThrow(/not a valid/);
+    });
+
     it('rejects an estimateUsd of the wrong type on read and on write (#192)', () => {
       const { db, store } = openStore();
       db.prepare(

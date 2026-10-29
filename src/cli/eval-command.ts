@@ -196,6 +196,8 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         skillsDir: config.skillsDir,
         settingSources: security.sdk.settingSources,
         maxTurns: config.maxTurns,
+        // #187: the user file's cap, like run; none leaves the session default.
+        ...(security.budget.maxUsd === null ? {} : { maxBudgetUsd: security.budget.maxUsd }),
         ...(config.descriptor !== undefined && { descriptor: config.descriptor }),
         generateId: () => sessionId,
         turnId,

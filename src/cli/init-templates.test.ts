@@ -30,6 +30,8 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     sessionId: 'test-session',
     modelChoice: { model: 'claude-sonnet-5', rule_id: 'test', reason: 'test' },
     usage: null,
+    maxBudgetUsd: 1,
+    interrupted: false,
     costUsd: null,
     numTurns: null,
     denied: [],

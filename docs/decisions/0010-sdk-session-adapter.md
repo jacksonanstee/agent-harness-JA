@@ -153,3 +153,13 @@ Three design questions:
   `QueryOptions` mirrors the same ten keys and the exact-keys pin is
   unchanged, so the earlier "passes its four" sentences were true when written
   and are left as they were.
+
+  **Added 29/10/2026 (issue #187, ADR-0041):** the primary query now passes
+  eight keys: the six above plus `maxBudgetUsd` (default USD 1.00) and an
+  `abortController` linked to `SessionConfig.signal`. `QueryOptions` mirrors
+  eleven SDK keys and the exact-keys pin moved to eleven. `run` now installs a
+  one-shot SIGINT handler, so the first Ctrl-C reaches decision 3's `finally`:
+  the stop hook fires and the turn-cost row is written. A second Ctrl-C is
+  still a signal death that skips whatever cleanup has not yet run. The sentences above that say the
+  harness installs no signal handler were true when written and are left as
+  they were.
