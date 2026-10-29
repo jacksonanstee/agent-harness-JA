@@ -135,6 +135,10 @@ describe('negative controls', () => {
     await allowed('Bash', { command: 'git status' });
     await allowed('Bash', { command: 'npm run skills-lint' });
     await allowed('Bash', { command: 'cat .harnessrc' });
+    // A relative spelling must start a word: `myskills` is not `skills`, and
+    // `foo.harness/x` is not `.harness/x` (N13).
+    await allowed('Bash', { command: 'ls myskills' });
+    await allowed('Bash', { command: 'cat foo.harness/x' });
   });
 
   it('ignores tools outside the table', async () => {
