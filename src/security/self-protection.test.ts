@@ -138,6 +138,24 @@ describe('aliases (D3: as written and by real path)', () => {
     await denied('Write', { file_path: join(outside, 'cfg') + '/../.harness/settings.json' });
   });
 
+  it('caps the TOTAL symlink hops per path, so a doubling link tree cannot hang the hook (parity H1)', async () => {
+    const d = tmp('sp-dos-');
+    symlinkSync('.', join(d, 'L0'));
+    for (let n = 1; n <= 24; n += 1) symlinkSync(`L${n - 1}/L${n - 1}`, join(d, `L${n}`));
+    const started = Date.now();
+    await denied('Write', { file_path: join(d, 'L24', 'x') });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('denies a path through more than 40 links in total, as the kernel would (ELOOP)', async () => {
+    const d = tmp('sp-chain-');
+    mkdirSync(join(d, 'real'));
+    // Each real/sN -> real, so real/s0/s1/.../s40 follows 41 links in turn.
+    for (let n = 0; n < 41; n += 1) symlinkSync(join(d, 'real'), join(d, 'real', `s${n}`));
+    const path = [join(d, 'real'), ...Array.from({ length: 41 }, (_, n) => `s${n}`)].join('/');
+    await denied('Write', { file_path: `${path}/x` });
+  });
+
   it('denies a target that cannot be resolved (a symlink loop): unresolvable is never "allow"', async () => {
     const d = tmp('sp-loop-');
     symlinkSync(join(d, 'b'), join(d, 'a'));
@@ -170,7 +188,7 @@ describe('negative controls', () => {
     await allowed('Write', { file_path: join(outside, 'other.db') });
   });
 
-  it('allows unrelated Bash, including bare mentions of the word skills (owner ruling: path-shaped only)', async () => {
+  it('allows unrelated Bash, and the word skills inside quoted text (owner ruling: an unquoted bare word is a path)', async () => {
     for (const command of [
       'git status',
       'npm run skills-lint',
@@ -178,10 +196,9 @@ describe('negative controls', () => {
       'ls myskills',
       'cat foo.harness/x',
       'git commit -m "add skills"',
-      'grep skills README.md',
+      'echo "skills: done"',
       'npm run build:skills',
-      'rm -rf skills',
-      'echo .harness',
+      'grep -r "update the skills list" docs',
     ]) {
       await allowed('Bash', { command });
     }
@@ -233,6 +250,28 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     // A relative path after `=` is only caught by the path-word check (N21).
     'dd if=/dev/zero of=.harness/telemetry.db',
     'cp --target-directory=./skills/evil x',
+    // An unquoted bare word is the folder (owner ruling, revised 29/10): a bare
+    // destination writes (security re-check).
+    'cp -r /tmp/evil skills',
+    'mv /tmp/evil skills',
+    'tar -xf x.tar -C .harness',
+    'cp /tmp/s .harness',
+    'rm -rf skills',
+    "cp -r /tmp/evil 'skills'",
+    'cp -r /tmp/evil --target-directory=skills',
+    // `=` inside a later component, and every HOME form (security re-check).
+    'cp x skills/x=1/SKILL.md',
+    'cp x .harness/a=settings.json',
+    'cp x ${HOME%/}/.harness/settings.json',
+    'cp x ${HOME:0}/.harness/settings.json',
+    'cp x ${HOME/x/y}/.harness/settings.json',
+    'cp x ${HOME:-${HOME}}/.harness/settings.json',
+    'cp x ~+/.harness/settings.json',
+    "cp x ~/$'.harness'/settings.json",
+    // A path glued to an earlier token by a comma inside quoted code (parity M2).
+    `python3 -c "import shutil; shutil.copy('/tmp/x','.harness/settings.json')"`,
+    `python3 -c "import os; os.symlink('/tmp/x','skills/evil')"`,
+    `python3 -c "import shutil; shutil.copy('/tmp/x','${join(outside, 'cfg')}/settings.json')"`,
   ])('denies %s', async (command) => {
     await denied('Bash', { command });
     await denied('Monitor', { command });

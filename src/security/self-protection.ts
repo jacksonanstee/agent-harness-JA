@@ -36,7 +36,11 @@ export class SelfProtectionViolation extends Error {
 
 /** SQLite's sidecars for a WAL database (the telemetry store sets journal_mode = WAL). */
 const DB_SIDECARS = ['', '-wal', '-shm', '-journal'] as const;
-/** Symlink hops followed per path before giving up (Linux's own limit is 40). */
+/**
+ * Symlink hops followed in TOTAL per path before giving up, as Linux counts
+ * them (40). A per-nesting limit is not enough: a doubling link tree
+ * (`Ln -> L(n-1)/L(n-1)`) is exponential in total hops (docs parity H1).
+ */
 const MAX_LINK_HOPS = 40;
 
 export interface ProtectedRoot {
@@ -81,9 +85,10 @@ function rawAbsolute(path: string, cwd: string): string {
  * The real path of `path` as the kernel would resolve it: components are
  * taken left to right, each existing symlink is followed (a dangling link's
  * target too), and `..` is applied to the RESOLVED prefix. A component that
- * does not exist is kept as written. Null only when the hop limit is hit.
+ * does not exist is kept as written. Null when the shared hop budget runs out
+ * or a link vanishes while it is read.
  */
-function realResolve(path: string, hops = 0): string | null {
+function realResolve(path: string, budget: { hops: number } = { hops: MAX_LINK_HOPS }): string | null {
   const { root } = parse(path);
   let current = root;
   for (const part of path.slice(root.length).split(sep)) {
@@ -103,14 +108,15 @@ function realResolve(path: string, hops = 0): string | null {
       current = next;
       continue;
     }
-    if (hops >= MAX_LINK_HOPS) return null;
+    if (budget.hops <= 0) return null;
+    budget.hops -= 1;
     let target: string;
     try {
       target = readlinkSync(next);
     } catch {
       return null; // the link changed under us: unresolvable, never "allow"
     }
-    const resolved = realResolve(isAbsolute(target) ? target : `${current}${sep}${target}`, hops + 1);
+    const resolved = realResolve(isAbsolute(target) ? target : `${current}${sep}${target}`, budget);
     if (resolved === null) return null;
     current = resolved;
   }
@@ -165,29 +171,77 @@ function isProtected(path: string, roots: ProtectedRoots): boolean {
 }
 
 /**
- * The command as the shell would mostly read it, for matching only: quotes
- * and backslashes dropped, `${HOME…}`, `$HOME` and a word-initial `~` replaced
- * by the user directory. Not a shell parser: a path built at run time (a
- * variable, a glob, `cd`) still gets past it (R-23).
+ * The command with `HOME` and `~` spellings replaced, for matching only:
+ * every `${HOME…}` form (one nesting level) and `$HOME` become the user
+ * directory, a word-initial `~` too and `~+` the working directory; the `$`
+ * of ANSI-C `$'…'` quoting is dropped. Not a shell: a path built at run time
+ * still gets past it (R-23).
  */
-function normalise(command: string, home: string): string {
+function expandHome(command: string, roots: ProtectedRoots): string {
   return command
-    .replace(/["'\\]/gu, '')
-    .replace(/\$\{HOME(?:[:]?[-=+?][^}]*)?\}/gu, home)
-    .replace(/\$HOME(?![A-Za-z0-9_])/gu, home)
-    .replace(/(^|[\s=:(<>|;&`])~(?=\/|$|[\s;&|)<>])/gu, `$1${home}`);
+    .replace(/\$(?=['"])/gu, '')
+    .replace(/\$\{HOME(?:[^{}]|\{[^{}]*\})*\}/gu, roots.home)
+    .replace(/\$HOME(?![A-Za-z0-9_])/gu, roots.home)
+    .replace(/(^|[\s=:(<>|;&`'"])~\+(?=\/|$|[\s;&|)<>'"])/gu, `$1${roots.cwd}`)
+    .replace(/(^|[\s=:(<>|;&`'"])~(?=\/|$|[\s;&|)<>'"])/gu, `$1${roots.home}`);
 }
 
-// Words split at whitespace and shell operators; `of=/x` and `--x=/y` keep
-// only what follows the last `=`.
-const WORD_SPLIT = /[\s;&|()<>`]+/u;
+/**
+ * Shell-style words: quotes and backslashes are removed and quoted parts
+ * join their neighbours (`"$HOME"/.harness` is one word), split at unquoted
+ * whitespace and operators. Not a parser: no expansion, no here-docs.
+ */
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let quote: "'" | '"' | null = null;
+  let started = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] ?? '';
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"' && i + 1 < command.length) word += command[(i += 1)] ?? '';
+      else word += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+    } else if (ch === '\\' && i + 1 < command.length) {
+      word += command[(i += 1)] ?? '';
+      started = true;
+    } else if (/[\s;&|()<>`]/u.test(ch)) {
+      if (started) words.push(word);
+      word = '';
+      started = false;
+    } else {
+      word += ch;
+      started = true;
+    }
+  }
+  if (started) words.push(word);
+  return words;
+}
 
-/** Path-shaped words (owner ruling 29/10/2026): only a word containing `/` is a path. */
-function pathWords(command: string): string[] {
-  return command
-    .split(WORD_SPLIT)
-    .map((word) => word.slice(word.lastIndexOf('=') + 1))
-    .filter((word) => word.includes('/'));
+/**
+ * The candidate paths in a command. A word with a `/` is a path, and so is
+ * each piece of it split at spaces, commas, quotes and brackets (code inside
+ * one quoted argument) and each `=`-separated piece. A word with no space and no `/` is
+ * an argument, so a bare `skills` or `.harness` counts as that folder (owner
+ * ruling, revised 29/10/2026: `cp -r x skills` writes); quoted text with a
+ * space in it (`-m "add skills"`) is not.
+ */
+function candidatePaths(command: string): string[] {
+  const out: string[] = [];
+  for (const word of shellWords(command)) {
+    const bareArgument = !/\s/u.test(word) && !word.includes('/');
+    for (const piece of word.split(/[\s,'"()[\]{};]+/u)) {
+      for (const part of [piece, ...piece.split('=')]) {
+        if (part !== '' && (part.includes('/') || bareArgument)) out.push(part);
+      }
+    }
+  }
+  return out;
 }
 
 // After an absolute mention: end, a path separator, whitespace, a quote, a
@@ -206,8 +260,11 @@ function mentionsAbsolute(folded: string, roots: ProtectedRoots): boolean {
 }
 
 function commandIsProtected(command: string, roots: ProtectedRoots): boolean {
-  const normalised = normalise(command, roots.home);
-  return pathWords(normalised).some((word) => isProtected(word, roots)) || mentionsAbsolute(fold(normalised), roots);
+  const expanded = expandHome(command, roots);
+  return (
+    candidatePaths(expanded).some((path) => isProtected(path, roots)) ||
+    mentionsAbsolute(fold(expanded.replace(/["'\\]/gu, '')), roots)
+  );
 }
 
 /**
