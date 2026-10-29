@@ -70,5 +70,6 @@ The read → ENOENT-is-empty → JSON-parse-fail-loud → path-prefixed-rethrow 
 
 - A tool executor or OS-level sandbox (seatbelt/bubblewrap/container) lands: re-anchor path bases to the executor's working directory and consider promoting the gate to real isolation.
 - Symlink escapes become a live concern: add an optional `realpath` mode with documented TOCTOU caveats.
+  **Partly answered 29/10/2026 (issue #188, ADR-0042):** a built-in guard, registered before this gate, compares real paths (with the TOCTOU caveat) for the harness's own state only: both `.harness` directories, the run's skills root and the telemetry database. The paths gate itself stays lexical.
 - Users hit the metacharacter false-deny wall: consider quote-aware tokenisation with an explicit threat-model review.
 - A third settings consumer appears: `loadJsonSettings` may grow layer-discovery (`user`/`project` path resolution) too. *Fired 2026-08-28 in a different shape: the third consumer was of the symlink GUARD, not of the loader, and what grew was the read envelope (ADR-0034 decision 4). Layer discovery still lives in `composeSecurity`.*

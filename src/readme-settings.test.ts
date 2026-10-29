@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, WARNING_PREFIX } from './cli/shared.js';
-import { parseBudgetSettings } from './security/index.js';
+import { parseBudgetSettings, SELF_PROTECTION_REASON } from './security/index.js';
 import { formatBudgetStartLine, formatStopLine } from './cli.js';
 import { sdkStartLine } from './cli/run-sdk.js';
 import { INIT_SETTINGS_JSON } from './cli/init-templates.js';
@@ -475,6 +475,11 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
     const composed = compose(budgetDoc, undefined);
     expect(composed.budget.maxUsd).toBe(2.5);
     expect(composed.warnings).toEqual([]);
+  });
+
+  it('the section quotes the self-protection reason verbatim from the code (#188)', () => {
+    const { section } = loaded();
+    expect(section).toContain(SELF_PROTECTION_REASON);
   });
 
   it('the section quotes the budget start and stop lines verbatim from the code that emits them (#187)', () => {

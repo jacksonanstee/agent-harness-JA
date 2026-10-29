@@ -375,12 +375,12 @@ check_adr_counts() {
       [ "$n" = "$actual" ] || note "README.md: claims '$n ADRs' but docs/decisions holds $actual"
     done
     # (c) the spelled-out count, e.g. "Twenty-nine ADRs".
-    for word in $(printf '%s' "$line" | grep -oiE '\b(twenty|thirty)(-(one|two|three|four|five|six|seven|eight|nine))? ADRs?\b' | sed 's/ ADRs*$//'); do
+    for word in $(printf '%s' "$line" | grep -oiE '\b(twenty|thirty|forty|fifty)(-(one|two|three|four|five|six|seven|eight|nine))? ADRs?\b' | sed 's/ ADRs*$//'); do
       claims=$((claims + 1))
       expected=$(awk -v n="$actual" 'BEGIN {
         split("one two three four five six seven eight nine", o, " ");
         tens = int(n / 10) * 10; unit = n % 10;
-        name = (tens == 20) ? "twenty" : (tens == 30) ? "thirty" : "";
+        name = (tens == 20) ? "twenty" : (tens == 30) ? "thirty" : (tens == 40) ? "forty" : (tens == 50) ? "fifty" : "";
         if (name == "") { print ""; exit }
         print (unit == 0) ? name : name "-" o[unit];
       }')
