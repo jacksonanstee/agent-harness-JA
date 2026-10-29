@@ -95,6 +95,6 @@ The guard belongs to the CLI's composition, not to `createSession`. A library ca
 ## Revisit if
 
 - An OS-level sandbox lands: the Bash half can then defer to it.
-- #211's `executes` marker lands: `writes` and `executes` should be pinned against the SDK together.
+- #211's `executes` marker lands: `writes` and `executes` should be pinned against the SDK together. *Amended 30/10/2026: #211 shipped `CODE_EXECUTING_TOOLS`, a gate map beside the table rather than a table flag (REPL has no table entry), pinned against the SDK in the same `tool-targets.sdk-parity.test.ts` as the table; ADR-0040 D-8.*
 - The SDK starts reporting the child's working directory per call (the `cwd` assumption above).
 - A legitimate agent workflow needs to write one of these paths: give it an explicit, operator-only escape hatch, never a project-file key.

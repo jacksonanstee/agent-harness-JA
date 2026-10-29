@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { buildProtectedRoots, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON } from '../security/index.js';
+import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
@@ -334,12 +334,23 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
   });
 
-  it('registers exactly three pre-tool handlers (self-protection, permissions, sandbox; #188)', async () => {
+  it('registers exactly four pre-tool handlers (self-protection, code-execution deny, permissions, sandbox; #188, #211)', async () => {
     const hooks = createHookRuntime();
     registerSecurityHooks(hooks, compose({}, []), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(false);
-    expect(result.handlersFired).toBe(3);
+    expect(result.handlersFired).toBe(4);
+  });
+
+  // #211: no rule or sandbox list can grant REPL, whose own CLI floor is allow.
+  it('a user allow-everything rule with both sandbox lists cannot let REPL run; the built-in reason is reported', async () => {
+    const hooks = createHookRuntime();
+    const allowAll = { permissions: { rules: [{ tool: '*', decision: 'allow' }] } };
+    registerSecurityHooks(hooks, compose(allowAll, [], { sandbox: { paths: { allow: ['/'] }, commands: { allow: ['node'] } } }), roots);
+    const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool: 'REPL', args: { code: '1' }, redactions: null });
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe(CODE_EXECUTION_DENY_REASON);
   });
 
   // #188 D5: first, so no rule, grant or absent sandbox can let a policy write through.

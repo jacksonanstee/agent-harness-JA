@@ -72,6 +72,37 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
 };
 
 /**
+ * What a user rule allow can do for a tool that runs code (issue #211, ADR-0040 D-8):
+ * - `commands`: a grant only while the USER layer has a non-empty
+ *   `sandbox.commands` list, whose argv check refuses a chained command;
+ * - `withheld`: never a grant; the bundled CLI's own permission check decides,
+ *   and it asks, which a headless run refuses;
+ * - `denied`: refused by a built-in hook before any rule is read
+ *   (`codeExecutionDenyHook`), because the CLI's own check allows it.
+ */
+export type CodeExecutionGate = 'commands' | 'withheld' | 'denied';
+
+/**
+ * Every tool that runs a command or script, and its gate. Each value is a
+ * per-tool ruling (owner, 30/10/2026), not derived from the table kind:
+ * Workflow's `scriptPath` is a path, but a `paths` list checks where a script
+ * is, not what it runs, and the SDK's own loop is Write the script, then run
+ * it. tool-targets.sdk-parity.test.ts fails when an SDK tool with a field
+ * named for code is missing here, when a member is not SDK-declared, when
+ * `commands` is not exactly the command-kind entries, or when a `denied`
+ * member has a table entry.
+ */
+export const CODE_EXECUTING_TOOLS: Readonly<Record<string, CodeExecutionGate>> = {
+  Bash: 'commands',
+  Monitor: 'commands',
+  // The CLI's check is `ask` for an inline script, a name and a scriptPath alike.
+  Workflow: 'withheld',
+  // `code` is arbitrary JavaScript; the CLI's check is a flat `allow` (read from
+  // the bundled binary, 30/10/2026). Off in SDK runs unless CLAUDE_CODE_REPL is set.
+  REPL: 'denied',
+};
+
+/**
  * Target-shaped SDK fields (name says path or command) that are deliberately
  * NOT gated, each with its reason. The derived gate fails on a target-shaped
  * field that is neither gated nor listed here, and on an entry here that names

@@ -72,6 +72,9 @@ export {
   selfProtectionHook,
   SelfProtectionViolation,
   SELF_PROTECTION_REASON,
+  codeExecutionDenyHook,
+  CodeExecutionDenied,
+  CODE_EXECUTION_DENY_REASON,
 } from './security/index.js';
 export type {
   Confidence,

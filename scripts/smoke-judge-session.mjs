@@ -151,7 +151,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 // A missing build must be a message and exit 2, not an unhandled rejection.
 const distWithhold = join(repoRoot, 'dist', 'session', 'withhold.js');
-// The shared tool-target table is internal (not on the root barrel); the D-8 policy below derives from it, as src/cli/shared.ts does.
+// The shared tool-target table and the CODE_EXECUTING_TOOLS gate map are internal (not on the root barrel); the D-8 policy below reads the map, as src/cli/shared.ts does.
 const distToolTargets = join(repoRoot, 'dist', 'internal', 'tool-targets.js');
 for (const required of [dist, distConstants, distLines, distWithhold, distToolTargets]) {
   if (!existsSync(required)) {
@@ -182,6 +182,7 @@ const {
   mergeSandboxLayers,
   parseSandboxSettings,
   sandboxHook,
+  codeExecutionDenyHook,
   SETTING_SOURCES,
   JUDGE_MODEL,
   route,
@@ -191,7 +192,7 @@ const {
 const { JUDGE_MAX_CONCURRENT, JUDGE_HOOK_TIMEOUT_S } = await import(distConstants);
 const { JUDGE_HOOK_CANCELLED_WARNING, judgeLeakedByHookTimeoutWarning } = await import(distLines);
 const { WITHHELD_MARKER, withholdPlaceholder } = await import(distWithhold);
-const { TOOL_TARGET_FIELDS } = await import(distToolTargets);
+const { TOOL_TARGET_FIELDS, CODE_EXECUTING_TOOLS } = await import(distToolTargets);
 const withholdPlaceholderProbe = () => withholdPlaceholder('Read', '00000000');
 const evidenceDirB2 = join(repoRoot, 'tasks', 'issue-145-evidence', 'prb2-smoke');
 
@@ -1179,7 +1180,7 @@ const READ_ONLY_PROBE_DENYLIST = new Set([
 const PROBE_PROGRAM = 'touch';
 const probeCommand = (nonce) => `${PROBE_PROGRAM} harness-ok-${nonce}`;
 const BASH_RULE = { tool: 'Bash', match: `${PROBE_PROGRAM} *`, decision: 'allow' };
-// D-8 (owner ruling 21/10/2026, generalised to every command-kind tool 22/10/2026): a Bash (or Monitor) rule allow is a grant ONLY when the USER layer has a non-empty
+// D-8 (owner ruling 21/10/2026, generalised 22/10/2026 and by #211): a Bash (or Monitor) rule allow is a grant ONLY when the USER layer has a non-empty
 // sandbox.commands.allow. So the grant leg's user document carries both.
 const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: [PROBE_PROGRAM] } } };
 const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
@@ -1214,9 +1215,12 @@ const configDirFixtures = (markerDir) => [
   ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: [`Bash(${PROBE_PROGRAM} *)`] } })],
 ];
 
-// ADR-0040 D-8 (generalised to every command-kind tool, 22/10/2026): mirrors COMMAND_TOOLS in src/cli/shared.ts,
-// derived from the one table (ADR-0033, src/internal/tool-targets.ts, imported from dist above), never hand-listed.
-const COMMAND_TOOLS = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
+// ADR-0040 D-8 (#211): mirrors ungrantableTools in src/cli/shared.ts. Every CODE_EXECUTING_TOOLS member (imported from dist
+// above) is withheld unless its gate is `commands` and the USER document has a non-empty sandbox.commands list.
+const ungrantableFor = (userSandbox) => {
+  const commandsConfigured = (userSandbox.commands?.allow.length ?? 0) > 0;
+  return new Set(Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate !== 'commands' || !commandsConfigured).map(([name]) => name));
+};
 
 // Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (parsePermissionSettings and parseSandboxSettings on each document), the
 // layers merge with mergeLayers and the intersect merge mergeSandboxLayers, and the grant policy
@@ -1227,14 +1231,16 @@ function composeIsolationSecurity({ user, project }) {
   return {
     permissions: mergeLayers(userParsed.permissions, projectParsed.permissions),
     sandbox: mergeSandboxLayers(userParsed.sandbox, projectParsed.sandbox),
-    grantPolicy: { ungrantableTools: new Set((userParsed.sandbox.commands?.allow.length ?? 0) > 0 ? [] : COMMAND_TOOLS) },
+    grantPolicy: { ungrantableTools: ungrantableFor(userParsed.sandbox) },
   };
 }
 
-// Mirrors registerSecurityHooks (src/cli/shared.ts, not root-public) with root-public exports: permissions
-// first with no prompter and the grant policy, then the sandbox backstop, both before any other handler.
+// Mirrors registerSecurityHooks (src/cli/shared.ts, not root-public) with root-public exports: the built-in
+// code-execution deny (#211), then permissions with no prompter and the grant policy, then the sandbox backstop,
+// all before any other handler. The self-protection deny (#188) is not mirrored: no leg touches a .harness path.
 function registerIsolationSecurity(hooks, { user, project }) {
   const security = composeIsolationSecurity({ user, project });
+  hooks.register('pre-tool', codeExecutionDenyHook());
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }
@@ -1294,17 +1300,21 @@ async function isolationLoadChecks() {
     const grant = await permissionHook(createPermissionEvaluator(sec.permissions), undefined, sec.grantPolicy)(payload);
     check(grant === undefined, `a project-layer allow must not be a grant, got ${JSON.stringify(grant)}`);
   });
-  await attempt('D-8 for every command-kind tool (lens 1 H-1)', async () => {
+  await attempt('D-8 for every code-executing tool (lens 1 H-1, #211)', async () => {
     const fromTable = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
     check(fromTable.includes('Bash') && fromTable.includes('Monitor'), `the shared table must list Bash and Monitor as command-kind tools, got ${JSON.stringify(fromTable)}`);
     const monitorRule = { permissions: { rules: [{ tool: 'Monitor', decision: 'allow' }] } };
     const monitorPayload = { tool: 'Monitor', args: { command: 'git status; echo y' } };
     const ungrantable = composeIsolationSecurity({ user: monitorRule, project: {} });
-    check([...ungrantable.grantPolicy.ungrantableTools].sort().join(',') === [...fromTable].sort().join(','), `with no user sandbox list the ungrantable set must equal the command-kind names ${JSON.stringify(fromTable)}, got ${JSON.stringify([...ungrantable.grantPolicy.ungrantableTools])}`);
+    const allMembers = Object.keys(CODE_EXECUTING_TOOLS).sort();
+    check(fromTable.every((name) => CODE_EXECUTING_TOOLS[name] === 'commands'), `every command-kind table entry must be commands-gated, got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
+    check([...ungrantable.grantPolicy.ungrantableTools].sort().join(',') === allMembers.join(','), `with no user sandbox list the ungrantable set must equal every CODE_EXECUTING_TOOLS member ${JSON.stringify(allMembers)}, got ${JSON.stringify([...ungrantable.grantPolicy.ungrantableTools])}`);
     const withheld = await permissionHook(createPermissionEvaluator(ungrantable.permissions), undefined, ungrantable.grantPolicy)(monitorPayload);
     check(withheld === undefined, `without a user sandbox.commands.allow a Monitor allow must not be a grant, got ${JSON.stringify(withheld)}`);
     const grantable = composeIsolationSecurity({ user: { ...monitorRule, sandbox: { commands: { allow: ['git'] } } }, project: {} });
-    check(grantable.grantPolicy.ungrantableTools.size === 0, `with a user sandbox list nothing is withheld, got ${JSON.stringify([...grantable.grantPolicy.ungrantableTools])}`);
+    const stillWithheld = Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate !== 'commands').map(([name]) => name).sort();
+    check(stillWithheld.includes('Workflow') && stillWithheld.includes('REPL'), `Workflow and REPL must never be commands-gated, got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
+    check([...grantable.grantPolicy.ungrantableTools].sort().join(',') === stillWithheld.join(','), `with a user commands list only the non-commands members stay withheld (${JSON.stringify(stillWithheld)}), got ${JSON.stringify([...grantable.grantPolicy.ungrantableTools])}`);
     const projectOnly = composeIsolationSecurity({ user: monitorRule, project: { sandbox: { commands: { allow: ['git'] } } } });
     check(projectOnly.grantPolicy.ungrantableTools.has('Monitor'), 'a project-only sandbox list must not make Monitor grantable');
   });

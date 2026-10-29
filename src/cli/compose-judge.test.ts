@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
+import { CODE_EXECUTING_TOOLS } from '../internal/tool-targets.js';
 import { composeSecurity, SettingsLoadError } from './shared.js';
 
 const created: string[] = [];
@@ -82,26 +82,25 @@ describe('composeSecurity: the judge key, user layer only (spec D1, pins 1 and 2
   });
 });
 
-describe('composeSecurity: grantPolicy (#140, D-8)', () => {
+describe('composeSecurity: grantPolicy (#140, D-8; #211 every code-executing tool)', () => {
   const policyFor = (sandbox: unknown) =>
     composeSecurity({ userDir: layer(sandbox === undefined ? {} : { sandbox }), projectDir: layer(undefined) }).grantPolicy;
+  const ungrantable = (policy: { ungrantableTools: ReadonlySet<string> }) => [...policy.ungrantableTools].sort();
+  const ALL = ['Bash', 'Monitor', 'REPL', 'Workflow'];
 
-  it('no sandbox commands: Bash and Monitor (every command-kind tool) are ungrantable', () => {
-    expect([...policyFor(undefined).ungrantableTools]).toEqual(['Bash', 'Monitor']);
-    expect([...policyFor({ paths: { allow: ['/x'] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  it('no sandbox: every code-executing tool is ungrantable, and the set is CODE_EXECUTING_TOOLS (a future member is covered)', () => {
+    expect(ungrantable(policyFor(undefined))).toEqual(ALL);
+    expect(ungrantable(policyFor(undefined))).toEqual(Object.keys(CODE_EXECUTING_TOOLS).sort());
   });
-  it('the ungrantable set equals the command-kind names in the shared table (a future command tool is covered)', () => {
-    const fromTable = Object.entries(TOOL_TARGET_FIELDS)
-      .filter(([, target]) => target.kind === 'command')
-      .map(([name]) => name);
-    expect(fromTable).toContain('Monitor');
-    expect([...policyFor(undefined).ungrantableTools].sort()).toEqual([...fromTable].sort());
+  it('a user commands list makes Bash and Monitor grantable, nothing else', () => {
+    expect(ungrantable(policyFor({ commands: { allow: ['git'] } }))).toEqual(['REPL', 'Workflow']);
   });
-  it('a non-empty commands list: Bash is grantable', () => {
-    expect([...policyFor({ commands: { allow: ['git'] } }).ungrantableTools]).toEqual([]);
+  it('a user paths list unlocks nothing: Workflow is withheld (paths checks where a script is, not what it runs)', () => {
+    expect(ungrantable(policyFor({ paths: { allow: ['/x'] } }))).toEqual(ALL);
+    expect(ungrantable(policyFor({ paths: { allow: ['/x'] }, commands: { allow: ['git'] } }))).toEqual(['REPL', 'Workflow']);
   });
-  it('an empty commands list does not count as configured: Bash and Monitor are ungrantable', () => {
-    expect([...policyFor({ commands: { allow: [] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  it('an empty commands list does not count as configured', () => {
+    expect(ungrantable(policyFor({ commands: { allow: [] } }))).toEqual(ALL);
   });
 
   const policyBoth = (user: unknown, project: unknown) =>
@@ -110,11 +109,11 @@ describe('composeSecurity: grantPolicy (#140, D-8)', () => {
       projectDir: layer(project === undefined ? {} : { sandbox: project }),
     }).grantPolicy;
 
-  it('project-only sandbox commands make neither Bash nor Monitor grantable (a cloned repo cannot unlock the grant)', () => {
-    expect([...policyBoth(undefined, { commands: { allow: ['curl'] } }).ungrantableTools]).toEqual(['Bash', 'Monitor']);
+  it('project-only sandbox lists unlock nothing (a cloned repo cannot unlock the grant)', () => {
+    expect(ungrantable(policyBoth(undefined, { commands: { allow: ['curl'] }, paths: { allow: ['.'] } }))).toEqual(ALL);
   });
   it('user commands present: Bash and Monitor are grantable, with or without a project list (the gate is the merged list)', () => {
-    expect([...policyBoth({ commands: { allow: ['git'] } }, undefined).ungrantableTools]).toEqual([]);
-    expect([...policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }).ungrantableTools]).toEqual([]);
+    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, undefined))).toEqual(['REPL', 'Workflow']);
+    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }))).toEqual(['REPL', 'Workflow']);
   });
 });
