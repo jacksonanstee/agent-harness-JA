@@ -42,30 +42,33 @@ export interface ToolTarget {
   readonly missingMeansCwd?: boolean;
   /**
    * The tool writes a LOCAL file at the target (issue #188, ADR-0042): the
-   * self-protection deny applies to it. Read, Glob and Grep read; Artifact
-   * and Projects read for upload; Workflow reads and runs a script;
-   * EnterWorktree switches directory. Commands are covered by kind instead.
+   * self-protection deny applies to it. Required on every entry, so a new
+   * tool cannot be added without the choice (the SDK carries no read/write
+   * flag to derive it from). Read, Glob and Grep read; Artifact and Projects
+   * read for upload; Workflow reads and runs a script; EnterWorktree switches
+   * into (or creates) a worktree. Always false for `kind: 'command'`:
+   * commands are covered by kind.
    */
-  readonly writes?: true;
+  readonly writes: boolean;
 }
 
 export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
-  Bash: { field: 'command', kind: 'command' },
-  Read: { field: 'file_path', kind: 'path' },
+  Bash: { field: 'command', kind: 'command', writes: false },
+  Read: { field: 'file_path', kind: 'path', writes: false },
   Write: { field: 'file_path', kind: 'path', writes: true },
   Edit: { field: 'file_path', kind: 'path', writes: true },
   NotebookEdit: { field: 'notebook_path', kind: 'path', writes: true },
-  Glob: { field: 'path', kind: 'path', missingMeansCwd: true },
-  Grep: { field: 'path', kind: 'path', missingMeansCwd: true },
+  Glob: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
+  Grep: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
   // Issue #86: declared at the pinned SDK since day one, never in the table.
-  Artifact: { field: 'file_path', kind: 'path' },
-  Workflow: { field: 'scriptPath', kind: 'path' },
-  Monitor: { field: 'command', kind: 'command' },
-  EnterWorktree: { field: 'path', kind: 'path' },
+  Artifact: { field: 'file_path', kind: 'path', writes: false },
+  Workflow: { field: 'scriptPath', kind: 'path', writes: false },
+  Monitor: { field: 'command', kind: 'command', writes: false },
+  EnterWorktree: { field: 'path', kind: 'path', writes: false },
   // Projects has two target-shaped fields; only local_path is a filesystem
   // path (an upload read from the working directory). See the acknowledgement
   // below for `path`.
-  Projects: { field: 'local_path', kind: 'path' },
+  Projects: { field: 'local_path', kind: 'path', writes: false },
 };
 
 /**
