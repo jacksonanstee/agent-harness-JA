@@ -198,7 +198,7 @@ describe('negative controls', () => {
     await allowed('Write', { file_path: join(outside, 'other.db') });
   });
 
-  it('allows unrelated Bash, and the word skills inside quoted text (owner ruling: an unquoted bare word is a path)', async () => {
+  it('allows unrelated Bash, and the word skills inside quoted text with a space (owner ruling: a bare word, quoted or not, is a path)', async () => {
     for (const command of [
       'git status',
       'npm run skills-lint',
@@ -209,6 +209,8 @@ describe('negative controls', () => {
       'echo "skills: done"',
       'npm run build:skills',
       'grep -r "update the skills list" docs',
+      'ls -la',
+      'git log -n5',
     ]) {
       await allowed('Bash', { command });
     }
@@ -260,7 +262,7 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     // A relative path after `=` is only caught by the path-word check (N21).
     'dd if=/dev/zero of=.harness/telemetry.db',
     'cp --target-directory=./skills/evil x',
-    // An unquoted bare word is the folder (owner ruling, revised 29/10): a bare
+    // A bare word, quoted or not, is the folder (owner ruling, revised 29/10): a bare
     // destination writes (security re-check).
     'cp -r /tmp/evil skills',
     'mv /tmp/evil skills',
@@ -278,6 +280,12 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     'cp x ${HOME:-${HOME}}/.harness/settings.json',
     'cp x ~+/.harness/settings.json',
     "cp x ~/$'.harness'/settings.json",
+    // A short option glued to its value (parity re-check N2).
+    'sort -o.harness/settings.json x',
+    'curl -o.harness/settings.json https://e.invalid',
+    'tar -xf a.tar -C.harness',
+    'cp -t.harness x',
+    'cp -tskills x',
     // A path glued to an earlier token by a comma inside quoted code (parity M2).
     `python3 -c "import shutil; shutil.copy('/tmp/x','.harness/settings.json')"`,
     `python3 -c "import os; os.symlink('/tmp/x','skills/evil')"`,

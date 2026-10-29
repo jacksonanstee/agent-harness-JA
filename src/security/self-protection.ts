@@ -14,8 +14,8 @@
 // the check and the write, nor a hard link: TOCTOU and inode aliasing are the
 // documented limits (R-23). The Bash/Monitor check expands `HOME` and `~`
 // spellings, splits the command into shell-style words and runs every
-// candidate path (a word with a `/`, its pieces, and an unquoted bare
-// argument) through the same real-path test, plus any absolute mention; it is
+// candidate path (a word with a `/`, its pieces, and a bare argument,
+// quoted or not) through the same real-path test, plus any absolute mention; it is
 // defence in depth, bypassable by a path built at run time.
 import { lstatSync, readlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
@@ -39,7 +39,7 @@ export class SelfProtectionViolation extends Error {
 const DB_SIDECARS = ['', '-wal', '-shm', '-journal'] as const;
 /**
  * Symlink hops followed in TOTAL per path before giving up, as Linux counts
- * them (40). A per-nesting limit is not enough: a doubling link tree
+ * them (40; macOS's own limit is 32). A per-nesting limit is not enough: a doubling link tree
  * (`Ln -> L(n-1)/L(n-1)`) is exponential in total hops (docs parity H1).
  */
 const MAX_LINK_HOPS = 40;
@@ -226,18 +226,21 @@ function shellWords(command: string): string[] {
 
 /**
  * The candidate paths in a command. A word with a `/` is a path, and so is
- * each piece of it split at spaces, commas, quotes and brackets (code inside
- * one quoted argument) and each `=`-separated piece. A word with no space and no `/` is
- * an argument, so a bare `skills` or `.harness` counts as that folder (owner
- * ruling, revised 29/10/2026: `cp -r x skills` writes); quoted text with a
- * space in it (`-m "add skills"`) is not.
+ * each piece of it split at spaces, commas, quotes, brackets, `;` and braces
+ * (code inside one quoted argument), each `=`-separated piece, and the value
+ * of a short option glued to it (`-C.harness`). A word with no space and no
+ * `/`, quoted or not, is an argument, so a bare `skills` or `.harness` counts
+ * as that folder (owner ruling, revised 29/10/2026: `cp -r x skills` writes);
+ * quoted text with a space in it (`-m "add skills"`) is not.
  */
 function candidatePaths(command: string): string[] {
   const out: string[] = [];
   for (const word of shellWords(command)) {
     const bareArgument = !/\s/u.test(word) && !word.includes('/');
     for (const piece of word.split(/[\s,'"()[\]{};]+/u)) {
-      for (const part of [piece, ...piece.split('=')]) {
+      // A short option glued to its value (`-o.harness/x`, `-C.harness`).
+      const glued = /^-[A-Za-z]./u.test(piece) ? [piece.slice(2)] : [];
+      for (const part of [piece, ...piece.split('='), ...glued]) {
         if (part !== '' && (part.includes('/') || bareArgument)) out.push(part);
       }
     }
