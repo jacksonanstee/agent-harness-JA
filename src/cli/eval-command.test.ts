@@ -1,10 +1,14 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
-import { mergeLayers, parsePermissionSettings } from '../security/index.js';
+import { mergeLayers, parsePermissionSettings, SELF_PROTECTION_REASON } from '../security/index.js';
 import type { SettingSource } from '../security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { USAGE } from './shared.js';
@@ -236,6 +240,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
         security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [] }, budget: { maxUsd: null }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
+        selfProtection: SP_DIRS,
         create: (deps, config) => {
           seen.push(deps);
           return createSession(deps, config);
@@ -251,6 +256,9 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     }
   });
 });
+
+// #188: a throwaway home/project for the self-protection roots.
+const SP_DIRS = { userDir: mkdtempSync(join(tmpdir(), 'ev-home-')), projectDir: mkdtempSync(join(tmpdir(), 'ev-proj-')) };
 
 // Issue #140 I-1: the behavioural guard for the eval path's security-hook
 // registration (test/policy-corpus.test.ts keeps only a text pin on the call).
@@ -290,6 +298,7 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
         },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
+        selfProtection: SP_DIRS,
       });
       await factory({ skillsDir: null, maxTurns: 1 }).run('task');
       expect(outputs).toEqual([
@@ -326,6 +335,7 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
         },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
+        selfProtection: SP_DIRS,
       });
       await factory({ skillsDir: null, maxTurns: 1 }).run('task');
       return fake.captured[0]?.options;
@@ -363,6 +373,7 @@ describe('the eval session carries the composed budget.maxUsd (#187)', () => {
         },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
+        selfProtection: SP_DIRS,
       });
       await factory({ skillsDir: null, maxTurns: 1 }).run('task');
       return fake.captured[0]?.options;
@@ -377,5 +388,60 @@ describe('the eval session carries the composed budget.maxUsd (#187)', () => {
 
   it('no user cap leaves the session default', async () => {
     expect((await run(null))?.maxBudgetUsd).toBe(DEFAULT_MAX_BUDGET_USD);
+  });
+});
+
+// #188 (ADR-0042): the eval session registers the built-in deny, with the
+// task's own skills root protected.
+describe('the eval session registers the self-protection deny (#188)', () => {
+  const drive = async (tool: string, input: Record<string, unknown>, skillsDir: string | null) => {
+    const outputs: unknown[] = [];
+    const query: QueryFn = (args) =>
+      (async function* () {
+        for (const matcher of args.options?.hooks?.PreToolUse ?? []) {
+          for (const cb of matcher.hooks as unknown as SdkHookCallback[]) {
+            outputs.push(
+              await cb({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: 'toolu_1' }, 'toolu_1', {
+                signal: new AbortController().signal,
+              }),
+            );
+          }
+        }
+        yield RESULT;
+      })();
+    const db = openTelemetryDatabase({ path: ':memory:' });
+    try {
+      const factory = makeEvalSessionFactory({
+        query,
+        security: {
+          permissions: mergeLayers(parsePermissionSettings({ permissions: { rules: [{ tool: '*', decision: 'allow' }] } }), parsePermissionSettings({})),
+          grantPolicy: { ungrantableTools: new Set(['Bash']) },
+          sandbox: {},
+          judge: null,
+          sdk: { settingSources: [] },
+          budget: { maxUsd: null },
+          warnings: [],
+        },
+        telemetry: createTelemetryStore(db),
+        memory: createMemoryStore(db),
+        selfProtection: SP_DIRS,
+      });
+      await factory({ skillsDir, maxTurns: 1 }).run('task');
+      return outputs;
+    } finally {
+      db.close();
+    }
+  };
+  const deny = {
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: SELF_PROTECTION_REASON },
+  };
+
+  it('denies a write to the user settings file even under an allow-everything rule', async () => {
+    expect(await drive('Write', { file_path: join(SP_DIRS.userDir, '.harness', 'settings.json') }, null)).toEqual([deny]);
+  });
+
+  it("denies a write into the task's own skills root", async () => {
+    const skills = mkdtempSync(join(tmpdir(), 'ev-skills-'));
+    expect(await drive('Write', { file_path: join(skills, 'evil', 'SKILL.md') }, skills)).toEqual([deny]);
   });
 });

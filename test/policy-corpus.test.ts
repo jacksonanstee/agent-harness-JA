@@ -173,7 +173,9 @@ describe('policy corpus: shape', () => {
   it('the composition under test is the one the CLI registers (order and members)', () => {
     // #140: the two registrations live in ONE function (registerSecurityHooks); both
     // command sites must call it, and it must register permissions before the sandbox.
+    // #188 (ADR-0042): the built-in self-protection deny is registered FIRST.
     const expected = [
+      "hooks.register('pre-tool', selfProtectionHook(protectedRoots));",
       "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));",
       "hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));",
     ];
@@ -186,14 +188,16 @@ describe('policy corpus: shape', () => {
         .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
         .join('\n');
     const shared = code('../src/cli/shared.ts');
-    const first = shared.indexOf(expected[0] ?? '');
-    const second = shared.indexOf(expected[1] ?? '');
-    expect(first, 'registerSecurityHooks registers permissionHook').toBeGreaterThanOrEqual(0);
+    const zeroth = shared.indexOf(expected[0] ?? '');
+    const first = shared.indexOf(expected[1] ?? '');
+    const second = shared.indexOf(expected[2] ?? '');
+    expect(zeroth, 'registerSecurityHooks registers selfProtectionHook').toBeGreaterThanOrEqual(0);
+    expect(first, 'registerSecurityHooks registers permissionHook after it').toBeGreaterThan(zeroth);
     expect(second, 'registerSecurityHooks registers sandboxHook after it').toBeGreaterThan(first);
     // A text pin only. The behavioural guard for the eval site is the
     // makeEvalSessionFactory deny test in src/cli/eval-command.test.ts (#140, I-1).
     for (const file of ['../src/cli.ts', '../src/cli/eval-command.ts']) {
-      expect(code(file), `${file} calls registerSecurityHooks`).toContain('registerSecurityHooks(hooks, security);');
+      expect(code(file), `${file} calls registerSecurityHooks`).toMatch(/registerSecurityHooks\(hooks, security, protectedRoots\);/);
     }
   });
 });

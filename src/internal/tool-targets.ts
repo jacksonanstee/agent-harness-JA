@@ -40,14 +40,21 @@ export interface ToolTarget {
    * that case rather than denying a call the SDK considers well-formed.
    */
   readonly missingMeansCwd?: boolean;
+  /**
+   * The tool writes a LOCAL file at the target (issue #188, ADR-0042): the
+   * self-protection deny applies to it. Read, Glob and Grep read; Artifact
+   * and Projects read for upload; Workflow reads and runs a script;
+   * EnterWorktree switches directory. Commands are covered by kind instead.
+   */
+  readonly writes?: true;
 }
 
 export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
   Bash: { field: 'command', kind: 'command' },
   Read: { field: 'file_path', kind: 'path' },
-  Write: { field: 'file_path', kind: 'path' },
-  Edit: { field: 'file_path', kind: 'path' },
-  NotebookEdit: { field: 'notebook_path', kind: 'path' },
+  Write: { field: 'file_path', kind: 'path', writes: true },
+  Edit: { field: 'file_path', kind: 'path', writes: true },
+  NotebookEdit: { field: 'notebook_path', kind: 'path', writes: true },
   Glob: { field: 'path', kind: 'path', missingMeansCwd: true },
   Grep: { field: 'path', kind: 'path', missingMeansCwd: true },
   // Issue #86: declared at the pinned SDK since day one, never in the table.
