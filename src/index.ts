@@ -115,6 +115,7 @@ export type {
   SecretRedactor,
   SecretRule,
   SettingSource,
+  ProtectedRoot,
   ProtectedRoots,
   ProtectedRootsInput,
 } from './security/index.js';

@@ -83,6 +83,13 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Depends on:** `internal/settings` for its settings-file loader (which reads through `internal/guarded-read` since ADR-0034); the composition root composes the layers and registers the hook (injected, not imported).
 - **Design notes:** Rules are `{ tool, match?, decision }` with trailing-`*` prefix globs only. Precedence is specificity (match > tool > wildcard) then severity (deny > ask > allow), so merged layers evaluate order-independently and a user deny survives a project allow (sticky deny). Unmatched tools get `defaultDecision` (default allow). Harden with a wildcard deny RULE plus explicit allows, not a deny default: sticky deny protects user rules, and the default is consulted only when no rule in either layer matches, so a project allow rule beats a user deny default (issue #100, by execution). `ask` fails closed without a prompter; malformed settings fail loud at startup. Shipped ([ADR-0014](./decisions/0014-declarative-permission-model.md)).
 
+#### `security/self-protection`
+
+- **Owns:** the built-in, non-configurable deny on agent writes to the harness's own state: both `.harness` directories, the run's skills root and an outside `--db` with its sidecars (ADR-0042).
+- **Public API:** `buildProtectedRoots({ userDir, projectDir, skillsDir, dbPath }): ProtectedRoots`; `selfProtectionHook(roots)` (pre-tool handler throwing `SelfProtectionViolation` with the fixed `SELF_PROTECTION_REASON`).
+- **Depends on:** `internal/tool-targets` (the shared table's `writes` flag and `canonicalizePath`) and `node:fs` for real-path resolution; reads no settings.
+- **Design notes:** Registered FIRST by `registerSecurityHooks`, so the pre-tool stack is three deep: self-protection, permissions, sandbox. Writer targets are compared as written and by real path, walking raw components so links (dangling ones too) are followed before `..`; Bash and Monitor are denied on any path-shaped mention after a light normalisation. Defence in depth for commands (R-23). Shipped ([ADR-0042](./decisions/0042-built-in-self-protection-deny.md)).
+
 #### `security/sandbox`
 
 - **Owns:** path and command allowlists for every path/command-taking SDK tool (derived from the SDK's declarations via `internal/tool-targets`, ADR-0033: Bash, Read/Write/Edit, Glob/Grep, NotebookEdit, Artifact, Workflow, Monitor, EnterWorktree, Projects), enforced as a pre-tool gate (deny before the SDK executes — a policy boundary, not OS isolation).

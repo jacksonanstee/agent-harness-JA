@@ -39,7 +39,7 @@ const DB_SIDECARS = ['', '-wal', '-shm', '-journal'] as const;
 /** Symlink hops followed per path before giving up (Linux's own limit is 40). */
 const MAX_LINK_HOPS = 40;
 
-interface ProtectedRoot {
+export interface ProtectedRoot {
   /** 'dir' protects the path and everything under it; 'file' only the path itself. */
   readonly kind: 'dir' | 'file';
   /** Canonical forms: as written, and by real path when that differs. */

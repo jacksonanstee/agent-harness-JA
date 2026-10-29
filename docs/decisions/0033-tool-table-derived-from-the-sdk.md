@@ -177,7 +177,7 @@ surface it never read.
 - R-9 keeps its class (undeclared runtime tools); it is narrower and named, not closed.
 - The gate is a dev and CI check. It does nothing on an operator's machine.
 
-- **Amended 29/10/2026 (issue #188, ADR-0042):** the table gains a `writes` marker on `Write`, `Edit` and `NotebookEdit`, the tools that write a local file at their target, read by the self-protection deny. Unlike the key set, the marker is not derived from the SDK's declarations, which carry no read/write flag. It is pinned to its exact set in `src/security/self-protection.test.ts`.
+- **Amended 29/10/2026 (issue #188, ADR-0042):** every table entry gains a REQUIRED `writes` flag, true for `Write`, `Edit` and `NotebookEdit` (the tools that write a local file at their target) and false elsewhere, read by the self-protection deny. Unlike the key set, it is not derived from the SDK's declarations, which carry no read/write flag; making it required forces the choice for a new entry, and `src/security/self-protection.test.ts` pins both the true and the false sets by name.
 
 ## Revisit if
 
