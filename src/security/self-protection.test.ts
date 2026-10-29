@@ -147,6 +147,16 @@ describe('aliases (D3: as written and by real path)', () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
+  it('counts hops across NESTED links against one budget: 53 hops in a shallow tree is ELOOP (mutation N31)', async () => {
+    // L0 -> .; L1 -> L0/L0/... (25 times); L2 -> L1/L1. Resolving L2 follows
+    // 1 + 2 * (1 + 25) = 53 links, though no branch nests deeper than 3.
+    const d = tmp('sp-wide-');
+    symlinkSync('.', join(d, 'L0'));
+    symlinkSync(Array.from({ length: 25 }, () => 'L0').join('/'), join(d, 'L1'));
+    symlinkSync('L1/L1', join(d, 'L2'));
+    await denied('Write', { file_path: join(d, 'L2', 'x') });
+  });
+
   it('denies a path through more than 40 links in total, as the kernel would (ELOOP)', async () => {
     const d = tmp('sp-chain-');
     mkdirSync(join(d, 'real'));
