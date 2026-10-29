@@ -230,6 +230,9 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     `ln -s "$HOME"/.harness/settings.json /tmp/s`,
     `cp x ${join(outside, 'cfg')}/../.harness/settings.json`,
     `cp x ${join(outside, 'dangling')}`,
+    // A relative path after `=` is only caught by the path-word check (N21).
+    'dd if=/dev/zero of=.harness/telemetry.db',
+    'cp --target-directory=./skills/evil x',
   ])('denies %s', async (command) => {
     await denied('Bash', { command });
     await denied('Monitor', { command });
