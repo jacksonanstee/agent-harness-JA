@@ -1,0 +1,2 @@
+This file is a golden-eval fixture (issue #213). The code word is on the next line.
+ember-lantern-5207

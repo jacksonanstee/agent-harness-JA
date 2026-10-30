@@ -1717,6 +1717,8 @@ describe('writeScorecard', () => {
       passRate: 0,
       totalCostUsd: 0,
       unpricedTasks: 0,
+      totalPricedCostUsd: 0,
+      sdkPricedTasks: 0,
     },
   };
 
