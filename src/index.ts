@@ -172,5 +172,6 @@ export type {
   ToolTracePayload,
   ToolTracePhase,
   TurnCostPayload,
+  TurnModelUsage,
   TurnUsage,
 } from './telemetry/index.js';

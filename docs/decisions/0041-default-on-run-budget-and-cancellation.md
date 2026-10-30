@@ -43,7 +43,7 @@ The memory row of a run that D7 completes records `failed: false`, and its `resu
 
 ## Consequences
 
-- **The cap is a ceiling on starting a new turn, not on spend.** A run can overshoot by up to one turn's cost. The SDK enforces the cap on its own `total_cost_usd`, which for claude-sonnet-5 on SDK 0.3.201 prices at Sonnet 4.x rates, about 1.5x list (#212). A USD 1.00 cap therefore trips at about USD 0.67 of list-price spend. This is the safe direction, but the summary's `cost=` and the budget line both show the SDK's figure, not list price.
+- **The cap is a ceiling on starting a new turn, not on spend.** A run can overshoot by up to one turn's cost. The SDK enforces the cap on its own `total_cost_usd`, which for claude-sonnet-5 on SDK 0.3.201 prices at Sonnet 4.x rates, about 1.5x list (#212). A USD 1.00 cap therefore trips at about USD 0.67 of list-price spend. This is the safe direction, but the summary's `cost=` and the budget line both show the SDK's figure, not list price. *Amended 30/10/2026 (issue #212, ADR-0043): the summary's `cost=` now leads with the harness-priced figure and `sdk-cost=` shows the SDK's; the budget stop line still names the SDK-reported cost, the figure the cap was checked against, and a separate stderr line after the run gives the ratio and where the cap really stopped.*
 - **An interrupted run's spend is not traced.** The row exists, which R-21 recorded as missing, but its cost is null, and whether the cut request is billed is unverified, as it is for the judge (ADR-0037).
 - **`error_max_turns` now presents differently.** Before, `run` printed `error: Claude Code returned an error result: ...` and exited 1. It now prints the summary line and `[harness] stopped: the run ended without success (result="error_max_turns")`, and exits 1. A library caller now receives a result for such a run instead of a rejection.
 - **Eval task sessions are capped.** A golden task whose run costs more than its cap by the SDK's figure (USD 1.00, or the user file's `budget.maxUsd`) now stops with `error_max_budget_usd`. `eval` has no flag. The 17 Sonnet `run` sessions in the operator's own telemetry (backfilled 26/10/2026) averaged about USD 0.30 each by the SDK's figure, but golden tasks have not been measured against the cap. The cap bounds each task, not the pack.
@@ -58,6 +58,7 @@ The memory row of a run that D7 completes records `failed: false`, and its `resu
 - **A distinct exit code for a budget stop.** Scripts that check for exit 1 keep working without one, and the stop line names the cause. Rejected (owner ruling, 29/10/2026).
 - **Spot the budget stop in the CLI by matching the SDK's error text.** That breaks silently if the SDK rewords its message, and it leaves `error_max_turns` behind a bare `error:` line. Rejected in favour of D7.
 - **Ignore the second Ctrl-C until cleanup finishes.** That leaves the operator no escape if a hook or the telemetry write hangs. Rejected.
+
 
 ## Revisit if
 

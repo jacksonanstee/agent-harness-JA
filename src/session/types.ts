@@ -46,6 +46,16 @@ export interface SdkPermissionDenial {
   tool_use_id: string;
 }
 
+/** One entry of the result's `modelUsage` (sdk.d.ts `ModelUsage`; #212). */
+export interface SdkModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  webSearchRequests: number;
+  costUSD: number;
+}
+
 export interface SdkResultMessage {
   type: 'result';
   subtype: string;
@@ -55,6 +65,12 @@ export interface SdkResultMessage {
   num_turns?: number;
   total_cost_usd?: number;
   usage?: SdkUsage;
+  /**
+   * Per-model usage and the CLI's own cost for each (#212). Declared optional
+   * so drift yields null; the parse tolerates any shape at runtime, since the
+   * stream is untrusted.
+   */
+  modelUsage?: Record<string, SdkModelUsage>;
   /**
    * Why the model stopped. The SDK declares this on BOTH result variants
    * (success and error) as an open `string | null`; declared optional here so
@@ -520,6 +536,13 @@ export interface SessionResult {
   modelChoice: ModelChoice;
   usage: SdkUsage | null;
   costUsd: number | null;
+  /**
+   * The run's cost priced by the harness's own table from the result's
+   * per-model usage (#212), or null when it cannot be priced whole. `costUsd`
+   * above is the SDK's figure, which the bundled CLI at 0.3.201 prices about
+   * 1.5x high for Sonnet 5.
+   */
+  pricedCostUsd: number | null;
   /** The dollar ceiling this run passed the SDK (issue #187): the config's, else the default. */
   maxBudgetUsd: number;
   /**

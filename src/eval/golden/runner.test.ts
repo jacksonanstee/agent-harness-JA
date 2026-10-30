@@ -36,6 +36,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     maxBudgetUsd: 1,
     interrupted: false,
     costUsd: 0.01,
+    pricedCostUsd: null,
     numTurns: 2,
     denied: [],
     cliDenied: [],

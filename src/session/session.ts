@@ -30,6 +30,7 @@ import type {
   SdkPostToolUseInput,
   SdkPreToolUseInput,
   SdkResultMessage,
+  SdkUsage,
   SdkSystemMessage,
   SdkTextBlock,
   SdkUserMessage,
@@ -47,8 +48,14 @@ import {
   sanitizeControlChars,
   truncateWellFormed,
 } from '../internal/sanitize.js';
-import { DEFAULT_MAX_BUDGET_USD, isBudgetUsd, MAX_SKILL_PROMPT_CHARS } from '../internal/limits.js';
-import { buildRunEstimate } from '../internal/pricing.js';
+import {
+  DEFAULT_MAX_BUDGET_USD,
+  isBudgetUsd,
+  isNonNegativeFinite as isCount,
+  MAX_SKILL_PROMPT_CHARS,
+  MODEL_USAGE_MAX,
+} from '../internal/limits.js';
+import { buildRunEstimate, PRICE_TABLE_CHECKED, priceModelUsage, type ModelUsageRow } from '../internal/pricing.js';
 import {
   cleanSkillText,
   FENCE_OPENER_RE,
@@ -243,6 +250,79 @@ function truncate(value: string | null): string | null {
 function cleanSdkId(raw: string): string | null {
   const clean = cleanSdkToken(raw);
   return clean === '' ? null : clean;
+}
+
+/**
+ * Reads the result message's `modelUsage` (#212) into at most MODEL_USAGE_MAX
+ * rows. The stream is untrusted: a non-object, or an entry with a count that is
+ * not a finite number >= 0, yields null (nothing stored, nothing priced); an
+ * unusable per-model SDK cost is kept as null. Keys are cleaned like the other
+ * SDK tokens. `truncated` marks a cut set, which is never priced.
+ */
+function parseModelUsage(raw: unknown): { rows: ModelUsageRow[]; truncated: boolean } | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  const rows: ModelUsageRow[] = [];
+  for (const [key, value] of entries.slice(0, MODEL_USAGE_MAX)) {
+    if (typeof value !== 'object' || value === null) return null;
+    const u = value as Record<string, unknown>;
+    const counts = [u.inputTokens, u.outputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens, u.webSearchRequests];
+    if (!counts.every(isCount)) return null;
+    // Validated above; destructured so each count keeps its own name.
+    const [inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, webSearchRequests] =
+      counts as [number, number, number, number, number];
+    rows.push({
+      model: cleanSdkId(key) ?? '(unnamed)',
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
+      webSearchRequests,
+      sdkCostUsd: isCount(u.costUSD) ? u.costUSD : null,
+    });
+  }
+  return { rows, truncated: entries.length > MODEL_USAGE_MAX };
+}
+
+/** The optional cache counts, dropped from `usage` when not a finite number >= 0. */
+const OPTIONAL_USAGE_COUNTS: ReadonlySet<string> = new Set(['cache_creation_input_tokens', 'cache_read_input_tokens']);
+
+/**
+ * The result's `usage` (#212 security re-check), or null when its two required
+ * counts are not finite numbers >= 0. A copy, with any unusable optional cache
+ * count dropped, so the store never sees a value it would refuse.
+ */
+function usableUsage(raw: SdkUsage | undefined): SdkUsage | null {
+  if (raw === undefined || raw === null || typeof raw !== 'object') return null;
+  if (!isCount(raw.input_tokens) || !isCount(raw.output_tokens)) return null;
+  return Object.fromEntries(
+    Object.entries(raw).filter(([key, value]) => !OPTIONAL_USAGE_COUNTS.has(key) || isCount(value)),
+  ) as unknown as SdkUsage;
+}
+
+/** The per-model SDK costs must sum to the SDK total within this fraction (#212). */
+const MODEL_USAGE_COVERAGE_TOLERANCE = 0.01;
+
+/**
+ * The harness-priced figure for a run (#212), or null. Null for no usage, a
+ * set cut at MODEL_USAGE_MAX, or anything `priceModelUsage` cannot price. Also
+ * null when every row carries the SDK's own per-model cost and those do not
+ * sum to the SDK's total within MODEL_USAGE_COVERAGE_TOLERANCE: the CLI then
+ * billed something `modelUsage` does not list, so pricing the list would
+ * under-report the run (security fold, L3).
+ */
+function pricedRunCost(
+  modelUsage: { rows: ModelUsageRow[]; truncated: boolean } | null,
+  sdkTotal: number | null,
+): number | null {
+  if (modelUsage === null || modelUsage.truncated) return null;
+  const perModel = modelUsage.rows.map((r) => r.sdkCostUsd);
+  if (sdkTotal !== null && sdkTotal > 0 && perModel.every((c): c is number => c !== null)) {
+    const listed = perModel.reduce((a, c) => a + c, 0);
+    if (Math.abs(listed - sdkTotal) > sdkTotal * MODEL_USAGE_COVERAGE_TOLERANCE) return null;
+  }
+  return priceModelUsage(modelUsage.rows);
 }
 
 /**
@@ -1654,6 +1734,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let refusal: SessionRefusal | null = null;
     let usage: SessionResult['usage'] = null;
     let costUsd: number | null = null;
+    let modelUsage: { rows: ModelUsageRow[]; truncated: boolean } | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
     // D7 (issue #187): when its read loop fails after an is_error result, the
@@ -1735,9 +1816,15 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           // detected, which is the fail-loud direction.
           stopReason =
             typeof message.stop_reason === 'string' ? cleanSdkToken(message.stop_reason) : null;
-          usage = message.usage ?? null;
-          costUsd = message.total_cost_usd ?? null;
-          numTurns = message.num_turns ?? null;
+          // #212 security re-check: the store refuses a non-finite or missing token
+          // count, which would drop the whole turn-cost row, so an unusable usage is null.
+          usage = usableUsage(message.usage);
+          // #212 security fold: `1e999` parses to Infinity, which the store
+          // refuses, and that would drop the run's whole turn-cost row.
+          costUsd = isCount(message.total_cost_usd) ? message.total_cost_usd : null;
+          // #212: last result wins, like cost and usage.
+          modelUsage = parseModelUsage(message.modelUsage);
+          numTurns = isCount(message.num_turns) ? message.num_turns : null;
           // Last result wins, like cost and usage above (issue #209).
           cliDenied = parseCliDenials(message.permission_denials, harnessDeniedIds);
           // Second, independent channel: works on CLIs old enough to omit the
@@ -1797,6 +1884,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const judge = judgeRun === null ? null : await judgeRun.drain();
 
     const sessionId = sdkSessionId ?? harnessSessionId;
+    // #212: the harness's own figure, never a partial sum presented as whole.
+    const pricedCostUsd = pricedRunCost(modelUsage, costUsd);
 
     // Durable metrics (ADR-0004/0011): one turn-cost event per run, on the
     // error path too so failed runs leave a costed trace. Keyed on the harness
@@ -1827,6 +1916,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         refusalFallbackModel: refusal?.fallbackModel ?? null,
         maxBudgetUsd,
         interrupted,
+        modelUsage: modelUsage?.rows ?? null,
+        pricedCostUsd,
+        pricedPriceChecked: pricedCostUsd === null ? null : PRICE_TABLE_CHECKED,
         // #192: the pre-run estimate and its inputs. maxTurns is a ceiling on
         // the turns taken, so the estimate leans high on cache reads. An unset
         // maxTurns, a maxTurns below 1, or no system prompt (no skills) gives
@@ -1895,6 +1987,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       modelChoice,
       usage,
       costUsd,
+      pricedCostUsd,
       maxBudgetUsd,
       interrupted,
       numTurns,

@@ -28,6 +28,7 @@ import type {
   ToolTracePayload,
   ToolTracePhase,
   TurnCostPayload,
+  TurnModelUsage,
   TurnUsage,
 } from './types.js';
 import {
@@ -48,7 +49,7 @@ import {
   truncateTailWellFormed,
   truncateWellFormed,
 } from '../internal/sanitize.js';
-import { isBudgetUsd } from '../internal/limits.js';
+import { isBudgetUsd, isNonNegativeFinite as isCount, MODEL_USAGE_MAX } from '../internal/limits.js';
 
 /**
  * Exhaustive BY CONSTRUCTION. The previous
@@ -323,6 +324,21 @@ function isTurnUsage(value: unknown): value is TurnUsage {
   );
 }
 
+
+
+function isTurnModelUsage(value: unknown): value is TurnModelUsage {
+  return (
+    isObject(value) &&
+    typeof value.model === 'string' &&
+    isCount(value.inputTokens) &&
+    isCount(value.outputTokens) &&
+    isCount(value.cacheReadInputTokens) &&
+    isCount(value.cacheCreationInputTokens) &&
+    isCount(value.webSearchRequests) &&
+    (value.sdkCostUsd === null || isCount(value.sdkCostUsd))
+  );
+}
+
 function isTurnCostPayload(value: unknown): value is TurnCostPayload {
   return (
     isObject(value) &&
@@ -346,7 +362,12 @@ function isTurnCostPayload(value: unknown): value is TurnCostPayload {
     (value.estimateOutputDefaulted === undefined || typeof value.estimateOutputDefaulted === 'boolean') &&
     isOptionalStringOrNull(value.estimatePriceChecked) &&
     (value.maxBudgetUsd === undefined || isBudgetUsd(value.maxBudgetUsd)) &&
-    (value.interrupted === undefined || typeof value.interrupted === 'boolean')
+    (value.interrupted === undefined || typeof value.interrupted === 'boolean') &&
+    (value.modelUsage === undefined ||
+      value.modelUsage === null ||
+      (Array.isArray(value.modelUsage) && value.modelUsage.length <= MODEL_USAGE_MAX && value.modelUsage.every(isTurnModelUsage))) &&
+    (value.pricedCostUsd === undefined || value.pricedCostUsd === null || isCount(value.pricedCostUsd)) &&
+    isOptionalStringOrNull(value.pricedPriceChecked)
   );
 }
 
@@ -723,6 +744,10 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       refusalCategory: sanitizeOptional(p.refusalCategory),
       refusalFallbackModel: sanitizeOptional(p.refusalFallbackModel),
       estimatePriceChecked: sanitizeOptional(p.estimatePriceChecked),
+      ...(p.modelUsage === undefined
+        ? {}
+        : { modelUsage: p.modelUsage === null ? null : p.modelUsage.map((u) => ({ ...u, model: sanitizeText(u.model) })) }),
+      ...(p.pricedPriceChecked === undefined ? {} : { pricedPriceChecked: sanitizeOptional(p.pricedPriceChecked) }),
     };
   }
   if (event.type === 'tool-trace') {

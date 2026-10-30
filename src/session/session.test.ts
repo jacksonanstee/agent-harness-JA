@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_EXPECTED_OUTPUT_TOKENS, estimateRunCostUsd, PRICE_TABLE } from '../internal/pricing.js';
+import { MODEL_USAGE_MAX } from '../internal/limits.js';
+import { DEFAULT_EXPECTED_OUTPUT_TOKENS, estimateRunCostUsd, PRICE_TABLE, PRICE_TABLE_CHECKED, priceModelUsage } from '../internal/pricing.js';
 import { escapePathUnsafe } from '../internal/sanitize.js';
 import { cleanSdkToken } from './sdk-refusal.js';
 
@@ -580,6 +581,113 @@ describe('createSession', () => {
     expect(cost.payload.resultSubtype).toBe('success');
     expect(cost.payload.model).toBeTruthy();
     expect(cost.payload.ruleId).toBeTruthy();
+  });
+
+  describe('harness-priced cost from modelUsage (#212)', () => {
+    const MU = {
+      inputTokens: 1_000, outputTokens: 2_000, cacheReadInputTokens: 30_000, cacheCreationInputTokens: 4_000,
+      webSearchRequests: 1, costUSD: 0.2, contextWindow: 200_000, maxOutputTokens: 64_000,
+    };
+    async function run(result: Record<string, unknown>) {
+      const telemetry = fakeTelemetry();
+      const fake = fakeQuery([INIT, { ...RESULT, ...result }]);
+      const out = await createSession(makeDeps(fake, { telemetry }), { skillsDir: '/nowhere' }).run('hi');
+      const cost = telemetry.events.find((e) => e.type === 'turn-cost');
+      if (cost?.type !== 'turn-cost') throw new Error('no turn-cost event');
+      return { out, payload: cost.payload };
+    }
+
+    it('stores every model usage and the harness figure priced from them; costUsd stays the SDK figure', async () => {
+      const { out, payload } = await run({
+        total_cost_usd: 0.21,
+        modelUsage: { 'claude-sonnet-5': MU, 'claude-haiku-4-5-20251001': { ...MU, costUSD: 0.01 } },
+      });
+      expect(payload.costUsd).toBe(0.21);
+      expect(payload.modelUsage).toEqual([
+        { model: 'claude-sonnet-5', inputTokens: 1_000, outputTokens: 2_000, cacheReadInputTokens: 30_000, cacheCreationInputTokens: 4_000, webSearchRequests: 1, sdkCostUsd: 0.2 },
+        { model: 'claude-haiku-4-5-20251001', inputTokens: 1_000, outputTokens: 2_000, cacheReadInputTokens: 30_000, cacheCreationInputTokens: 4_000, webSearchRequests: 1, sdkCostUsd: 0.01 },
+      ]);
+      // By hand from the price page, independent of priceModelUsage: Sonnet 5
+      // (1k x $2 + 2k x $10 + 30k x $0.20 + 4k x $2.50)/1M + 1 search x $0.01 = 0.048;
+      // Haiku 4.5 (1k x $1 + 2k x $5 + 30k x $0.10 + 4k x $1.25)/1M + $0.01 = 0.029.
+      expect(payload.pricedCostUsd).toBeCloseTo(0.077, 12);
+      const want = priceModelUsage(payload.modelUsage ?? []);
+      expect(payload.pricedPriceChecked).toBe(PRICE_TABLE_CHECKED);
+      expect(PRICE_TABLE.every((r) => r.checked === PRICE_TABLE_CHECKED)).toBe(true);
+      expect(out.pricedCostUsd).toBe(want);
+    });
+
+    it('a result with no modelUsage, or a malformed one, prices as null (never zero) and stores no usage', async () => {
+      for (const modelUsage of [undefined, null, 'x', [], { 'claude-sonnet-5': { ...MU, outputTokens: 'lots' } }]) {
+        const { out, payload } = await run(modelUsage === undefined ? {} : { modelUsage });
+        expect(payload.pricedCostUsd, JSON.stringify(modelUsage)).toBeNull();
+        expect(out.pricedCostUsd).toBeNull();
+        expect(payload.modelUsage ?? null).toBeNull();
+      }
+    });
+
+    it('an unpriced model keeps its usage row but leaves the harness figure null', async () => {
+      const { payload } = await run({ modelUsage: { 'claude-sonnet-5': MU, 'some-new-model': MU } });
+      expect(payload.modelUsage).toHaveLength(2);
+      expect(payload.pricedCostUsd).toBeNull();
+    });
+
+    it('cleans model keys like the other SDK strings, and keeps at most MODEL_USAGE_MAX of them', async () => {
+      const many = Object.fromEntries(Array.from({ length: MODEL_USAGE_MAX + 5 }, (_, i) => [`m-${i}`, MU]));
+      const { payload } = await run({ modelUsage: { 'claude\u001b[2Jsonnet-5': MU, ...many } });
+      expect(payload.modelUsage).toHaveLength(MODEL_USAGE_MAX);
+      expect(payload.modelUsage?.[0]?.model).not.toContain('\u001b');
+    });
+
+    it('a truncated set prices as null even when every kept model is priced (no partial sum)', async () => {
+      const many = Object.fromEntries(Array.from({ length: MODEL_USAGE_MAX + 1 }, (_, i) => [`claude-haiku-4-5-202501${String(i + 10).padStart(2, '0')}`, MU]));
+      const { payload } = await run({ modelUsage: many });
+      expect(payload.modelUsage).toHaveLength(MODEL_USAGE_MAX);
+      expect(priceModelUsage(payload.modelUsage ?? [])).not.toBeNull();
+      expect(payload.pricedCostUsd).toBeNull();
+    });
+
+    it('prices only when the per-model SDK costs cover the SDK total (else modelUsage is not the whole run)', async () => {
+      const covered = await run({ total_cost_usd: 0.3, modelUsage: { 'claude-sonnet-5': { ...MU, costUSD: 0.2 }, 'claude-haiku-4-5': { ...MU, costUSD: 0.1 } } });
+      expect(covered.payload.pricedCostUsd).not.toBeNull();
+      const gap = await run({ total_cost_usd: 1.5, modelUsage: { 'claude-sonnet-5': { ...MU, costUSD: 0.2 } } });
+      expect(gap.payload.pricedCostUsd).toBeNull();
+      expect(gap.payload.modelUsage).toHaveLength(1);
+      // Within 1%: rounding, not a missing model.
+      const near = await run({ total_cost_usd: 0.2019, modelUsage: { 'claude-sonnet-5': { ...MU, costUSD: 0.2 } } });
+      expect(near.payload.pricedCostUsd).not.toBeNull();
+      // A row with no SDK cost cannot be cross-checked, so it prices on the table alone.
+      const unchecked = await run({ total_cost_usd: 1.5, modelUsage: { 'claude-sonnet-5': { ...MU, costUSD: -1 } } });
+      expect(unchecked.payload.pricedCostUsd).not.toBeNull();
+    });
+
+    it('a huge count or a non-finite SDK total still writes the turn-cost row (security fold M1)', async () => {
+      const huge = await run({ modelUsage: { 'claude-sonnet-5': { ...MU, inputTokens: 1e308, costUSD: 0.2 } }, total_cost_usd: 0.2 });
+      expect(huge.payload.pricedCostUsd).toBeNull();
+      expect(huge.out.pricedCostUsd).toBeNull();
+      const inf = await run({ total_cost_usd: Number.POSITIVE_INFINITY });
+      expect(inf.payload.costUsd).toBeNull();
+      expect(inf.out.costUsd).toBeNull();
+    });
+
+    it('a non-finite or missing usage count or num_turns still writes the row (security re-check)', async () => {
+      const INF = Number.POSITIVE_INFINITY;
+      const turns = await run({ num_turns: INF });
+      expect(turns.payload.numTurns).toBeNull();
+      for (const usage of [{ input_tokens: INF, output_tokens: 1 }, { output_tokens: 1 }, 'x']) {
+        const r = await run({ usage });
+        expect(r.payload.usage, JSON.stringify(usage)).toBeNull();
+        expect(r.out.usage).toBeNull();
+      }
+      const cache = await run({ usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: INF } });
+      expect(cache.payload.usage).toEqual({ inputTokens: 1, outputTokens: 2, cacheCreationInputTokens: null, cacheReadInputTokens: null });
+    });
+
+    it('an unusable SDK per-model cost is stored as null, not rejected', async () => {
+      const { payload } = await run({ modelUsage: { 'claude-sonnet-5': { ...MU, costUSD: -1 } } });
+      expect(payload.modelUsage?.[0]?.sdkCostUsd).toBeNull();
+      expect(payload.pricedCostUsd).not.toBeNull();
+    });
   });
 
   describe('turn-cost estimate (#192)', () => {

@@ -41,3 +41,15 @@ export const DEFAULT_MAX_BUDGET_USD = 1;
 export function isBudgetUsd(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
+
+/**
+ * At most this many per-model entries on a turn-cost row (#212). The SDK
+ * result's `modelUsage` is untrusted input, so a flood of model keys is cut
+ * here, and a cut set is never priced (a partial sum would read as whole).
+ */
+export const MODEL_USAGE_MAX = 16;
+
+/** A count or dollar figure from untrusted input: a finite number >= 0 (#212). */
+export function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}

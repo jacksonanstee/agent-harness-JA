@@ -382,6 +382,7 @@ describe('formatRunSummaryLine', () => {
     refusal: null,
     numTurns: 2,
     costUsd: 0.05,
+    pricedCostUsd: null,
     denied: [{ tool: 'Bash', reason: 'blocked' }],
     cliDenied: [],
     memoryEntryId: 'session-abc',
@@ -401,6 +402,18 @@ describe('formatRunSummaryLine', () => {
 
   it('prints cli-denied=0 when the result named none', () => {
     expect(formatRunSummaryLine(base)).toContain(' denied=1 cli-denied=0 memory=');
+  });
+
+  it('leads cost= with the harness-priced figure and states the SDK figure as sdk-cost= (#212)', () => {
+    const priced = formatRunSummaryLine({ ...base, costUsd: 0.075, pricedCostUsd: 0.05 });
+    expect(priced).toContain(' cost=$0.0500 sdk-cost=$0.0750 denied=');
+    // No harness figure: cost= falls back to the SDK figure, and the two read the same.
+    const fallback = formatRunSummaryLine({ ...base, costUsd: 0.075, pricedCostUsd: null });
+    expect(fallback).toContain(' cost=$0.0750 sdk-cost=$0.0750 denied=');
+    const neither = formatRunSummaryLine({ ...base, costUsd: null, pricedCostUsd: null });
+    expect(neither).toContain(' cost=n/a sdk-cost=n/a denied=');
+    const harnessOnly = formatRunSummaryLine({ ...base, costUsd: null, pricedCostUsd: 0.05 });
+    expect(harnessOnly).toContain(' cost=$0.0500 sdk-cost=n/a denied=');
   });
 
   it('keeps n/a and none placeholders', () => {
