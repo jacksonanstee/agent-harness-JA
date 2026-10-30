@@ -82,6 +82,7 @@ function errorMessage(cause: unknown): string {
 function emptyVolatile(): GoldenRow['volatile'] {
   return {
     costUsd: null,
+    pricedCostUsd: null,
     numTurns: null,
     durationMs: null,
     resultSubtype: null,
@@ -89,6 +90,9 @@ function emptyVolatile(): GoldenRow['volatile'] {
     refusalFallbackModel: null,
   };
 }
+
+/** A row's headline cost (#213): the harness figure, else the SDK's, else null. */
+const headlineCost = (row: GoldenRow): number | null => row.volatile.pricedCostUsd ?? row.volatile.costUsd;
 
 /** A non-finite cost (NaN/Infinity, from an untrusted SDK or adversary
  *  payload) is treated as unknown rather than summed — it falls into the
@@ -215,6 +219,8 @@ function computeTotals(rows: GoldenRow[]): GoldenTotals {
     passRate: passed / rows.length,
     totalCostUsd: priced.reduce((sum, r) => sum + (r.volatile.costUsd ?? 0), 0),
     unpricedTasks: rows.length - priced.length,
+    totalPricedCostUsd: rows.reduce((sum, r) => sum + (headlineCost(r) ?? 0), 0),
+    sdkPricedTasks: rows.filter((r) => r.volatile.pricedCostUsd === null && r.volatile.costUsd !== null).length,
   };
 }
 
@@ -411,6 +417,7 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
     }
     const volatile = {
       costUsd: finiteCostOrNull(result.costUsd),
+      pricedCostUsd: finiteCostOrNull(result.pricedCostUsd),
       numTurns: result.numTurns,
       durationMs: now() - startedAt,
       resultSubtype: result.resultSubtype,

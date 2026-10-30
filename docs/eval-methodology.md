@@ -53,7 +53,15 @@ that proves the rule).
   session runs (ADR-0017 amendment, issue #95).
 - **Cost:** `totals.totalCostUsd` never understates — rows whose cost is
   unknown are counted in `totals.unpricedTasks` and the rendered cost line
-  becomes a `≥` bound.
+  becomes a `≥` bound. That total is the SDK's own figure. Since #213 each
+  row also carries `volatile.pricedCostUsd`, the harness-priced figure
+  (ADR-0043), and `totals.totalPricedCostUsd` sums each row's harness figure,
+  else its SDK figure, with `totals.sdkPricedTasks` counting the fallbacks.
+  The rendered cost line and each row's cost cell lead with that figure and
+  state the SDK's beside it, and the line becomes a `≥` bound when a row has
+  neither figure. In the JSON, such a row adds nothing to
+  `totalPricedCostUsd` and only `unpricedTasks` signals the gap. The
+  adversary's challenge cost stays on the SDK figure.
 - **Where it runs:** operator-invoked only, never per-PR CI. Oracles are
   PR-author code executed in-process and CI holds an API key — a fork PR
   would be a clean exfiltration path (ADR-0017; security-model R-10; a

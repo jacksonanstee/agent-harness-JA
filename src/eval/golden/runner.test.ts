@@ -500,6 +500,9 @@ describe('createGoldenRunner rows', () => {
       passRate: 1 / 3,
       totalCostUsd: 0.02,
       unpricedTasks: 1,
+      // #213: no harness figure on these rows, so the headline falls back to the SDK's.
+      totalPricedCostUsd: 0.02,
+      sdkPricedTasks: 2,
     });
     expect(scorecard.meta.harnessVersion).toBe('0.1.0-test');
     expect(scorecard.meta.models).toEqual(['claude-sonnet-5']);
@@ -521,6 +524,37 @@ describe('createGoldenRunner rows', () => {
     expect(alpha?.volatile.costUsd).toBeNull();
     expect(scorecard.totals.totalCostUsd).toBe(0);
     expect(scorecard.totals.unpricedTasks).toBe(3);
+  });
+
+  it('records the harness-priced figure beside the SDK one and totals the headline (#213, ADR-0043)', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ costUsd: 0.015, pricedCostUsd: 0.01 })),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    const ran = scorecard.rows.filter((r) => r.volatile.costUsd !== null);
+    expect(ran.length).toBeGreaterThan(0);
+    for (const row of ran) {
+      expect(row.volatile.costUsd).toBe(0.015);
+      expect(row.volatile.pricedCostUsd).toBe(0.01);
+    }
+    expect(scorecard.totals.totalCostUsd).toBeCloseTo(0.015 * ran.length, 12);
+    expect(scorecard.totals.totalPricedCostUsd).toBeCloseTo(0.01 * ran.length, 12);
+    expect(scorecard.totals.sdkPricedTasks).toBe(0);
+  });
+
+  it('a non-finite harness figure is null and the row falls back to the SDK figure (#213)', async () => {
+    const runner = createGoldenRunner({
+      createTaskSession: fakeSessionFactory(fakeResult({ costUsd: 0.015, pricedCostUsd: Infinity })),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    const alpha = scorecard.rows.find((r) => r.id === 'alpha');
+    expect(alpha?.volatile.pricedCostUsd).toBeNull();
+    expect(scorecard.totals.totalPricedCostUsd).toBeCloseTo(scorecard.totals.totalCostUsd, 12);
+    expect(scorecard.totals.sdkPricedTasks).toBe(scorecard.rows.filter((r) => r.volatile.costUsd !== null).length);
   });
 
   it('threads task config into the session factory', async () => {
@@ -896,6 +930,8 @@ describe('adversarial verification (E-4 phase 2)', () => {
         passRate: 1 / 3,
         totalCostUsd: 0.02,
         unpricedTasks: 1,
+        totalPricedCostUsd: 0.02,
+        sdkPricedTasks: 2,
       });
     },
   );

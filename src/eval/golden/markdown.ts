@@ -8,7 +8,11 @@ function rowLine(row: GoldenRow): string {
   const result = row.pass ? 'pass' : 'FAIL';
   const kind = row.failureKind ?? '—';
   const reason = row.reason === null ? '—' : escapeCell(row.reason);
-  const cost = row.volatile.costUsd === null ? 'n/a' : formatUsd(row.volatile.costUsd);
+  // #213: the harness figure leads; the SDK's rides beside it, or marks a fallback.
+  const { costUsd, pricedCostUsd } = row.volatile;
+  const sdk = costUsd === null ? 'n/a' : formatUsd(costUsd);
+  const cost =
+    pricedCostUsd !== null ? `${formatUsd(pricedCostUsd)} (SDK ${sdk})` : costUsd === null ? 'n/a' : `${sdk} (SDK)`;
   const turns = row.volatile.numTurns === null ? 'n/a' : String(row.volatile.numTurns);
   const duration =
     row.volatile.durationMs === null
@@ -62,12 +66,17 @@ function verificationLines(scorecard: GoldenScorecard): string[] {
 export function toMarkdown(scorecard: GoldenScorecard): string {
   const { totals, meta } = scorecard;
   const pct = (totals.passRate * 100).toFixed(1);
-  const cost =
+  const tasks = (n: number): string => `${n} task${n === 1 ? '' : 's'}`;
+  const sdkCost =
     totals.unpricedTasks === 0
       ? formatUsd(totals.totalCostUsd)
-      : `≥ ${formatUsd(totals.totalCostUsd)} (${totals.unpricedTasks} task${
-          totals.unpricedTasks === 1 ? '' : 's'
-        } unpriced)`;
+      : `≥ ${formatUsd(totals.totalCostUsd)} (${tasks(totals.unpricedTasks)} unpriced)`;
+  // #213: lead with the harness figure (ADR-0043). A row with neither figure is unknown;
+  // counted from the rows, which agree with totals for any scorecard the runner produces.
+  const unknown = scorecard.rows.filter((r) => (r.volatile.pricedCostUsd ?? r.volatile.costUsd) === null).length;
+  const headline = unknown === 0 ? formatUsd(totals.totalPricedCostUsd) : `≥ ${formatUsd(totals.totalPricedCostUsd)} (${tasks(unknown)} unpriced)`;
+  const fellBack = totals.sdkPricedTasks === 0 ? '' : `; ${tasks(totals.sdkPricedTasks)} at the SDK figure`;
+  const cost = `${headline} at list prices (SDK figure ${sdkCost}${fellBack})`;
   const lines = [
     '# Golden eval scorecard',
     '',

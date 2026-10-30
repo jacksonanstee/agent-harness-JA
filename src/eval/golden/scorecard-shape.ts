@@ -30,7 +30,14 @@ export type GoldenFailureKind = (typeof GOLDEN_FAILURE_KINDS)[number];
 
 /** Volatile partition — informational, never baseline-diffed. */
 export interface RowVolatile {
+  /** The SDK's own figure (`total_cost_usd`); about 1.5x list for Sonnet 5 at SDK 0.3.201. */
   costUsd: number | null;
+  /**
+   * The harness-priced figure (`SessionResult.pricedCostUsd`, ADR-0043, #213),
+   * or null when the run could not be priced whole; the headline falls back
+   * to `costUsd` then.
+   */
+  pricedCostUsd: number | null;
   numTurns: number | null;
   durationMs: number | null;
   resultSubtype: string | null;
@@ -113,6 +120,14 @@ export type GoldenTotals = ScorecardTotalsCore<GoldenFailureKind> & {
   totalCostUsd: number;
   /** Rows whose costUsd is null (didn't run, or SDK reported no cost). */
   unpricedTasks: number;
+  /**
+   * The headline (#213, ADR-0043): each row's `pricedCostUsd`, else its
+   * `costUsd`, summed over rows with either. Rows with neither are unknown,
+   * never added as zero.
+   */
+  totalPricedCostUsd: number;
+  /** Rows whose headline is the SDK figure because the harness could not price them. */
+  sdkPricedTasks: number;
 };
 
 /** E-4 report-only section. Volatile like everything golden — never diffed. */

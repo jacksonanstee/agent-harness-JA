@@ -6,6 +6,8 @@ import type { ChallengeFinding } from '../verifier/types.js';
 function makeCard(rows: GoldenRow[], overrides?: {
   totalCostUsd?: number;
   unpricedTasks?: number;
+  totalPricedCostUsd?: number;
+  sdkPricedTasks?: number;
 }): GoldenScorecard {
   const passed = rows.filter((r) => r.pass).length;
   return {
@@ -32,6 +34,8 @@ function makeCard(rows: GoldenRow[], overrides?: {
       },
       passRate: rows.length === 0 ? 0 : passed / rows.length,
       totalCostUsd: overrides?.totalCostUsd ?? 0.1,
+      totalPricedCostUsd: overrides?.totalPricedCostUsd ?? overrides?.totalCostUsd ?? 0.1,
+      sdkPricedTasks: overrides?.sdkPricedTasks ?? 0,
       unpricedTasks: overrides?.unpricedTasks ?? 0,
     },
   };
@@ -44,6 +48,7 @@ const passRow: GoldenRow = {
   reason: null,
   volatile: {
     costUsd: 0.05,
+    pricedCostUsd: null,
     numTurns: 3,
     durationMs: 8200,
     resultSubtype: 'success',
@@ -59,6 +64,7 @@ const failRow: GoldenRow = {
   reason: 'expected "pong" | got\nsomething else',
   volatile: {
     costUsd: null,
+    pricedCostUsd: null,
     numTurns: null,
     durationMs: null,
     resultSubtype: null,
@@ -241,6 +247,26 @@ describe('toMarkdown', () => {
   it('renders a lower-bound cost when rows are unpriced — never a silent understatement', () => {
     const md = toMarkdown(makeCard([passRow, failRow], { totalCostUsd: 0.05, unpricedTasks: 1 }));
     expect(md).toContain('≥ $0.0500 (1 task unpriced)');
+  });
+
+  it('leads the cost line with the harness figure and states the SDK figure (#213, ADR-0043)', () => {
+    const priced = { ...passRow, volatile: { ...passRow.volatile, costUsd: 0.075, pricedCostUsd: 0.05 } };
+    const md = toMarkdown(makeCard([priced], { totalCostUsd: 0.075, totalPricedCostUsd: 0.05, unpricedTasks: 0, sdkPricedTasks: 0 }));
+    expect(md).toContain('- **Cost:** $0.0500 at list prices (SDK figure $0.0750)');
+    const row = md.split('\n').find((l) => l.startsWith('| hello-world |'));
+    expect(row).toContain('| $0.0500 (SDK $0.0750) |');
+  });
+
+  it('the headline is a lower bound when a row has neither figure (code review M1)', () => {
+    const md = toMarkdown(makeCard([passRow, failRow], { totalCostUsd: 0.05, totalPricedCostUsd: 0.04, unpricedTasks: 1, sdkPricedTasks: 0 }));
+    expect(md).toContain('- **Cost:** ≥ $0.0400 (1 task unpriced) at list prices (SDK figure ≥ $0.0500 (1 task unpriced))');
+  });
+
+  it('names the tasks whose headline fell back to the SDK figure (#213)', () => {
+    const md = toMarkdown(makeCard([passRow], { totalCostUsd: 0.05, totalPricedCostUsd: 0.05, unpricedTasks: 0, sdkPricedTasks: 1 }));
+    expect(md).toContain('- **Cost:** $0.0500 at list prices (SDK figure $0.0500; 1 task at the SDK figure)');
+    const row = md.split('\n').find((l) => l.startsWith('| hello-world |'));
+    expect(row).toContain('| $0.0500 (SDK) |');
   });
 
   it('escapes pipes and newlines in reason cells (Markdown injection)', () => {
