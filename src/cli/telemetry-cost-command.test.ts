@@ -55,15 +55,18 @@ interface Fixture {
   session: string;
   day: number;
   model: string;
-  /** Dyadic values so any summation order is exact. */
+  /** Dyadic values so any summation order is exact. The SDK's figure (`costUsd`). */
   cost: number | null;
+  /** The harness-priced figure (#212); absent on rows written before it. */
+  priced?: number | null;
 }
 
 const FIXTURE: Fixture[] = [
-  { kind: 'agent', session: 's-a', day: 1, model: 'model-x', cost: 0.5 },
+  { kind: 'agent', session: 's-a', day: 1, model: 'model-x', cost: 0.5, priced: 0.375 },
   { kind: 'agent', session: 's-a', day: 2, model: 'model-x', cost: 0.25 },
-  { kind: 'agent', session: 's-b', day: 2, model: 'model-y', cost: 0.125 },
+  { kind: 'agent', session: 's-b', day: 2, model: 'model-y', cost: 0.125, priced: 0.0625 },
   { kind: 'agent', session: 's-b', day: 3, model: 'model-y', cost: null },
+  { kind: 'agent', session: 's-d', day: 3, model: 'model-y', cost: null, priced: 0.5 },
   { kind: 'agent', session: 's-c', day: 3, model: 'model-x', cost: 1 },
   { kind: 'judge', session: 's-a', day: 2, model: '', cost: 0.0625 },
   { kind: 'judge', session: 's-b', day: 3, model: '', cost: null },
@@ -88,6 +91,7 @@ function seed(dbPath: string, rows: Fixture[]): void {
             usage: null,
             sdkSessionId: null,
             resultSubtype: 'success',
+            ...(r.priced === undefined ? {} : { pricedCostUsd: r.priced }),
           },
         });
       } else {
@@ -139,20 +143,33 @@ function run(over: Partial<TelemetryCostArgs> & { dbPath: string }, now?: () => 
 }
 
 interface Expected {
+  /** The headline: harness-priced where known, else the SDK figure (#212). */
   sum: number;
   rows: number;
   unknown: number;
+  sdkSum: number;
+  sdkKnown: number;
+  /** Rows whose headline came from the SDK figure. */
+  sdkPriced: number;
 }
+
+const headline = (r: Fixture): number | null => (r.kind === 'agent' ? (r.priced ?? r.cost) : r.cost);
 
 /** Re-derives per-key totals from the fixture rows; nothing is hand-copied. */
 function derive(rows: Fixture[], kind: Fixture['kind'], by: 'model' | 'session' | 'day', sinceDay: number) {
   const map = new Map<string, Expected>();
   for (const r of rows.filter((x) => x.kind === kind && x.day >= sinceDay)) {
     const key = by === 'session' ? r.session : by === 'day' ? `2026-10-${String(r.day).padStart(2, '0')}` : kind === 'judge' ? '(not recorded)' : r.model;
-    const e = map.get(key) ?? { sum: 0, rows: 0, unknown: 0 };
+    const e = map.get(key) ?? { sum: 0, rows: 0, unknown: 0, sdkSum: 0, sdkKnown: 0, sdkPriced: 0 };
     e.rows += 1;
-    if (r.cost === null) e.unknown += 1;
-    else e.sum += r.cost;
+    const h = headline(r);
+    if (h === null) e.unknown += 1;
+    else e.sum += h;
+    if (h !== null && (r.priced ?? null) === null) e.sdkPriced += 1;
+    if (r.cost !== null) {
+      e.sdkKnown += 1;
+      e.sdkSum += r.cost;
+    }
     map.set(key, e);
   }
   return map;
@@ -310,10 +327,16 @@ describe('runTelemetryCost', () => {
         const key = by === 'day' ? (cells[0] as string) : (JSON.parse(cells[0] as string) as string);
         const e = expected.get(key);
         expect(e, `unexpected key ${key}`).toBeDefined();
-        const known = (e as Expected).rows - (e as Expected).unknown;
-        expect(cells[1]).toBe(String(e?.rows));
-        expect(cells[2]).toBe(known === 0 ? 'n/a' : formatUsd((e as Expected).sum));
-        expect(cells[3]).toBe((e as Expected).unknown === 0 ? '-' : `unknown (${label((e as Expected).unknown)})`);
+        const x = e as Expected;
+        const known = x.rows - x.unknown;
+        expect(cells[1]).toBe(String(x.rows));
+        expect(cells[2]).toBe(known === 0 ? 'n/a' : formatUsd(x.sum));
+        if (kind === 'agent') {
+          // #212: the SDK figure beside the headline, and how many rows fell back to it.
+          expect(cells[3]).toBe(x.sdkKnown === 0 ? 'n/a' : formatUsd(x.sdkSum));
+          expect(cells[4]).toBe(x.sdkPriced === 0 ? '-' : label(x.sdkPriced));
+        }
+        expect(cells[kind === 'agent' ? 5 : 3]).toBe(x.unknown === 0 ? '-' : `unknown (${label(x.unknown)})`);
       }
     }
   });
@@ -321,17 +344,35 @@ describe('runTelemetryCost', () => {
   it('the TOTAL line is agent + judge re-derived, with unknowns counted not summed', () => {
     const result = run({ dbPath: fixtureDb() });
     const known = (kind: Fixture['kind']): number =>
-      FIXTURE.filter((r) => r.kind === kind).reduce((s, r) => s + (r.cost ?? 0), 0);
+      FIXTURE.filter((r) => r.kind === kind).reduce((s, r) => s + (headline(r) ?? 0), 0);
     const unknown = (kind: Fixture['kind']): number =>
-      FIXTURE.filter((r) => r.kind === kind && r.cost === null).length;
+      FIXTURE.filter((r) => r.kind === kind && headline(r) === null).length;
     const total = result.out.split('\n').filter((l) => l.startsWith('TOTAL'));
     expect(total).toEqual([
-      `TOTAL ${formatUsd(known('agent') + known('judge'))} (agent ${formatUsd(known('agent'))}, judge ${formatUsd(known('judge'))})` +
+      `TOTAL ${formatUsd(known('agent') + known('judge'))} (agent ${formatUsd(known('agent'))}, judge ${formatUsd(known('judge'))} at the SDK figure)` +
         `; unknown cost, not included: ${label(unknown('agent') + unknown('judge'))} (agent ${unknown('agent')}, judge ${unknown('judge')})`,
     ]);
     // The fixture really has an unknown on each side, or the above proves nothing.
     expect(unknown('agent')).toBeGreaterThan(0);
     expect(unknown('judge')).toBeGreaterThan(0);
+  });
+
+  it('leads with the harness-priced figure and states the SDK figure and the fallback count (#212)', () => {
+    const result = run({ dbPath: fixtureDb() });
+    const agent = FIXTURE.filter((r) => r.kind === 'agent');
+    const sdk = agent.reduce((s, r) => s + (r.cost ?? 0), 0);
+    const sdkRows = agent.filter((r) => r.cost !== null).length;
+    const harness = agent.filter((r) => (r.priced ?? null) !== null).length;
+    const fellBack = agent.filter((r) => (r.priced ?? null) === null && r.cost !== null).length;
+    expect(result.out.split('\n').filter((l) => l.startsWith('agent cost source'))).toEqual([
+      `agent cost source: harness price table ${label(harness)}, SDK figure ${label(fellBack)}; ` +
+        `the SDK reported ${formatUsd(sdk)} over its ${label(sdkRows)} (#212)`,
+    ]);
+    // The fixture exercises all three: harness-priced, fallen back, and harness-only (SDK null).
+    expect(harness).toBeGreaterThan(0);
+    expect(fellBack).toBeGreaterThan(0);
+    expect(agent.some((r) => r.cost === null && (r.priced ?? null) !== null)).toBe(true);
+    expect(sdk).not.toBe(agent.reduce((t, r) => t + (headline(r) ?? 0), 0));
   });
 
   it('judge spend is not folded into agent spend', () => {
@@ -354,7 +395,7 @@ describe('runTelemetryCost', () => {
   it('a group whose every row is null cost shows n/a, never $0.0000', () => {
     const rows: Fixture[] = [{ kind: 'agent', session: 's', day: 2, model: 'm', cost: null }];
     const result = run({ dbPath: fixtureDb(rows) });
-    expect(sectionRows(result.out, 'agent spend')).toEqual([['"m"', '1', 'n/a', 'unknown (1 row)']]);
+    expect(sectionRows(result.out, 'agent spend')).toEqual([['"m"', '1', 'n/a', 'n/a', '-', 'unknown (1 row)']]);
   });
 
   it('an unreadable payload is unknown, not zero and not a crash', () => {
@@ -403,6 +444,8 @@ interface EstFixture {
   estimate: number | null | 'absent';
   /** Non-null writes refusalFallbackModel: priced on a different model, so unpaired. */
   fallback?: string;
+  /** The harness-priced figure (#212); the actual leads with it when present. */
+  priced?: number;
 }
 
 /** Dyadic values so any summation order is exact. */
@@ -430,6 +473,7 @@ function estDb(rows: EstFixture[] = EST_FIXTURE): string {
         resultSubtype: 'success',
         ...(r.estimate === 'absent' ? {} : { estimateUsd: r.estimate }),
         ...(r.fallback === undefined ? {} : { refusalFallbackModel: r.fallback }),
+        ...(r.priced === undefined ? {} : { pricedCostUsd: r.priced }),
       };
       store.record({ type: 'turn-cost', sessionId: r.session, turnId: `t${i}`, ts: at(r.day), payload });
     });
@@ -485,6 +529,16 @@ describe('telemetry cost --estimate (#192)', () => {
       expect(cells[4]).toBe(mine.length === 0 || est === 0 ? 'n/a' : `${(act / est).toFixed(2)}x`);
       expect(cells[5]).toBe(unpaired === 0 ? '-' : `unpaired (${label(unpaired)})`);
     }
+  });
+
+  it('the actual is the harness-priced figure when a row has one, else the SDK figure (#212)', () => {
+    const rows: EstFixture[] = [
+      { session: 's', day: 2, model: 'm', cost: 0.75, estimate: 0.25, priced: 0.5 },
+      { session: 's', day: 2, model: 'm', cost: 0.125, estimate: 0.125 },
+    ];
+    const cells = sectionRows(run({ dbPath: estDb(rows), estimate: true }).out, EST_TITLE)[0] as string[];
+    expect(cells[3]).toBe(formatUsd(0.5 + 0.125));
+    expect(cells[3]).not.toBe(formatUsd(0.75 + 0.125));
   });
 
   it('a null or absent estimate is unpaired, never a zero estimate', () => {

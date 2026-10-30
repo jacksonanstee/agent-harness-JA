@@ -42,6 +42,7 @@ export type {
   SdkResultMessage,
   SdkSystemMessage,
   SdkTextBlock,
+  SdkModelUsage,
   SdkUsage,
   SdkUserMessage,
   Session,

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { formatStopLine, main, parseRunArgs } from '../cli.js';
+import { formatBudgetGapLine, formatStopLine, main, parseRunArgs } from '../cli.js';
 import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import type { QueryFn, QueryOptions, SdkMessage } from '../session/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
@@ -307,5 +307,51 @@ describe('review fold (#187)', () => {
   it('prints no cap line when no cap is set', async () => {
     const { stderr } = await runMain([], scripted([INIT, SUCCESS]).query);
     expect(stderr).not.toContain('[harness] budget: cap');
+  });
+});
+
+describe('the budget gap line (#212, D4): the cap is enforced on the SDK figure', () => {
+  it('names the ratio and the real-dollar stop point when the SDK figure differs from the harness figure', () => {
+    expect(formatBudgetGapLine({ costUsd: 0.15, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBe(
+      "[harness] budget: the cap is enforced on the SDK's cost figure, which read 1.50x the harness-priced " +
+        'figure on this run, so the $1.0000 cap stops near $0.6667 at list prices (#212)',
+    );
+  });
+
+  it('prints nothing within 5% either way, or when either figure is missing or zero', () => {
+    expect(formatBudgetGapLine({ costUsd: 0.104, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 0.096, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: null, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: null, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: 0, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 0, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
+  });
+
+  it('prints nothing when the ratio is not finite (a denormal harness figure)', () => {
+    expect(formatBudgetGapLine({ costUsd: 1, pricedCostUsd: Number.MIN_VALUE, maxBudgetUsd: 1 })).toBeNull();
+    // Security re-check: a finite ratio can still overflow the stop point.
+    expect(formatBudgetGapLine({ costUsd: 0.5, pricedCostUsd: 1, maxBudgetUsd: 1e308 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 1e-300, pricedCostUsd: 2e9, maxBudgetUsd: 1 })).toBeNull();
+  });
+
+  it('also reports an SDK figure BELOW list (the cap then lets more through than it says)', () => {
+    expect(formatBudgetGapLine({ costUsd: 0.05, pricedCostUsd: 0.1, maxBudgetUsd: 2 })).toContain('read 0.50x');
+    expect(formatBudgetGapLine({ costUsd: 0.05, pricedCostUsd: 0.1, maxBudgetUsd: 2 })).toContain('stops near $4.0000');
+  });
+
+  it('main prints it on stderr after a run whose two figures differ', async () => {
+    const MU = { inputTokens: 1e6, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 3, contextWindow: 1, maxOutputTokens: 1 };
+    const result: SdkMessage = { ...SUCCESS, total_cost_usd: 3, modelUsage: { 'claude-sonnet-5': MU } };
+    const fake = scripted([INIT, result]);
+    const { code, stderr, db } = await runMain([], fake.query);
+    expect(code).toBe(0);
+    const payload = turnCostPayload(db);
+    expect(payload.pricedCostUsd).toBe(2); // 1 MTok input at $2
+    expect(stderr).toContain("[harness] budget: the cap is enforced on the SDK's cost figure, which read 1.50x");
+  });
+
+  it('main prints no gap line when the run carries no per-model usage', async () => {
+    const { stderr } = await runMain([], scripted([INIT, SUCCESS]).query);
+    expect(stderr).not.toContain('cap is enforced on');
   });
 });

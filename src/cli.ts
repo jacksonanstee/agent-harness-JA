@@ -469,13 +469,18 @@ export function formatRefusalLine(
  * reading `denied=0` alone would take a CLI-blocked run for an unblocked one.
  */
 export function formatRunSummaryLine(
-  result: Pick<SessionResult, 'modelChoice' | 'refusal' | 'numTurns' | 'costUsd' | 'denied' | 'cliDenied' | 'memoryEntryId'>,
+  result: Pick<
+    SessionResult,
+    'modelChoice' | 'refusal' | 'numTurns' | 'costUsd' | 'pricedCostUsd' | 'denied' | 'cliDenied' | 'memoryEntryId'
+  >,
 ): string {
-  const cost = result.costUsd === null ? 'n/a' : formatUsd(result.costUsd);
+  // #212: cost= leads with the harness-priced figure, falling back to the SDK's;
+  // sdk-cost= is always the SDK's own, so the two can be compared on every run.
+  const usd = (v: number | null): string => (v === null ? 'n/a' : formatUsd(v));
   return (
     `\n[harness] model=${formatModelClaim(result.modelChoice.model, result.refusal)} ` +
     `(rule=${result.modelChoice.rule_id}) ` +
-    `turns=${result.numTurns ?? 'n/a'} cost=${cost} ` +
+    `turns=${result.numTurns ?? 'n/a'} cost=${usd(result.pricedCostUsd ?? result.costUsd)} sdk-cost=${usd(result.costUsd)} ` +
     `denied=${result.denied.length} cli-denied=${result.cliDenied.length} ` +
     `memory=${sanitizeForTerminal(result.memoryEntryId ?? 'none')}\n`
   );
@@ -497,6 +502,31 @@ export function formatStopLine(result: Pick<SessionResult, 'resultSubtype' | 'co
     );
   }
   return `[harness] stopped: the run ended without success (result=${formatTokenField(result.resultSubtype)})`;
+}
+
+/** The SDK and harness figures agree when within this fraction of each other (#212). */
+const BUDGET_GAP_TOLERANCE = 0.05;
+
+/**
+ * The stderr line saying the dollar cap is enforced on the SDK's own cost
+ * figure when that figure differs from the harness-priced one by more than
+ * BUDGET_GAP_TOLERANCE on this run (#212, D4), or null. The bundled CLI at
+ * 0.3.201 prices Sonnet 5 at Sonnet 4.x rates, so a $1.00 cap stops near
+ * $0.67 at list prices. Read from the run itself, never from a stored reading
+ * of the CLI's prices, so it goes quiet once the SDK's figure is right.
+ */
+export function formatBudgetGapLine(
+  result: Pick<SessionResult, 'costUsd' | 'pricedCostUsd' | 'maxBudgetUsd'>,
+): string | null {
+  const { costUsd, pricedCostUsd } = result;
+  if (costUsd === null || pricedCostUsd === null || costUsd <= 0 || pricedCostUsd <= 0) return null;
+  const ratio = costUsd / pricedCostUsd;
+  const stop = result.maxBudgetUsd / ratio;
+  if (!Number.isFinite(ratio) || !Number.isFinite(stop) || Math.abs(ratio - 1) <= BUDGET_GAP_TOLERANCE) return null;
+  return (
+    `[harness] budget: the cap is enforced on the SDK's cost figure, which read ${ratio.toFixed(2)}x the harness-priced ` +
+    `figure on this run, so the ${formatUsd(result.maxBudgetUsd)} cap stops near ${formatUsd(stop)} at list prices (#212)`
+  );
 }
 
 /** The `run` start line naming a cap taken from the flag or the settings file (issue #187). */
@@ -720,6 +750,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   process.stdout.write(formatRunSummaryLine(result));
   const stopLine = formatStopLine(result);
   if (stopLine !== null) process.stderr.write(`${stopLine}\n`);
+  const budgetGapLine = formatBudgetGapLine(result);
+  if (budgetGapLine !== null) process.stderr.write(`${budgetGapLine}\n`);
   // The interrupt raced the end of the stream: the run returned, but it was
   // still the operator's Ctrl-C, so the exit says so (review fold).
   const interruptedLine = result.interrupted ? formatInterruptedLine(result.costUsd) : null;

@@ -35,6 +35,9 @@ export interface PriceRow extends PriceRates {
 const PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing';
 const CHECKED = '2026-10-19';
 
+/** The date every PRICE_TABLE row was last checked; stored beside a harness-priced cost (#212). */
+export const PRICE_TABLE_CHECKED = CHECKED;
+
 const priced = (r: Omit<PriceRow, 'source' | 'checked' | 'longContext'>): Readonly<PriceRow> =>
   Object.freeze({ ...r, source: PRICING_URL, checked: CHECKED, longContext: null });
 
@@ -176,4 +179,63 @@ export function buildRunEstimate(input: {
     estimateOutputDefaulted: defaulted,
     estimatePriceChecked: PRICE_TABLE.find((r) => r.model === input.model)?.checked ?? null,
   };
+}
+
+/**
+ * Web search: "$10 USD per 1,000 searches, plus standard token costs" (PRICING_URL,
+ * read 2026-10-30). Web fetch has no charge beyond tokens, so it has no rate here.
+ */
+export const WEB_SEARCH_USD_PER_REQUEST = 0.01;
+
+/**
+ * One model's share of a run, from the SDK result's `modelUsage` (#212). The
+ * SDK's own figure rides along as `sdkCostUsd` so a row shows both; it is never
+ * used to price.
+ */
+export interface ModelUsageRow {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  webSearchRequests: number;
+  sdkCostUsd: number | null;
+}
+
+/** A dated id (`claude-haiku-4-5-20251001`) prices as its undated row; nothing else is stripped. */
+const DATE_SUFFIX = /-\d{8}$/;
+
+function rowFor(model: string, table: readonly Readonly<PriceRow>[]): Readonly<PriceRow> | undefined {
+  return table.find((r) => r.model === model) ?? table.find((r) => r.model === model.replace(DATE_SUFFIX, ''));
+}
+
+/**
+ * The run's cost priced by the harness's own dated table (#212), summed over
+ * every model the SDK reports. The bundled CLI at 0.3.201 prices Sonnet 5 at
+ * Sonnet 4.x rates, so its `total_cost_usd` reads about 1.5x high; this is the
+ * figure `telemetry cost` leads with. Null, never a partial sum, when there are
+ * no rows, any model is unpriced, any count is not a finite number >= 0, the
+ * total overflows (a huge but finite count), or a row has a long-context step:
+ * `modelUsage` is cumulative over the run, so it cannot show whether any one
+ * request crossed a per-request threshold.
+ */
+export function priceModelUsage(
+  rows: readonly ModelUsageRow[],
+  table: readonly Readonly<PriceRow>[] = PRICE_TABLE,
+): number | null {
+  if (rows.length === 0) return null;
+  let total = 0;
+  for (const u of rows) {
+    const row = rowFor(u.model, table);
+    const counts = [u.inputTokens, u.outputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens, u.webSearchRequests];
+    if (row === undefined || row.longContext !== null || !counts.every(usable)) return null;
+    total +=
+      (u.inputTokens * row.inputUsdPerMTok +
+        u.outputTokens * row.outputUsdPerMTok +
+        u.cacheReadInputTokens * row.cacheReadUsdPerMTok +
+        u.cacheCreationInputTokens * row.cacheWriteUsdPerMTok) /
+        PER_MTOK +
+      u.webSearchRequests * WEB_SEARCH_USD_PER_REQUEST;
+  }
+  return Number.isFinite(total) ? total : null;
 }

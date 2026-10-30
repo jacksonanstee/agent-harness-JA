@@ -141,7 +141,7 @@ prompt, `maxTurns - 1` cache reads of it, plus an output-token guess. The inputs
 silently re-mean old rows. `maxTurns` is a ceiling on turns, not the count taken, so the estimate
 leans high on cache reads; the user prompt, tool results and per-turn growth are not counted and
 characters become tokens by a named approximation (4 characters per token), so it leans low on
-input. It is for calibration against `costUsd`, not billing. The estimate is null, never zero, when
+input. It is for calibration against the actual cost (the harness-priced `pricedCostUsd` since #212, ADR-0043, else `costUsd`), not billing. The estimate is null, never zero, when
 `maxTurns` is unset or below 1, when there is no system prompt (no skills loaded), or when the model
 is unpriced.
 

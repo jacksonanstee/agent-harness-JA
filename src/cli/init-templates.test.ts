@@ -33,6 +33,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     maxBudgetUsd: 1,
     interrupted: false,
     costUsd: null,
+    pricedCostUsd: null,
     numTurns: null,
     denied: [],
     cliDenied: [],

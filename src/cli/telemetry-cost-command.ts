@@ -2,6 +2,7 @@ import { statSync } from 'node:fs';
 
 import Database from 'better-sqlite3';
 
+import { isNonNegativeFinite } from '../internal/limits.js';
 import { formatUsd } from '../internal/money.js';
 import { stalePriceRows, PRICE_MAX_AGE_DAYS } from '../internal/pricing.js';
 import { DEFAULT_DB_PATH } from '../memory/index.js';
@@ -97,7 +98,14 @@ interface Bucket {
   sum: number;
   /** Null cost or an unreadable payload: counted, NEVER added to `sum` as zero. */
   unknown: number;
+  /** Agent rows only (#212): the SDK's own figure beside the headline. */
+  sdkKnown: number;
+  sdkSum: number;
+  /** Rows whose headline is the SDK figure because the harness could not price them. */
+  sdkPriced: number;
 }
+
+const emptyBucket = (): Bucket => ({ known: 0, sum: 0, unknown: 0, sdkKnown: 0, sdkSum: 0, sdkPriced: 0 });
 
 interface RawRow {
   session_id: string;
@@ -110,23 +118,34 @@ type Spend = 'agent' | 'judge';
 
 const NO_MODEL = '(not recorded)';
 
-/** A usable cost is a finite number >= 0; anything else (null, wrong type, bad JSON) is unknown. */
-function readCost(payload: string): { cost: number | null; model: string | null; estimate: number | null } {
+const usableCost = (v: unknown): number | null => (isNonNegativeFinite(v) ? v : null);
+
+/**
+ * A usable cost is a finite number >= 0; anything else (null, wrong type, bad
+ * JSON) is unknown. `cost` is the SDK's figure (`costUsd`), `priced` the
+ * harness's own (`pricedCostUsd`, #212).
+ */
+function readCost(payload: string): {
+  cost: number | null;
+  priced: number | null;
+  model: string | null;
+  estimate: number | null;
+} {
   // A fallback-answered row was billed on a different model than the one the
   // estimate priced, so its estimate is dropped (the row reads as unpaired).
   try {
     const parsed: unknown = JSON.parse(payload);
-    if (typeof parsed !== 'object' || parsed === null) return { cost: null, model: null, estimate: null };
+    if (typeof parsed !== 'object' || parsed === null) return { cost: null, priced: null, model: null, estimate: null };
     const record = parsed as Record<string, unknown>;
-    const c = record.costUsd;
-    const cost = typeof c === 'number' && Number.isFinite(c) && c >= 0 ? c : null;
+    const cost = usableCost(record.costUsd);
+    const priced = usableCost(record.pricedCostUsd);
     const model = typeof record.model === 'string' ? record.model : null;
     const e = record.estimateUsd;
     const fellBack = typeof record.refusalFallbackModel === 'string';
     const estimate = !fellBack && typeof e === 'number' && Number.isFinite(e) && e >= 0 ? e : null;
-    return { cost, model, estimate };
+    return { cost, priced, model, estimate };
   } catch {
-    return { cost: null, model: null, estimate: null };
+    return { cost: null, priced: null, model: null, estimate: null };
   }
 }
 
@@ -146,11 +165,14 @@ function quote(value: string): string {
 }
 
 function sumOf(buckets: Map<string, Bucket>): Bucket {
-  const total: Bucket = { known: 0, sum: 0, unknown: 0 };
+  const total = emptyBucket();
   for (const b of buckets.values()) {
     total.known += b.known;
     total.sum += b.sum;
     total.unknown += b.unknown;
+    total.sdkKnown += b.sdkKnown;
+    total.sdkSum += b.sdkSum;
+    total.sdkPriced += b.sdkPriced;
   }
   return total;
 }
@@ -163,24 +185,28 @@ function unknownCell(b: Bucket): string {
   return b.unknown === 0 ? '-' : `unknown (${rowsLabel(b.unknown)})`;
 }
 
-function section(title: string, by: CostGrouping, buckets: Map<string, Bucket>): string[] {
+/**
+ * One spend table. With `withSdk` (agent rows, #212) COST is the harness-priced
+ * figure where known, SDK is the SDK's own, and SDK-PRICED counts the rows
+ * whose COST fell back to the SDK figure.
+ */
+function section(title: string, by: CostGrouping, buckets: Map<string, Bucket>, withSdk = false): string[] {
   const keys = [...buckets.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const lines = [title];
   if (keys.length === 0) return [...lines, '  (no rows)'];
   const shown = keys.map((key) => (by === 'day' ? key : quote(key)));
   const keyWidth = Math.max(by.length, ...shown.map((s) => s.length));
+  const head = withSdk ? ['ROWS', 'COST', 'SDK', 'SDK-PRICED'] : ['ROWS', 'COST'];
   const cells = keys.map((key) => {
     const b = buckets.get(key) as Bucket;
-    return [String(b.known + b.unknown), costCell(b), unknownCell(b)];
+    const sdk = [b.sdkKnown === 0 ? 'n/a' : formatUsd(b.sdkSum), b.sdkPriced === 0 ? '-' : rowsLabel(b.sdkPriced)];
+    return [String(b.known + b.unknown), costCell(b), ...(withSdk ? sdk : [])];
   });
-  const rowsWidth = Math.max(4, ...cells.map((c) => (c[0] as string).length));
-  const costWidth = Math.max(4, ...cells.map((c) => (c[1] as string).length));
-  lines.push(`  ${by.toUpperCase().padEnd(keyWidth)}  ${'ROWS'.padStart(rowsWidth)}  ${'COST'.padStart(costWidth)}  UNKNOWN`);
-  keys.forEach((_, i) => {
-    const [rows, cost, unknown] = cells[i] as string[];
-    lines.push(
-      `  ${(shown[i] as string).padEnd(keyWidth)}  ${(rows as string).padStart(rowsWidth)}  ${(cost as string).padStart(costWidth)}  ${unknown as string}`,
-    );
+  const widths = head.map((h, c) => Math.max(4, h.length, ...cells.map((row) => (row[c] as string).length)));
+  const pad = (row: readonly string[]): string => row.map((cell, c) => cell.padStart(widths[c] as number)).join('  ');
+  lines.push(`  ${by.toUpperCase().padEnd(keyWidth)}  ${pad(head)}  UNKNOWN`);
+  keys.forEach((key, i) => {
+    lines.push(`  ${(shown[i] as string).padEnd(keyWidth)}  ${pad(cells[i] as string[])}  ${unknownCell(buckets.get(key) as Bucket)}`);
   });
   return lines;
 }
@@ -298,23 +324,30 @@ export function runTelemetryCost(
   const pairs = new Map<string, PairBucket>();
   for (const row of rows) {
     const spend: Spend = row.type === 'turn-cost' ? 'agent' : 'judge';
-    const { cost, model, estimate } = readCost(row.payload);
+    const { cost, priced, model, estimate } = readCost(row.payload);
     const target = spend === 'agent' ? agent : judge;
     const key = groupKey(row, spend, model, args.by);
-    const bucket = target.get(key) ?? { known: 0, sum: 0, unknown: 0 };
-    if (cost === null) bucket.unknown += 1;
+    const bucket = target.get(key) ?? emptyBucket();
+    // #212: agent rows lead with the harness's own figure; judge rows carry only the SDK's.
+    const actual = spend === 'agent' ? (priced ?? cost) : cost;
+    if (actual === null) bucket.unknown += 1;
     else {
       bucket.known += 1;
-      bucket.sum += cost;
+      bucket.sum += actual;
+      if (spend === 'agent' && priced === null) bucket.sdkPriced += 1;
+    }
+    if (spend === 'agent' && cost !== null) {
+      bucket.sdkKnown += 1;
+      bucket.sdkSum += cost;
     }
     target.set(key, bucket);
     if (spend === 'agent') {
       const pair = pairs.get(key) ?? { paired: 0, estimate: 0, actual: 0, unpaired: 0 };
-      if (cost === null || estimate === null) pair.unpaired += 1;
+      if (actual === null || estimate === null) pair.unpaired += 1;
       else {
         pair.paired += 1;
         pair.estimate += estimate;
-        pair.actual += cost;
+        pair.actual += actual;
       }
       pairs.set(key, pair);
     }
@@ -324,14 +357,16 @@ export function runTelemetryCost(
   const judgeTotal = sumOf(judge);
   const unknown = agentTotal.unknown + judgeTotal.unknown;
   const lines = [
-    ...section(`agent spend (turn-cost rows) by ${args.by}, since ${since} (local time)`, args.by, agent),
+    ...section(`agent spend (turn-cost rows) by ${args.by}, since ${since} (local time)`, args.by, agent, true),
+    `agent cost source: harness price table ${rowsLabel(agentTotal.known - agentTotal.sdkPriced)}, SDK figure ${rowsLabel(agentTotal.sdkPriced)}; ` +
+      `the SDK reported ${formatUsd(agentTotal.sdkSum)} over its ${rowsLabel(agentTotal.sdkKnown)} (#212)`,
     '',
     ...section(`judge spend (judge-call rows) by ${args.by}, since ${since} (local time)`, args.by, judge),
     ...(args.estimate
       ? ['', ...estimateSection(args.by, since, pairs), ...(pairedRows(pairs) > 0 ? staleNote(options.now ?? Date.now) : [])]
       : []),
     '',
-    `TOTAL ${formatUsd(agentTotal.sum + judgeTotal.sum)} (agent ${formatUsd(agentTotal.sum)}, judge ${formatUsd(judgeTotal.sum)})` +
+    `TOTAL ${formatUsd(agentTotal.sum + judgeTotal.sum)} (agent ${formatUsd(agentTotal.sum)}, judge ${formatUsd(judgeTotal.sum)} at the SDK figure)` +
       `; unknown cost, not included: ${rowsLabel(unknown)} (agent ${agentTotal.unknown}, judge ${judgeTotal.unknown})`,
   ];
   streams.stdout(`${lines.join('\n')}\n`);

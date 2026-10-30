@@ -818,6 +818,10 @@ fixture-keyed variant is writable.
 
 No migration: the CHECK constrains `type`, not the payload (#152 D8's reasoning). A withheld call on the `unrewritten` or skipped redaction path carries two `tool-rewrite` rows for one `tool_use_id`; the join to `judge-call` on `tool_use_id` selects `kind = 'withhold'`.
 
+## Amendment (2026-10-30, issue #212, ADR-0043): three turn-cost keys, no m006
+
+`turn-cost` gains `modelUsage` (an array of at most `MODEL_USAGE_MAX` = 16 per-model rows: model, four token counts, web-search requests, the SDK's per-model cost or null), `pricedCostUsd` (the harness-priced figure, a finite number >= 0 or null) and `pricedPriceChecked` (the price table's checked date). All three are optional on read, so rows written before #212 still validate; the store refuses a longer array and re-sanitises each model name on write. No migration: the CHECK constrains `type`, not the payload.
+
 ## Revisit if
 
 - Retention policy: `telemetry_events` has **no TTL/purge** (memory's session

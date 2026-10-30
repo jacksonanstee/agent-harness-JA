@@ -7,6 +7,22 @@ export interface TurnUsage {
   cacheReadInputTokens: number | null;
 }
 
+/**
+ * One model's share of a run, from the SDK result's `modelUsage` (#212). The
+ * same shape as `ModelUsageRow` in src/internal/pricing.ts; restated here so
+ * this file keeps no imports.
+ */
+export interface TurnModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  webSearchRequests: number;
+  /** The SDK's own figure for this model, or null when it sent none. */
+  sdkCostUsd: number | null;
+}
+
 export interface TurnCostPayload {
   model: string;
   ruleId: string;
@@ -75,6 +91,22 @@ export interface TurnCostPayload {
    * because the SDK reports no cost for an aborted run (probe 29/10/2026).
    */
   interrupted?: boolean;
+  /**
+   * Per-model usage from the SDK result (#212), or null when the result carried
+   * none. OPTIONAL so rows written before #212 still validate on read.
+   */
+  modelUsage?: TurnModelUsage[] | null;
+  /**
+   * The run's cost priced by the harness's own table (`priceModelUsage`), or
+   * null when it cannot be priced whole: no usage, an unpriced model, an
+   * unusable count, an overflow, a set cut at MODEL_USAGE_MAX, a long-context
+   * step, or per-model SDK costs that do not cover the SDK total. `costUsd` stays the
+   * SDK's figure, which the bundled CLI at 0.3.201 prices about 1.5x high for
+   * Sonnet 5; `telemetry cost` leads with this one. Optional for the same reason.
+   */
+  pricedCostUsd?: number | null;
+  /** The `checked` date of the price table used for `pricedCostUsd`. */
+  pricedPriceChecked?: string | null;
 }
 
 /**

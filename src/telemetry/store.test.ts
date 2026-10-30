@@ -18,6 +18,9 @@ import {
   TELEMETRY_EVENT_TYPES,
   TOOL_REWRITE_KINDS,
 } from './store.js';
+import { MODEL_USAGE_MAX } from '../internal/limits.js';
+import type { ModelUsageRow } from '../internal/pricing.js';
+import type { TurnModelUsage } from './types.js';
 import {
   HOOK_EVENT_REASON_MAX,
   SKILL_DROP_NAME_MAX,
@@ -494,6 +497,41 @@ describe('createTelemetryStore.query', () => {
       expect(() => rec({ estimateOutputCount: 'x' })).toThrow(/not a valid/);
       expect(() => rec({ estimateOutputDefaulted: 1 })).toThrow(/not a valid/);
       expect(() => rec({ estimatePriceChecked: 5 })).toThrow(/not a valid/);
+    });
+
+    it('accepts the priced-cost fields (#212), all optional, and rejects wrong shapes', () => {
+      const { db, store } = openStore();
+      const base = {
+        model: 'm', ruleId: 'r', costUsd: null, numTurns: null, usage: null, sdkSessionId: null, resultSubtype: null,
+      };
+      const rec = (extra: Record<string, unknown>) =>
+        store.record({ type: 'turn-cost', sessionId: 's', turnId: `t${Math.random()}`, payload: { ...base, ...extra } as never });
+      const mu = { model: 'claude-sonnet-5', inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4, webSearchRequests: 0, sdkCostUsd: 0.5 };
+      expect(rec({ modelUsage: [mu], pricedCostUsd: 0.33, pricedPriceChecked: '2026-10-19' }).ok).toBe(true);
+      expect(rec({ modelUsage: [], pricedCostUsd: null, pricedPriceChecked: null }).ok).toBe(true);
+      expect(rec({ modelUsage: null }).ok).toBe(true);
+      expect(rec({ modelUsage: [{ ...mu, sdkCostUsd: null }] }).ok).toBe(true);
+      expect(() => rec({ pricedCostUsd: -0.01 })).toThrow(/not a valid turn-cost payload/);
+      expect(() => rec({ pricedCostUsd: '0.3' })).toThrow(/not a valid/);
+      expect(() => rec({ pricedPriceChecked: 5 })).toThrow(/not a valid/);
+      expect(() => rec({ modelUsage: {} })).toThrow(/not a valid/);
+      expect(() => rec({ modelUsage: [{ ...mu, model: 7 }] })).toThrow(/not a valid/);
+      for (const key of ['inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens', 'webSearchRequests']) {
+        expect(() => rec({ modelUsage: [{ ...mu, [key]: -1 }] }), key).toThrow(/not a valid/);
+        expect(() => rec({ modelUsage: [{ ...mu, [key]: Number.NaN }] }), key).toThrow(/not a valid/);
+      }
+      expect(() => rec({ modelUsage: [{ ...mu, sdkCostUsd: -1 }] })).toThrow(/not a valid/);
+      // Bounded: the stream is untrusted, so a flood of model keys is refused, not stored.
+      expect(rec({ modelUsage: Array.from({ length: MODEL_USAGE_MAX }, () => mu) }).ok).toBe(true);
+      expect(() => rec({ modelUsage: Array.from({ length: MODEL_USAGE_MAX + 1 }, () => mu) })).toThrow(/not a valid/);
+      // A model key is SDK text reaching the sinks, so it is sanitised like the other strings.
+      const tid = 'bidi-row';
+      store.record({ type: 'turn-cost', sessionId: 's', turnId: tid, payload: { ...base, modelUsage: [{ ...mu, model: 'claude\u001b[31msonnet' }] } as never });
+      const back = store.query({ type: 'turn-cost' }).find((e) => e.turnId === tid);
+      const model = (back?.payload as { modelUsage?: { model: string }[] }).modelUsage?.[0]?.model;
+      expect(model).toBeDefined();
+      expect(model).not.toContain('\u001b');
+      void db;
     });
 
     it('accepts the budget fields, both optional, and rejects wrong types (#187)', () => {
@@ -1510,3 +1548,9 @@ describe('tool-rewrite events and the post-tool-failure phase', () => {
     expect([...TOOL_REWRITE_KINDS].sort()).toEqual(['redact', 'withhold']);
   });
 });
+
+// #212 code review: the two row shapes are restated, so pin them to each other at the type level.
+// Strict equality, not mutual assignability, which an added OPTIONAL field passes both ways.
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const ROW_SHAPES_AGREE: Same<ModelUsageRow, TurnModelUsage> = true;
+void ROW_SHAPES_AGREE;

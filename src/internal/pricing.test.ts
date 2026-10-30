@@ -6,7 +6,10 @@ import {
   estimateRunCostUsd,
   PRICE_MAX_AGE_DAYS,
   PRICE_TABLE,
+  priceModelUsage,
   stalePriceRows,
+  WEB_SEARCH_USD_PER_REQUEST,
+  type ModelUsageRow,
   type PriceRow,
 } from './pricing.js';
 
@@ -138,5 +141,83 @@ describe('estimateRunCostUsd', () => {
 
   it('the shipped rows carry no long-context step (none listed for these models on the source page)', () => {
     for (const r of PRICE_TABLE) expect(r.longContext).toBeNull();
+  });
+});
+
+describe('priceModelUsage (#212): the harness prices a run from its own table, per model', () => {
+  const usageRow = (model: string, over: Partial<ModelUsageRow> = {}): ModelUsageRow => ({
+    model,
+    inputTokens: 1_000,
+    outputTokens: 2_000,
+    cacheReadInputTokens: 30_000,
+    cacheCreationInputTokens: 4_000,
+    webSearchRequests: 0,
+    sdkCostUsd: 9.99,
+    ...over,
+  });
+  /** Re-derived from the table row, never a hand-copied dollar figure. */
+  const byHand = (model: string, u: ModelUsageRow): number => {
+    const r = row(model);
+    return (
+      (u.inputTokens * r.inputUsdPerMTok +
+        u.outputTokens * r.outputUsdPerMTok +
+        u.cacheReadInputTokens * r.cacheReadUsdPerMTok +
+        u.cacheCreationInputTokens * r.cacheWriteUsdPerMTok) /
+        1_000_000 +
+      u.webSearchRequests * WEB_SEARCH_USD_PER_REQUEST
+    );
+  };
+
+  it('prices each token class at its own rate, ignoring the SDK figure', () => {
+    const u = usageRow('claude-sonnet-5');
+    expect(priceModelUsage([u])).toBeCloseTo(byHand('claude-sonnet-5', u), 12);
+    expect(priceModelUsage([u])).not.toBeCloseTo(u.sdkCostUsd as number, 2);
+  });
+
+  it('sums every model in the run (a WebFetch digest or subagent on another model counts)', () => {
+    const main = usageRow('claude-sonnet-5');
+    const digest = usageRow('claude-haiku-4-5', { inputTokens: 500, outputTokens: 80, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    expect(priceModelUsage([main, digest])).toBeCloseTo(byHand('claude-sonnet-5', main) + byHand('claude-haiku-4-5', digest), 12);
+  });
+
+  it('charges web searches at the page rate ($10 per 1,000)', () => {
+    expect(WEB_SEARCH_USD_PER_REQUEST).toBe(0.01);
+    const none = usageRow('claude-sonnet-5');
+    const three = usageRow('claude-sonnet-5', { webSearchRequests: 3 });
+    expect((priceModelUsage([three]) as number) - (priceModelUsage([none]) as number)).toBeCloseTo(0.03, 12);
+  });
+
+  it('matches a dated model id to its row, and only a trailing date (claude-opus-5-5 is not claude-opus-5)', () => {
+    const dated = usageRow('claude-haiku-4-5-20251001');
+    expect(priceModelUsage([dated])).toBeCloseTo(byHand('claude-haiku-4-5', dated), 12);
+    expect(priceModelUsage([usageRow('claude-opus-5-5')])).toBeNull();
+    expect(priceModelUsage([usageRow('claude-sonnet-5-preview')])).toBeNull();
+  });
+
+  it('is null, never a partial sum, when any model is unpriced; null for no rows', () => {
+    expect(priceModelUsage([usageRow('claude-sonnet-5'), usageRow('some-other-model')])).toBeNull();
+    expect(priceModelUsage([])).toBeNull();
+  });
+
+  it('is null for a non-finite or negative count (a malformed stream never prices as zero)', () => {
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      expect(priceModelUsage([usageRow('claude-sonnet-5', { outputTokens: bad })])).toBeNull();
+      expect(priceModelUsage([usageRow('claude-sonnet-5', { webSearchRequests: bad })])).toBeNull();
+    }
+  });
+
+  it('is null, never an overflow, for a huge but finite count (the row must stay writable)', () => {
+    expect(priceModelUsage([usageRow('claude-sonnet-5', { inputTokens: 1e308 })])).toBeNull();
+    expect(priceModelUsage([usageRow('claude-sonnet-5', { inputTokens: 1e300 })])).not.toBeNull();
+  });
+
+  it('is null when a row has a long-context step: cumulative usage cannot show a per-request crossing', () => {
+    const base = row('claude-sonnet-5');
+    const rates = { inputUsdPerMTok: 4, outputUsdPerMTok: 20, cacheWriteUsdPerMTok: 5, cacheReadUsdPerMTok: 0.4 };
+    for (const overPromptTokens of [1, 34_999, 35_000, 10_000_000]) {
+      const stepped: PriceRow = { ...base, longContext: { overPromptTokens, rates } };
+      expect(priceModelUsage([usageRow('claude-sonnet-5')], [stepped]), String(overPromptTokens)).toBeNull();
+    }
+    expect(priceModelUsage([usageRow('claude-sonnet-5')], [base])).not.toBeNull();
   });
 });
