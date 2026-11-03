@@ -252,9 +252,6 @@ describe('createPermissionEvaluator', () => {
         rule({ tool: '*', match: 'rm *', decision: 'deny' }),
       ],
     });
-    expect(evaluator.evaluate('Artifact', { file_path: '/etc/passwd', favicon: 'x' }).decision).toBe(
-      'deny',
-    );
     expect(evaluator.evaluate('Workflow', { scriptPath: '/etc/../etc/passwd' }).decision).toBe('deny');
     expect(evaluator.evaluate('EnterWorktree', { path: '/etc' }).decision).toBe('deny');
     expect(

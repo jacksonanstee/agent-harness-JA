@@ -29,8 +29,9 @@ export const MAX_SKILL_PROMPT_CHARS = 256_000;
  * when its config names none (issue #187, ADR-0041, H-6). Default-on: the
  * session applies it, so `run`, golden eval tasks and library callers are all
  * capped. The SDK checks it AFTER each turn against its own `total_cost_usd`,
- * so a run can overshoot by up to one turn, and that cost reads ~1.5x list for
- * claude-sonnet-5 on SDK 0.3.201 (#212), so the cap trips early, not late.
+ * so a run can overshoot by up to one turn. On SDK 0.3.201 that cost read ~1.5x
+ * list for claude-sonnet-5 (#212), so the cap tripped early; 0.3.312 prices it
+ * at list (keyed run, 03/11/2026, #219).
  */
 export const DEFAULT_MAX_BUDGET_USD = 1;
 

@@ -28,7 +28,7 @@ It also protects the `run --db` file and its SQLite sidecars (`-wal`, `-shm`, `-
 
 The other path tools carry `writes: false` and pass to the next gate:
 - `Read`, `Glob` and `Grep` read;
-- `Artifact` and `Projects` read for upload;
+- `Artifact` and `Projects` read for upload *(amended 03/11/2026, #219, ADR-0044: Artifact has since left the table; it is refused by name)*;
 - `Workflow` reads and runs a script;
 - `EnterWorktree` switches into a worktree, or creates one by `name`, so a checkout could in principle be placed under a protected directory (unverified where the CLI roots it; the harm is bounded, because it cannot overwrite an existing file).
 
@@ -79,7 +79,7 @@ The guard belongs to the CLI's composition, not to `createSession`. A library ca
 - **A link made in the gap between the check and the write, and hard links, are not caught.** The check runs at pre-tool time, and the SDK writes later. A link that appears between the two (TOCTOU), for example one made by a background process an earlier call started, is not seen. A hard link has its own real path, and only an inode comparison would catch one. The guarded settings read (ADR-0034 decisions 3 and 5) still refuses a symlinked settings file at the next load.
 - **Over-matching is accepted.** On the default layout, any bare `skills` argument, quoted or not, is the folder, so `ls skills`, `grep skills README.md`, `git commit -m "skills"`, `git checkout skills`, `npm run skills` and a here-doc body with the word on its own are all denied (only quoted text with a space in it passes), as is a command that names a protected path for an innocent reason (`grep x ~/.harness/settings.json`). A write under a real-path alias of a protected directory is denied too. Failing closed is the intended direction, and the operator can always edit the files themselves.
 - **Per-call filesystem reads.** Each writer target and each candidate path in a command is resolved with one `lstat` per component plus one `readlink` per link, at most 40 links per path in total.
-- **Telemetry shifts by one handler.** The permission hook is now handler 1, not 0, and the sandbox handler 2. So `handlerIndex` in `granted-by-rule` and `denied-by-hook` rows moves by one for them; a pre-tool handler never produces a `hook-error` row. A self-protection deny is a `denied-by-hook` row with `handlerIndex` 0 and the fixed reason. Nothing in the harness keys on these indices (ADR-0008 defines them as registration order).
+- **Telemetry shifts by one handler.** The permission hook is now handler 1, not 0, and the sandbox handler 2. *(Amended 03/11/2026, issues #211 and #219, ADR-0044: two more built-in denies now precede them, so the permission hook is handler 3 and the sandbox handler 4.)* So `handlerIndex` in `granted-by-rule` and `denied-by-hook` rows moves by one for them; a pre-tool handler never produces a `hook-error` row. A self-protection deny is a `denied-by-hook` row with `handlerIndex` 0 and the fixed reason. Nothing in the harness keys on these indices (ADR-0008 defines them as registration order).
 - **ADR-0041's later-run gap is closed for the named paths.** A model-authored `Write` or `Edit` to `~/.harness/settings.json`, through any alias that exists when the call is checked, is now denied, and so is a Bash command that names it in a form D4 rewrites. A path built at run time, or a spelling D4 does not rewrite, is still the residual above. The budget start line ADR-0041 added stays as the visible backstop on `run`.
 
 ## Alternatives considered

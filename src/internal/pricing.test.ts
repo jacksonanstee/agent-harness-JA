@@ -15,7 +15,7 @@ import {
 
 const DAY_MS = 86_400_000;
 /** Pinned clock: the day the table was checked. Tests never read the real clock. */
-const PINNED_NOW = Date.parse('2026-10-19T00:00:00Z');
+const PINNED_NOW = Date.parse('2026-11-03T00:00:00Z');
 
 function row(model: string): PriceRow {
   const found = PRICE_TABLE.find((r) => r.model === model);
@@ -139,8 +139,17 @@ describe('estimateRunCostUsd', () => {
     expect(over).toBeCloseTo((1001 * 11 + 1001 * 7 + 100 * 90) / 1_000_000, 12);
   });
 
-  it('the shipped rows carry no long-context step (none listed for these models on the source page)', () => {
-    for (const r of PRICE_TABLE) expect(r.longContext).toBeNull();
+  it('only Claude Haiku 5.5 carries a long-context step, as on the source page (#219)', () => {
+    expect(PRICE_TABLE.filter((r) => r.longContext !== null).map((r) => r.model)).toEqual(['claude-haiku-5-5']);
+  });
+
+  // Read from the "Model pricing" table of the source page on 03/11/2026; prompts over 100,000 tokens pay the step.
+  it('prices Claude Haiku 5.5 at the page rates, with its step at 100,000 prompt tokens', () => {
+    const r = row('claude-haiku-5-5');
+    expect([r.inputUsdPerMTok, r.outputUsdPerMTok, r.cacheWriteUsdPerMTok, r.cacheReadUsdPerMTok]).toEqual([0.1, 0.5, 0.125, 0.01]);
+    expect(r.longContext?.overPromptTokens).toBe(100_000);
+    const s = r.longContext?.rates;
+    expect([s?.inputUsdPerMTok, s?.outputUsdPerMTok, s?.cacheWriteUsdPerMTok, s?.cacheReadUsdPerMTok]).toEqual([0.5, 2.5, 0.625, 0.05]);
   });
 });
 
@@ -211,13 +220,29 @@ describe('priceModelUsage (#212): the harness prices a run from its own table, p
     expect(priceModelUsage([usageRow('claude-sonnet-5', { inputTokens: 1e300 })])).not.toBeNull();
   });
 
-  it('is null when a row has a long-context step: cumulative usage cannot show a per-request crossing', () => {
+  // #219 (ADR-0043 amended): a request's prompt (input + cache read + cache write) can never exceed the run's
+  // cumulative prompt for that model, so a cumulative total at or under the step proves every request paid
+  // base rates. Over it, one request may have crossed and the usage cannot say which: null, as before.
+  // usageRow's cumulative prompt is 1,000 + 30,000 + 4,000 = 35,000 tokens.
+  it('prices a long-context row at base rates only when the cumulative prompt is at or under its step', () => {
     const base = row('claude-sonnet-5');
     const rates = { inputUsdPerMTok: 4, outputUsdPerMTok: 20, cacheWriteUsdPerMTok: 5, cacheReadUsdPerMTok: 0.4 };
-    for (const overPromptTokens of [1, 34_999, 35_000, 10_000_000]) {
-      const stepped: PriceRow = { ...base, longContext: { overPromptTokens, rates } };
-      expect(priceModelUsage([usageRow('claude-sonnet-5')], [stepped]), String(overPromptTokens)).toBeNull();
+    const stepped = (overPromptTokens: number): PriceRow => ({ ...base, longContext: { overPromptTokens, rates } });
+    const u = usageRow('claude-sonnet-5');
+    for (const atOrUnder of [35_000, 35_001, 10_000_000]) {
+      expect(priceModelUsage([u], [stepped(atOrUnder)]), String(atOrUnder)).toBeCloseTo(byHand('claude-sonnet-5', u), 12);
     }
-    expect(priceModelUsage([usageRow('claude-sonnet-5')], [base])).not.toBeNull();
+    for (const over of [1, 34_999]) expect(priceModelUsage([u], [stepped(over)]), String(over)).toBeNull();
+    // Output and web searches are not prompt: a huge output never pushes a run over the step.
+    const loud = usageRow('claude-sonnet-5', { outputTokens: 10_000_000, webSearchRequests: 3 });
+    expect(priceModelUsage([loud], [stepped(35_000)])).toBeCloseTo(byHand('claude-sonnet-5', loud), 9);
+  });
+
+  // The keyed run of 03/11/2026 (#219): a Sonnet 5 run whose CLI also made one Haiku 5.5 side call.
+  it('prices the observed SDK 0.3.312 run (Sonnet 5 plus a Haiku 5.5 side call) to the SDK figure', () => {
+    const haiku = usageRow('claude-haiku-5-5', { inputTokens: 1174, outputTokens: 14, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    const sonnet = usageRow('claude-sonnet-5', { inputTokens: 2, outputTokens: 4, cacheReadInputTokens: 0, cacheCreationInputTokens: 20_318 });
+    expect(priceModelUsage([haiku])).toBeCloseTo(0.0001244, 10);
+    expect(priceModelUsage([haiku, sonnet])).toBeCloseTo(0.0509634, 10);
   });
 });

@@ -264,13 +264,14 @@ describe('sandboxHook', () => {
     await expect(hook(preTool('Glob', { pattern: '*', path: '/safe/sub' }))).resolves.toBeUndefined();
   });
 
-  it('gates the five tools the table lacked at the pinned SDK; they passed both gates (issue #86)', async () => {
-    // Verified 2026-08-25: at 0.3.201 these five declare a path or command
+  it('gates the tools the table lacked at the pinned SDK; they passed both gates (issue #86)', async () => {
+    // Verified 2026-08-25: at 0.3.201 five tools declared a path or command
     // field and were never in the table, so the sandbox returned early on each
-    // as an unknown tool. Workflow is proven exposed in headless runs.
-    await expect(
-      hook(preTool('Artifact', { file_path: '/etc/passwd', favicon: 'x' })),
-    ).rejects.toThrowError(SandboxViolation);
+    // as an unknown tool. Workflow is proven exposed in headless runs. Artifact,
+    // the fifth, left the table in #219: the built-in ungated-tool deny refuses
+    // it by name, so the sandbox now passes it as an unknown tool again. That
+    // pass is pinned at the end of this test, so re-adding a table entry is a
+    // visible act.
     await expect(hook(preTool('Workflow', { scriptPath: '/etc/passwd' }))).rejects.toThrowError(
       SandboxViolation,
     );
@@ -284,12 +285,13 @@ describe('sandboxHook', () => {
       hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' })),
     ).rejects.toThrowError(SandboxViolation);
     // An entry is a gate, not a blanket deny: allowlisted targets pass.
-    await expect(
-      hook(preTool('Artifact', { file_path: '/safe/page.html', favicon: 'x' })),
-    ).resolves.toBeUndefined();
     await expect(hook(preTool('Workflow', { scriptPath: '/safe/wf.js' }))).resolves.toBeUndefined();
     await expect(
       hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'git status' })),
+    ).resolves.toBeUndefined();
+    // #219: no table entry, so the sandbox does not see Artifact; ungated-tool-deny.test.ts pins the refusal.
+    await expect(
+      hook(preTool('Artifact', { file_path: '/etc/passwd', favicon: 'x' })),
     ).resolves.toBeUndefined();
   });
 

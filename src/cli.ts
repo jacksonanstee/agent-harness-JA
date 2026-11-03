@@ -511,8 +511,9 @@ const BUDGET_GAP_TOLERANCE = 0.05;
  * The stderr line saying the dollar cap is enforced on the SDK's own cost
  * figure when that figure differs from the harness-priced one by more than
  * BUDGET_GAP_TOLERANCE on this run (#212, D4), or null. The bundled CLI at
- * 0.3.201 prices Sonnet 5 at Sonnet 4.x rates, so a $1.00 cap stops near
- * $0.67 at list prices. Read from the run itself, never from a stored reading
+ * 0.3.201 priced Sonnet 5 at Sonnet 4.x rates, so a $1.00 cap stopped near
+ * $0.67 at list prices; 0.3.312 prices it at list (keyed run, 03/11/2026,
+ * #219), so the warning stays quiet there. Read from the run itself, never from a stored reading
  * of the CLI's prices, so it goes quiet once the SDK's figure is right.
  */
 export function formatBudgetGapLine(

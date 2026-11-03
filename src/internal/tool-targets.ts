@@ -44,8 +44,8 @@ export interface ToolTarget {
    * The tool writes a LOCAL file at the target (issue #188, ADR-0042): the
    * self-protection deny applies to it. Required on every entry, so a new
    * tool cannot be added without the choice (the SDK carries no read/write
-   * flag to derive it from). Read, Glob and Grep read; Artifact and Projects
-   * read for upload; Workflow reads and runs a script; EnterWorktree switches
+   * flag to derive it from). Read, Glob and Grep read; Projects reads for
+   * upload; Workflow reads and runs a script; EnterWorktree switches
    * into (or creates) a worktree. Always false for `kind: 'command'`:
    * commands are covered by kind.
    */
@@ -60,8 +60,6 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
   NotebookEdit: { field: 'notebook_path', kind: 'path', writes: true },
   Glob: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
   Grep: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
-  // Issue #86: declared at the pinned SDK since day one, never in the table.
-  Artifact: { field: 'file_path', kind: 'path', writes: false },
   Workflow: { field: 'scriptPath', kind: 'path', writes: false },
   Monitor: { field: 'command', kind: 'command', writes: false },
   EnterWorktree: { field: 'path', kind: 'path', writes: false },
@@ -116,6 +114,94 @@ export const ACKNOWLEDGED_NON_TARGET_FIELDS: Readonly<
     path:
       'a remote knowledge-base document key ("project_read/project_write/project_delete: doc path" ' +
       'in the SDK declaration), not a filesystem path; the filesystem field is local_path',
+  },
+};
+
+/**
+ * Where a deny entry's premise comes from. `declared`: sdk-tools.d.ts declares
+ * the tool. `binaryNeedle`: the SDK types do NOT declare it, but the bundled
+ * native CLI names it; the parity test scans the
+ * installed platform binary for the needle and FAILS if the binary is missing
+ * or the needle is gone, so the evidence is checked, not asserted (#219).
+ * The table itself stays typed-surface-only (R-9): binary evidence is admitted
+ * only to DENY more, never to gate or allow.
+ */
+export type DenyEvidence = 'declared' | { readonly binaryNeedle: string };
+
+/** A tool the harness refuses by name, whatever the rules say, with the evidence for its premise. */
+export interface DeniedTool {
+  readonly reason: string;
+  readonly evidence: DenyEvidence;
+}
+
+/**
+ * Tools that reach local files in ways no harness gate can check, refused by
+ * name by `ungatedToolDenyHook` (issue #219). At SDK 0.3.312 that is the
+ * Artifact family: Artifact reads and writes local files through inputs the
+ * one-field table cannot carry (`file_paths`, `out_dir`, `read_asset`'s default
+ * folder, and the undeclared `files`, `paths`, `edits`, `read_file`), and a
+ * consolidated toolset, switched by `CLAUDE_CODE_ARTIFACT_TOOLSET` or a remote
+ * flag, rewrites the input AFTER the pre-tool hook sees it and adds three more
+ * tools. A per-field deny list lost that race twice in review, so the family
+ * is refused whole. A refused tool has no table entry, the same rule as a
+ * `denied` code-executing tool: the parity test counts the refusal as covering
+ * its target fields, and fails if one is re-added to the table.
+ */
+export const DENIED_TOOLS: Readonly<Record<string, DeniedTool>> = {
+  Artifact: {
+    reason: 'publishes local files to claude.ai and saves files locally through inputs the table cannot gate',
+    evidence: 'declared',
+  },
+  ArtifactData: {
+    reason: 'consolidated-toolset tool: reads local JSON files (file_path, writes[]) and saves into out_dir',
+    evidence: { binaryNeedle: '"ArtifactData"' },
+  },
+  ArtifactComments: {
+    reason: 'consolidated-toolset tool for artifact comment threads; refused with its family',
+    evidence: { binaryNeedle: '"ArtifactComments"' },
+  },
+  ArtifactCheck: {
+    reason: 'consolidated-toolset tool for artifact checks; refused with its family',
+    evidence: { binaryNeedle: '"ArtifactCheck"' },
+  },
+};
+
+/**
+ * MCP tool-name prefixes refused whole, for a built-in MCP server the bundled
+ * CLI runs itself. The CLI ships Artifact a second time as its own stdio MCP
+ * server `claude-artifacts` (spawned as `claude --eval-artifacts-server`), whose
+ * tools stand in for the built-in and reach the pre-tool hook as
+ * `mcp__claude-artifacts__<tool>`, so the exact-name list above cannot see them
+ * (security review round 3, #219). The needle is the server-name constant
+ * itself, so a renamed server fails the parity test instead of slipping past.
+ * The underscore spelling is listed too, in case a build normalises the name. A prefix must be a whole
+ * `mcp__<server>__` segment; MCP tools are never declared in sdk-tools.d.ts, so
+ * evidence is always a binary needle.
+ */
+export const DENIED_TOOL_PREFIXES: Readonly<Record<string, DeniedTool>> = {
+  'mcp__claude-artifacts__': {
+    reason: 'the CLI-owned artifacts MCP server: the Artifact capability under MCP tool names',
+    evidence: { binaryNeedle: '"claude-artifacts"' },
+  },
+  'mcp__claude_artifacts__': {
+    reason: 'the same server under an underscore-normalised name',
+    evidence: { binaryNeedle: '"claude-artifacts"' },
+  },
+};
+
+/**
+ * CODE_EXECUTING_TOOLS members that sdk-tools.d.ts no longer declares but that
+ * the bundled native CLI still names (whether it still registers them is
+ * bytecode, so unread). The parity test accepts an
+ * undeclared member only through this list, scans the installed binary for the
+ * needle, and fails once the SDK declares the tool again, so the exception
+ * cannot outlive its cause (issue #219, ADR-0044 D3). Binary evidence keeps a DENY in
+ * place; it never adds a tool to the table (R-9).
+ */
+export const BINARY_ONLY_TOOLS: Readonly<Record<string, { readonly binaryNeedle: string; readonly note: string }>> = {
+  REPL: {
+    binaryNeedle: 'CLAUDE_CODE_REPL',
+    note: 'undeclared from SDK 0.3.312; the binary still holds two "REPL" tool-name constants and reads CLAUDE_CODE_REPL',
   },
 };
 

@@ -30,7 +30,7 @@ export type GoldenFailureKind = (typeof GOLDEN_FAILURE_KINDS)[number];
 
 /** Volatile partition — informational, never baseline-diffed. */
 export interface RowVolatile {
-  /** The SDK's own figure (`total_cost_usd`); about 1.5x list for Sonnet 5 at SDK 0.3.201. */
+  /** The SDK's own figure (`total_cost_usd`); about 1.5x list for Sonnet 5 at SDK 0.3.201, list at 0.3.312 (#219). */
   costUsd: number | null;
   /**
    * The harness-priced figure (`SessionResult.pricedCostUsd`, ADR-0043, #213),

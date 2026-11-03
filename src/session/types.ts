@@ -539,8 +539,8 @@ export interface SessionResult {
   /**
    * The run's cost priced by the harness's own table from the result's
    * per-model usage (#212), or null when it cannot be priced whole. `costUsd`
-   * above is the SDK's figure, which the bundled CLI at 0.3.201 prices about
-   * 1.5x high for Sonnet 5.
+   * above is the SDK's figure, which the bundled CLI at 0.3.201 priced about
+   * 1.5x high for Sonnet 5 (0.3.312 prices it at list, keyed run 03/11/2026, #219).
    */
   pricedCostUsd: number | null;
   /** The dollar ceiling this run passed the SDK (issue #187): the config's, else the default. */

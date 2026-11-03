@@ -10,8 +10,8 @@ describe('TOOL_TARGET_FIELDS', () => {
     // surface is COMPLETE (issue #86: five tools were missing for seven weeks
     // under this test), which is tool-targets.sdk-parity.test.ts's job.
     // MultiEdit left the list in #86: the pinned SDK never declared it.
+    // Artifact left the table in #219: it is refused by name (DENIED_TOOLS), and a refused tool has no entry.
     expect(Object.keys(TOOL_TARGET_FIELDS).sort()).toEqual([
-      'Artifact',
       'Bash',
       'Edit',
       'EnterWorktree',

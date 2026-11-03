@@ -25,7 +25,7 @@ const SDK_TOOLS_DTS = join(process.cwd(), 'node_modules', '@anthropic-ai', 'clau
 /**
  * Declared fields whose type the parser cannot read as a pure string-literal
  * union are ignored by design, and listed here so none is dropped silently.
- * Empty at SDK 0.3.201: every literal-bearing field parsed.
+ * Empty at SDK 0.3.312: every literal-bearing field parsed.
  */
 const UNPARSEABLE_FIELDS: readonly string[] = [];
 

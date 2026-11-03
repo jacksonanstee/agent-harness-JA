@@ -122,7 +122,7 @@ describe('the run path is isolated by default (#140, ADR-0040 D1; spec 6a.2, def
         event: 'pre-tool',
         tool: 'Bash',
         reason: 'permission: allow Bash [rule 0, user]',
-        handlerIndex: 2, // self-protection (#188), code-execution deny (#211), then permissions
+        handlerIndex: 3, // self-protection (#188), code-execution deny (#211), ungated-tool deny (#219), then permissions
       });
     } finally {
       handle.close();

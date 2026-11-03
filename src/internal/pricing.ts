@@ -26,14 +26,23 @@ export interface PriceRow extends PriceRates {
   checked: string;
   /**
    * A per-model price step by prompt length, or null when the source page lists
-   * none. The page lists one only for Claude Haiku 5.5, which is not a model
-   * this harness names; the field exists so a future row can carry one.
+   * none. The page lists one only for Claude Haiku 5.5: a request whose prompt
+   * (input + cache read + cache write) is over the threshold pays `rates`.
    */
   longContext: { overPromptTokens: number; rates: PriceRates } | null;
 }
 
 const PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing';
-const CHECKED = '2026-10-19';
+const CHECKED = '2026-11-03';
+
+/**
+ * Models the harness never routes to but the bundled CLI calls on its own in a
+ * run, so their usage arrives in `modelUsage` and must be priced or the whole
+ * run falls back to the SDK figure (#219: the SDK 0.3.312 CLI made a Haiku 5.5
+ * side call in each of three keyed runs on 03/11/2026). pricing-coverage.test.ts
+ * allows a PRICE_TABLE row only for a router model or one listed here.
+ */
+export const CLI_SIDE_CALL_MODELS: readonly string[] = Object.freeze(['claude-haiku-5-5']);
 
 /** The date every PRICE_TABLE row was last checked; stored beside a harness-priced cost (#212). */
 export const PRICE_TABLE_CHECKED = CHECKED;
@@ -41,7 +50,11 @@ export const PRICE_TABLE_CHECKED = CHECKED;
 const priced = (r: Omit<PriceRow, 'source' | 'checked' | 'longContext'>): Readonly<PriceRow> =>
   Object.freeze({ ...r, source: PRICING_URL, checked: CHECKED, longContext: null });
 
-/** Rows were read from the "Model pricing" table of PRICING_URL on CHECKED. */
+/**
+ * Rows were read from the "Model pricing" table of PRICING_URL on CHECKED
+ * (every row re-read on 03/11/2026 when Haiku 5.5 was added, #219: the SDK
+ * 0.3.312 CLI made a Haiku 5.5 side call in each of three keyed runs).
+ */
 export const PRICE_TABLE: readonly Readonly<PriceRow>[] = Object.freeze([
   priced({
     model: 'claude-haiku-4-5',
@@ -49,6 +62,19 @@ export const PRICE_TABLE: readonly Readonly<PriceRow>[] = Object.freeze([
     cacheWriteUsdPerMTok: 1.25,
     cacheReadUsdPerMTok: 0.1,
     outputUsdPerMTok: 5,
+  }),
+  Object.freeze({
+    model: 'claude-haiku-5-5',
+    inputUsdPerMTok: 0.1,
+    cacheWriteUsdPerMTok: 0.125,
+    cacheReadUsdPerMTok: 0.01,
+    outputUsdPerMTok: 0.5,
+    source: PRICING_URL,
+    checked: CHECKED,
+    longContext: {
+      overPromptTokens: 100_000,
+      rates: { inputUsdPerMTok: 0.5, cacheWriteUsdPerMTok: 0.625, cacheReadUsdPerMTok: 0.05, outputUsdPerMTok: 2.5 },
+    },
   }),
   priced({
     model: 'claude-sonnet-5',
@@ -211,13 +237,18 @@ function rowFor(model: string, table: readonly Readonly<PriceRow>[]): Readonly<P
 
 /**
  * The run's cost priced by the harness's own dated table (#212), summed over
- * every model the SDK reports. The bundled CLI at 0.3.201 prices Sonnet 5 at
- * Sonnet 4.x rates, so its `total_cost_usd` reads about 1.5x high; this is the
- * figure `telemetry cost` leads with. Null, never a partial sum, when there are
- * no rows, any model is unpriced, any count is not a finite number >= 0, the
- * total overflows (a huge but finite count), or a row has a long-context step:
- * `modelUsage` is cumulative over the run, so it cannot show whether any one
- * request crossed a per-request threshold.
+ * every model the SDK reports. The bundled CLI at 0.3.201 priced Sonnet 5 at
+ * Sonnet 4.x rates (0.3.312 prices it at list, observed 03/11/2026, #219); this
+ * is the figure `telemetry cost` leads with. Null, never a partial sum, when
+ * there are no rows, any model is unpriced, any count is not a finite number
+ * >= 0, or the total overflows (a huge but finite count).
+ *
+ * A row with a long-context step prices at base rates only when the model's
+ * cumulative prompt for the run (input + cache read + cache write) is at or
+ * under the step: no single request's prompt can exceed the run's total, so
+ * none crossed. Over it, `modelUsage` cannot show which request crossed, so
+ * the run is null (#212's rule, narrowed in #219, ADR-0043 amended). The proof
+ * assumes `modelUsage` counts every request for the model.
  */
 export function priceModelUsage(
   rows: readonly ModelUsageRow[],
@@ -228,7 +259,9 @@ export function priceModelUsage(
   for (const u of rows) {
     const row = rowFor(u.model, table);
     const counts = [u.inputTokens, u.outputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens, u.webSearchRequests];
-    if (row === undefined || row.longContext !== null || !counts.every(usable)) return null;
+    if (row === undefined || !counts.every(usable)) return null;
+    const prompt = u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
+    if (row.longContext !== null && prompt > row.longContext.overPromptTokens) return null;
     total +=
       (u.inputTokens * row.inputUsdPerMTok +
         u.outputTokens * row.outputUsdPerMTok +

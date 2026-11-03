@@ -75,6 +75,10 @@ export {
   codeExecutionDenyHook,
   CodeExecutionDenied,
   CODE_EXECUTION_DENY_REASON,
+  ungatedToolDenyHook,
+  UngatedToolDenied,
+  UNGATED_TOOL_DENY_REASON,
+  builtInDenyHooks,
 } from './security/index.js';
 export type {
   Confidence,

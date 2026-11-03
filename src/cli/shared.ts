@@ -32,7 +32,7 @@ import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, Sandbo
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
-import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings, codeExecutionDenyHook, selfProtectionHook } from '../security/index.js';
+import { BudgetSettingsError, hasBudgetKey, parseBudgetSettings, builtInDenyHooks } from '../security/index.js';
 import type { ProtectedRoots } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -486,11 +486,12 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 
 /**
  * Registers the security pre-tool hooks in their ONE shipped order, for every
- * command that builds a session (`run`, `eval`). The built-in self-protection
- * deny comes first (#188, ADR-0042): it reads no settings, so no rule, grant
- * or absent sandbox dimension can let a call it denies through, and its
- * reason is the one reported. The built-in code-execution deny (#211) is
- * second, for the same reason. Then permissions, then the sandbox as the
+ * command that builds a session (`run`, `eval`). The three built-in denies
+ * come first, from `builtInDenyHooks` in its order: self-protection (#188,
+ * ADR-0042), the code-execution deny (#211), the ungated-tool deny (#219,
+ * ADR-0044). They read no settings, so no rule, grant or absent sandbox
+ * dimension can let a call they deny through, and their reason is the one
+ * reported. Then permissions, then the sandbox as the
  * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more
  * actionable, so they get first say (ADR-0015 section 4). The sandbox also
@@ -502,8 +503,7 @@ export function registerSecurityHooks(
   security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox'>,
   protectedRoots: ProtectedRoots,
 ): void {
-  hooks.register('pre-tool', selfProtectionHook(protectedRoots));
-  hooks.register('pre-tool', codeExecutionDenyHook());
+  for (const deny of builtInDenyHooks(protectedRoots)) hooks.register('pre-tool', deny);
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }

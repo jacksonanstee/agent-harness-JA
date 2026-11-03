@@ -174,8 +174,10 @@ describe('policy corpus: shape', () => {
     // #140: the two registrations live in ONE function (registerSecurityHooks); both
     // command sites must call it, and it must register permissions before the sandbox.
     // #188 (ADR-0042): the built-in self-protection deny is registered FIRST.
+    // #219 (ADR-0044 D4): the three built-in denies come from builtInDenyHooks,
+    // whose own order (self-protection first) built-in-denies.test.ts pins.
     const expected = [
-      "hooks.register('pre-tool', selfProtectionHook(protectedRoots));",
+      "for (const deny of builtInDenyHooks(protectedRoots)) hooks.register('pre-tool', deny);",
       "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));",
       "hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));",
     ];
@@ -185,13 +187,13 @@ describe('policy corpus: shape', () => {
     const code = (file: string): string =>
       readFileSync(new URL(file, import.meta.url), 'utf8')
         .split('\n')
-        .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+        .filter((line) => !/^(?:\/\/|\/\*|\*)/.test(line.trimStart()))
         .join('\n');
     const shared = code('../src/cli/shared.ts');
     const zeroth = shared.indexOf(expected[0] ?? '');
     const first = shared.indexOf(expected[1] ?? '');
     const second = shared.indexOf(expected[2] ?? '');
-    expect(zeroth, 'registerSecurityHooks registers selfProtectionHook').toBeGreaterThanOrEqual(0);
+    expect(zeroth, 'registerSecurityHooks registers the built-in denies').toBeGreaterThanOrEqual(0);
     expect(first, 'registerSecurityHooks registers permissionHook after it').toBeGreaterThan(zeroth);
     expect(second, 'registerSecurityHooks registers sandboxHook after it').toBeGreaterThan(first);
     // A text pin only. The behavioural guard for the eval site is the
