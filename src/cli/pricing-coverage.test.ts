@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PRICE_TABLE } from '../internal/pricing.js';
+import { CLI_SIDE_CALL_MODELS, PRICE_TABLE } from '../internal/pricing.js';
 import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from '../router/table.js';
 import { MODELS, type Model } from '../router/types.js';
 import { JUDGE_MODEL } from '../session/index.js';
@@ -19,10 +19,19 @@ describe('PRICE_TABLE coverage', () => {
     for (const id of MODELS) expect(PRICE_TABLE.map((r) => r.model), id).toContain(id);
   });
 
-  it('has no row for a model outside MODELS, and no duplicate rows', () => {
-    const named = new Set<string>(MODELS);
+  it('has no row for a model outside MODELS or CLI_SIDE_CALL_MODELS, and no duplicate rows', () => {
+    const named = new Set<string>([...MODELS, ...CLI_SIDE_CALL_MODELS]);
     for (const r of PRICE_TABLE) expect(named.has(r.model), r.model).toBe(true);
     expect(new Set(PRICE_TABLE.map((r) => r.model)).size).toBe(PRICE_TABLE.length);
+  });
+
+  // #219: a side-call model is priced but never routed; once the router can choose it, it belongs in MODELS.
+  it('CLI_SIDE_CALL_MODELS is exactly the observed Haiku 5.5, priced, and outside MODELS', () => {
+    expect([...CLI_SIDE_CALL_MODELS]).toEqual(['claude-haiku-5-5']);
+    for (const id of CLI_SIDE_CALL_MODELS) {
+      expect(PRICE_TABLE.map((r) => r.model), id).toContain(id);
+      expect(MODELS as readonly string[], id).not.toContain(id);
+    }
   });
 
   it('every model the router table, fallthrough and judge name is in MODELS', () => {

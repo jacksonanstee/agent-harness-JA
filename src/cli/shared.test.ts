@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON } from '../security/index.js';
+import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
@@ -334,12 +334,34 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
   });
 
-  it('registers exactly four pre-tool handlers (self-protection, code-execution deny, permissions, sandbox; #188, #211)', async () => {
+  it('registers exactly five pre-tool handlers (self-protection, code-execution deny, ungated-tool deny, permissions, sandbox; #188, #211, #219)', async () => {
     const hooks = createHookRuntime();
     registerSecurityHooks(hooks, compose({}, []), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(false);
-    expect(result.handlersFired).toBe(4);
+    expect(result.handlersFired).toBe(5);
+  });
+
+  // #219: the Artifact family reaches local files past the path gates (upload lists, download folders, a
+  // CLI-side input rewrite after this hook), so it is refused by name. A sandbox-approved file_path rides
+  // along in each Artifact case, so the path gates alone would pass it: the bypass shapes from review.
+  it.each([
+    ['Artifact', 'file_paths', { action: 'upload_asset', url: 'u', file_path: join(spProject, 'a.png'), file_paths: ['/etc/hosts'] }],
+    ['Artifact', 'out_dir', { action: 'read_asset', url: 'u', file_path: join(spProject, 'a.png'), out_dir: join(spHome, '.harness') }],
+    ['Artifact', 'files', { action: 'publish', file_path: join(spProject, 'a.html'), files: { 'a.css': join(spHome, '.ssh', 'id_rsa') } }],
+    ['Artifact', 'read_asset with no out_dir', { action: 'read_asset', url: 'u', asset_id: 'a', file_path: join(spProject, 'a.png') }],
+    ['Artifact', 'paths (consolidated read)', { action: 'read', url: 'u', paths: ['a.css'], file_path: join(spProject, 'a.png') }],
+    ['Artifact', 'a plain single-file publish', { action: 'publish', file_path: join(spProject, 'a.html') }],
+    ['ArtifactData', 'file_path upload', { action: 'update', file_path: join(spHome, '.ssh', 'id_rsa') }],
+    ['mcp__claude-artifacts__publish_files', 'the built-in artifacts MCP server', { files: { 'a.css': join(spHome, '.ssh', 'id_rsa') } }],
+  ])('a user allow-everything rule with a path sandbox cannot let %s (%s) through; the built-in reason is reported', async (tool, _shape, args) => {
+    const hooks = createHookRuntime();
+    const allowAll = { permissions: { rules: [{ tool: '*', decision: 'allow' }] } };
+    registerSecurityHooks(hooks, compose(allowAll, [], { sandbox: { paths: { allow: [spProject] } } }), roots);
+    const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool, args, redactions: null });
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe(UNGATED_TOOL_DENY_REASON);
   });
 
   // #211: no rule or sandbox list can grant REPL, whose own CLI floor is allow.

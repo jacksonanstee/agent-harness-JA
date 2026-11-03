@@ -58,6 +58,8 @@ export { hasSdkKey, parseSdkSettings, SDK_SETTING_SOURCES_MESSAGE, SdkSettingsEr
 export type { SettingSource } from './sdk-settings.js';
 export { buildProtectedRoots, SELF_PROTECTION_REASON, selfProtectionHook, SelfProtectionViolation } from './self-protection.js';
 export { CODE_EXECUTION_DENY_REASON, codeExecutionDenyHook, CodeExecutionDenied } from './code-execution-deny.js';
+export { UNGATED_TOOL_DENY_REASON, ungatedToolDenyHook, UngatedToolDenied } from './ungated-tool-deny.js';
+export { builtInDenyHooks } from './built-in-denies.js';
 export type { ProtectedRoot, ProtectedRoots, ProtectedRootsInput } from './self-protection.js';
 export { BUDGET_MAX_USD_MESSAGE, BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from './budget-settings.js';
 export type {

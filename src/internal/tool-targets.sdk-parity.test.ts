@@ -1,9 +1,16 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ACKNOWLEDGED_NON_TARGET_FIELDS, CODE_EXECUTING_TOOLS, TOOL_TARGET_FIELDS } from './tool-targets.js';
+import {
+  ACKNOWLEDGED_NON_TARGET_FIELDS,
+  BINARY_ONLY_TOOLS,
+  CODE_EXECUTING_TOOLS,
+  DENIED_TOOL_PREFIXES,
+  DENIED_TOOLS,
+  TOOL_TARGET_FIELDS,
+} from './tool-targets.js';
 
 // Derived gate for the tool table (issue #86, ADR-0033). The pin test next
 // door pins the table to ITSELF, which catches an accidental edit and nothing
@@ -48,6 +55,36 @@ const SDK_TOOLS_DTS = join(
   'claude-agent-sdk',
   'sdk-tools.d.ts',
 );
+
+// The bundled native CLI for this platform (a sibling optional dependency). It
+// is read only to CHECK binary evidence for a deny that the typed surface
+// cannot carry (#219); nothing is derived from it, so the table stays
+// typed-surface-only (R-9). Named for darwin and linux (glibc), the dev and CI
+// platforms; anywhere else (win32, whose file name is unverified; musl, a `-musl` package)
+// it is absent and every binary check FAILS as "could not check", never passes.
+const PLATFORM_BINARY = join(
+  process.cwd(),
+  'node_modules',
+  '@anthropic-ai',
+  `claude-agent-sdk-${process.platform}-${process.arch}`,
+  'claude',
+);
+let platformBinaryBytes: Buffer | undefined;
+
+/** A prefix `mcp__<server>__` names its needle when the needle is `"<server>"`, allowing for `_`/`-` normalisation. */
+const prefixNamesNeedle = (prefix: string, needle: string): boolean => {
+  const fold = (name: string): string => name.replace(/[_-]/g, '-');
+  return `"${fold(prefix.slice('mcp__'.length, -'__'.length))}"` === fold(needle);
+};
+
+/** True when the installed platform binary holds `needle`; a missing binary fails the calling test. */
+function binaryHolds(needle: string): boolean {
+  if (platformBinaryBytes === undefined) {
+    expect(existsSync(PLATFORM_BINARY), `could not check: no platform binary at ${PLATFORM_BINARY}`).toBe(true);
+    platformBinaryBytes = readFileSync(PLATFORM_BINARY);
+  }
+  return platformBinaryBytes.includes(needle);
+}
 
 /**
  * A field is target-shaped when its NAME says path or command. This vocabulary
@@ -210,9 +247,11 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
     expect(targetBearing.length).toBeGreaterThan(0);
   });
 
-  it('every SDK tool that declares a path/command field has a table entry (completeness direction)', () => {
+  // #219: a tool refused by name (DENIED_TOOLS) is covered by the refusal and has no table entry,
+  // the same rule as a `denied` CODE_EXECUTING_TOOLS member (REPL).
+  it('every SDK tool that declares a path/command field has a table entry or is refused by name (completeness direction)', () => {
     const missing = targetBearing
-      .filter((tool) => TOOL_TARGET_FIELDS[tool.tool] === undefined)
+      .filter((tool) => TOOL_TARGET_FIELDS[tool.tool] === undefined && DENIED_TOOLS[tool.tool] === undefined)
       .map(
         (tool) =>
           `${tool.tool} (${tool.iface}: ${tool.fields.filter(isTargetShaped).map((f) => f.name).join(', ')})`,
@@ -222,7 +261,11 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
 
   it('every other target-shaped field is acknowledged with a reason, and no acknowledgement is stale', () => {
     const unacknowledged: string[] = [];
+    const visited: string[] = [];
     for (const tool of targetBearing) {
+      // #219: a tool refused by name (DENIED_TOOLS) has every field covered by the refusal.
+      if (DENIED_TOOLS[tool.tool] !== undefined) continue;
+      visited.push(...tool.fields.filter(isTargetShaped).map((field) => `${tool.tool}.${field.name}`));
       const entry = TOOL_TARGET_FIELDS[tool.tool];
       const acknowledged = ACKNOWLEDGED_NON_TARGET_FIELDS[tool.tool] ?? {};
       for (const field of tool.fields.filter(isTargetShaped)) {
@@ -232,6 +275,15 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
         unacknowledged.push(`${tool.tool}.${field.name}: target-shaped, neither gated nor acknowledged with a reason`);
       }
     }
+    // Non-vacuity (a mutation widening the skip to every tool survived without this): the walk must
+    // visit exactly the target fields of every target-bearing tool that is NOT refused by name,
+    // computed here from the SDK list by name alone, so any wider or narrower skip fails.
+    const refused = new Set(Object.keys(DENIED_TOOLS));
+    const expected = sdkTools
+      .filter((tool) => !refused.has(tool.tool))
+      .flatMap((tool) => tool.fields.filter((field) => TARGET_FIELD_NAME.test(field.name)).map((field) => `${tool.tool}.${field.name}`));
+    expect([...visited].sort()).toEqual([...expected].sort());
+    expect(visited).toContain('Projects.path');
     expect(unacknowledged).toEqual([]);
 
     const stale: string[] = [];
@@ -337,9 +389,24 @@ describe('CODE_EXECUTING_TOOLS is derived from the installed SDK declarations (i
     expect(missing, 'SDK tools that run a command or script but that a user rule allow could still grant unconditionally').toEqual([]);
   });
 
-  it('every member is a tool the SDK declares (map -> SDK direction)', () => {
+  // #219 D3: a member the SDK stopped declaring but the bundled binary still
+  // names stays, via BINARY_ONLY_TOOLS (evidence required). An entry the
+  // SDK declares again is stale and fails, so the exception cannot outlive its cause.
+  it('every member is a tool the SDK declares, or a binary-only tool with evidence (map -> SDK direction)', () => {
     const declared = new Set(sdkTools.map((tool) => tool.tool));
-    expect(members.filter((name) => !declared.has(name))).toEqual([]);
+    expect(members.filter((name) => !declared.has(name) && BINARY_ONLY_TOOLS[name] === undefined)).toEqual([]);
+  });
+
+  it('every BINARY_ONLY_TOOLS entry is a member, is undeclared by the SDK, and carries evidence', () => {
+    const declared = new Set(sdkTools.map((tool) => tool.tool));
+    const stale = Object.entries(BINARY_ONLY_TOOLS).flatMap(([name, evidence]) => [
+      ...(CODE_EXECUTING_TOOLS[name] === undefined ? [`${name}: not a CODE_EXECUTING_TOOLS member`] : []),
+      ...(declared.has(name) ? [`${name}: the SDK declares it again, drop the exception`] : []),
+      ...(evidence.note.trim() === '' ? [`${name}: no note`] : []),
+      ...(binaryHolds(evidence.binaryNeedle) ? [] : [`${name}: "${evidence.binaryNeedle}" is gone from the binary`]),
+    ]);
+    expect(stale).toEqual([]);
+    expect(Object.keys(BINARY_ONLY_TOOLS)).toEqual(['REPL']);
   });
 
   it('`commands` is exactly the command-kind table entries: no other dimension constrains what runs', () => {
@@ -359,5 +426,45 @@ describe('CODE_EXECUTING_TOOLS is derived from the installed SDK declarations (i
     const denied = Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate === 'denied');
     expect(denied.length).toBeGreaterThan(0);
     expect(denied.filter(([name]) => TOOL_TARGET_FIELDS[name] !== undefined).map(([name]) => name)).toEqual([]);
+  });
+});
+
+describe('DENIED_TOOLS evidence holds against the installed SDK and binary (issue #219)', () => {
+  const declaredTools = (): Set<string> => new Set(loadSdkTools().map((tool) => tool.tool));
+
+  it('a declared entry is a tool the SDK declares; a binary entry is not, and its needle is in the installed binary', () => {
+    const declared = declaredTools();
+    const stale = Object.entries(DENIED_TOOLS).flatMap(([tool, entry]) => {
+      if (entry.evidence === 'declared') return declared.has(tool) ? [] : [`${tool}: the SDK does not declare the tool`];
+      return [
+        ...(declared.has(tool) ? [`${tool}: the SDK declares it now, use 'declared' evidence`] : []),
+        ...(binaryHolds(entry.evidence.binaryNeedle) ? [] : [`${tool}: needle gone from the binary`]),
+      ];
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('a tool refused by name has no table entry (a gate it can never reach would mislead readers and callers)', () => {
+    expect(Object.keys(DENIED_TOOLS).filter((tool) => TOOL_TARGET_FIELDS[tool] !== undefined)).toEqual([]);
+  });
+
+  it('a refused prefix is a whole MCP server segment, and its needle is in the installed binary', () => {
+    const stale = Object.entries(DENIED_TOOL_PREFIXES).flatMap(([prefix, entry]) => [
+      ...(/^mcp__[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*__$/.test(prefix) ? [] : [`${prefix}: not of the form mcp__<server>__`]),
+      ...(entry.evidence === 'declared' ? [`${prefix}: MCP tools are never declared; evidence must be a binary needle`] : []),
+      ...(entry.evidence !== 'declared' && !binaryHolds(entry.evidence.binaryNeedle) ? [`${prefix}: needle gone from the binary`] : []),
+      // The needle must be the server's own name, so a rename fails here rather than leaving a dead prefix.
+      ...(entry.evidence !== 'declared' && !prefixNamesNeedle(prefix, entry.evidence.binaryNeedle) ? [`${prefix}: needle is not this server's name`] : []),
+    ]);
+    expect(stale).toEqual([]);
+  });
+
+  it('a denied tool is not also a code-executing tool (one built-in deny per tool, one reason in telemetry)', () => {
+    expect(Object.keys(DENIED_TOOLS).filter((tool) => CODE_EXECUTING_TOOLS[tool] !== undefined)).toEqual([]);
+  });
+
+  it('the binary check is not vacuous: a needle that is not there reads as absent', () => {
+    expect(binaryHolds('CLAUDE_CODE_REPL')).toBe(true);
+    expect(binaryHolds('no such needle #219 \u0000 zz')).toBe(false);
   });
 });

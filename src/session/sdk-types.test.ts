@@ -146,7 +146,7 @@ type ExactKeys<T, K extends PropertyKey> = [Exclude<keyof T, K>] extends [never]
     : false
   : false;
 
-// SDK side (0.3.201): the channels exist and have the shapes the rows describe.
+// SDK side (0.3.312): the channels exist and have the shapes the rows describe.
 const _sdkDeclaresAbort: Assignable<'abortController', keyof Options> = true;
 const _sdkAbortIsController: Assignable<NonNullable<Options['abortController']>, AbortController> = true;
 const _sdkDeclaresBudget: Assignable<'maxBudgetUsd', keyof Options> = true;
@@ -156,16 +156,18 @@ const _sdkBudgetIsNumber: Assignable<NonNullable<Options['maxBudgetUsd']>, numbe
 type IsAny<T> = 0 extends 1 & T ? true : false;
 const _sdkAbortNotAny: IsAny<Options['abortController']> = false;
 const _sdkBudgetNotAny: IsAny<Options['maxBudgetUsd']> = false;
-// The SDK declares a retry report with the shape H-8 names. Its MEMBERSHIP in
-// the `SDKMessage` stream union is deliberately not pinned: in 0.3.201 that
-// union names two members the package never declares
-// (`SDKControlRequestProgressMessage`, `SDKConversationResetMessage`,
-// sdk.d.ts:3772), which under `skipLibCheck` are the error type, so the union
-// accepts everything and a membership pin compiled for `string` too (code
-// lens, issue #101). The line below RECORDS that defect: when a future SDK
-// declares those members the union becomes real, this reddens, and
-// `Assignable<SDKAPIRetryMessage, SDKMessage>` can take its place.
-const _sdkMessageUnionAcceptsAnything: Assignable<string, SDKMessage> = true;
+// The SDK declares a retry report with the shape H-8 names, and it is a member
+// of the `SDKMessage` stream union. Up to 0.3.201 membership could not be
+// pinned: the union named two members the package never declared
+// (`SDKControlRequestProgressMessage`, `SDKConversationResetMessage`), which
+// under `skipLibCheck` are the error type, so the union accepted everything
+// and a membership pin compiled for `string` too (code lens, issue #101).
+// 0.3.312 declares both (issue #219), so the union is real: the first line
+// pins that it no longer accepts anything (if a future SDK regresses to an
+// undeclared member, this reddens and the membership pin below is vacuous
+// again), the second pins membership.
+const _sdkMessageUnionIsReal: Assignable<string, SDKMessage> = false;
+const _retryIsStreamMember: Assignable<SDKAPIRetryMessage, SDKMessage> = true;
 const _retrySubtype: Assignable<SDKAPIRetryMessage['subtype'], 'api_retry'> = true;
 const _retryCountsAttempts: Assignable<SDKAPIRetryMessage['attempt'], number> = true;
 // The SDK result declares two duration fields (on both result variants), and
@@ -262,7 +264,8 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _sdkBudgetIsNumber,
       _sdkAbortNotAny,
       _sdkBudgetNotAny,
-      _sdkMessageUnionAcceptsAnything,
+      _sdkMessageUnionIsReal,
+      _retryIsStreamMember,
       _retrySubtype,
       _retryCountsAttempts,
       _sdkResultHasDurationMs,

@@ -65,7 +65,7 @@ describe('the writes marker (D2)', () => {
     expect(entries.every(([, t]) => typeof t.writes === 'boolean')).toBe(true);
     expect(entries.filter(([, t]) => t.writes).map(([n]) => n).sort()).toEqual(['Edit', 'NotebookEdit', 'Write']);
     expect(entries.filter(([, t]) => !t.writes).map(([n]) => n).sort()).toEqual([
-      'Artifact', 'Bash', 'EnterWorktree', 'Glob', 'Grep', 'Monitor', 'Projects', 'Read', 'Workflow',
+      'Bash', 'EnterWorktree', 'Glob', 'Grep', 'Monitor', 'Projects', 'Read', 'Workflow',
     ]);
   });
 

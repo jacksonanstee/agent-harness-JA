@@ -316,7 +316,6 @@ describe('createSession', () => {
         input: { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' },
         output: 'never',
       },
-      { tool: 'Artifact', input: { file_path: '/etc/passwd', favicon: 'x' }, output: 'never' },
       { tool: 'Workflow', input: { scriptPath: '/safe/wf.js' }, output: 'ran' },
     ]);
     const hooks = createHookRuntime();
@@ -332,7 +331,6 @@ describe('createSession', () => {
     expect(result.denied).toEqual([
       { tool: 'Workflow', reason: expect.stringContaining('sandbox') },
       { tool: 'Monitor', reason: expect.stringContaining('sandbox') },
-      { tool: 'Artifact', reason: expect.stringContaining('sandbox') },
     ]);
     expect(postFired).toEqual(['Workflow']);
   });

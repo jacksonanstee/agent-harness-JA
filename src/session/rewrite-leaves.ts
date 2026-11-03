@@ -99,7 +99,7 @@ export function rewriteStringLeaves(
  * String-literal vocabulary the CLI's built-in tool OUTPUT schemas constrain,
  * keyed by the object key that carries it (union across tools). Derived from
  * the `*Output` declarations of `@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`
- * at SDK 0.3.201; `rewrite-leaves.sdk-parity.test.ts` re-derives it and fails
+ * at SDK 0.3.312; `rewrite-leaves.sdk-parity.test.ts` re-derives it and fails
  * on drift. To regenerate after an SDK bump: run that test, read the diff it
  * prints, update this table (sorted keys, sorted values) and review each new
  * literal against the tool that declares it.
@@ -115,20 +115,49 @@ export const SDK_OUTPUT_LITERALS: Readonly<Record<string, readonly string[]>> = 
     'edited',
     'keep',
     'merged',
+    'pin',
     'ready',
     'rebased',
     'remove',
+    'reopened',
+    'unpin',
   ],
   cell_type: ['code', 'markdown'],
   disabledReason: ['config_off', 'no_transport', 'user_present'],
   kind: ['amended', 'cherry-picked', 'committed'],
   level: ['high', 'low', 'max', 'medium', 'xhigh'],
-  method: ['project_delete', 'project_info', 'project_read', 'project_search', 'project_write'],
+  mediaType: ['image/gif', 'image/jpeg', 'image/png', 'image/webp'],
+  method: [
+    'project_delete',
+    'project_info',
+    'project_memory_list',
+    'project_memory_read',
+    'project_read',
+    'project_search',
+    'project_write',
+  ],
   mode: ['content', 'count', 'files_with_matches'],
-  outcome: ['fixed', 'no_change_needed', 'skipped'],
-  service_tier: ['batch', 'priority', 'standard'],
+  outcome: ['connected', 'fixed', 'no_attempt_yet', 'no_change_needed', 'not_now', 'skipped'],
+  rail: ['durable_wake', 'live_stopped'],
+  rel: ['mine', 'shared'],
+  role: ['commenter', 'editor', 'reader', 'viewer'],
+  scope: ['all', 'shared'],
   source: ['seeded'],
-  status: ['added', 'async_launched', 'completed', 'in_progress', 'modified', 'pending', 'remote_launched'],
+  status: [
+    'added',
+    'async_launched',
+    'completed',
+    'error',
+    'failed',
+    'in_progress',
+    'modified',
+    'not_attempted',
+    'not_connected',
+    'pending',
+    'refreshed',
+    'remote_launched',
+    'uploaded',
+  ],
   taskType: ['local_workflow', 'remote_agent'],
   type: [
     'create',
@@ -144,6 +173,7 @@ export const SDK_OUTPUT_LITERALS: Readonly<Record<string, readonly string[]>> = 
     'text',
     'update',
   ],
+  unanswered: ['dismissed', 'replied_in_chat', 'skipped'],
   verdict: ['CONFIRMED', 'PLAUSIBLE'],
 };
 

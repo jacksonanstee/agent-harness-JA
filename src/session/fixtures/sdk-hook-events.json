@@ -1,7 +1,7 @@
 {
   "_provenance": {
     "capturedFrom": "@anthropic-ai/claude-agent-sdk",
-    "sdkVersion": "0.3.201",
+    "sdkVersion": "0.3.312",
     "marker": "harness-fixture-capture-marker",
     "readMarker": "harness-fixture-read-marker",
     "note": "Genuine SDK hook inputs, volatile fields replaced with placeholders. Re-capture with scripts/capture-sdk-hook-fixture.mjs after an SDK bump."
@@ -13,13 +13,13 @@
     "prompt_id": "<prompt>",
     "permission_mode": "default",
     "effort": {
-      "level": "xhigh"
+      "level": "medium"
     },
     "hook_event_name": "PreToolUse",
     "tool_name": "Bash",
     "tool_input": {
       "command": "echo harness-fixture-capture-marker",
-      "description": "Echo a marker string"
+      "description": "Print the fixture marker string"
     },
     "tool_use_id": "<tool_use_id>"
   },
@@ -30,13 +30,13 @@
     "prompt_id": "<prompt>",
     "permission_mode": "default",
     "effort": {
-      "level": "xhigh"
+      "level": "medium"
     },
     "hook_event_name": "PostToolUse",
     "tool_name": "Bash",
     "tool_input": {
       "command": "echo harness-fixture-capture-marker",
-      "description": "Echo a marker string"
+      "description": "Print the fixture marker string"
     },
     "tool_response": {
       "stdout": "harness-fixture-capture-marker",
@@ -55,7 +55,7 @@
     "prompt_id": "<prompt>",
     "permission_mode": "default",
     "effort": {
-      "level": "xhigh"
+      "level": "medium"
     },
     "hook_event_name": "PreToolUse",
     "tool_name": "Read",
@@ -71,7 +71,7 @@
     "prompt_id": "<prompt>",
     "permission_mode": "default",
     "effort": {
-      "level": "xhigh"
+      "level": "medium"
     },
     "hook_event_name": "PostToolUse",
     "tool_name": "Read",
@@ -98,13 +98,13 @@
     "prompt_id": "<prompt>",
     "permission_mode": "default",
     "effort": {
-      "level": "xhigh"
+      "level": "medium"
     },
     "hook_event_name": "PostToolUseFailure",
     "tool_name": "Bash",
     "tool_input": {
       "command": "cat <cwd>/harness-fixture-capture-missing-84.txt",
-      "description": "Read scratchpad fixture file"
+      "description": "Print contents of fixture file"
     },
     "tool_use_id": "<tool_use_id>",
     "error": "Exit code 1\ncat: <cwd>/harness-fixture-capture-missing-84.txt: No such file or directory",

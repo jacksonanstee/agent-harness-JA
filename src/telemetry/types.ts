@@ -99,10 +99,11 @@ export interface TurnCostPayload {
   /**
    * The run's cost priced by the harness's own table (`priceModelUsage`), or
    * null when it cannot be priced whole: no usage, an unpriced model, an
-   * unusable count, an overflow, a set cut at MODEL_USAGE_MAX, a long-context
-   * step, or per-model SDK costs that do not cover the SDK total. `costUsd` stays the
-   * SDK's figure, which the bundled CLI at 0.3.201 prices about 1.5x high for
-   * Sonnet 5; `telemetry cost` leads with this one. Optional for the same reason.
+   * unusable count, an overflow, a set cut at MODEL_USAGE_MAX, a model whose
+   * cumulative prompt is over its long-context step (#219), or per-model SDK costs
+   * that do not cover the SDK total. `costUsd` stays the SDK's figure, which the
+   * bundled CLI at 0.3.201 priced about 1.5x high for Sonnet 5 (0.3.312 prices it
+   * at list, #219); `telemetry cost` leads with this one. Optional for the same reason.
    */
   pricedCostUsd?: number | null;
   /** The `checked` date of the price table used for `pricedCostUsd`. */

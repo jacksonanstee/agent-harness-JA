@@ -13,7 +13,7 @@ export class CodeExecutionDenied extends Error {
   }
 }
 
-const DENIED_TOOLS: ReadonlySet<string> = new Set(
+const DENIED_CODE_TOOLS: ReadonlySet<string> = new Set(
   Object.entries(CODE_EXECUTING_TOOLS)
     .filter(([, gate]) => gate === 'denied')
     .map(([name]) => name),
@@ -27,5 +27,5 @@ const DENIED_TOOLS: ReadonlySet<string> = new Set(
  */
 export function codeExecutionDenyHook(): (payload: PreToolLike) => Promise<void> {
   return (payload) =>
-    DENIED_TOOLS.has(payload.tool) ? Promise.reject(new CodeExecutionDenied()) : Promise.resolve();
+    DENIED_CODE_TOOLS.has(payload.tool) ? Promise.reject(new CodeExecutionDenied()) : Promise.resolve();
 }
