@@ -18,6 +18,7 @@ import {
   mergeLayers,
   mergeSandboxLayers,
   parseJudgeSettings,
+  parseSdkAllowedMcpServers,
   parseSdkSettings,
   parsePermissionSettings,
   parseSandboxSettings,
@@ -332,9 +333,11 @@ export interface SecurityComposition {
   /**
    * The Claude Code settings sources the SDK child may load (#140, ADR-0040
    * D2), from the USER layer's `sdk.settingSources` only; `[]` (the default)
-   * isolates the child. Read by `run` and `eval`.
+   * isolates the child. Read by `run` and `eval`. `allowedMcpServers` (#225,
+   * ADR-0045), also USER layer only: the MCP servers whose tools the
+   * unreviewed-tool deny lets through; `[]` (the default) refuses every MCP tool.
    */
-  sdk: { settingSources: SettingSource[] };
+  sdk: { settingSources: SettingSource[]; allowedMcpServers: string[] };
   /**
    * The run's dollar ceiling (#187, ADR-0041 D3), from the USER layer's
    * `budget.maxUsd` only; null means the session default. Read by `run` and `eval`.
@@ -348,6 +351,14 @@ export const SDK_USER_INHERIT_WARNING =
   'claude code settings: the "user" source is inherited, so the operator\'s ~/.claude settings, hooks and plugins apply to this run (ADR-0040)';
 export const SDK_PROJECT_INHERIT_WARNING =
   'claude code settings: the "project" or "local" source is inherited, so the working directory\'s .claude files and CLAUDE.md apply to this run as trusted input (ADR-0040)';
+/**
+ * #225 (ADR-0045): `sdk.allowedMcpServers` set while no Claude Code settings
+ * are inherited. The harness passes the SDK no MCP servers and sets
+ * `strictMcpConfig`, so no configured server loads; only a server the CLI
+ * adds on its own could match (whether one connects headless is inference).
+ */
+export const SDK_MCP_UNUSED_WARNING =
+  'claude code settings: sdk.allowedMcpServers is set but sdk.settingSources is empty, so no configured MCP server is loaded; only a server the bundled CLI adds on its own could match the list (ADR-0045)';
 
 export interface ComposeSecurityDeps {
   /**
@@ -399,6 +410,8 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
             // D-2: the same rule for `sdk`; the project layer's key is only
             // detected, so a malformed one can never exit 2 or widen sources.
             sdk: isUser ? parseSdkSettings(doc) : [],
+            // #225: MCP servers are allowed from the USER layer only, so a cloned repo cannot list one.
+            allowedMcpServers: isUser ? parseSdkAllowedMcpServers(doc) : [],
             sdkKeyPresent: hasSdkKey(doc),
             // #187 D3: the same rule for `budget`; a project cap is never parsed.
             budget: isUser ? parseBudgetSettings(doc) : null,
@@ -417,7 +430,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
           throw error;
         }
       },
-      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], sdkKeyPresent: false, budget: null, budgetKeyPresent: false },
+      { permissions: { rules: [] }, sandbox: {}, judge: null, judgeKeyPresent: false, sdk: [], allowedMcpServers: [], sdkKeyPresent: false, budget: null, budgetKeyPresent: false },
       SettingsLoadError,
       deps.readFile,
     );
@@ -438,6 +451,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   }
   if (user.sdk.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
   if (user.sdk.includes('project') || user.sdk.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
+  if (user.allowedMcpServers.length > 0 && user.sdk.length === 0) warnings.push(SDK_MCP_UNUSED_WARNING);
   // No prompter is wired yet (no interactive mode), so every 'ask' resolves
   // to deny — fail closed, but tell the settings author (ADR-0014 §4).
   if (
@@ -478,7 +492,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
     grantPolicy,
     sandbox,
     judge: user.judge,
-    sdk: { settingSources: user.sdk },
+    sdk: { settingSources: user.sdk, allowedMcpServers: user.allowedMcpServers },
     budget: { maxUsd: user.budget },
     warnings,
   };
@@ -486,12 +500,13 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 
 /**
  * Registers the security pre-tool hooks in their ONE shipped order, for every
- * command that builds a session (`run`, `eval`). The three built-in denies
+ * command that builds a session (`run`, `eval`). The four built-in denies
  * come first, from `builtInDenyHooks` in its order: self-protection (#188,
  * ADR-0042), the code-execution deny (#211), the ungated-tool deny (#219,
- * ADR-0044). They read no settings, so no rule, grant or absent sandbox
- * dimension can let a call they deny through, and their reason is the one
- * reported. Then permissions, then the sandbox as the
+ * ADR-0044), the unreviewed-tool deny (#225, ADR-0045, given the USER
+ * layer's `sdk.allowedMcpServers`). They read no settings themselves, so no rule,
+ * grant or absent sandbox dimension can let a call they deny through, and
+ * their reason is the one reported. Then permissions, then the sandbox as the
  * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more
  * actionable, so they get first say (ADR-0015 section 4). The sandbox also
@@ -500,10 +515,10 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
  */
 export function registerSecurityHooks(
   hooks: Pick<HookRuntime, 'register'>,
-  security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox'>,
+  security: Pick<SecurityComposition, 'permissions' | 'grantPolicy' | 'sandbox' | 'sdk'>,
   protectedRoots: ProtectedRoots,
 ): void {
-  for (const deny of builtInDenyHooks(protectedRoots)) hooks.register('pre-tool', deny);
+  for (const deny of builtInDenyHooks(protectedRoots, { allowedMcpServers: security.sdk.allowedMcpServers })) hooks.register('pre-tool', deny);
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }

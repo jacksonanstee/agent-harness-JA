@@ -376,6 +376,15 @@ describe('grantFor (#140, D-7, D-8): the one decision that a rule allow is a gra
     const e = evaluate([rule({ tool: 'Read', decision: 'allow', layer: 'user' })], 'Read');
     expect(grantFor('Read', e, noBash)).toEqual(reasonOf(e));
   });
+  // #225 (ADR-0045): a grant skips the CLI's own check, and the CLI runs MCP servers no operator configured,
+  // so no rule may pre-approve an MCP tool, under an open policy or not.
+  it.each(['mcp__github__create_issue', 'mcp__ide__executeCode', 'mcp__x__y'])('%s never grants, even on a user allow', (tool) => {
+    for (const pattern of [tool, 'mcp__*', '*']) {
+      const e = evaluate([rule({ tool: pattern, decision: 'allow', layer: 'user' })], tool);
+      expect(e.decision, pattern).toBe('allow');
+      expect(grantFor(tool, e, open), pattern).toBeUndefined();
+    }
+  });
 });
 
 describe('permissionHook', () => {

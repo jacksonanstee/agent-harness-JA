@@ -177,7 +177,7 @@ describe('policy corpus: shape', () => {
     // #219 (ADR-0044 D4): the three built-in denies come from builtInDenyHooks,
     // whose own order (self-protection first) built-in-denies.test.ts pins.
     const expected = [
-      "for (const deny of builtInDenyHooks(protectedRoots)) hooks.register('pre-tool', deny);",
+      "for (const deny of builtInDenyHooks(protectedRoots, { allowedMcpServers: security.sdk.allowedMcpServers })) hooks.register('pre-tool', deny);",
       "hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));",
       "hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));",
     ];

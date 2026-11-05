@@ -3,6 +3,7 @@ import { sep } from 'node:path';
 import {
   CASE_INSENSITIVE_PLATFORM,
   canonicalizePath,
+  MCP_TOOL_PREFIX,
   TOOL_TARGET_FIELDS,
 } from '../../internal/tool-targets.js';
 import { PRE_TOOL_GRANT_KIND, type PreToolGrant } from '../../internal/pre-tool-grant.js';
@@ -17,6 +18,7 @@ import type {
   PermissionEvaluator,
   Prompter,
 } from './types.js';
+
 
 /** Higher wins at equal specificity — fail closed on conflicting rules. */
 const SEVERITY: Readonly<Record<PermissionDecision, number>> = {
@@ -254,7 +256,7 @@ export class PermissionDenied extends Error {
  * The one place that decides "a rule allow is an SDK grant" (#140, D-7, D-8;
  * reused by #105 and #189). Only a USER-layer RULE allow qualifies: a project
  * allow and a defaultDecision allow (layer null) are not grants. A tool the
- * policy lists as ungrantable never is. The reason is the ADR-0031 shape (no
+ * policy lists as ungrantable never is, and neither is an MCP tool (#225). The reason is the ADR-0031 shape (no
  * glob) and reaches telemetry only, never the SDK. Evaluation stays the
  * list/telemetry read model; it does not carry a grant.
  */
@@ -265,6 +267,10 @@ export function grantFor(
 ): PreToolGrant | undefined {
   if (evaluation.decision !== 'allow' || evaluation.layer !== 'user') return undefined;
   if (policy.ungrantableTools.has(tool)) return undefined;
+  // #225 (ADR-0045): never an MCP tool. A grant skips the CLI's own check, and the CLI runs MCP
+  // servers no operator configured (an IDE code kernel, browser and computer control). Built in on
+  // purpose, outside GrantPolicy, so no composition can drop it.
+  if (tool.startsWith(MCP_TOOL_PREFIX)) return undefined;
   return { grant: PRE_TOOL_GRANT_KIND, reason: evaluation.reason };
 }
 
