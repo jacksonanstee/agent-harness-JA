@@ -20,10 +20,27 @@ export class SdkSettingsError extends Error {
 /** The one refusal for a bad list. It never echoes a value (G-3). */
 export const SDK_SETTING_SOURCES_MESSAGE = `sdk.settingSources must be an array of distinct values from ${SETTING_SOURCES.map((s) => `"${s}"`).join(', ')}`;
 
-const SDK_KEYS: readonly string[] = ['settingSources'];
+const SDK_KEYS: readonly string[] = ['settingSources', 'allowedMcpServers'];
+
+/** The one refusal for a bad MCP server list (#225). It never echoes a value (G-3). */
+export const SDK_ALLOWED_MCP_SERVERS_MESSAGE =
+  'sdk.allowedMcpServers must be an array of distinct MCP server names (letters, digits, "-" and single "_", 1-64 characters)';
+
+/**
+ * An MCP server name the harness can match as a whole `mcp__<server>__`
+ * segment: letters, digits, `-`, and `_` only between two other characters
+ * and never doubled, so the name cannot run into the `__` that ends the
+ * segment. 1-64 characters. The other half of this naming contract is
+ * `underListedServer` in unknown-tool-deny.ts: change both together.
+ */
+const MCP_SERVER_NAME = /^(?=.{1,64}$)[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMcpServerName(value: unknown): value is string {
+  return typeof value === 'string' && MCP_SERVER_NAME.test(value);
 }
 
 function isSettingSource(value: unknown): value is SettingSource {
@@ -38,18 +55,44 @@ function isSettingSource(value: unknown): value is SettingSource {
  * value (G-3); an unknown key's name is bounded by `unknownKeyMessage`.
  */
 export function parseSdkSettings(doc: unknown): SettingSource[] {
-  if (!isRecord(doc)) throw new SdkSettingsError('settings root must be a JSON object');
-  const sdk = doc['sdk'];
+  const sdk = sdkBlock(doc);
   if (sdk === undefined) return [];
-  if (!isRecord(sdk)) throw new SdkSettingsError('sdk must be an object');
-  const [unknown] = unknownKeys(sdk, SDK_KEYS);
-  if (unknown !== undefined) throw new SdkSettingsError(unknownKeyMessage('sdk', unknown, SDK_KEYS));
   const list = sdk['settingSources'];
   if (list === undefined) return [];
   if (!Array.isArray(list) || !list.every(isSettingSource) || new Set<unknown>(list).size !== list.length) {
     throw new SdkSettingsError(SDK_SETTING_SOURCES_MESSAGE);
   }
   return [...list];
+}
+
+/**
+ * Validates `sdk.allowedMcpServers` of a USER settings document (#225, ADR-0045):
+ * the MCP servers whose tools `unknownToolDenyHook` lets through. Absent key,
+ * absent list and `[]` all resolve to `[]`, which refuses every MCP tool:
+ * the bundled CLI runs MCP servers no operator configured. Anything else must
+ * be an array of distinct server names, returned as a fresh array in the
+ * order written. The message is fixed and never echoes a value (G-3).
+ */
+export function parseSdkAllowedMcpServers(doc: unknown): string[] {
+  const sdk = sdkBlock(doc);
+  if (sdk === undefined) return [];
+  const list = sdk['allowedMcpServers'];
+  if (list === undefined) return [];
+  if (!Array.isArray(list) || !list.every(isMcpServerName) || new Set<unknown>(list).size !== list.length) {
+    throw new SdkSettingsError(SDK_ALLOWED_MCP_SERVERS_MESSAGE);
+  }
+  return [...list];
+}
+
+/** The validated `sdk` object of a settings document, or undefined when the key is absent. */
+function sdkBlock(doc: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(doc)) throw new SdkSettingsError('settings root must be a JSON object');
+  const sdk = doc['sdk'];
+  if (sdk === undefined) return undefined;
+  if (!isRecord(sdk)) throw new SdkSettingsError('sdk must be an object');
+  const [unknown] = unknownKeys(sdk, SDK_KEYS);
+  if (unknown !== undefined) throw new SdkSettingsError(unknownKeyMessage('sdk', unknown, SDK_KEYS));
+  return sdk;
 }
 
 /**

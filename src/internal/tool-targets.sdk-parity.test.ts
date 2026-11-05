@@ -5,10 +5,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   ACKNOWLEDGED_NON_TARGET_FIELDS,
+  ACKNOWLEDGED_TOOLS,
+  ALLOWED_TOOL_NAMES,
   BINARY_ONLY_TOOLS,
   CODE_EXECUTING_TOOLS,
   DENIED_TOOL_PREFIXES,
   DENIED_TOOLS,
+  REVIEWED_REFUSED_TOOLS,
   TOOL_TARGET_FIELDS,
 } from './tool-targets.js';
 
@@ -466,5 +469,95 @@ describe('DENIED_TOOLS evidence holds against the installed SDK and binary (issu
   it('the binary check is not vacuous: a needle that is not there reads as absent', () => {
     expect(binaryHolds('CLAUDE_CODE_REPL')).toBe(true);
     expect(binaryHolds('no such needle #219 \u0000 zz')).toBe(false);
+  });
+});
+
+// Issue #225, ADR-0045: the default-deny allowlist. The hook refuses every
+// unlisted non-MCP name at runtime; these checks make the REVIEW keep up with
+// the SDK, so an unruled typed-surface name fails CI instead of only failing
+// closed in a session.
+//
+// Reach: the typed surface (BUILTIN_TOOL_NAMES, read as text from sdk.d.ts,
+// plus the ToolInputSchemas union) is checked name by name. Tools the binary
+// defines outside it are refused by default and not named here; the CI signal
+// for them is a ratchet on the count of definition SITES in the installed
+// binary. A site is a call, not a tool: at 0.3.312 four sites are factories
+// that define about ten tools, so a tool added to a factory's array, or one
+// added as another removed, leaves the count unchanged. The run-time
+// `system/init` tools check (the second #225 change) is the stronger signal.
+// The needle is a minified call (`tn({name:`), so a minifier rename also fails
+// it: that reads as "could not check", re-derive the needle.
+describe('the default-deny allowlist is reviewed against the installed SDK and binary (issue #225)', () => {
+  /** Declared interface names whose runtime tool name differs (the hook and BUILTIN_TOOL_NAMES spell the runtime name). */
+  const DECLARED_TO_RUNTIME: Readonly<Record<string, string>> = {
+    ListMcpResources: 'ListMcpResourcesTool',
+    ReadMcpResource: 'ReadMcpResourceTool',
+    ReadMcpResourceDir: 'ReadMcpResourceDirTool',
+    ProposeSkills: 'propose_skills',
+  };
+  /** Union members that are not tools: `McpInput` is the generic input of every MCP tool. */
+  const DECLARED_NON_TOOLS = ['Mcp'] as const;
+  /** Tool-definition sites in the 0.3.312 darwin/linux binary, counted 05/11/2026. Re-read the binary when this moves. */
+  const BINARY_TOOL_DEFINITION_NEEDLE = /\btn\(\{name:/g;
+  const BINARY_TOOL_DEFINITIONS = 77;
+
+  /** `BUILTIN_TOOL_NAMES` read from sdk.d.ts as text: the unit suite never loads the SDK at runtime (pin 30). */
+  const readBuiltinToolNames = (): readonly string[] => {
+    const source = readFileSync(join(process.cwd(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.d.ts'), 'utf8');
+    const list = /export declare const BUILTIN_TOOL_NAMES: readonly \[([^\]]*)\];/.exec(source)?.[1];
+    expect(list, 'could not check: no `BUILTIN_TOOL_NAMES` tuple in sdk.d.ts').toBeDefined();
+    return [...(list ?? '').matchAll(/'([^']+)'/g)].map((name) => name[1] ?? '');
+  };
+
+  let BUILTIN_TOOL_NAMES: readonly string[] = [];
+  let typedSurface: ReadonlySet<string> = new Set();
+
+  beforeAll(() => {
+    BUILTIN_TOOL_NAMES = readBuiltinToolNames();
+    const declared = loadSdkTools()
+      .map((tool) => tool.tool)
+      .filter((tool) => !(DECLARED_NON_TOOLS as readonly string[]).includes(tool))
+      .map((tool) => DECLARED_TO_RUNTIME[tool] ?? tool);
+    typedSurface = new Set([...BUILTIN_TOOL_NAMES, ...declared]);
+  });
+
+  it('reads a real typed surface (a short read is "could not check", not clean)', () => {
+    expect(BUILTIN_TOOL_NAMES.length).toBeGreaterThanOrEqual(MIN_UNION_MEMBERS);
+    for (const anchor of ANCHOR_TOOLS) expect(typedSurface.has(anchor), anchor).toBe(true);
+  });
+
+  it('every alias and non-tool exception still holds (none outlives its cause)', () => {
+    const declared = new Set(loadSdkTools().map((tool) => tool.tool));
+    const stale = [
+      ...Object.entries(DECLARED_TO_RUNTIME).flatMap(([iface, runtime]) => [
+        ...(declared.has(iface) ? [] : [`${iface}: no longer declared`]),
+        ...(BUILTIN_TOOL_NAMES.includes(runtime) ? [] : [`${runtime}: not in BUILTIN_TOOL_NAMES`]),
+      ]),
+      ...DECLARED_NON_TOOLS.filter((name) => !declared.has(name)).map((name) => `${name}: no longer declared`),
+    ];
+    expect(stale).toEqual([]);
+  });
+
+  it('every typed-surface tool carries a ruling: allowed, refused by name, a denied code runner, or reviewed-refused', () => {
+    const ruled = (tool: string): boolean =>
+      ALLOWED_TOOL_NAMES.has(tool) ||
+      Object.hasOwn(DENIED_TOOLS, tool) ||
+      CODE_EXECUTING_TOOLS[tool] === 'denied' ||
+      Object.hasOwn(REVIEWED_REFUSED_TOOLS, tool);
+    expect([...typedSurface].filter((tool) => !ruled(tool)).sort(), 'unruled typed-surface tools: rule each in tool-targets.ts').toEqual([]);
+  });
+
+  // A quoted name anywhere in the binary is weak evidence (it shows the name, not a definition); only StructuredOutput relies on it.
+  it('every acknowledged or reviewed-refused entry names a tool the SDK lists or the binary names (no stale ruling)', () => {
+    const stale = [...Object.keys(ACKNOWLEDGED_TOOLS), ...Object.keys(REVIEWED_REFUSED_TOOLS)].filter(
+      (tool) => !typedSurface.has(tool) && !binaryHolds(`"${tool}"`),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it('the tool-definition count in the installed binary is the one the classification read', () => {
+    binaryHolds('CLAUDE_CODE_REPL'); // loads the binary, failing loudly when it is missing
+    const sites = (platformBinaryBytes ?? Buffer.alloc(0)).toString('latin1').match(BINARY_TOOL_DEFINITION_NEEDLE) ?? [];
+    expect(sites.length, 'tool definitions in the binary changed: re-read it, rule each new tool, then update the count').toBe(BINARY_TOOL_DEFINITIONS);
   });
 });

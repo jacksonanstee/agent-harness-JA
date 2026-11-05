@@ -88,7 +88,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Owns:** the built-in, non-configurable deny on agent writes to the harness's own state: both `.harness` directories, the run's skills root and an outside `--db` with its sidecars (ADR-0042).
 - **Public API:** `buildProtectedRoots({ userDir, projectDir, skillsDir, dbPath }): ProtectedRoots`; `selfProtectionHook(roots)` (pre-tool handler throwing `SelfProtectionViolation` with the fixed `SELF_PROTECTION_REASON`).
 - **Depends on:** `internal/tool-targets` (the shared table's `writes` flag, `canonicalizePath` and `CASE_INSENSITIVE_PLATFORM`), the `security/pre-tool-like` payload type, and `node:fs` for real-path resolution; reads no settings.
-- **Design notes:** Registered FIRST by `registerSecurityHooks`, so the pre-tool stack is five deep: self-protection, the code-execution deny, the ungated-tool deny, permissions, sandbox. Writer targets are compared as written and by real path, walking raw components so links (dangling ones too) are followed before `..`, 40 hops in total; Bash and Monitor are denied when a shell-style word (a bare `skills` or `.harness`, quoted or not, included) or an absolute mention names a protected path, after `HOME` and `~` spellings are expanded. Defence in depth for commands (R-23). Shipped ([ADR-0042](./decisions/0042-built-in-self-protection-deny.md)).
+- **Design notes:** Registered FIRST by `registerSecurityHooks`, so the pre-tool stack is six deep: self-protection, the code-execution deny, the ungated-tool deny, the unreviewed-tool deny, permissions, sandbox. Writer targets are compared as written and by real path, walking raw components so links (dangling ones too) are followed before `..`, 40 hops in total; Bash and Monitor are denied when a shell-style word (a bare `skills` or `.harness`, quoted or not, included) or an absolute mention names a protected path, after `HOME` and `~` spellings are expanded. Defence in depth for commands (R-23). Shipped ([ADR-0042](./decisions/0042-built-in-self-protection-deny.md)).
 
 #### `security/code-execution-deny`
 
@@ -104,12 +104,19 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Depends on:** `internal/tool-targets` (the two lists) and the `security/pre-tool-like` payload type; reads no settings and no arguments.
 - **Design notes:** Registered THIRD, via `builtInDenyHooks`, before any rule is read. It matches an exact tool name or a whole `mcp__<server>__` prefix and never reads arguments, because the CLI can rewrite Artifact's input after the pre-tool hook. A refused tool has no tool-table entry. Each entry's evidence is checked by the parity test: declared in `sdk-tools.d.ts`, or a needle found in the installed platform binary. Its reason prefix `built-in tool deny: ` differs from the other built-in denies'. Residual R-25. Shipped ([ADR-0044](./decisions/0044-sdk-0-3-312-deny-artifact-family-and-binary-only-tools.md)).
 
+#### `security/unknown-tool-deny`
+
+- **Owns:** the built-in default-deny: every non-MCP tool not in `ALLOWED_TOOL_NAMES` (the gated table, the `commands` and `withheld` code runners, and `ACKNOWLEDGED_TOOLS`), every MCP tool whose server is not in the USER layer's `sdk.allowedMcpServers` (default none), and every `Agent` call whose own arguments carry a `cwd` or an `isolation` other than `"worktree"`.
+- **Public API:** `unknownToolDenyHook({ allowedMcpServers? })` (pre-tool handler throwing `UnknownToolDenied`, `McpServerDenied` or `RemoteAgentDenied`, each with its fixed reason).
+- **Depends on:** `internal/tool-targets` (`ALLOWED_TOOL_NAMES`) and the `security/pre-tool-like` payload type; reads no settings itself (the MCP server list is passed in).
+- **Design notes:** Registered FOURTH, via `builtInDenyHooks`, after the other built-in denies, so their more specific reasons win for the tools they also refuse. Names match exactly. An MCP name passes only as `mcp__<server>__<tool>` under a listed server, with a tool segment that is non-empty and does not start with `_`, because the bundled CLI runs MCP servers no operator configured; a rule allow is never a grant for an MCP tool, so the CLI's own check still decides (R-26). For `Agent` it reads only own fields: any `cwd` refuses, and `isolation` passes only when absent, undefined or `"worktree"`. The parity test demands a ruling for every typed-surface tool (`BUILTIN_TOOL_NAMES` plus the declared union) and pins the installed binary's tool-definition count. Shipped ([ADR-0045](./decisions/0045-default-deny-unreviewed-tools.md)).
+
 #### `security/built-in-denies`
 
-- **Owns:** the one shipped order of the three built-in, non-configurable pre-tool denies.
-- **Public API:** `builtInDenyHooks(roots)`: self-protection, the code-execution deny, the ungated-tool deny, in that order, as fresh handlers.
-- **Depends on:** `security/self-protection`, `security/code-execution-deny`, `security/ungated-tool-deny`.
-- **Design notes:** `registerSecurityHooks` registers its result before permissions and the sandbox; a library caller that composes its own stack should use it rather than re-type the order. Its test probes each position against each deny, so a reorder, a drop or a duplicate fails. Shipped ([ADR-0044](./decisions/0044-sdk-0-3-312-deny-artifact-family-and-binary-only-tools.md) D4).
+- **Owns:** the one shipped order of the four built-in, non-configurable pre-tool denies.
+- **Public API:** `builtInDenyHooks(roots, { allowedMcpServers? })`: self-protection, the code-execution deny, the ungated-tool deny, the unreviewed-tool deny, in that order, as fresh handlers.
+- **Depends on:** `security/self-protection`, `security/code-execution-deny`, `security/ungated-tool-deny`, `security/unknown-tool-deny`.
+- **Design notes:** `registerSecurityHooks` registers its result before permissions and the sandbox; a library caller that composes its own stack should use it rather than re-type the order. Its test probes each position against each deny, so a reorder, a drop or a duplicate fails. Shipped ([ADR-0044](./decisions/0044-sdk-0-3-312-deny-artifact-family-and-binary-only-tools.md) D4; the fourth deny, [ADR-0045](./decisions/0045-default-deny-unreviewed-tools.md) D7).
 
 #### `security/sandbox`
 

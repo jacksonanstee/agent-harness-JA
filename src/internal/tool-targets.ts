@@ -206,6 +206,104 @@ export const BINARY_ONLY_TOOLS: Readonly<Record<string, { readonly binaryNeedle:
 };
 
 /**
+ * The prefix of every MCP tool name: the bundled CLI builds each one as
+ * `mcp__<normalised server>__<tool>`. Shared by the unreviewed-tool deny and
+ * the grant rule so the literal lives in one place (#225).
+ */
+export const MCP_TOOL_PREFIX = 'mcp__';
+
+/**
+ * Non-MCP tools the harness lets through without a table entry, each with the
+ * reason it was ruled safe (issue #225, owner 05/11/2026). Everything not
+ * allowed is refused by the built-in unreviewed-tool deny: the bundled CLI defines tools
+ * that no SDK type or `BUILTIN_TOOL_NAMES` lists (read from the 0.3.312
+ * binary: SendFile, PublishPlugin, DesignSync, AppifactRepl, memory_write, the
+ * self_hosted_runner_* family and more), and when a tool defines no permission
+ * check of its own the CLI allows it outright. So the gate is an allowlist,
+ * not a deny list. An entry here means "no reach to local files, commands or
+ * off-box data that a headless run needs gated", not "harmless": the list is
+ * only what a headless harness run needs. Growing it is a reviewed change
+ * (ratchet in unknown-tool-deny.test.ts).
+ */
+export const ACKNOWLEDGED_TOOLS: Readonly<Record<string, string>> = {
+  Agent:
+    'a local or worktree subagent whose own tool calls pass the same hooks; a call whose own arguments carry a cwd ' +
+    'or any isolation other than "worktree" (a cloud agent no local hook sees) is refused by the built-in deny',
+  AskUserQuestion: 'asks the operator a question in the local UI; no file, command or network reach',
+  EndConversation: 'ends the session; no input fields (the binary appears to exempt it from hooks, read not run)',
+  EnterPlanMode: 'a permission-mode transition into plan mode; no input fields, and plan mode only narrows what runs',
+  ExitPlanMode: 'a permission-mode transition out of plan mode; no file or command field (its only declared field is deprecated)',
+  RefreshMcpTools: 'reloads the tool list of a configured MCP server; no file, command or network field',
+  ReportFindings: 'renders review findings in the host UI; nothing is written or sent',
+  StructuredOutput: 'returns the structured result the caller asked for; ends the turn',
+  SubagentHandback: 'a subagent delivers its report to the agent that spawned it, in process',
+  TaskCreate: 'local task-list entry; no file, command or network field',
+  TaskGet: 'reads a local task-list entry',
+  TaskList: 'lists local task-list entries',
+  TaskStop: 'stops a background task by id; starts nothing',
+  TaskUpdate: 'updates a local task-list entry',
+  TodoWrite: 'local todo list',
+  ToolSearch: 'loads deferred tool schemas from the in-memory registry; every loaded tool still meets this gate',
+  WaitForMcpServers: 'waits for configured MCP servers to connect; no file, command or network field',
+  WebFetch: 'network egress by URL: ungated by design, a URL dimension is future work (ADR-0015, R-3)',
+  WebSearch: 'network egress by query: ungated by design (ADR-0015, R-3)',
+};
+
+/**
+ * Typed-surface tools (SDK `BUILTIN_TOOL_NAMES` or a declared `*Input`) that
+ * the harness reviewed and refuses, with the reason (issue #225, owner
+ * 05/11/2026). The built-in unreviewed-tool deny refuses them because they
+ * are not allowed; this list does not drive it and is read by the parity test
+ * only. Never wire it into the hook: that would turn the allowlist back into a
+ * deny list. It exists so the parity test can require every typed-surface name
+ * to carry a ruling, and so a reader sees why. Binary-only tools are refused
+ * by default and need no entry.
+ */
+export const REVIEWED_REFUSED_TOOLS: Readonly<Record<string, string>> = {
+  ClaudeDesign: 'writes to claude.ai design projects through a server-defined, opaque arguments object',
+  CronCreate: 'schedules a prompt to run later; the CLI marks it as enabling code execution and allows it outside auto mode',
+  CronDelete: 'scheduler state; refused with CronCreate',
+  CronList: 'scheduler state; refused with CronCreate',
+  ExitWorktree: 'its remove action deletes a worktree and branch with no path field to gate',
+  ListAgents: 'lists other local and cloud Claude sessions this session can reach',
+  ListMcpResourcesTool:
+    'lists resources of ANY connected MCP server, including servers not in sdk.allowedMcpServers and the CLI\'s own; ' +
+    'not needed by a headless run',
+  LSP: 'reads files by filePath and starts plugin-configured language servers; neither is gated',
+  OfferChromeSetup: 'offers browser control setup; not needed by a headless run',
+  PowerShell: 'a command runner; the harness argv checker parses POSIX shell only',
+  propose_skills: 'interactive review card; not needed by a headless run',
+  ProposeGoal: 'interactive goal approval; not needed by a headless run',
+  PushNotification: 'sends a message off the box, to a terminal or a phone',
+  ReadMcpResourceDirTool: 'lists a resource directory of ANY connected MCP server; refused with ListMcpResourcesTool',
+  ReadMcpResourceTool: 'reads a resource of ANY connected MCP server (its server field is not checked); refused with ListMcpResourcesTool',
+  ReadNotifications: 'reads queued external webhook and trigger content; not needed by a headless run',
+  RemoteTrigger: 'manages cloud agents through the claude.ai API; the CLI marks it as enabling code execution',
+  ScheduleWakeup: 'resumes a /loop session later; not needed by a headless run',
+  SendFeedback: 'queues a feedback draft; not needed by a headless run',
+  SendMessage: 'its `to` field accepts bridge: addresses, other machines and cloud sessions',
+  SendUserFile: 'reads local files by path and uploads them to the user',
+  SendUserMessage: 'in brief mode its attachments field reads local files by path and uploads them',
+  ShareOnboardingGuide: 'uploads ./ONBOARDING.md to the organisation and returns a share link',
+  ShowOnboardingRolePicker: 'interactive picker; not needed by a headless run',
+  Skill:
+    "a skill's inline shell commands run through the shell tool after only the CLI's own permission check, " +
+    'outside the pre-tool hooks; the harness loads its own skills separately',
+};
+
+/**
+ * Every non-MCP tool name the unreviewed-tool deny lets through: the gated table,
+ * the code runners whose gate is not `denied`, and the acknowledged tools.
+ */
+export const ALLOWED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(TOOL_TARGET_FIELDS),
+  ...Object.entries(CODE_EXECUTING_TOOLS)
+    .filter(([, gate]) => gate !== 'denied')
+    .map(([tool]) => tool),
+  ...Object.keys(ACKNOWLEDGED_TOOLS),
+]);
+
+/**
  * The default filesystems on darwin (APFS) and win32 (NTFS) are
  * case-insensitive: `/SAFE/x` and `/safe/x` are the same file but different
  * strings, so purely lexical comparison lets a deny rule be dodged by case

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { composeSecurity, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, SettingsLoadError } from './shared.js';
+import { composeSecurity, SDK_MCP_UNUSED_WARNING, SDK_PROJECT_INHERIT_WARNING, SDK_USER_INHERIT_WARNING, SettingsLoadError } from './shared.js';
 
 const created: string[] = [];
 afterAll(() => {
@@ -68,5 +68,36 @@ describe('composeSecurity: the sdk key, user layer only (#140, ADR-0040 D2)', ()
     expect(() => composeSecurity({ userDir, projectDir: layer(undefined) })).toThrow(
       `${join(userDir, '.harness', 'settings.json')}: sdk.settingSources must be an array`,
     );
+  });
+});
+
+describe('composeSecurity: sdk.allowedMcpServers, user layer only (#225, ADR-0045)', () => {
+  it('no list anywhere: allowedMcpServers [] (every MCP tool refused)', () => {
+    expect(compose({}, {}).c.sdk.allowedMcpServers).toEqual([]);
+  });
+
+  it('a user list reaches the composition as written', () => {
+    expect(compose({ sdk: { allowedMcpServers: ['github', 'my-db'] } }, {}).c.sdk.allowedMcpServers).toEqual(['github', 'my-db']);
+  });
+
+  // Architecture review: with no settings inherited the run loads no MCP server, so a list is dead configuration.
+  it('a list with no settingSources warns once that it has no effect; with settingSources it does not', () => {
+    expect(compose({ sdk: { allowedMcpServers: ['github'] } }, {}).c.warnings).toEqual([SDK_MCP_UNUSED_WARNING]);
+    expect(compose({ sdk: { settingSources: ['user'], allowedMcpServers: ['github'] } }, {}).c.warnings).toEqual([SDK_USER_INHERIT_WARNING]);
+    expect(compose({ sdk: { allowedMcpServers: [] } }, {}).c.warnings).toEqual([]);
+  });
+
+  it('a project list never allows a server, alone or beside a user list (a cloned repo cannot widen it)', () => {
+    expect(compose({}, { sdk: { allowedMcpServers: ['ide'] } }).c.sdk.allowedMcpServers).toEqual([]);
+    expect(compose({ sdk: { allowedMcpServers: ['github'] } }, { sdk: { allowedMcpServers: ['ide'] } }).c.sdk.allowedMcpServers).toEqual(['github']);
+  });
+
+  it('a MALFORMED project list never exits 2 (the project sdk key is detected, not parsed)', () => {
+    const { c } = compose({}, { sdk: { allowedMcpServers: ['a__b', 1] } });
+    expect(c.sdk.allowedMcpServers).toEqual([]);
+  });
+
+  it('a malformed user list fails loud', () => {
+    expect(() => compose({ sdk: { allowedMcpServers: ['a__b'] } }, {})).toThrow(SettingsLoadError);
   });
 });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON } from '../security/index.js';
+import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
@@ -314,10 +314,11 @@ describe('parseSafeInt (issue #128)', () => {
 
 describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site for run and eval)', () => {
   const bashRule = (decision: 'allow' | 'deny') => ({ permissions: { rules: [{ tool: 'Bash', match: 'git *', decision }] } });
-  const compose = (user: unknown, ungrantable: string[], sandbox: unknown = {}) => ({
+  const compose = (user: unknown, ungrantable: string[], sandbox: unknown = {}, allowedMcpServers: string[] = []) => ({
     permissions: mergeLayers(parsePermissionSettings(user), parsePermissionSettings({})),
     grantPolicy: { ungrantableTools: new Set(ungrantable) },
     sandbox: mergeSandboxLayers(parseSandboxSettings(sandbox), parseSandboxSettings({})),
+    sdk: { settingSources: [], allowedMcpServers },
   });
   const payload = { event: 'pre-tool' as const, tool: 'Bash', args: { command: 'git status' }, redactions: null };
   // #188: a real roots set over a throwaway home and project.
@@ -334,12 +335,12 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
   });
 
-  it('registers exactly five pre-tool handlers (self-protection, code-execution deny, ungated-tool deny, permissions, sandbox; #188, #211, #219)', async () => {
+  it('registers exactly six pre-tool handlers (self-protection, code-execution deny, ungated-tool deny, unreviewed-tool deny, permissions, sandbox; #188, #211, #219, #225)', async () => {
     const hooks = createHookRuntime();
     registerSecurityHooks(hooks, compose({}, []), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(false);
-    expect(result.handlersFired).toBe(5);
+    expect(result.handlersFired).toBe(6);
   });
 
   // #219: the Artifact family reaches local files past the path gates (upload lists, download folders, a
@@ -373,6 +374,43 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.denied).toBe(true);
     if (!result.denied) throw new Error('unreachable');
     expect(result.reason).toBe(CODE_EXECUTION_DENY_REASON);
+  });
+
+  // #225: default-deny. No rule or sandbox list can let an unreviewed tool, or a cloud subagent, through.
+  it.each([
+    ['PowerShell', { command: 'Get-Content ~/.ssh/id_rsa' }, UNKNOWN_TOOL_DENY_REASON],
+    ['SendUserFile', { files: [join(spHome, '.ssh', 'id_rsa')] }, UNKNOWN_TOOL_DENY_REASON],
+    ['Skill', { skill: 'x' }, UNKNOWN_TOOL_DENY_REASON],
+    ['a_tool_from_a_future_sdk', {}, UNKNOWN_TOOL_DENY_REASON],
+    ['Agent', { prompt: 'p', isolation: 'remote' }, REMOTE_AGENT_DENY_REASON],
+  ])('a user allow-everything rule with both sandbox lists cannot let %s through; the built-in reason is reported', async (tool, args, reason) => {
+    const hooks = createHookRuntime();
+    const allowAll = { permissions: { rules: [{ tool: '*', decision: 'allow' }] } };
+    registerSecurityHooks(hooks, compose(allowAll, [], { sandbox: { paths: { allow: ['/'] }, commands: { allow: ['ls'] } } }), roots);
+    const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool, args, redactions: null });
+    expect(result.denied).toBe(true);
+    if (!result.denied) throw new Error('unreachable');
+    expect(result.reason).toBe(reason);
+  });
+
+  // #225: the CLI runs MCP servers no operator configured. With none listed, a user allow-everything rule
+  // cannot reach one; with the server listed, the call passes the harness but the rule is no grant, so the
+  // CLI's own check still decides.
+  it('a user allow-everything rule cannot reach an unlisted MCP server; a listed one passes without a grant', async () => {
+    const allowAll = { permissions: { rules: [{ tool: '*', decision: 'allow' }] } };
+    const closed = createHookRuntime();
+    registerSecurityHooks(closed, compose(allowAll, []), roots);
+    const refused = await closed.fire('pre-tool', { event: 'pre-tool', tool: 'mcp__ide__executeCode', args: { code: '1' }, redactions: null });
+    expect(refused.denied).toBe(true);
+    if (!refused.denied) throw new Error('unreachable');
+    expect(refused.reason).toBe(MCP_SERVER_DENY_REASON);
+
+    const listed = createHookRuntime();
+    registerSecurityHooks(listed, compose(allowAll, [], {}, ['github']), roots);
+    const passed = await listed.fire('pre-tool', { event: 'pre-tool', tool: 'mcp__github__create_issue', args: {}, redactions: null });
+    expect(passed.denied).toBe(false);
+    if (passed.denied) throw new Error('unreachable');
+    expect(passed.granted).toBe(false);
   });
 
   // #188 D5: first, so no rule, grant or absent sandbox can let a policy write through.
