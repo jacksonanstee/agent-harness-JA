@@ -37,7 +37,7 @@ The owner ruled on 03/11/2026, in four steps:
 - `DENIED_TOOLS`: `Artifact`, `ArtifactData`, `ArtifactComments` and `ArtifactCheck`, matched by exact name;
 - `DENIED_TOOL_PREFIXES`: `mcp__claude-artifacts__`, plus the underscore spelling in case a build normalises the server name, matched as a whole `mcp__<server>__` segment.
 
-`ungatedToolDenyHook` (`src/security/ungated-tool-deny.ts`) refuses any call that matches either list, whatever the rules say. It reads neither the arguments, which the CLI may rewrite after the hook, nor any settings. Its reason is the fixed `UNGATED_TOOL_DENY_REASON`.
+`ungatedToolDenyHook` (`src/security/ungated-tool-deny.ts`) refuses any call that matches either list, whatever the rules say. It reads neither the arguments, which the CLI may rewrite after the hook, nor any settings. Its reason is the fixed `UNGATED_TOOL_DENY_REASON`. *Amended 08/11/2026 (issue #230): the check is now `ungatedToolDenial` in the same file, step 2 of `toolNameDenyHook`; it still reads neither arguments nor settings, and the reason is unchanged.*
 
 In `shared.test.ts`, eight shapes go through the composed hook stack with a user allow-everything rule and a project-scoped path sandbox:
 - six Artifact calls: `file_paths`, `out_dir`, `files`, `read_asset` with no `out_dir`, a consolidated `paths` read, and a plain single-file publish;
@@ -62,7 +62,7 @@ The darwin-arm64 and linux-x64 0.3.312 builds both hold every needle (read 03/11
 
 The needle is weak evidence: it shows the CLI still reads the enabling variable, not that the tool still registers. That stays UNCHECKED statically. REPL stays `denied`. The deny matches the tool name, and both constants are exactly `"REPL"`.
 
-**D4. One order for the built-in denies.** `builtInDenyHooks(roots)` (`src/security/built-in-denies.ts`) returns self-protection, the code-execution deny and the ungated-tool deny in that order. `registerSecurityHooks` registers them before permissions and the sandbox. It is on the root barrel, so a library caller that composes its own stack gets the same order instead of re-typing it. *Amended 05/11/2026 (issue #225, ADR-0045): a fourth deny, the unreviewed-tool deny, follows these three.*
+**D4. One order for the built-in denies.** `builtInDenyHooks(roots)` (`src/security/built-in-denies.ts`) returns self-protection, the code-execution deny and the ungated-tool deny in that order. `registerSecurityHooks` registers them before permissions and the sandbox. It is on the root barrel, so a library caller that composes its own stack gets the same order instead of re-typing it. *Amended 05/11/2026 (issue #225, ADR-0045): a fourth deny, the unreviewed-tool deny, follows these three.* *Amended 08/11/2026 (issue #230), ADR-0045 D7: the code-execution, ungated-tool and unreviewed-tool denies are one classifier, `toolNameDenyHook`, in the same order; the ungated-tool check is now `ungatedToolDenial`, its second step. `builtInDenyHooks` returns self-protection, the tool-name deny and the remote-agent deny.*
 
 The new reason has its own prefix, `built-in tool deny: `, so a telemetry row is attributable by reason even when handler indices differ between releases. A tool is in at most one of `DENIED_TOOLS` and `CODE_EXECUTING_TOOLS`, which the parity test pins.
 
@@ -74,7 +74,7 @@ The new reason has its own prefix, `built-in tool deny: `, so a telemetry row is
 
 ## Consequences
 
-- Telemetry `handlerIndex` shifts by one: the permission hook is now 3 and the sandbox 4. A query that filters by index must be updated, as after ADR-0042. Rows carry no harness version, so prefer the reason prefix. *Amended 05/11/2026 (ADR-0045): now 4 and 5.*
+- Telemetry `handlerIndex` shifts by one: the permission hook is now 3 and the sandbox 4. A query that filters by index must be updated, as after ADR-0042. Rows carry no harness version, so prefer the reason prefix. *Amended 05/11/2026 (ADR-0045): now 4 and 5.* *Amended 08/11/2026 (issue #230): now 3 and 4.*
 - A library caller that registers its own hooks gets no built-in deny unless it registers them. `builtInDenyHooks` is the supported way.
 - Residual R-25: a tool that reaches local files outside the table is refused only if it is listed.
 - Rules that name Artifact no longer match on its path: no rule can allow it. A library caller that registers the exported `sandboxHook` with a `paths` list but WITHOUT `builtInDenyHooks` used to have the sandbox gate Artifact's `file_path`, and refuse a call lacking one. It now passes Artifact as an untabled tool, so such a caller must register `builtInDenyHooks`. A permission rule naming Artifact now matches the arguments' JSON instead of a canonical path. Declared target-shaped fields are found by the parity test. Undeclared tools and inputs are found only by reading the binary, and nothing re-reads it automatically for new ones.

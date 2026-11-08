@@ -4,6 +4,8 @@
 // judged-scan-constants.ts). Not re-exported from the package or the session
 // index: internal to the session.
 
+import { MCP_TOOL_PREFIX } from '../internal/tool-targets.js';
+
 /**
  * Aggregate bounds on the model-facing rewrite walk (issue #84, D1, G-7).
  * `JSON.parse` accepts nesting and breadth a recursive walk cannot survive, so
@@ -176,9 +178,6 @@ export const SDK_OUTPUT_LITERALS: Readonly<Record<string, readonly string[]>> = 
   unanswered: ['dismissed', 'replied_in_chat', 'skipped'],
   verdict: ['CONFIRMED', 'PLAUSIBLE'],
 };
-
-/** MCP tools are named `mcp__<server>__<tool>`; the CLI never schema-checks their output. */
-const MCP_TOOL_PREFIX = 'mcp__';
 
 /**
  * True when a leaf is a structural value the CLI's output-schema check needs

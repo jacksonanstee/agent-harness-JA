@@ -76,7 +76,7 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
  * - `withheld`: never a grant; the bundled CLI's own permission check decides,
  *   and it asks, which a headless run refuses;
  * - `denied`: refused by a built-in hook before any rule is read
- *   (`codeExecutionDenyHook`), because the CLI's own check allows it.
+ *   (`codeExecutionDenial`, step 1 of `toolNameDenyHook`), because the CLI's own check allows it.
  */
 export type CodeExecutionGate = 'commands' | 'withheld' | 'denied';
 
@@ -136,7 +136,7 @@ export interface DeniedTool {
 
 /**
  * Tools that reach local files in ways no harness gate can check, refused by
- * name by `ungatedToolDenyHook` (issue #219). At SDK 0.3.312 that is the
+ * name by `ungatedToolDenial`, step 2 of `toolNameDenyHook` (issue #219). At SDK 0.3.312 that is the
  * Artifact family: Artifact reads and writes local files through inputs the
  * one-field table cannot carry (`file_paths`, `out_dir`, `read_asset`'s default
  * folder, and the undeclared `files`, `paths`, `edits`, `read_file`), and a

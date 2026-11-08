@@ -57,18 +57,17 @@ export type { PreToolLike } from './pre-tool-like.js';
 export { hasSdkKey, parseSdkAllowedMcpServers, parseSdkSettings, SDK_ALLOWED_MCP_SERVERS_MESSAGE, SDK_SETTING_SOURCES_MESSAGE, SdkSettingsError, SETTING_SOURCES } from './sdk-settings.js';
 export type { SettingSource } from './sdk-settings.js';
 export { buildProtectedRoots, SELF_PROTECTION_REASON, selfProtectionHook, SelfProtectionViolation } from './self-protection.js';
-export { CODE_EXECUTION_DENY_REASON, codeExecutionDenyHook, CodeExecutionDenied } from './code-execution-deny.js';
-export { UNGATED_TOOL_DENY_REASON, ungatedToolDenyHook, UngatedToolDenied } from './ungated-tool-deny.js';
+export { CODE_EXECUTION_DENY_REASON, CodeExecutionDenied } from './code-execution-deny.js';
+export { UNGATED_TOOL_DENY_REASON, UngatedToolDenied } from './ungated-tool-deny.js';
 export {
   MCP_SERVER_DENY_REASON,
   McpServerDenied,
-  REMOTE_AGENT_DENY_REASON,
-  RemoteAgentDenied,
   UNKNOWN_TOOL_DENY_REASON,
-  unknownToolDenyHook,
   UnknownToolDenied,
 } from './unknown-tool-deny.js';
-export type { UnknownToolDenyOptions } from './unknown-tool-deny.js';
+export { REMOTE_AGENT_DENY_REASON, remoteAgentDenyHook, RemoteAgentDenied } from './remote-agent-deny.js';
+export { toolNameDenyHook } from './tool-name-deny.js';
+export type { ToolNameDenyOptions } from './tool-name-deny.js';
 export {
   AGENT_SCAN_MAX_DEPTH,
   AGENT_SCAN_MAX_FILES,

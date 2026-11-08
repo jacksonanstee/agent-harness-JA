@@ -67,7 +67,7 @@ export function parseSdkSettings(doc: unknown): SettingSource[] {
 
 /**
  * Validates `sdk.allowedMcpServers` of a USER settings document (#225, ADR-0045):
- * the MCP servers whose tools `unknownToolDenyHook` lets through. Absent key,
+ * the MCP servers whose tools `toolNameDenyHook` lets through. Absent key,
  * absent list and `[]` all resolve to `[]`, which refuses every MCP tool:
  * the bundled CLI runs MCP servers no operator configured. Anything else must
  * be an array of distinct server names, returned as a fresh array in the

@@ -687,8 +687,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       }
     },
   });
-  // Order (self-protection, code-execution deny, permissions, then sandbox)
-  // lives in registerSecurityHooks. #188: the run's own state is protected.
+  // Order (the built-in denies from builtInDenyHooks, then permissions, then
+  // sandbox) lives in registerSecurityHooks. #188: the run's own state is protected.
   const protectedRoots = buildProtectedRoots({
     userDir: seams.userDir ?? homedir(),
     projectDir: process.cwd(),
