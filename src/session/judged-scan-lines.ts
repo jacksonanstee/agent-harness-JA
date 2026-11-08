@@ -1,4 +1,4 @@
-import { describeError } from './describe-error.js';
+import { scannerFailure } from './redactor-failure.js';
 import { JUDGE_EARLY_STOP_AFTER, JUDGE_MAX_CONCURRENT } from './judged-scan-constants.js';
 
 // Issue #96 PR-B1: the judge path's live-line texts (spec D7; U-1, U-3, U-4;
@@ -51,7 +51,7 @@ export function judgeRefusedWarning(): string {
 
 /** Spec D3 step 5: a judged-scanner rejection is reported like today's scanner failure (ADR-0026 D7), same prefix, same renderer. */
 export function judgeScanFailedWarning(error: unknown): string {
-  return `injection scan failed: ${describeError(error)}`;
+  return `injection scan failed: ${scannerFailure(error)}`;
 }
 
 /** U-4: the existing LEAKED warning, naming the hook timeout as the cause instead of the redactor. */

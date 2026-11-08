@@ -68,7 +68,8 @@ export { FENCE_OPENER_RE };
 import { relativeSkillDropPath } from './skill-drop-path.js';
 import { cleanSdkToken, isModelRefusal } from './sdk-refusal.js';
 import { describeError } from './describe-error.js';
-import { redactorFailure } from './redactor-failure.js';
+import { redactorFailure, scannerFailure } from './redactor-failure.js';
+import { withIdentifierRuleIds } from './scan-rule-ids.js';
 import { createAgentGate } from './agent-gate.js';
 import { INIT_CHECK_NOT_RUN, initCheckWarning } from '../security/index.js';
 import type { InitCheck } from '../security/index.js';
@@ -1024,20 +1025,32 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
-    // Redacts the final result text for the memory copy and the returned
-    // SessionResult (issue #112). Like redactForPersistence, but it warns on a
-    // failure, since a library caller or an eval oracle otherwise sees only the
-    // sentinel. Absent redactor → as is (nothing configured).
-    function redactResultText(value: string | null): string | null {
-      if (value === null || deps.redactSecrets === undefined) return value;
+    // Redacts text the session returns to its caller and keeps in memory: the
+    // final result (issue #112) and each deny reason (issue #234). Like
+    // redactForPersistence, but it warns on a failure, since a library caller
+    // or an eval oracle otherwise sees only the sentinel. Absent redactor → as
+    // is (nothing configured).
+    function redactForBoundary(value: string, what: 'the result text' | 'a deny reason'): string {
+      if (deps.redactSecrets === undefined) return value;
       try {
         const { redacted } = deps.redactSecrets(value);
         if (typeof redacted === 'string') return redacted;
-        warn('secret redaction failed for the result text: redactor returned a non-string');
+        warn(`secret redaction failed for ${what}: redactor returned a non-string`);
       } catch (error: unknown) {
-        warn(`secret redaction failed for the result text: ${redactorFailure(error)}`);
+        warn(`secret redaction failed for ${what}: ${redactorFailure(error)}`);
       }
       return REDACTION_FAILED;
+    }
+
+    // A post-tool hook receives the RAW tool result (ADR-0013 §9), so its
+    // thrown reason can carry a secret (#234): redact-then-bound, like the
+    // pre-tool fire-failed telemetry row, before it reaches the warning
+    // channel. Also bounds a scanner's rule ids. At most HOOK_EVENT_REASON_MAX
+    // characters, the ellipsis included.
+    // A function declaration, not a const: it is hoisted, because the skill
+    // channel scan (above, at load time) reaches it before this line runs.
+    function boundedHookReason(reason: string): string {
+      return boundHookEventReason(redactForPersistence(reason) ?? REDACTION_FAILED);
     }
 
     // Redacts one assistant text block before it is handed to `onText`
@@ -1088,18 +1101,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     function runInjectionScan(tool: string, output: unknown): unknown {
       if (deps.scanInjection === undefined) return null;
       try {
-        const result = deps.scanInjection(stringifyForScan(output));
+        const result = withIdentifierRuleIds(deps.scanInjection(stringifyForScan(output)));
         if (result.verdict !== 'pass') {
           warn(
             `injection scan ${result.verdict} on ${tool} output ` +
-              `(rules: ${result.rule_ids.map(sanitizeText).join(', ')})`,
+              // #234 review: ids are identifiers by now (withIdentifierRuleIds); still bounded, a scanner can return many.
+              `(rules: ${boundedHookReason(result.rule_ids.map(sanitizeText).join(', '))})`,
           );
         }
         return result;
       } catch (error: unknown) {
-        warn(
-          `injection scan failed: ${describeError(error)}`,
-        );
+        warn(`injection scan failed: ${scannerFailure(error)}`);
         return null;
       }
     }
@@ -1656,10 +1668,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           redactions: redaction?.findings ?? null,
         });
         for (const error of fireResult.errors) {
-          warn(`post-tool hook error: ${error.reason}`);
+          warn(`post-tool hook error: ${boundedHookReason(error.reason)}`);
         }
       } catch (error: unknown) {
-        warn(`post-tool fire failed: ${describeError(error)}`);
+        // #234 review: redacted like the pre-tool fire-failed warning; the payload held the raw result.
+        warn(`post-tool fire failed: ${redactForPersistence(describeError(error)) ?? REDACTION_FAILED}`);
       }
 
       let withheld: { value: unknown } | null = null;
@@ -1746,10 +1759,11 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           failed: true,
         });
         for (const error of fireResult.errors) {
-          warn(`post-tool hook error: ${error.reason}`);
+          warn(`post-tool hook error: ${boundedHookReason(error.reason)}`);
         }
       } catch (error: unknown) {
-        warn(`post-tool fire failed: ${describeError(error)}`);
+        // #234 review: redacted like the pre-tool fire-failed warning; the payload held the raw result.
+        warn(`post-tool fire failed: ${redactForPersistence(describeError(error)) ?? REDACTION_FAILED}`);
       }
       if (jh !== null) {
         const decision = jh.decide(judged);
@@ -2007,7 +2021,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // #112: redacted ONCE and shared by the memory copy and the returned result,
     // so a stateful redactor cannot give the two sinks different text. A failure
     // warns (class only, #113) and fails closed to the sentinel.
-    const safeResultText = redactResultText(resultText);
+    const safeResultText = resultText === null ? null : redactForBoundary(resultText, 'the result text');
+    // #234: each deny reason likewise, shared by memory and the return. A
+    // hook's thrown reason can echo the tool input, which can carry a secret.
+    const safeDenied: DeniedToolCall[] = denied.map((call) => ({ tool: call.tool, reason: redactForBoundary(call.reason, 'a deny reason') }));
     let memoryEntryId: string | null = null;
     const writeResult = deps.memory.write({
       id: `session-${sessionId}`,
@@ -2028,10 +2045,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // Same redact-then-truncate as prompt/resultText: the deny reason is
         // harness-authored today, but ANY registered hook's throw message
         // lands here, and this is a retained sink (R-17 channel d, ADR-0031).
-        denied: denied.map((call) => ({
-          tool: call.tool,
-          reason: truncate(redactForPersistence(call.reason)),
-        })),
+        denied: safeDenied.map((call) => ({ tool: call.tool, reason: truncate(call.reason) })),
         failed: streamError !== null,
       }),
     });
@@ -2057,7 +2071,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       maxBudgetUsd,
       interrupted,
       numTurns,
-      denied,
+      // #234: redacted at the boundary, shared with the memory copy.
+      denied: safeDenied,
       cliDenied,
       initCheck,
       memoryEntryId,

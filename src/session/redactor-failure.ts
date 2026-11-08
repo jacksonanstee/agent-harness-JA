@@ -1,5 +1,6 @@
 /**
- * What a warning may say about a redactor that threw (issue #113). The
+ * What a warning may say about a redactor, or an injection scanner, that threw
+ * (issues #113 and #234: both take secret-bearing input). The
  * redactor's input is secret-bearing by construction, so its error message can
  * carry the secret (a redactor throwing `new Error('bad input: ' + text)` put
  * it on stderr). So can a custom error's `name`, and a thrown non-Error. Only a
@@ -30,6 +31,14 @@ function errorKind(error: unknown): string {
   }
 }
 
+const withheld = (component: string, error: unknown, issue: string): string =>
+  `the ${component} threw ${errorKind(error)}; its message is withheld because it can carry the input (${issue})`;
+
 export function redactorFailure(error: unknown): string {
-  return `the redactor threw ${errorKind(error)}; its message is withheld because it can carry the input (#113)`;
+  return withheld('redactor', error, '#113');
+}
+
+/** The injection scanner's input is the raw tool output (#234). */
+export function scannerFailure(error: unknown): string {
+  return withheld('scanner', error, '#234');
 }

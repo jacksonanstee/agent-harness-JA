@@ -19,6 +19,13 @@ describe('redactorFailure', () => {
     }
   });
 
+  it('scannerFailure says the same, naming the scanner and #234', async () => {
+    const { scannerFailure } = await import('./redactor-failure.js');
+    expect(scannerFailure(new TypeError('secret'))).toBe(
+      'the scanner threw TypeError; its message is withheld because it can carry the input (#234)',
+    );
+  });
+
   it('names each standard class, and anything else as non-standard, never throwing', async () => {
     const { redactorFailure } = await import('./redactor-failure.js');
     const { proxy, revoke } = Proxy.revocable({}, {});
