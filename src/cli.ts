@@ -43,9 +43,10 @@ import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
-import { createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
+import { agentScanFor, createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
 import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session/index.js';
 import {
+  AgentDefinitionRefused,
   redact,
   scan,
   buildProtectedRoots,
@@ -717,6 +718,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       telemetry,
       scanInjection: (text) => scan(text),
       redactSecrets: (text) => redact(text),
+      // #229: the agent-file scan reads the same home directory as the settings.
+      scanAgents: agentScanFor(seams.userDir ?? homedir()),
       ...runJudgeDeps(security.judge, query),
     },
     {
@@ -741,6 +744,11 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   try {
     result = await session.run(prompt);
   } catch (error: unknown) {
+    // #229: a loadable agent file the harness cannot vouch for refuses the run before the SDK is called.
+    if (error instanceof AgentDefinitionRefused) {
+      process.stderr.write(`refusing to run: ${sanitizeDiagnostic(error.message)}\n`);
+      return 2;
+    }
     if (!interrupt.signal.aborted) throw error;
     process.stderr.write(`${formatInterruptedLine(null)}\n`);
     return EXIT_INTERRUPTED;

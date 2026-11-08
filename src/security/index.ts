@@ -69,6 +69,31 @@ export {
   UnknownToolDenied,
 } from './unknown-tool-deny.js';
 export type { UnknownToolDenyOptions } from './unknown-tool-deny.js';
+export {
+  AGENT_SCAN_MAX_DEPTH,
+  AGENT_SCAN_MAX_FILES,
+  AgentDefinitionRefused,
+  agentDefinitionRoots,
+  agentFileVerdict,
+  BUNDLED_AGENT_NAMES,
+  CLI_FRONTMATTER,
+  cliFrontmatterBlock,
+  managedSettingsDir,
+  scanAgentDefinitions,
+} from './agent-definitions.js';
+export type {
+  AgentFileVerdict,
+  AgentRefusal,
+  AgentRefusalReason,
+  AgentRoot,
+  AgentRootsInput,
+  AgentScanLimits,
+  AgentScanResult,
+  AgentSource,
+} from './agent-definitions.js';
+export { agentNameRefusal, UNSCANNED_AGENT_DENY_REASON, UnscannedAgentDenied } from './agent-name-deny.js';
+export { checkInit, INIT_CHECK_LIST_MAX, INIT_CHECK_NAME_MAX, INIT_CHECK_NOT_RUN, initCheckWarning, isRuledTool } from './init-check.js';
+export type { InitCheck, InitCheckState } from './init-check.js';
 export { builtInDenyHooks } from './built-in-denies.js';
 export type { ProtectedRoot, ProtectedRoots, ProtectedRootsInput } from './self-protection.js';
 export { BUDGET_MAX_USD_MESSAGE, BudgetSettingsError, hasBudgetKey, parseBudgetSettings } from './budget-settings.js';

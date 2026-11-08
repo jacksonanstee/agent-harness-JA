@@ -185,3 +185,72 @@ describe('the sdk.settingSources opt-in on the run path (#140, ADR-0040 D2; spec
     expect(sdk.primary).toHaveLength(0);
   });
 });
+
+describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
+  const agentFile = (root: string, rel: string, extra: string): void => {
+    const full = join(root, rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, `---\nname: helper\ndescription: helps\n${extra}---\nbody\n`);
+  };
+
+  async function runWithUserAgent(settingSources: string[], extra: string, calls: { tool: string; input: unknown }[] = []) {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    const sdk = fakeSdk(calls);
+    const userDir = dir();
+    agentFile(userDir, join('.claude', 'agents', 'evil.md'), extra);
+    mkdirSync(join(userDir, '.harness'));
+    writeFileSync(join(userDir, '.harness', 'settings.json'), JSON.stringify({ sdk: { settingSources } }));
+    process.env.ANTHROPIC_API_KEY = 'dummy';
+    const err: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    vi.spyOn(process, 'cwd').mockReturnValue(dir());
+    try {
+      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: sdk.query }) });
+      return { code, sdk, stderr: err.join('') };
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it('a user agent file setting isolation: remote refuses the run, exit 2, and the SDK is never called', async () => {
+    const { code, sdk, stderr } = await runWithUserAgent(['user'], 'isolation: remote\n');
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: agent definition refused: user:evil\.md \(isolation\)\. /m);
+  });
+
+  it('the same file is not read when the user source is not inherited (only the managed directory is)', async () => {
+    const { code, sdk } = await runWithUserAgent(['local'], 'isolation: remote\n');
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+  });
+
+  it('a clean user agent file runs, and an Agent call naming it is not refused by the gate', async () => {
+    const calls = [
+      { tool: 'Agent', input: { subagent_type: 'helper', prompt: 'p' } },
+      { tool: 'Agent', input: { subagent_type: 'evil', prompt: 'p' } },
+    ];
+    const { code, sdk } = await runWithUserAgent(['user'], 'tools: Read\n', calls);
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+    // The scanned file is named `helper` (frontmatter), so `helper` passes the gate and the stem `evil` does not.
+    expect(sdk.outputs[0]).not.toMatchObject({ hookSpecificOutput: { permissionDecisionReason: expect.stringMatching(/^unscanned agent deny/) as unknown } });
+    expect(sdk.outputs[1]).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: expect.stringMatching(/^unscanned agent deny/) as unknown } });
+  });
+
+  it('an Agent call naming an unscanned agent is refused through the composed run stack', async () => {
+    const sdk = fakeSdk([{ tool: 'Agent', input: { subagent_type: 'plugin:spy', prompt: 'p' } }]);
+    const { code } = await runMain(runArgs().argv, undefined, sdk.query);
+    expect(code).toBe(0);
+    expect(sdk.outputs).toEqual([
+      {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: expect.stringMatching(/^unscanned agent deny: /) as unknown,
+        },
+      },
+    ]);
+  });
+});

@@ -40,6 +40,7 @@ function fakeResult(overrides: Partial<SessionResult> = {}): SessionResult {
     numTurns: 2,
     denied: [],
     cliDenied: [],
+    initCheck: { state: 'not-run', unruledTools: [], unknownAgents: [], unruledToolCount: 0, unknownAgentCount: 0 },
     memoryEntryId: null,
     skillErrors: [],
     droppedSkills: [],

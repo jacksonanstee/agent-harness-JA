@@ -41,6 +41,8 @@ Under `[]` the user, project and local rule layers are gone, so a hook `{}` leav
 
 ## Decision
 
+*Amended 08/11/2026 (issue #229, ADR-0046): "nothing loaded" under `settingSources: []` does not cover managed agent files, which the CLI reads from `<managed>/.claude/agents` whatever the sources say (read from the 0.3.312 binary, not run). `run()` now starts with a scan of every agent file the CLI can load.*
+
 **D1. The primary session isolates by default.** `createSession` passes `settingSources: []` and `strictMcpConfig: true` on the primary query. Both come from one function, `buildSessionIsolation` (`src/session/session.ts:489`), spread into the options at `:1652`, so the keyless canary asserts one object and has one mutation target. `strictMcpConfig` follows the list (`settingSources.length === 0`), so an isolated child also ignores `.mcp.json`, settings-declared servers and plugin servers (D-3). The list is copied, never handed to the SDK by reference, and a non-array fails with a `TypeError` (`:490-493`). The session passes six keys now (`model`, `systemPrompt`, `maxTurns`, `settingSources`, `strictMcpConfig`, `hooks`), none of `tools`, `skills` or `persistSession` (`src/session/session.ts:1649-1658`). Library callers are isolated by default: `SessionConfig.settingSources` is optional and absent means `[]` (`src/session/types.ts:412-413`).
 
 *Keyed legs (27/10/2026, run 3 at `ac739cf`; the owner ran it and reported exit 0 from the terminal, which the JSON does not record).* Each leg's `detail`, pasted from its JSON:

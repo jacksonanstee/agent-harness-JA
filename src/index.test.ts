@@ -63,6 +63,16 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.DEFAULT_SECRET_RULES.length).toBeGreaterThan(0);
   });
 
+  it('exports the #229 agent gate surface: the run refusal, the call deny and its reason, the scan seam', () => {
+    expect(barrel.AgentDefinitionRefused).toBe(securityBarrel.AgentDefinitionRefused);
+    expect(barrel.UnscannedAgentDenied).toBe(securityBarrel.UnscannedAgentDenied);
+    expect(barrel.UNSCANNED_AGENT_DENY_REASON).toBe(securityBarrel.UNSCANNED_AGENT_DENY_REASON);
+    expect(barrel.agentScanFor).toBe(sessionBarrel.agentScanFor);
+    // The scan internals stay off the root barrel.
+    expect('scanAgentDefinitions' in barrel).toBe(false);
+    expect('createAgentGate' in barrel).toBe(false);
+  });
+
   it('exports the telemetry factories, with DEFAULT_DB_PATH aliased', () => {
     expect(typeof barrel.createTelemetryStore).toBe('function');
     expect(typeof barrel.openTelemetryDatabase).toBe('function');
