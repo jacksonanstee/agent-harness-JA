@@ -11,6 +11,7 @@ import {
   CODE_EXECUTING_TOOLS,
   DENIED_TOOL_PREFIXES,
   DENIED_TOOLS,
+  MCP_TOOL_PREFIX,
   REVIEWED_REFUSED_TOOLS,
   TOOL_TARGET_FIELDS,
 } from './tool-targets.js';
@@ -77,7 +78,7 @@ let platformBinaryBytes: Buffer | undefined;
 /** A prefix `mcp__<server>__` names its needle when the needle is `"<server>"`, allowing for `_`/`-` normalisation. */
 const prefixNamesNeedle = (prefix: string, needle: string): boolean => {
   const fold = (name: string): string => name.replace(/[_-]/g, '-');
-  return `"${fold(prefix.slice('mcp__'.length, -'__'.length))}"` === fold(needle);
+  return `"${fold(prefix.slice(MCP_TOOL_PREFIX.length, -'__'.length))}"` === fold(needle);
 };
 
 /** True when the installed platform binary holds `needle`; a missing binary fails the calling test. */

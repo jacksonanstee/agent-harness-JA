@@ -182,7 +182,8 @@ const {
   mergeSandboxLayers,
   parseSandboxSettings,
   sandboxHook,
-  codeExecutionDenyHook,
+  toolNameDenyHook,
+  remoteAgentDenyHook,
   SETTING_SOURCES,
   JUDGE_MODEL,
   route,
@@ -1236,11 +1237,13 @@ function composeIsolationSecurity({ user, project }) {
 }
 
 // Mirrors registerSecurityHooks (src/cli/shared.ts, not root-public) with root-public exports: the built-in
-// code-execution deny (#211), then permissions with no prompter and the grant policy, then the sandbox backstop,
+// tool-name deny (#230: code-execution, ungated-tool and unreviewed-tool, no MCP server listed) and the
+// remote-agent deny (#225), then permissions with no prompter and the grant policy, then the sandbox backstop,
 // all before any other handler. The self-protection deny (#188) is not mirrored: no leg touches a .harness path.
 function registerIsolationSecurity(hooks, { user, project }) {
   const security = composeIsolationSecurity({ user, project });
-  hooks.register('pre-tool', codeExecutionDenyHook());
+  hooks.register('pre-tool', toolNameDenyHook());
+  hooks.register('pre-tool', remoteAgentDenyHook());
   hooks.register('pre-tool', permissionHook(createPermissionEvaluator(security.permissions), undefined, security.grantPolicy));
   hooks.register('pre-tool', sandboxHook(createSandbox(security.sandbox)));
 }

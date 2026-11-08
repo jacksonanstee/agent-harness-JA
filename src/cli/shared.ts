@@ -514,12 +514,13 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
 
 /**
  * Registers the security pre-tool hooks in their ONE shipped order, for every
- * command that builds a session (`run`, `eval`). The four built-in denies
+ * command that builds a session (`run`, `eval`). The three built-in denies
  * come first, from `builtInDenyHooks` in its order: self-protection (#188,
- * ADR-0042), the code-execution deny (#211), the ungated-tool deny (#219,
- * ADR-0044), the unreviewed-tool deny (#225, ADR-0045, given the USER
- * layer's `sdk.allowedMcpServers`). They read no settings themselves, so no rule,
- * grant or absent sandbox dimension can let a call they deny through, and
+ * ADR-0042), the tool-name deny (#230: the code-execution, ungated-tool and
+ * unreviewed-tool denies of #211, #219 and #225, given the USER layer's
+ * `sdk.allowedMcpServers`), and the remote-agent deny (#225, ADR-0045). They
+ * read no settings themselves, so no rule, grant or absent sandbox dimension
+ * can let a call they deny through, and
  * their reason is the one reported. Then permissions, then the sandbox as the
  * backstop: the deny outcome is identical (the runtime denies
  * on the first throw), but rule-attributed permission reasons are more

@@ -2,43 +2,39 @@ import { describe, expect, it } from 'vitest';
 
 import { DENIED_TOOL_PREFIXES, DENIED_TOOLS } from '../internal/tool-targets.js';
 import { CODE_EXECUTION_DENY_REASON } from './code-execution-deny.js';
-import { UNGATED_TOOL_DENY_REASON, ungatedToolDenyHook, UngatedToolDenied } from './ungated-tool-deny.js';
+import { UNGATED_TOOL_DENY_REASON, ungatedToolDenial, UngatedToolDenied } from './ungated-tool-deny.js';
 
-const preTool = (tool: string, args: unknown) => ({ event: 'pre-tool' as const, tool, args, redactions: null });
-
-describe('ungatedToolDenyHook (#219): a built-in deny for tools that reach local files in ways no gate can check', () => {
-  const hook = ungatedToolDenyHook();
-
-  it.each(['Artifact', 'ArtifactData', 'ArtifactComments', 'ArtifactCheck'])('denies %s whatever the arguments', async (tool) => {
-    for (const args of [{}, { action: 'publish', file_path: '/p/a.html' }, { action: 'list' }, null, 'x', []]) {
-      await expect(hook(preTool(tool, args)), JSON.stringify(args)).rejects.toThrow(UngatedToolDenied);
-      await expect(hook(preTool(tool, args))).rejects.toThrow(UNGATED_TOOL_DENY_REASON);
-    }
+describe('ungatedToolDenial (#219; a toolNameDenyHook step since #230): a built-in deny for tools that reach local files in ways no gate can check', () => {
+  // "Whatever the arguments" is pinned on toolNameDenyHook, whose test hands it arguments that throw on any read.
+  it.each(['Artifact', 'ArtifactData', 'ArtifactComments', 'ArtifactCheck'])('denies %s with the fixed reason', (tool) => {
+    expect(ungatedToolDenial(tool)).toBeInstanceOf(UngatedToolDenied);
+    expect(ungatedToolDenial(tool)?.message).toBe(UNGATED_TOOL_DENY_REASON);
   });
 
   // Security review round 3: the CLI also ships Artifact as its own MCP server, `claude-artifacts`.
   it.each(['mcp__claude-artifacts__publish_files', 'mcp__claude-artifacts__read_file', 'mcp__claude_artifacts__copy_file'])(
     'denies the built-in artifacts MCP server tool %s by prefix',
-    async (tool) => {
-      await expect(hook(preTool(tool, { path: 'a' }))).rejects.toThrow(UngatedToolDenied);
+    (tool) => {
+      expect(ungatedToolDenial(tool)).toBeInstanceOf(UngatedToolDenied);
     },
   );
 
-  it('a prefix matches only a whole server segment', async () => {
-    for (const tool of ['mcp__claude-artifacts', 'mcp__claude-artifactsx__publish', 'mcp__my-claude-artifacts__x', 'claude-artifacts__x']) {
-      await expect(hook(preTool(tool, {})), tool).resolves.toBeUndefined();
+  it('a prefix matches only a whole server segment', () => {
+    // The last probe holds the whole prefix mid-name: the match must be anchored at the start (security review, #230).
+    for (const tool of ['mcp__claude-artifacts', 'mcp__claude-artifactsx__publish', 'mcp__my-claude-artifacts__x', 'claude-artifacts__x', 'mcp__github__mcp__claude-artifacts__x']) {
+      expect(ungatedToolDenial(tool), tool).toBeUndefined();
     }
   });
 
-  it('matches the exact tool name only', async () => {
-    for (const tool of ['artifact', 'ARTIFACT', 'Artifact ', 'Artifacts', 'mcp__x__Artifact', 'Read', 'Projects', 'Bash']) {
-      await expect(hook(preTool(tool, { file_path: '/x' })), tool).resolves.toBeUndefined();
+  it('matches the exact tool name only', () => {
+    for (const tool of ['artifact', 'ARTIFACT', 'Artifact ', 'Artifacts', 'mcp__x__Artifact', 'Read', 'Projects', 'Bash', '__proto__', 'constructor']) {
+      expect(ungatedToolDenial(tool), tool).toBeUndefined();
     }
   });
 
-  it('denies every DENIED_TOOLS entry, read from the list itself', async () => {
+  it('denies every DENIED_TOOLS entry, read from the list itself', () => {
     for (const tool of Object.keys(DENIED_TOOLS)) {
-      await expect(hook(preTool(tool, {})), tool).rejects.toThrow(UngatedToolDenied);
+      expect(ungatedToolDenial(tool), tool).toBeInstanceOf(UngatedToolDenied);
     }
   });
 
@@ -48,9 +44,9 @@ describe('ungatedToolDenyHook (#219): a built-in deny for tools that reach local
     expect(Object.keys(DENIED_TOOL_PREFIXES).sort()).toEqual(['mcp__claude-artifacts__', 'mcp__claude_artifacts__']);
   });
 
-  it('denies a tool under every DENIED_TOOL_PREFIXES entry, read from the list itself', async () => {
+  it('denies a tool under every DENIED_TOOL_PREFIXES entry, read from the list itself', () => {
     for (const prefix of Object.keys(DENIED_TOOL_PREFIXES)) {
-      await expect(hook(preTool(`${prefix}any_tool`, {})), prefix).rejects.toThrow(UngatedToolDenied);
+      expect(ungatedToolDenial(`${prefix}any_tool`), prefix).toBeInstanceOf(UngatedToolDenied);
     }
   });
 

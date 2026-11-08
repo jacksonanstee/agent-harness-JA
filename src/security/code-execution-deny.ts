@@ -1,5 +1,4 @@
 import { CODE_EXECUTING_TOOLS } from '../internal/tool-targets.js';
-import type { PreToolLike } from './pre-tool-like.js';
 
 /** The one reason the model reads. Fixed text: it never echoes an argument (ADR-0031). */
 export const CODE_EXECUTION_DENY_REASON =
@@ -20,12 +19,10 @@ const DENIED_CODE_TOOLS: ReadonlySet<string> = new Set(
 );
 
 /**
- * Pre-tool hook denying every CODE_EXECUTING_TOOLS member whose gate is
- * `denied` (today REPL; issue #211). It reads no settings, so no rule, grant
- * or sandbox list can let one through. Without it, withholding the grant would
- * refuse nothing for such a tool, since the CLI's own check is `allow`.
+ * The refusal for a CODE_EXECUTING_TOOLS member whose gate is `denied` (today
+ * REPL; issue #211), or undefined. A pure function of the name, applied by
+ * `toolNameDenyHook` (#230). Without it, withholding the grant would refuse
+ * nothing for such a tool, since the CLI's own check is `allow`.
  */
-export function codeExecutionDenyHook(): (payload: PreToolLike) => Promise<void> {
-  return (payload) =>
-    DENIED_CODE_TOOLS.has(payload.tool) ? Promise.reject(new CodeExecutionDenied()) : Promise.resolve();
-}
+export const codeExecutionDenial = (tool: string): CodeExecutionDenied | undefined =>
+  DENIED_CODE_TOOLS.has(tool) ? new CodeExecutionDenied() : undefined;

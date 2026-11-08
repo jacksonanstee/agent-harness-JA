@@ -335,12 +335,12 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.reason).toBe('permission: deny Bash [rule 0, user]');
   });
 
-  it('registers exactly six pre-tool handlers (self-protection, code-execution deny, ungated-tool deny, unreviewed-tool deny, permissions, sandbox; #188, #211, #219, #225)', async () => {
+  it('registers exactly five pre-tool handlers (self-protection, tool-name deny, remote-agent deny, permissions, sandbox; #188, #230, #225)', async () => {
     const hooks = createHookRuntime();
     registerSecurityHooks(hooks, compose({}, []), roots);
     const result = await hooks.fire('pre-tool', payload);
     expect(result.denied).toBe(false);
-    expect(result.handlersFired).toBe(6);
+    expect(result.handlersFired).toBe(5);
   });
 
   // #219: the Artifact family reaches local files past the path gates (upload lists, download folders, a
