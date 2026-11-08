@@ -111,6 +111,27 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 - **Depends on:** `internal/tool-targets` (`ALLOWED_TOOL_NAMES`) and the `security/pre-tool-like` payload type; reads no settings itself (the MCP server list is passed in).
 - **Design notes:** Registered FOURTH, via `builtInDenyHooks`, after the other built-in denies, so their more specific reasons win for the tools they also refuse. Names match exactly. An MCP name passes only as `mcp__<server>__<tool>` under a listed server, with a tool segment that is non-empty and does not start with `_`, because the bundled CLI runs MCP servers no operator configured; a rule allow is never a grant for an MCP tool, so the CLI's own check still decides (R-26). For `Agent` it reads only own fields: any `cwd` refuses, and `isolation` passes only when absent, undefined or `"worktree"`. The parity test demands a ruling for every typed-surface tool (`BUILTIN_TOOL_NAMES` plus the declared union) and pins the installed binary's tool-definition count. Shipped ([ADR-0045](./decisions/0045-default-deny-unreviewed-tools.md)).
 
+#### `security/agent-definitions`
+
+- **Owns:** the scan of every agent definition file the bundled CLI can load, and the frontmatter verdict on each (issue #229).
+- **Public API:** `agentDefinitionRoots(input)`, `scanAgentDefinitions(roots, limits?)`, `agentFileVerdict(raw)`, `cliFrontmatterBlock(raw)`, `managedSettingsDir(platform)`, `BUNDLED_AGENT_NAMES`, and `AgentDefinitionRefused` (fixed message naming source, path and key, never a value).
+- **Depends on:** `internal/frontmatter` (the safe gray-matter options and fence check), `internal/sanitize`, the filesystem; the caller supplies cwd, home, `CLAUDE_CONFIG_DIR` and the managed directory.
+- **Design notes:** Mirrors the CLI 2.1.312 loader as read from the binary: the managed directory always, the user and project directories per the setting sources, recursive `.md`, symlinks followed. It judges exactly the block the CLI's frontmatter regex reads, twice (a YAML parse and a textual guard), and refuses anything it cannot vouch for. The parity test re-checks the bundled names and the regex against the installed binary. Residual R-27. Shipped ([ADR-0046](./decisions/0046-agent-definition-scan-and-init-check.md)).
+
+#### `security/agent-name-deny`
+
+- **Owns:** the rule that an `Agent` call may name only an admitted agent.
+- **Public API:** `agentNameRefusal(args, admitted)` returning `UnscannedAgentDenied` (fixed `UNSCANNED_AGENT_DENY_REASON`) or undefined.
+- **Depends on:** nothing.
+- **Design notes:** Not a registered hook: its admitted names come from the per-run scan, so the session applies it before its hook chain. Exact match on the call's own `subagent_type`; an absent one is the CLI's default agent. Shipped ([ADR-0046](./decisions/0046-agent-definition-scan-and-init-check.md) D3).
+
+#### `security/init-check`
+
+- **Owns:** the check of the SDK's `system/init` message: tools with no ruling, agents not admitted.
+- **Public API:** `checkInit(message, admitted)` (three states, `not-run`, `clean`, `found`, with capped name lists and full counts), `initCheckWarning(check)`, `isRuledTool(name)`.
+- **Depends on:** `internal/tool-targets` (the rulings), `internal/sanitize`.
+- **Design notes:** Report-only: the default-deny and the agent-name rule already refuse what it names. Shipped ([ADR-0046](./decisions/0046-agent-definition-scan-and-init-check.md) D4).
+
 #### `security/built-in-denies`
 
 - **Owns:** the one shipped order of the four built-in, non-configurable pre-tool denies.
@@ -166,7 +187,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `harness/session`
 
 - **Owns:** the harness entry point — orchestrates one agent turn end-to-end (route → load skills → hooks → SDK stream → memory summary). Added with H-1; see [ADR-0010](./decisions/0010-sdk-session-adapter.md).
-- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`; `buildJudge(query, model)`, the S-5 injection judge's single isolated model call, which takes the injected `query` and imports no SDK ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) D2). `SessionDeps.judge` (`{ call, maxCallsPerRun, withhold? }`) turns the judge on for a session, and `SessionResult.judge` reports its per-run summary, and `SessionResult.outputRewrites` carries a `kind: 'withhold'` row per withheld result ([ADR-0039](./decisions/0039-judge-withholding-off-by-default.md)); `SessionConfig.settingSources` (absent or `[]` isolates the child from Claude Code's user, project and local settings; the opt-in is the user settings file's `sdk.settingSources`, [ADR-0040](./decisions/0040-session-isolates-claude-code-settings-by-default.md)); `createSession` refuses a judge without `scanInjection` and `redactSecrets` at construction ([ADR-0037](./decisions/0037-s5-judge-wired-into-the-session.md) D3, D7).
+- **Public API:** `createSession(deps, config)` → `session.run(prompt): SessionResult`; `buildJudge(query, model)`, the S-5 injection judge's single isolated model call, which takes the injected `query` and imports no SDK ([ADR-0036](./decisions/0036-s5-judge-implemented-and-measured.md) D2). `SessionDeps.judge` (`{ call, maxCallsPerRun, withhold? }`) turns the judge on for a session, and `SessionResult.judge` reports its per-run summary, and `SessionResult.outputRewrites` carries a `kind: 'withhold'` row per withheld result ([ADR-0039](./decisions/0039-judge-withholding-off-by-default.md)); `SessionConfig.settingSources` (absent or `[]` isolates the child from Claude Code's user, project and local settings; the opt-in is the user settings file's `sdk.settingSources`, [ADR-0040](./decisions/0040-session-isolates-claude-code-settings-by-default.md)); `createSession` refuses a judge without `scanInjection` and `redactSecrets` at construction ([ADR-0037](./decisions/0037-s5-judge-wired-into-the-session.md) D3, D7); `run()` starts with the agent-file scan and rejects with `AgentDefinitionRefused`, `SessionDeps.scanAgents` is its seam (`agentScanFor(home)` builds the real one), and `SessionResult.initCheck` reports the init check ([ADR-0046](./decisions/0046-agent-definition-scan-and-init-check.md)).
 - **Depends on:** `harness/router`, `harness/skills`, `harness/hooks`, `harness/memory`, the `security/*` layer through `src/security/index.ts` (a runtime edge since the judge: `judged-scan.ts`, `judged-scan-validate.ts`), `harness/telemetry` (runtime, `session.ts`), and an injected Claude Agent SDK `query` function (structural types only; the SDK import lives in the CLI).
 - **Design notes:** Fires `session-start`/`stop` directly around the SDK stream; bridges `pre-tool`/`post-tool` through the SDK's hook callbacks with denials translated to the SDK's deny output. A model refusal is surfaced as a distinguishable outcome rather than an empty result (`SessionResult.refusal` / `stopReason`, read from both the SDK's refusal banners and the result's `stop_reason`); a fallback swap reports the model that actually answered ([ADR-0025](./decisions/0025-refusal-handling.md)). Each assistant text block passes the injected redactor before `onText` (fail-closed to the sentinel, issue #91); `resultText` on the returned result is raw and is redacted only at the memory write.
 

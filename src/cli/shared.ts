@@ -360,6 +360,22 @@ export const SDK_PROJECT_INHERIT_WARNING =
 export const SDK_MCP_UNUSED_WARNING =
   'claude code settings: sdk.allowedMcpServers is set but sdk.settingSources is empty, so no configured MCP server is loaded; only a server the bundled CLI adds on its own could match the list (ADR-0045)';
 
+/**
+ * The one settings-time site for what inheriting Claude Code settings implies
+ * (#229, architecture review 05/11/2026): every operator warning keyed on the
+ * USER layer's `sdk.*` keys is decided here. The agent-file scan is NOT here:
+ * it runs in the session (ADR-0046), because a library caller passes
+ * `settingSources` straight to `createSession`, and because the managed agents
+ * directory loads even when no source is inherited.
+ */
+export function inheritedSettingsWarnings(sdk: { readonly settingSources: readonly SettingSource[]; readonly allowedMcpServers: readonly string[] }): string[] {
+  const warnings: string[] = [];
+  if (sdk.settingSources.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
+  if (sdk.settingSources.includes('project') || sdk.settingSources.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
+  if (sdk.allowedMcpServers.length > 0 && sdk.settingSources.length === 0) warnings.push(SDK_MCP_UNUSED_WARNING);
+  return warnings;
+}
+
 export interface ComposeSecurityDeps {
   /**
    * Test seam only, passed through to the shared loader. Omitted, every
@@ -449,9 +465,7 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
   if (project.budgetKeyPresent) {
     warnings.push(`ignoring "budget" in ${projectPath}: the budget is configured only in ~/.harness/settings.json`);
   }
-  if (user.sdk.includes('user')) warnings.push(SDK_USER_INHERIT_WARNING);
-  if (user.sdk.includes('project') || user.sdk.includes('local')) warnings.push(SDK_PROJECT_INHERIT_WARNING);
-  if (user.allowedMcpServers.length > 0 && user.sdk.length === 0) warnings.push(SDK_MCP_UNUSED_WARNING);
+  warnings.push(...inheritedSettingsWarnings({ settingSources: user.sdk, allowedMcpServers: user.allowedMcpServers }));
   // No prompter is wired yet (no interactive mode), so every 'ask' resolves
   // to deny — fail closed, but tell the settings author (ADR-0014 §4).
   if (

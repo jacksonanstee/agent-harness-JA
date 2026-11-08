@@ -3,7 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { JudgeCall, RedactResult, ScanResult, SettingSource } from '../security/index.js';
+import type { AgentScanResult, InitCheck, JudgeCall, RedactResult, ScanResult, SettingSource } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -390,6 +390,13 @@ export interface SessionDeps {
    */
   redactSecrets?: (text: string) => RedactResult;
   /**
+   * The agent-definition scan (#229, ADR-0046), run at the start of every
+   * `run()` with the config's setting sources. Default: the real directories
+   * the CLI loads from (the managed directory always). A seam for tests; a
+   * library caller should leave it unset.
+   */
+  scanAgents?: (settingSources: readonly SettingSource[]) => AgentScanResult;
+  /**
    * The S-5 judge (issue #96 PR-B1, spec D3, R1): the call and the per-run
    * cap. When present, every non-block PostToolUse and PostToolUseFailure
    * result is judged once on the copy the model receives (redacted),
@@ -567,6 +574,13 @@ export interface SessionResult {
    * asserted on the result, the memory row and the warnings only.
    */
   cliDenied: readonly CliDeniedToolCall[];
+  /**
+   * The run-time check of the SDK's init message (#229, ADR-0046): `not-run`
+   * when no init message with tool and agent lists arrived, `clean`, or `found`
+   * with the unruled tools and the agents no scanned file or bundled definition
+   * names (both still refused). Names are cleaned and bounded.
+   */
+  initCheck: InitCheck;
   memoryEntryId: string | null;
   skillErrors: SkillError[];
   /**

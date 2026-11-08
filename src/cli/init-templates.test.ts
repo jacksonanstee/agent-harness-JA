@@ -37,6 +37,7 @@ function sessionResult(overrides: Partial<SessionResult>): SessionResult {
     numTurns: null,
     denied: [],
     cliDenied: [],
+    initCheck: { state: 'not-run', unruledTools: [], unknownAgents: [], unruledToolCount: 0, unknownAgentCount: 0 },
     memoryEntryId: null,
     skillErrors: [],
     droppedSkills: [],

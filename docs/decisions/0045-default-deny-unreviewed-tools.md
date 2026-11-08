@@ -86,7 +86,7 @@ Each reason has its own prefix (`unreviewed tool deny: `, `mcp server deny: `, `
 
 ## Revisit if
 
-- The second #225 change lands: the `system/init` tools check and the scan of loadable agent files. D4's file route then closes when `sdk.settingSources` is set; bundled agents stay a residual.
+- The second #225 change lands: the `system/init` tools check and the scan of loadable agent files. D4's file route then closes when `sdk.settingSources` is set; bundled agents stay a residual. *Landed 08/11/2026 as ADR-0046: the scan covers the managed directory too, which loads even when no source is set; what stays open is R-27.*
 - A fifth built-in deny is proposed: first merge the name-based denies (the code-execution deny, the ungated-tool deny and the name half of this one) into one classifier that throws the existing error classes, and move the Agent argument check into its own hook. That shifts `handlerIndex` once instead of once per deny (architecture review, deferred 05/11/2026).
 - The tool-definition count or a ruling check fails on an SDK bump: re-read the binary, rule each new tool, then update the count.
 - #105 lands: an explicit `tools` list built from `ALLOWED_TOOL_NAMES` would keep refused tools out of the child entirely (a `disallowedTools` list cannot name tools nobody knows). This hook stays, for three reasons: a subagent with no `tools` inherits its parent's; ToolSearch can surface deferred tools; and the SDK documents no negation for `disallowedTools`, so "every MCP server except the listed ones" has no documented way to be said to the SDK, which leaves this hook the only MCP allowlist.

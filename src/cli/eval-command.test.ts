@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore } from '../memory/index.js';
@@ -319,6 +319,9 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
 // Issue #140, ADR-0040 D2: eval passes the composed list to the primary query.
 describe('the eval session carries the composed sdk.settingSources (#140, D2)', () => {
   const run = async (settingSources: SettingSource[]) => {
+    // #229: the session scans agent files from process.cwd() up for 'project'; keep it off the real tree.
+    vi.spyOn(process, 'cwd').mockReturnValue(SP_DIRS.projectDir);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
     const fake = fakeQuery([RESULT]);
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
@@ -341,6 +344,8 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
       return fake.captured[0]?.options;
     } finally {
       db.close();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
     }
   };
 

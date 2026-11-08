@@ -86,6 +86,9 @@ export {
   REMOTE_AGENT_DENY_REASON,
   McpServerDenied,
   MCP_SERVER_DENY_REASON,
+  AgentDefinitionRefused,
+  UNSCANNED_AGENT_DENY_REASON,
+  UnscannedAgentDenied,
   builtInDenyHooks,
 } from './security/index.js';
 export type {
@@ -134,6 +137,12 @@ export type {
   ProtectedRoot,
   ProtectedRoots,
   ProtectedRootsInput,
+  AgentRefusal,
+  AgentRefusalReason,
+  AgentScanResult,
+  AgentSource,
+  InitCheck,
+  InitCheckState,
 } from './security/index.js';
 export {
   createTelemetryStore,

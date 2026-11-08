@@ -14,9 +14,10 @@ import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
-import { createSession } from '../session/index.js';
+import { agentScanFor, createSession } from '../session/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
+  AgentDefinitionRefused,
   redact,
   scan,
   buildProtectedRoots,
@@ -197,6 +198,8 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         telemetry,
         scanInjection: (text) => scan(text),
         redactSecrets: (text) => redact(text),
+        // #229: the same home directory the settings were read from.
+        scanAgents: agentScanFor(deps.selfProtection.userDir),
       },
       {
         skillsDir: config.skillsDir,
@@ -252,6 +255,15 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
       return 2;
     }
     throw error;
+  }
+
+  // #229 (ADR-0046): the same agent-file scan every task's session runs, once
+  // up front, so a refused file is exit 2 with no scorecard, as on `run`; the
+  // per-task scan stays as the backstop for a file that changes mid-eval.
+  const agentScan = agentScanFor(seams.userDir ?? homedir())(security.sdk.settingSources);
+  if (agentScan.refusals.length > 0) {
+    process.stderr.write(`refusing to run: ${sanitizeDiagnostic(new AgentDefinitionRefused(agentScan.refusals).message)}\n`);
+    return 2;
   }
 
   const query = await loadSdkQuery(seams.importSdk);

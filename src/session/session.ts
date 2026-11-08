@@ -68,6 +68,9 @@ export { FENCE_OPENER_RE };
 import { relativeSkillDropPath } from './skill-drop-path.js';
 import { cleanSdkToken, isModelRefusal } from './sdk-refusal.js';
 import { describeError } from './describe-error.js';
+import { createAgentGate } from './agent-gate.js';
+import { INIT_CHECK_NOT_RUN, initCheckWarning } from '../security/index.js';
+import type { InitCheck } from '../security/index.js';
 import {
   createJudgeRun,
   decidesWithhold,
@@ -621,6 +624,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
   }
 
   async function run(prompt: string): Promise<SessionResult> {
+    // Step 1 (#229, ADR-0046): scan the agent files the CLI can load, before
+    // anything else runs; a refused file throws AgentDefinitionRefused. The
+    // isolation is built first so a non-array settingSources throws its TypeError.
+    const isolation = buildSessionIsolation(config);
+    const agentGate = createAgentGate(isolation.settingSources ?? [], deps.scanAgents);
+
     // Step 2: model selection.
     const descriptor = config.descriptor ?? DEFAULT_DESCRIPTOR;
     const modelChoice = deps.route(descriptor);
@@ -729,6 +738,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const turnId = config.turnId ?? randomUUID();
     let sdkSessionId: string | null = null;
     const denied: DeniedToolCall[] = [];
+    // #229: the first init message's check; null until one arrives.
+    let initCheck: InitCheck | null = null;
     // The cleaned tool_use_id of every call the harness itself denied, so the
     // CLI's `permission_denials` (a union that includes them) can be reduced
     // to the CLI's own refusals. Cleaned with `cleanSdkId`, as the parse is.
@@ -1453,30 +1464,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     }
 
     // Steps 7 and 12: bridge SDK tool hooks onto the harness runtime.
-    const preToolCallback: SdkHookCallback<SdkPreToolUseInput> = async (input, toolUseID) => {
-      // `tool_name` is required on both union members; the `?? 'unknown'` guards
-      // only a non-conforming injected `deps.query` (a fake, or a future SDK
-      // shape), not the real SDK, which always sends it.
-      const tool = sanitizeText(input.tool_name ?? 'unknown');
-      // Step 11 (inputs): scan tool arguments for secrets. Observe-only in v1 —
-      // the tool still receives the raw input. The SDK's `updatedInput` rewrite
-      // channel does exist (ADR-0032); adopting it for input redaction is part
-      // of the deferred enforcement decision (issue #84). Findings ride the hook
-      // payload and warn. `input` may carry a secret an attacker-influenced
-      // prior tool result told the model to pass along.
-      const inputRedaction = runSecretRedaction(tool, input.tool_input);
-
-      let deniedReason: string | null = null;
-      let granted = false;
+    /** Fires the pre-tool hooks; a fire() failure denies, never grants (ADR-0014). */
+    const firePreTool = async (
+      tool: string,
+      args: unknown,
+      redactions: unknown,
+    ): Promise<{ deniedReason: string | null; granted: boolean }> => {
       try {
         const fireResult = await deps.hooks.fire('pre-tool', {
           event: 'pre-tool',
           tool,
-          args: input.tool_input,
-          redactions: inputRedaction?.findings ?? null,
+          args,
+          redactions,
         });
-        if (fireResult.denied) deniedReason = fireResult.reason;
-        else granted = fireResult.granted === true;
+        return fireResult.denied
+          ? { deniedReason: fireResult.reason, granted: false }
+          : { deniedReason: null, granted: fireResult.granted === true };
       } catch (error: unknown) {
         // fire() itself failing must fail closed, not SDK-defined. The reason
         // sent to the model is generic; the detail goes to warnings only.
@@ -1504,7 +1507,38 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
             reason: boundHookEventReason(`fire failed: ${safeDetail}`),
           },
         });
-        deniedReason = 'pre-tool hook failure';
+        return { deniedReason: 'pre-tool hook failure', granted: false };
+      }
+    };
+
+    const preToolCallback: SdkHookCallback<SdkPreToolUseInput> = async (input, toolUseID) => {
+      // `tool_name` is required on both union members; the `?? 'unknown'` guards
+      // only a non-conforming injected `deps.query` (a fake, or a future SDK
+      // shape), not the real SDK, which always sends it.
+      const tool = sanitizeText(input.tool_name ?? 'unknown');
+      // Step 11 (inputs): scan tool arguments for secrets. Observe-only in v1 —
+      // the tool still receives the raw input. The SDK's `updatedInput` rewrite
+      // channel does exist (ADR-0032); adopting it for input redaction is part
+      // of the deferred enforcement decision (issue #84). Findings ride the hook
+      // payload and warn. `input` may carry a secret an attacker-influenced
+      // prior tool result told the model to pass along.
+      const inputRedaction = runSecretRedaction(tool, input.tool_input);
+
+      let deniedReason: string | null;
+      let granted = false;
+      // #229: an Agent call naming an agent no scanned file or bundled definition
+      // defines is refused before the hooks fire; no hook or rule can admit it.
+      const agentRefusal = tool === 'Agent' ? agentGate.refusalFor(input.tool_input) : null;
+      if (agentRefusal !== null) {
+        deniedReason = agentRefusal;
+        recordTelemetry({
+          type: 'hook-event',
+          sessionId: harnessSessionId,
+          turnId,
+          payload: { kind: 'denied-by-hook', event: 'pre-tool', tool, reason: boundHookEventReason(agentRefusal) },
+        });
+      } else {
+        ({ deniedReason, granted } = await firePreTool(tool, input.tool_input, inputRedaction?.findings ?? null));
       }
       if (deniedReason !== null) {
         denied.push({ tool, reason: deniedReason });
@@ -1766,7 +1800,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           maxTurns: config.maxTurns,
           maxBudgetUsd,
           abortController,
-          ...buildSessionIsolation(config),
+          ...isolation,
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
@@ -1776,8 +1810,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       });
 
       for await (const message of stream) {
-        if (isSystemInit(message) && typeof message.session_id === 'string') {
-          sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
+        if (isSystemInit(message)) {
+          if (initCheck === null) {
+            initCheck = agentGate.checkInit(message);
+            const line = initCheckWarning(initCheck);
+            if (line !== null) warn(line);
+          }
+          if (typeof message.session_id === 'string') sdkSessionId = cleanSdkId(message.session_id) ?? sdkSessionId;
         } else if (isModelRefusal(message)) {
           // Later banner wins: a turn that falls back and then refuses again
           // must report the terminal truth, not the intermediate swap.
@@ -1878,6 +1917,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       for (const error of stopResult.errors) {
         warn(`stop hook error: ${error.reason}`);
       }
+    }
+
+    // #229: no init message means neither list was checked; say so.
+    if (initCheck === null) {
+      initCheck = INIT_CHECK_NOT_RUN;
+      const line = initCheckWarning(initCheck);
+      if (line !== null) warn(line);
     }
 
     // Spec D3 step 7: await the judged hooks still running, bounded by JUDGE_DRAIN_MS, then fold the summary (D7).
@@ -1993,6 +2039,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       numTurns,
       denied,
       cliDenied,
+      initCheck,
       memoryEntryId,
       skillErrors: loadResult.errors,
       droppedSkills,
