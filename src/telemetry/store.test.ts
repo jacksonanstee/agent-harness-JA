@@ -1023,7 +1023,7 @@ describe('skill-drop events', () => {
 
   it('TELEMETRY_EVENT_TYPES covers every member of the union', () => {
     expect([...TELEMETRY_EVENT_TYPES].sort()).toEqual(
-      ['hook-event', 'judge-call', 'skill-drop', 'tool-rewrite', 'tool-trace', 'turn-cost'],
+      ['hook-event', 'init-check', 'judge-call', 'skill-drop', 'tool-rewrite', 'tool-trace', 'turn-cost'],
     );
   });
 

@@ -553,7 +553,7 @@ describe('createSession', () => {
 
     await session.run('say hello');
 
-    expect(telemetry.events).toHaveLength(2);
+    expect(telemetry.events).toHaveLength(3); // tool-trace, init-check (#232), turn-cost
     const trace = telemetry.events.find((e) => e.type === 'tool-trace');
     const cost = telemetry.events.find((e) => e.type === 'turn-cost');
     expect(trace).toBeDefined();
@@ -3942,7 +3942,7 @@ describe('SDK API retries are invisible to the harness (requirement H-8, issue #
     // below is not an equality of empties.
     expect(clean.result.resultText).toBe('hello from claude');
     expect(clean.texts).toEqual(['hello from claude']);
-    expect(clean.telemetry.map((event) => event.type)).toEqual(['turn-cost']);
+    expect(clean.telemetry.map((event) => event.type)).toEqual(['init-check', 'turn-cost']);
     expect(clean.hookRecords.map((record) => (record as { event: string }).event)).toEqual(['session-start', 'stop']);
     expect(clean.rows).toHaveLength(1);
 

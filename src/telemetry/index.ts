@@ -17,6 +17,7 @@ export {
   TOOL_TRACE_PHASES,
 } from './store.js';
 export type { OpenTelemetryDatabaseOptions } from './store.js';
+export { INIT_CHECK_ROW_STATES } from './init-check-row.js';
 export { MIGRATIONS, runMigrations, type Migration } from './migrations/index.js';
 export {
   hasHomeShapedPath,
@@ -35,6 +36,8 @@ export type {
 } from './scrub.js';
 export {
   HOOK_EVENT_REASON_MAX,
+  INIT_CHECK_ROW_LIST_MAX,
+  INIT_CHECK_ROW_NAME_MAX,
   SKILL_DROP_CHANNEL_MAX,
   SKILL_DROP_CHANNELS_MAX,
   SKILL_DROP_NAME_MAX,
@@ -47,6 +50,8 @@ export {
 export type {
   HookEventKind,
   HookEventPayload,
+  InitCheckPayload,
+  InitCheckRowState,
   JudgeCallErrorKind,
   JudgeCallPayload,
   JudgeCallState,

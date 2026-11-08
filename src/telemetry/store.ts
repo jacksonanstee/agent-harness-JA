@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 
+import { isInitCheckPayload, sanitizeInitCheckPayload } from './init-check-row.js';
 import { MIGRATIONS, runMigrations } from './migrations/index.js';
 import type {
   HookEventPayload,
@@ -66,6 +67,7 @@ const EVENT_TYPE_PRESENCE: Record<TelemetryEventType, true> = {
   'skill-drop': true,
   'tool-rewrite': true,
   'judge-call': true,
+  'init-check': true,
 };
 
 export const TELEMETRY_EVENT_TYPES = Object.keys(EVENT_TYPE_PRESENCE) as readonly TelemetryEventType[];
@@ -704,6 +706,8 @@ function isPayloadForType(type: TelemetryEventType, payload: unknown): boolean {
       return isToolRewritePayload(payload);
     case 'judge-call':
       return isJudgeCallPayload(payload);
+    case 'init-check':
+      return isInitCheckPayload(payload);
     default: {
       // `payload` is unknown here, so the old unguarded fall-through gave NO
       // compile-time protection: a fifth type would have been validated
@@ -780,6 +784,8 @@ function sanitizePayload(event: TelemetryEventInput): TelemetryEventInput['paylo
       tool_use_id: p.tool_use_id === null ? null : sanitizeText(p.tool_use_id),
     };
   }
+  // Before the fall-through below, which treats any unnamed type as a hook-event.
+  if (event.type === 'init-check') return sanitizeInitCheckPayload(event.payload);
   if (event.type === 'skill-drop') {
     const p = event.payload;
     // sanitizeText is a 1:1 space substitution, so lengths are preserved and

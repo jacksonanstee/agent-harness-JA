@@ -4,6 +4,7 @@ import { m002TelemetryEvents } from './m002-telemetry-events.js';
 import { m003SkillDropType } from './m003-skill-drop-type.js';
 import { m004ToolRewriteType } from './m004-tool-rewrite-type.js';
 import { m005JudgeCallType } from './m005-judge-call-type.js';
+import { m006InitCheckType } from './m006-init-check-type.js';
 
 export { runMigrations, type Migration } from './runner.js';
 
@@ -17,4 +18,5 @@ export const MIGRATIONS: readonly Migration[] = [
   m003SkillDropType,
   m004ToolRewriteType,
   m005JudgeCallType,
+  m006InitCheckType,
 ];

@@ -1954,6 +1954,23 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const line = initCheckWarning(initCheck);
       if (line !== null) warn(line);
     }
+    // #232: one row per run, not-run included, so "checked and clean" and
+    // "never checked" stay distinguishable. Fresh arrays: the row never shares
+    // the check's readonly-typed lists. Written here on purpose, before the
+    // judge drain and the turn-cost row, so it lands on every path that writes
+    // turn-cost; a judge-call row settling in the drain may follow it.
+    recordTelemetry({
+      type: 'init-check',
+      sessionId: harnessSessionId,
+      turnId,
+      payload: {
+        state: initCheck.state,
+        unruledTools: [...initCheck.unruledTools],
+        unknownAgents: [...initCheck.unknownAgents],
+        unruledToolCount: initCheck.unruledToolCount,
+        unknownAgentCount: initCheck.unknownAgentCount,
+      },
+    });
 
     // Spec D3 step 7: await the judged hooks still running, bounded by JUDGE_DRAIN_MS, then fold the summary (D7).
     const judge = judgeRun === null ? null : await judgeRun.drain();

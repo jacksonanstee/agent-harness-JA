@@ -44,6 +44,8 @@ with a promise that telemetry's runner would adopt its DDL (ADR-0009 §5).
      migration m004, the same rebuild shape.
    - **Extended 2026-10-01 (issue #96 PR-B1, ADR-0037):** a sixth type,
      `judge-call`, by migration m005. See the second amendment below.
+   - **Extended 2026-11-08 (issue #232, ADR-0046 D4):** a seventh type,
+     `init-check`, by migration m006. See the amendment of that date below.
 5. **Correlation model.** The composition root (cli) pre-generates a harness
    session id and a turn id, because hook events fire before the SDK reports
    its own session id. Every telemetry writer keys on the harness ids; the SDK
@@ -782,7 +784,7 @@ the table decision 4 already owns.
    all, the one stated exception to one-row-per-result (ADR-0037).
 2. **Migration m005 follows the standing rule below:** a table rebuild in
    m004's shape with one more literal in the CHECK, `rowid` copied explicitly,
-   the three indexes recreated, byte-diffed against m004 in `ddl-drift.test.ts`
+   the three indexes recreated, diffed against m004 in `ddl-drift.test.ts` (whitespace collapsed, the CHECK clause normalised away)
    with only the CHECK literal normalised away, and row and rowid preservation
    pinned in `m005.test.ts` with a seeded rowid gap. The old-binary lockout of
    item 3 above attaches to it as to every migration.
@@ -822,7 +824,60 @@ No migration: the CHECK constrains `type`, not the payload (#152 D8's reasoning)
 
 `turn-cost` gains `modelUsage` (an array of at most `MODEL_USAGE_MAX` = 16 per-model rows: model, four token counts, web-search requests, the SDK's per-model cost or null), `pricedCostUsd` (the harness-priced figure, a finite number >= 0 or null) and `pricedPriceChecked` (the price table's checked date). All three are optional on read, so rows written before #212 still validate; the store refuses a longer array and re-sanitises each model name on write. No migration: the CHECK constrains `type`, not the payload.
 
+## Amendment (2026-11-08, issue #232, ADR-0046 D4): the `init-check` event and migration m006
+
+1. **Seventh event type, `init-check`.** One row per run with the session's
+   check of the SDK's `system/init` message, written once `SessionResult.initCheck`
+   is final (after the stream, before the judge drain and the `turn-cost` row;
+   the order is pinned in `src/session/init-check-row.test.ts`), so on the
+   stream-error path too. `not-run` is recorded as well, so a reader can tell "checked and
+   clean" from "never checked". A run refused before the SDK is called (a refused
+   agent file) writes neither this row nor `turn-cost`. Payload `{ state,
+   unruledTools, unknownAgents, unruledToolCount, unknownAgentCount }`
+   (`src/telemetry/types.ts`), the same shape as `initCheck`.
+2. **Migration m006 follows the standing rule below:** m005's rebuild with one
+   more literal in the CHECK, `rowid` copied explicitly, the three indexes
+   recreated, diffed against m005 in `ddl-drift.test.ts` (whitespace collapsed, the CHECK clause normalised away), and row and rowid
+   preservation pinned in `m006.test.ts` with a seeded rowid gap.
+3. **The row is closed and mirrors the check's invariants** (`isInitCheckPayload`,
+   `src/telemetry/init-check-row.ts`, kept out of `store.ts`, which is already
+   past the 800-line ceiling). It rejects any key outside the set before reading a
+   value; `state` must be in the `INIT_CHECK_ROW_STATES` mirror; each count is a
+   non-negative safe integer; each list holds strings of at most
+   `INIT_CHECK_ROW_NAME_MAX` (64) UTF-16 units, and its length is exactly
+   min(count, `INIT_CHECK_ROW_LIST_MAX` = 16); and the state must agree with the
+   counts (`found` exactly when a count is above zero). The names are cleaned of
+   control and bidi characters again on write, since the store is a public
+   factory a direct writer can reach. The three mirrors are pinned equal to
+   their security origins (`InitCheckState`, `INIT_CHECK_LIST_MAX`,
+   `INIT_CHECK_NAME_MAX`) in `src/session/init-check-row.test.ts`, which also
+   writes the session's rows into a real store, so a row the validator refuses
+   fails a test instead of becoming one stderr warning.
+4. **What the row carries.** Tool and agent names the CLI reported, never a tool
+   argument or output, path or MCP tool name (`mcp__*` names are ruled, so never
+   listed). An agent name comes from a definition file's frontmatter, a plugin,
+   or a CLI newer than the pinned bundled list, so it is not harness-authored
+   text: a plugin's names are attacker-chosen when the plugin is untrusted. The
+   start-line warning prints the same text, but that is ephemeral, and this row
+   is retained with no TTL and leaves the machine through `telemetry export`, so
+   a consumer of the export (a dashboard, a model summarising it) must treat
+   `unruledTools` and `unknownAgents` as data. "Cleaned" means control and bidi
+   characters; invisible code points (zero-width, tag, variation selectors) are
+   kept in the database, as in every other string field of the store, and
+   `telemetry export` escapes them.
+
 ## Revisit if
+
+- **The per-type table rebuild (added 2026-11-08, #232 architecture review).**
+  m003 to m006 are four rebuilds that differ by one CHECK literal; payload
+  changes have needed none. Revisit at the next new type, or when a database
+  is large enough for the copy to matter. Dropping the CHECK for the
+  application-level check alone has a precondition: `rowToEvent` throws on an
+  unknown type and one bad row fails the whole `query()`, so with no CHECK (and
+  so no migration and no old-binary lockout) an older binary would open the
+  database and then fail `telemetry export` at the first new-type row. The read
+  path must skip and count unknown types first, or the schema must carry a
+  version stamp.
 
 - Retention policy: `telemetry_events` has **no TTL/purge** (memory's session
   summaries decay after 30 days). Tool-result summaries persist indefinitely.
