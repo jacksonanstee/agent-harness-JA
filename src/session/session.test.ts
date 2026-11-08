@@ -1292,9 +1292,6 @@ describe('createSession', () => {
     ['telemetry.record throws', 'telemetry record threw', (): Partial<SessionDeps> => ({
       telemetry: { record: () => { throw booby(); } },
     })],
-    ['scanInjection throws', 'injection scan failed', (): Partial<SessionDeps> => ({
-      scanInjection: () => { throw booby(); },
-    })],
     ['post-tool fire() rejects', 'post-tool fire failed', (): Partial<SessionDeps> => {
       const real = createHookRuntime();
       const hooks: HookRuntime = {
@@ -1316,6 +1313,26 @@ describe('createSession', () => {
     const result = await session.run('say hello');
     expect(result.resultText).toBe('hello from claude');
     expect(warnings).toContain(`${prefix}: unrepresentable error`);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // #234: the scanner row, split out of the loop above. The scanner's input is
+  // the raw tool output, so its warning names the class without reading the
+  // message at all.
+  it('an unrepresentable error from scanInjection degrades to a class-only warning and the run completes', async () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, { scanInjection: () => { throw booby(); } }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('hello from claude');
+    expect(warnings).toContain(
+      'injection scan failed: the scanner threw Error; its message is withheld because it can carry the input (#234)',
+    );
     expect(warnings.join('\n')).not.toContain('getter leak');
   });
 
@@ -1712,9 +1729,11 @@ describe('createSession', () => {
       );
       const result = await session.run('hi');
 
-      // Invisible (U+200B) is DELETED, bidi (U+202E) is space-substituted —
-      // the same cleanSkillText contract already applied to `name`.
-      expect(result.droppedSkills[0]?.ruleIds).toEqual(['badrule', 'evil exe']);
+      // Since #234 an id that is not an identifier never gets this far: it is
+      // replaced where the scan result enters the session (scan-rule-ids.ts),
+      // so neither the invisible nor the bidi char survives. cleanSkillText
+      // still runs on the stored array as defence in depth.
+      expect(result.droppedSkills[0]?.ruleIds).toEqual(['non-conforming-rule-id']);
     });
 
     it('an `ask` verdict warns but never drops (enforcement is high-confidence only)', async () => {
@@ -3683,9 +3702,12 @@ describe('skill-drop telemetry (issue #46)', () => {
     };
     expect(payload).toBeDefined();
     expect(payload.ruleIds).toHaveLength(1);
-    // Cap is TOTAL stored length: the ellipsis is inside the budget, so a
-    // truncated element lands exactly ON the cap and passes the store validator.
-    expect(payload.ruleIds[0]?.length).toBe(SKILL_DROP_RULE_ID_MAX);
+    // Since #234 an id longer than RULE_ID_MAX (64, the same as
+    // SKILL_DROP_RULE_ID_MAX) is replaced where the scan result enters the
+    // session, so the per-element truncation here is now defence in depth
+    // that the session cannot reach; the long id still never reaches the row.
+    expect(payload.ruleIds[0]).toBe('non-conforming-rule-id');
+    expect(payload.ruleIds[0]?.length).toBeLessThanOrEqual(SKILL_DROP_RULE_ID_MAX);
     expect(payload.ruleIds[0]).not.toBe(longId);
   });
 
@@ -4367,7 +4389,10 @@ describe('issue #84 D2/G-6: notice is bounded and charset-restricted', () => {
     await session.run('hi');
     const ctx = hookSpecific(fake.outputs[0]?.out)?.additionalContext ?? '';
     expect(ctx.length).toBeLessThan(1000);
-    expect(ctx).toContain('unknown-rule');
+    // Since #234 the phrase ids are replaced where the scan result enters the
+    // session, before the notice's own unknown-rule mapping could see them.
+    expect(ctx).toContain('non-conforming-rule-id');
+    expect(ctx).not.toContain('phrase');
     expect(scan(ctx).verdict).toBe('pass');
     // At most NOTICE_RULE_IDS_MAX ids interpolated.
     expect(NOTICE_RULE_IDS_MAX).toBeGreaterThan(0);
