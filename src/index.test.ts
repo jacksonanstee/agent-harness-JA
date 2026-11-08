@@ -16,8 +16,8 @@ import type {
   JudgedScanResult,
   JudgeErrorKind,
   JudgeMode,
-  JudgeCallPayload,
-  JudgeRunState,
+  InitCheckPayload,
+  JudgeCallPayload,  JudgeRunState,
   JudgeSessionState,
   JudgeSettings,
   JudgeSummary,
@@ -210,6 +210,10 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.JUDGE_CALL_STATES).toHaveLength(10);
     expect(barrel.JUDGE_CALL_VERDICTS).toHaveLength(3);
     expect(barrel.JUDGE_CALL_ERROR_KINDS).toHaveLength(4);
+    // #232: the init-check row's payload type and mirrors travel with TelemetryEvent (ADR-0023 closure).
+    expect(barrel.INIT_CHECK_ROW_STATES).toHaveLength(3);
+    expect(barrel.INIT_CHECK_ROW_LIST_MAX).toBe(16);
+    expect(barrel.INIT_CHECK_ROW_NAME_MAX).toBe(64);
     const rootNames = Object.keys(barrel);
     for (const fixed of ['JUDGE_HOOK_TIMEOUT_S', 'JUDGE_MAX_CONCURRENT', 'JUDGE_EARLY_STOP_AFTER', 'JUDGE_DRAIN_MS', 'JUDGE_ABORT_GRACE_MS', 'hasJudgeKey', 'WITHHELD_MARKER']) {
       expect(rootNames, `root barrel must not export ${fixed}`).not.toContain(fixed);
@@ -218,6 +222,7 @@ describe('root barrel (src/index.ts)', () => {
     const judge: SessionJudge = { call: async () => ({ ok: true, verdict: 'pass', costUsd: null }), maxCallsPerRun: 1 };
     const state: JudgeSessionState = 'stopped';
     const row = (p: JudgeCallPayload): string => p.state;
+    const initRow = (p: InitCheckPayload): number => p.unruledToolCount;
     const summary = (s: JudgeSummary): number => s.calls;
     // Pin 31 (B-4): the internal smoke seam type is NOT on the root. If it
     // ever is, this directive is unused and `npm run typecheck` fails TS2578.
@@ -232,7 +237,7 @@ describe('root barrel (src/index.ts)', () => {
     type NoMarker = typeof Root.WITHHELD_MARKER;
     const marker: NoMarker | null = null;
     expect(marker).toBeNull();
-    expect([settings.mode, typeof judge.call, state, typeof row, typeof summary]).toEqual(['always', 'function', 'stopped', 'function', 'function']);
+    expect([settings.mode, typeof judge.call, state, typeof row, typeof summary, typeof initRow]).toEqual(['always', 'function', 'stopped', 'function', 'function', 'function']);
   });
 
   it('exports the type closure its own signatures reference (compile-time)', () => {

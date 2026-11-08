@@ -49,7 +49,7 @@ describe('judge off is today\'s path; judge on adds the matcher timeout and the 
     expect(Object.keys(opts?.hooks?.PostToolUse?.[0] ?? {})).toEqual(['hooks']);
     expect(Object.keys(opts?.hooks?.PostToolUseFailure?.[0] ?? {})).toEqual(['hooks']);
     expect(result.judge).toBeNull();
-    expect(b.events().map((e) => e.type)).toEqual(['tool-trace', 'turn-cost']);
+    expect(b.events().map((e) => e.type)).toEqual(['tool-trace', 'init-check', 'turn-cost']);
     expect(b.warnings.filter((w) => w.includes('judge'))).toEqual([]);
   });
 
@@ -61,7 +61,7 @@ describe('judge off is today\'s path; judge on adds the matcher timeout and the 
     expect(fake.options[0]?.hooks?.PostToolUse?.[0]?.timeout).toBe(JUDGE_HOOK_TIMEOUT_S);
     expect(fake.options[0]?.hooks?.PostToolUseFailure?.[0]?.timeout).toBe(JUDGE_HOOK_TIMEOUT_S);
     expect(fake.options[0]?.hooks?.PreToolUse?.[0]).not.toHaveProperty('timeout');
-    expect(b.events().map((e) => e.type)).toEqual(['judge-call', 'tool-trace', 'turn-cost']);
+    expect(b.events().map((e) => e.type)).toEqual(['judge-call', 'tool-trace', 'init-check', 'turn-cost']);
     expect(result.judge).toMatchObject({ cap: 5, calls: 1, annotated: 0, tightened: 0 });
     expectNoLostRows(b);
   });
@@ -135,7 +135,7 @@ describe('composition through the session (pins 5, 6, 20)', () => {
     expect(fj.texts).toEqual([]);
     expect(b.judgeRows()).toEqual([]);
     expect(result.outputAnnotations).toEqual([]);
-    expect(b.events().map((e) => e.type)).toEqual(['tool-trace', 'turn-cost']);
+    expect(b.events().map((e) => e.type)).toEqual(['tool-trace', 'init-check', 'turn-cost']);
   });
 });
 
@@ -223,7 +223,7 @@ describe('the custom post-tool hook reads the COMPOSED verdict, 3a and 3b includ
     expect(contextOf(fake.outputs.get('toolu_1'))).toContain('judge-refused');
     expect(result.outputAnnotations[0]).toMatchObject({ phase: 'post-tool', verdict: 'ask', ruleIds: ['judge-refused'] });
     expect(seen[0]?.rule_ids).toEqual(result.outputAnnotations[0]?.ruleIds);
-    expect(b.events().map((e) => e.type)).toEqual(['judge-call', 'tool-trace', 'turn-cost']);
+    expect(b.events().map((e) => e.type)).toEqual(['judge-call', 'tool-trace', 'init-check', 'turn-cost']);
     expect(b.judgeRows()[0]).toMatchObject({ state: 'refused', heuristic: 'pass', judge: null, composed: 'ask', errorKind: 'refused', costUsd: 0.002283 });
     expect(result.judge).toMatchObject({ calls: 1, annotated: 1, tightened: 1 });
     expect(result.judge?.byState.refused).toBe(1);

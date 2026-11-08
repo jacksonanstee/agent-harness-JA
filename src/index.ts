@@ -145,6 +145,9 @@ export type {
 } from './security/index.js';
 export {
   createTelemetryStore,
+  INIT_CHECK_ROW_LIST_MAX,
+  INIT_CHECK_ROW_NAME_MAX,
+  INIT_CHECK_ROW_STATES,
   JUDGE_CALL_ERROR_KINDS,
   JUDGE_CALL_STATES,
   JUDGE_CALL_VERDICTS,
@@ -165,6 +168,8 @@ export type {
   OpenTelemetryDatabaseOptions,
   HookEventKind,
   HookEventPayload,
+  InitCheckPayload,
+  InitCheckRowState,
   JudgeCallErrorKind,
   JudgeCallPayload,
   JudgeCallState,

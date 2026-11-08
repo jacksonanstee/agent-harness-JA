@@ -1,4 +1,4 @@
-export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop' | 'tool-rewrite' | 'judge-call';
+export type TelemetryEventType = 'turn-cost' | 'tool-trace' | 'hook-event' | 'skill-drop' | 'tool-rewrite' | 'judge-call' | 'init-check';
 
 export interface TurnUsage {
   inputTokens: number;
@@ -245,6 +245,38 @@ export interface JudgeCallPayload {
    * boolean, `false` included.
    */
   withholdDecided?: boolean;
+}
+
+/**
+ * Structural MIRRORS of security's `InitCheckState` and of its two caps,
+ * `INIT_CHECK_LIST_MAX` and `INIT_CHECK_NAME_MAX` (src/security/init-check.ts;
+ * issue #232). Telemetry is a leaf: lint forbids it importing session, and
+ * by convention it imports nothing from security either (keeping the export
+ * path off security's heavy barrel), so nothing here derives from the origin; drift tests in
+ * src/session/init-check-row.test.ts prove each equal to it. Grow the origin
+ * without its mirror and every row with the new value fails validation and is
+ * lost to one stderr warning.
+ */
+export type InitCheckRowState = 'not-run' | 'clean' | 'found';
+export const INIT_CHECK_ROW_LIST_MAX = 16;
+export const INIT_CHECK_ROW_NAME_MAX = 64;
+
+/**
+ * The run's `system/init` check (issue #232, ADR-0046 D4), one row per run,
+ * `not-run` included, so a reader can tell "checked and clean" from "never
+ * checked". CLOSED: the validator rejects any key outside this set. Each list
+ * holds at most INIT_CHECK_ROW_LIST_MAX distinct names, each at most
+ * INIT_CHECK_ROW_NAME_MAX UTF-16 units, already cleaned of control and bidi
+ * characters by the check; the counts are the distinct names before the cap,
+ * so `list.length` is `min(count, INIT_CHECK_ROW_LIST_MAX)`. `clean` and
+ * `not-run` carry empty lists and zero counts; `found` has a count above zero.
+ */
+export interface InitCheckPayload {
+  state: InitCheckRowState;
+  unruledTools: string[];
+  unknownAgents: string[];
+  unruledToolCount: number;
+  unknownAgentCount: number;
 }
 
 /**
@@ -547,7 +579,8 @@ export type TelemetryEvent =
   | (TelemetryEventBase & { type: 'hook-event'; payload: HookEventPayload })
   | (TelemetryEventBase & { type: 'skill-drop'; payload: SkillDropPayload })
   | (TelemetryEventBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
-  | (TelemetryEventBase & { type: 'judge-call'; payload: JudgeCallPayload });
+  | (TelemetryEventBase & { type: 'judge-call'; payload: JudgeCallPayload })
+  | (TelemetryEventBase & { type: 'init-check'; payload: InitCheckPayload });
 
 /** Base shape, do not extend or construct directly; use the TelemetryEvent / TelemetryEventInput unions. */
 export interface TelemetryInputBase {
@@ -564,7 +597,8 @@ export type TelemetryEventInput =
   | (TelemetryInputBase & { type: 'hook-event'; payload: HookEventPayload })
   | (TelemetryInputBase & { type: 'skill-drop'; payload: SkillDropPayload })
   | (TelemetryInputBase & { type: 'tool-rewrite'; payload: ToolRewritePayload })
-  | (TelemetryInputBase & { type: 'judge-call'; payload: JudgeCallPayload });
+  | (TelemetryInputBase & { type: 'judge-call'; payload: JudgeCallPayload })
+  | (TelemetryInputBase & { type: 'init-check'; payload: InitCheckPayload });
 
 export interface TelemetryFilter {
   sessionId?: string;
