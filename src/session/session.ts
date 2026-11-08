@@ -68,6 +68,7 @@ export { FENCE_OPENER_RE };
 import { relativeSkillDropPath } from './skill-drop-path.js';
 import { cleanSdkToken, isModelRefusal } from './sdk-refusal.js';
 import { describeError } from './describe-error.js';
+import { redactorFailure } from './redactor-failure.js';
 import { createAgentGate } from './agent-gate.js';
 import { INIT_CHECK_NOT_RUN, initCheckWarning } from '../security/index.js';
 import type { InitCheck } from '../security/index.js';
@@ -1001,9 +1002,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         }
         return { redacted: result.redacted, findings: result.findings };
       } catch (error: unknown) {
-        warn(
-          `secret redaction failed: ${describeError(error)}`,
-        );
+        warn(`secret redaction failed: ${redactorFailure(error)}`);
         return { redacted: REDACTION_FAILED, findings: null };
       }
     }
@@ -1023,6 +1022,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       } catch {
         return REDACTION_FAILED;
       }
+    }
+
+    // Redacts the final result text for the memory copy and the returned
+    // SessionResult (issue #112). Like redactForPersistence, but it warns on a
+    // failure, since a library caller or an eval oracle otherwise sees only the
+    // sentinel. Absent redactor → as is (nothing configured).
+    function redactResultText(value: string | null): string | null {
+      if (value === null || deps.redactSecrets === undefined) return value;
+      try {
+        const { redacted } = deps.redactSecrets(value);
+        if (typeof redacted === 'string') return redacted;
+        warn('secret redaction failed for the result text: redactor returned a non-string');
+      } catch (error: unknown) {
+        warn(`secret redaction failed for the result text: ${redactorFailure(error)}`);
+      }
+      return REDACTION_FAILED;
     }
 
     // Redacts one assistant text block before it is handed to `onText`
@@ -1046,7 +1061,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         }
         return redacted;
       } catch (error: unknown) {
-        warn(`secret redaction failed for assistant text: ${describeError(error)}`);
+        warn(`secret redaction failed for assistant text: ${redactorFailure(error)}`);
         return REDACTION_FAILED;
       }
     }
@@ -1445,7 +1460,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       try {
         result = deps.redactSecrets(errorText);
       } catch (error: unknown) {
-        warn(`secret redaction failed: ${describeError(error)}`);
+        warn(`secret redaction failed: ${redactorFailure(error)}`);
         return { redactedRow: REDACTION_FAILED, findings: null, redacted: true };
       }
       if (typeof result.redacted !== 'string') {
@@ -1989,6 +2004,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // secret into `resultText`, or the user can paste one into `prompt`
     // (ADR-0013). Redact-then-truncate so a marker, not a secret fragment,
     // survives the cut.
+    // #112: redacted ONCE and shared by the memory copy and the returned result,
+    // so a stateful redactor cannot give the two sinks different text. A failure
+    // warns (class only, #113) and fails closed to the sentinel.
+    const safeResultText = redactResultText(resultText);
     let memoryEntryId: string | null = null;
     const writeResult = deps.memory.write({
       id: `session-${sessionId}`,
@@ -2005,7 +2024,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
         // Already sanitized at capture; no redaction pass needed because these
         // are short vendor-supplied tokens, not model or tool prose.
         refusal,
-        resultText: truncate(redactForPersistence(resultText)),
+        resultText: truncate(safeResultText),
         // Same redact-then-truncate as prompt/resultText: the deny reason is
         // harness-authored today, but ANY registered hook's throw message
         // lands here, and this is a retained sink (R-17 channel d, ADR-0031).
@@ -2025,7 +2044,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     if (streamError !== null) throw streamError;
 
     return {
-      resultText,
+      // #112: redacted at the boundary, like every other copy (memory, onText).
+      resultText: safeResultText,
       resultSubtype,
       stopReason,
       refusal,

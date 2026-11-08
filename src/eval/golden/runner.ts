@@ -428,8 +428,9 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
 
     try {
       const verdict = validateVerdict(await oracle(result));
-      // Raw output is retained only when phase 2 can ever consume it — a
-      // plain oracle-only run (no --challenge) must not hold raw resultText
+      // Output is retained only when phase 2 can ever consume it — a
+      // plain oracle-only run (no --challenge) must not hold resultText (already
+      // redacted by the session since #112, and redacted again before the adversary)
       // in memory it never retained before (review3 MEDIUM). runChallengePhase
       // is the only reader of these two fields (grep-verified) and it only
       // runs when deps.verifier is defined, so this gate has no other effect.

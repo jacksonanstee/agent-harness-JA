@@ -1001,7 +1001,8 @@ describe('createSession', () => {
       onWarning: (w) => warnings.push(w),
     });
     const result = await session.run('hi');
-    expect(result.resultText).toBe('hello from claude');
+    // #112: the returned result fails closed too.
+    expect(result.resultText).toBe('[REDACTION FAILED]');
     const trace = events.find((e) => e.type === 'tool-trace');
     if (trace?.type !== 'tool-trace') throw new Error('no tool-trace');
     expect(trace.payload.resultSummary).toBe('[REDACTION FAILED]');
@@ -1291,9 +1292,6 @@ describe('createSession', () => {
     ['telemetry.record throws', 'telemetry record threw', (): Partial<SessionDeps> => ({
       telemetry: { record: () => { throw booby(); } },
     })],
-    ['redactSecrets throws', 'secret redaction failed', (): Partial<SessionDeps> => ({
-      redactSecrets: () => { throw booby(); },
-    })],
     ['scanInjection throws', 'injection scan failed', (): Partial<SessionDeps> => ({
       scanInjection: () => { throw booby(); },
     })],
@@ -1318,6 +1316,26 @@ describe('createSession', () => {
     const result = await session.run('say hello');
     expect(result.resultText).toBe('hello from claude');
     expect(warnings).toContain(`${prefix}: unrepresentable error`);
+    expect(warnings.join('\n')).not.toContain('getter leak');
+  });
+
+  // #112/#113: the redactor row, split out of the loop above. A redactor that
+  // throws an error whose message getter throws: the warning names the class
+  // without reading the message, and the returned result fails closed.
+  it('an unrepresentable error from redactSecrets degrades to a class-only warning and the run completes', async () => {
+    const fake = fakeQuery([INIT, ASSISTANT, RESULT], [
+      { tool: 'Read', input: { file_path: '/tmp/x' }, output: 'contents' },
+    ]);
+    const warnings: string[] = [];
+    const session = createSession(makeDeps(fake, { redactSecrets: () => { throw booby(); } }), {
+      skillsDir: '/nowhere',
+      onWarning: (w) => warnings.push(w),
+    });
+    const result = await session.run('say hello');
+    expect(result.resultText).toBe('[REDACTION FAILED]');
+    expect(warnings).toContain(
+      'secret redaction failed: the redactor threw Error; its message is withheld because it can carry the input (#113)',
+    );
     expect(warnings.join('\n')).not.toContain('getter leak');
   });
 
@@ -1435,8 +1453,11 @@ describe('createSession', () => {
       });
       const result = await session.run('hi');
       expect(chunks).toEqual(['[REDACTION FAILED]']);
-      expect(warnings).toContain('secret redaction failed for assistant text: boom');
-      expect(result.resultText).toBe('hello from claude');
+      expect(warnings).toContain(
+        'secret redaction failed for assistant text: the redactor threw Error; its message is withheld because it can carry the input (#113)',
+      );
+      // #112: the result is redacted at the boundary too, so a throwing redactor fails it closed.
+      expect(result.resultText).toBe('[REDACTION FAILED]');
     });
 
     it('fails closed to the sentinel when the redactor returns a non-string', async () => {
