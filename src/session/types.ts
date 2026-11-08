@@ -521,9 +521,14 @@ export interface SessionRefusal {
 
 export interface SessionResult {
   /**
-   * The SDK's final result text, RAW: not redacted here. The memory copy is
-   * redacted at the write and each `onText` block at emission (issue #91); a
-   * caller that persists or prints this field must run it through `redact`.
+   * The SDK's final result text, redacted with the session's `redactSecrets`
+   * (issue #112), like the memory copy and each `onText` block (issue #91):
+   * the sentinel `[REDACTION FAILED]` when the redactor throws or returns a
+   * non-string (with a warning: only the error class on a throw), and the text as
+   * is only when no redactor is configured (the CLI always configures one). The
+   * built-in redactor scans at most 128 KiB and replaces the rest with a
+   * marker, so a longer result comes back cut there. An eval oracle reads this
+   * redacted text. The memory copy is the same redacted text, truncated.
    */
   resultText: string | null;
   /** SDK result subtype, e.g. 'success' or 'error_max_turns'; null if no result message arrived. */

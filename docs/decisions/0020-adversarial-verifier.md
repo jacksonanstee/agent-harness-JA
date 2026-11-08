@@ -239,6 +239,9 @@ export function createVerifier(deps: { adversary: AdversaryFn; adversaryModelId:
   challenge time**. Phase 2, only when `deps.verifier` is present
   (`src/eval/golden/runner.ts:runChallengePhase`): the runner walks the
   completed rows in taskId order and challenges each **oracle-pass row**.
+  *(Amended 08/11/2026, issue #112: the session now returns `resultText` already
+  redacted, so "raw" below means not yet redacted by the runner; the runner still
+  redacts it again before the adversary call, which is safe to apply twice.)*
   The **raw** `resultText` of each pass row is retained in memory **only
   when `--challenge` is active** (`deps.verifier` present) — a plain golden
   run never retains it, gated at the point of capture
