@@ -188,3 +188,16 @@ The #112/#113 review found three more places that rendered text whose input is s
 Checked and left as they are: the model-facing rewrite walk and the rewrite verifier warnings (a redactor's throw is caught inside the leaf function, so its message cannot reach them), and `cliDenied` (tool names and ids only).
 
 Residual: hook-event records reach a `HookSink` with the reason only control-stripped (`src/hooks/runtime.ts`). The CLI's sink redacts and bounds them before telemetry; a library caller that supplies its own `onEvent` receives them unredacted and must redact them itself.
+
+## Amendment (2026-11-09, issue #111): a private key split across assistant text blocks
+
+- Each assistant text block is redacted on its own, and `private-key-block` needs its BEGIN header. So a reply that started a key, called a tool, then finished it in the next block emitted that block's body and END fence raw. The memory copy was unaffected: it redacts the whole reply in one string.
+- The session now carries the open block across blocks for the run (`privateKeyOpen`, `redactForEmission` in `src/session/session.ts`). When a block ends inside a key (its last private-key header has no END fence after it, `opensUnterminatedPrivateKey`), the next block goes through `continuePrivateKey` (`src/security/secrets/pem-continuation.ts`) before the redactor:
+  - each run of body lines (base64 of 16 or more characters, a padded final line, or a PEM, OpenSSH or PGP armour header) and the END fence becomes one `[REDACTED:private-key-block]`;
+  - other lines are kept, so a lead-in such as "part two:" is not swallowed and the body after it does not leak;
+  - the fence closes the key, and the block's remaining text is redacted as usual.
+- With no fence, the key stays open only if the block carried body. A block of prose closes it, so a reply that moves on after a key it never finished is not blacked out.
+- The header and fence regex sources are shared with the rule, which is now built from them, so the two cannot drift. The built pattern is byte-identical to the old literal.
+- A continued block counts as one finding in the per-block warning.
+- Residual, as the issue said: S-2 is pattern-based and observe-only. An output whose block boundaries an attacker controls can drop the header outright, which no rule catches. A body line shorter than 16 characters that is not padded (a short final line) is kept.
+

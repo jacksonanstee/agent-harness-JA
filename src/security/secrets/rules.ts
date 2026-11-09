@@ -1,3 +1,4 @@
+import { PEM_END_FENCE_SOURCE, PRIVATE_KEY_HEADER_SOURCE } from './pem-continuation.js';
 import type { SecretRule } from './types.js';
 
 /**
@@ -170,8 +171,8 @@ export const DEFAULT_SECRET_RULES = [
     // can never fail once a header is found, so many-header input is linear
     // (each match consumes to the next fence or to end-of-input) and
     // redact()'s MAX_INPUT cap is the total bound.
-    pattern:
-      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]{0,40}-----|$)/,
+    // Built from the sources pem-continuation.ts shares with the session's cross-block continuation (#111).
+    pattern: new RegExp(`${PRIVATE_KEY_HEADER_SOURCE}[\\s\\S]*?(?:${PEM_END_FENCE_SOURCE}|$)`),
     description: 'PEM private-key block (terminated, unterminated, or oversized)',
   },
   {

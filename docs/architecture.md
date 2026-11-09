@@ -71,7 +71,7 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 
 #### `security/secrets-scanner`
 
-- **Owns:** redaction of secrets in tool inputs and outputs, in the memory summary, and in each assistant text block before the session emits it through `onText` (issue #91).
+- **Owns:** redaction of secrets in tool inputs and outputs, in the memory summary, and in each assistant text block before the session emits it through `onText` (issue #91), carrying an unterminated private key into the next block (`continuePrivateKey`, issue #111).
 - **Public API:** `redact(text: string): { redacted: string, findings: SecretFinding[] }`.
 - **Depends on:** built-in pattern registry; optional user-supplied patterns via config.
 - **Design notes:** Patterns drawn from `gitleaks` and `trufflehog` rule sets (25 rules; entropy-gated heuristics). Redaction format: `[REDACTED:<rule_id>]`. `SecretFinding` carries only `rule_id`+offsets+length (no secret bytes). Shipped ([ADR-0013](./decisions/0013-secret-redaction.md)). Since 2026-09-08 the model-facing copy of a SUCCESSFUL tool call is redacted too, rewritten in place through the SDK's `updatedToolOutput` channel ([ADR-0035](./decisions/0035-model-facing-enforcement-via-rewrite-channels.md)); a FAILED call's output cannot be rewritten (its hook has no rewrite channel) and the tool input side stays observe-only, so those still reach the model raw (R-4, R-22).
