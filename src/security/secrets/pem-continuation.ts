@@ -36,7 +36,11 @@ const hasKeyRun = (line: string): boolean => (line.match(BODY_RUN_RE) ?? []).som
 const replaceKeyRuns = (line: string): string => line.replace(BODY_RUN_RE, (run) => (isKeyRun(run) ? PRIVATE_KEY_MARKER : run));
 /** A line's content without a quote, bullet, line-number or backtick decoration (`> `, `- `, `* `, `12 | `). */
 const DECORATION_RE = /^\s*(?:>\s*|[-*]\s+|\d+\s*\|\s*|`)*/;
-const coreOf = (line: string): string => line.replace(DECORATION_RE, '').replace(/`?\s*$/, '');
+// trimEnd, not a `\s*$` pattern: that retries at every interior whitespace position and is quadratic (#111 re-check).
+const coreOf = (line: string): string => {
+  const stripped = line.replace(DECORATION_RE, '').trimEnd();
+  return stripped.endsWith('`') ? stripped.slice(0, -1).trimEnd() : stripped;
+};
 /** A short base64 line or an armour header, once its decoration is removed. */
 const isMaybeLine = (line: string): boolean => {
   const core = coreOf(line);
@@ -63,8 +67,13 @@ export function opensUnterminatedPrivateKey(text: string): boolean {
   if (END_RE.test(tail)) return false;
   // Key body after it, or only what a key's first lines can be: blank lines, armour headers (an ENCRYPTED PEM or PGP key
   // always has them before the body) or a partial first line (#111 review).
-  // A base64-only line counts here only under 40 characters: a longer one that is not key body (a hex hash) is not a partial key line.
-  return hasKeyRun(tail) || tail.split('\n').every((line) => line.trim() === '' || (isMaybeLine(line) && coreOf(line).length < 40));
+  // An armour header counts at any length (a real DEK-Info line is 54 characters); a base64-only line only under 40, since
+  // a longer one that is not key body (a hex hash) is not a partial key line. A bare decoration (a ``` fence, a lone `> `) has no
+  // core, so it reads as blank.
+  return hasKeyRun(tail) || tail.split('\n').every((line) => {
+    const core = coreOf(line);
+    return core === '' || ARMOUR_HEADER_RE.test(core) || (SHORT_BASE64_LINE_RE.test(core) && core.length < 40);
+  });
 }
 
 /** The carry between texts: whether a key is open, and how many non-blank texts in a row carried none of its body. */
@@ -96,8 +105,8 @@ const kindOf = (line: string): LineKind => {
 /**
  * Which lines are body: every `body` line, and a `maybe` line when the next
  * line that is not blank or `maybe` is body or the fence, or when the line
- * before it that is not blank is body (a key's short last line, its fence in
- * the next block).
+ * before it that is not blank is body in this block (a key's short last
+ * line, its fence in the next block).
  */
 function bodyLines(kinds: readonly LineKind[], fenceFollows: boolean): boolean[] {
   const isBody = kinds.map((kind) => kind === 'body');

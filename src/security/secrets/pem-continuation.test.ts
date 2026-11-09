@@ -26,7 +26,7 @@ describe('opensUnterminatedPrivateKey (#111)', () => {
     ['a closed block then a second, open one', `${BEGIN}\n${END}\nnext:\n${BEGIN}\n${BODY}`, true],
     ['a header mentioned inside prose (review: no over-redaction)', `Look for the line \`${BEGIN}\` at the top of the file.`, false],
     ['a header followed by a hex hash, not key body', `${BEGIN}\n${'a'.repeat(20)}${'0'.repeat(20)}`, false],
-    ['review: a header then only armour headers and a blank line (ENCRYPTED PEM, PGP)', `${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B\n\n`, true],
+    ['review: a header then only armour headers and a blank line (ENCRYPTED PEM, PGP)', `${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B2C3D4E5F60718293A4B5C6D7E8F9\n\n`, true],
     ['review: a header then a partial first body line', `${BEGIN}\nMIIEowIBAAKCAQEA0Z3V`, true],
     ['review: a header then a quoted partial line', `> ${BEGIN}\n> MIIEowIBAAKC`, true],
     ['a header then prose', `${BEGIN}\nis the line a key starts with.`, false],
@@ -136,4 +136,21 @@ describe('continuePrivateKey (#111)', () => {
   it('the shared carries are frozen', () => {
     expect(Object.isFrozen(OPEN_PRIVATE_KEY) && Object.isFrozen(CLOSED_PRIVATE_KEY)).toBe(true);
   });
+
+  it('a short tail alone in a text, with no body or fence beside it, is kept (residual: it cannot be told from a short word)', () => {
+    expect(go('AQAB').text).toBe('AQAB');
+  });
+
+  it('re-check: a header followed by a bare ``` fence opens, so a key in a new code block is carried', () => {
+    expect(opensUnterminatedPrivateKey(`\`\`\`\n${BEGIN}\n\`\`\`\n`)).toBe(true);
+  });
+
+  it('re-check (D): a long interior whitespace run stays linear in both helpers', () => {
+    const line = `x${' '.repeat(200_000)}y`;
+    const t0 = performance.now();
+    go(line);
+    opensUnterminatedPrivateKey(`${BEGIN}\n${line}`);
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
 });
+

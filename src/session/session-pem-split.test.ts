@@ -128,7 +128,7 @@ describe('#111: a private key split across assistant text blocks is redacted in 
   });
 
   it('review: an ENCRYPTED key split after its armour headers: the body in block 2 is replaced (N)', async () => {
-    const { chunks } = await emitted([assistant(`${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B2C\n\n`), toolUse, assistant(`${BODY1}\n${BODY2}\n${END}`)]);
+    const { chunks } = await emitted([assistant(`${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B2C3D4E5F60718293A4B5C6D7E8F9\n\n`), toolUse, assistant(`${BODY1}\n${BODY2}\n${END}`)]);
     expect(chunks[1]).toBe(`${MARKER}\n${MARKER}\n${MARKER}`);
   });
 
