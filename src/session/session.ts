@@ -177,19 +177,23 @@ const NOTICE_TOOL_NAME_MAX = 40;
 
 /** How many tail lines `droppedTailLine` tries, so a huge leaf of repeated lines costs a bounded scan. */
 const TAIL_SPAN_CANDIDATES = 64;
+/** A tail span keeps at most this many trailing characters of its line: any part of the dropped tail is equally good evidence. */
+const TAIL_SPAN_MAX = 256;
 
 /**
- * A line of an oversized leaf's dropped tail to watch for in the model's copy
- * (#207): searching from the end, the first line of at least MIN_SPAN_LINE
- * characters that the rewrite does not contain. Null when none qualifies, so
- * the entry stays span-less and reads `no-content-span`.
+ * A line of an oversized leaf, near its end, to watch for in the model's copy
+ * (#207): searching back over the leaf's last lines, the first whose last
+ * TAIL_SPAN_MAX characters hold at least MIN_SPAN_LINE non-blank characters
+ * and are not in the rewrite. Null when none qualifies, so the entry stays
+ * span-less and reads `no-content-span`.
  */
 function droppedTailLine(leaf: string, redacted: string): string | null {
   const lines = leaf.split('\n');
   const stop = Math.max(0, lines.length - TAIL_SPAN_CANDIDATES);
   for (let i = lines.length - 1; i >= stop; i -= 1) {
     const line = lines[i] ?? '';
-    if (line.trim().length >= MIN_SPAN_LINE && !redacted.includes(line)) return line;
+    const span = line.length > TAIL_SPAN_MAX ? line.slice(-TAIL_SPAN_MAX) : line;
+    if (span.trim().length >= MIN_SPAN_LINE && !redacted.includes(span)) return span;
   }
   return null;
 }

@@ -130,6 +130,13 @@ describe('#207: a redaction entry with no recorded span cannot read applied on a
       expect(rows).toEqual([expect.objectContaining({ outcome: 'applied', truncated: true })]);
     });
 
+    it('one oversized line with no newline (minified output): its last characters are the span, so landed reads applied and raw leaked', async () => {
+      const line = Array.from({ length: 9_000 }, (_, i) => `t${i}.`).join('').padEnd(140_000, 'z') + 'end-of-the-only-line';
+      expect(line.length).toBeGreaterThan(131_072);
+      expect((await runOnce(line, redact(line).redacted)).rows).toEqual([expect.objectContaining({ outcome: 'applied', truncated: true })]);
+      expect((await runOnce(line, line)).rows).toEqual([expect.objectContaining({ outcome: 'leaked' })]);
+    });
+
     it('a tail of only short lines records nothing, so even a landed rewrite reads no-content-span', async () => {
       const shorts = `${'x'.repeat(140_000)}\n${Array.from({ length: 70 }, () => 'ab').join('\n')}`;
       const { rows } = await runOnce(shorts, redact(shorts).redacted);

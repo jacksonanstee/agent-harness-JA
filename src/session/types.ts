@@ -386,7 +386,9 @@ export interface SessionDeps {
    * block before `onText` (issue #91). When absent, none of those are redacted:
    * both CLI composition roots inject `redact`; a library caller must too.
    * Failures fail CLOSED per leaf/sink to the `[REDACTION FAILED]` sentinel,
-   * never the raw text.
+   * never the raw text. The rewrite verifier (ADR-0035 D4) confirms `applied`
+   * only for `[REDACTED:<rule_id>]` markers built from the returned findings,
+   * so a redactor must emit that marker for each finding (#207).
    */
   redactSecrets?: (text: string) => RedactResult;
   /**
