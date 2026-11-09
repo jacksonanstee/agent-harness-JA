@@ -79,9 +79,16 @@ Violating these rules is treated as a build failure (enforced by an ESLint `no-r
 #### `security/permissions`
 
 - **Owns:** allow / ask / deny decisions for tool invocations, plus the settings-file loader (`~/.harness/settings.json` under `<cwd>/.harness/settings.json`).
-- **Public API:** `createPermissionEvaluator(opts).evaluate(tool, args): Evaluation`; `permissionHook(evaluator, prompter | undefined, grantPolicy)` (a pre-tool handler that throws `PermissionDenied` on deny, and returns a `PreToolGrant` for a user-layer rule allow unless the policy withholds that tool, ADR-0040 D3 and D-8); `loadSettingsFile` / `mergeLayers` / `parsePermissionSettings`.
+- **Public API:** `createPermissionEvaluator(opts).evaluate(tool, args): Evaluation`; `permissionHook(evaluator, prompter | undefined, grantPolicy)` (a pre-tool handler that throws `PermissionDenied` on deny, and returns a `PreToolGrant` for a user-layer rule allow unless the policy withholds that tool, ADR-0040 D3 and D-8), whose third argument a caller builds with `grantPolicyFor(userSandbox)` (`security/grant-policy`); `loadSettingsFile` / `mergeLayers` / `parsePermissionSettings`.
 - **Depends on:** `internal/settings` for its settings-file loader (which reads through `internal/guarded-read` since ADR-0034); the composition root composes the layers and registers the hook (injected, not imported).
 - **Design notes:** Rules are `{ tool, match?, decision }` with trailing-`*` prefix globs only. Precedence is specificity (match > tool > wildcard) then severity (deny > ask > allow), so merged layers evaluate order-independently and a user deny survives a project allow (sticky deny). Unmatched tools get `defaultDecision` (default allow). Harden with a wildcard deny RULE plus explicit allows, not a deny default: sticky deny protects user rules, and the default is consulted only when no rule in either layer matches, so a project allow rule beats a user deny default (issue #100, by execution). `ask` fails closed without a prompter; malformed settings fail loud at startup. Shipped ([ADR-0014](./decisions/0014-declarative-permission-model.md)).
+
+#### `security/grant-policy`
+
+- **Owns:** the ADR-0040 D-8 rule: which code-executing tools a permission-rule allow must not turn into an SDK grant (#218).
+- **Public API:** `grantPolicyFor(userSandbox: SandboxConfig): GrantPolicy`, a pure function returning a fresh set per call. Pass the USER layer's sandbox, never a merged one: the merge returns the project's `commands` list when the user has none, so a cloned repository's list would otherwise unlock the grant.
+- **Depends on:** `internal/tool-targets` (`CODE_EXECUTING_TOOLS`) and the `GrantPolicy` and `SandboxConfig` types; kept out of `security/permissions` so that module stays sandbox-free.
+- **Design notes:** `composeSecurity` calls it with `user.sandbox`; the smoke script imports it from `dist` rather than mirroring it.
 
 #### `security/self-protection`
 
