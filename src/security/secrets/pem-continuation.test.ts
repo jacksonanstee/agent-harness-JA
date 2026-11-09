@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { continuePrivateKey, opensUnterminatedPrivateKey, PEM_END_FENCE_SOURCE, PRIVATE_KEY_HEADER_SOURCE, PRIVATE_KEY_MARKER } from './pem-continuation.js';
+import { CLOSED_PRIVATE_KEY, continuePrivateKey, OPEN_PRIVATE_KEY, opensUnterminatedPrivateKey, PEM_END_FENCE_SOURCE, PRIVATE_KEY_HEADER_SOURCE, PRIVATE_KEY_IDLE_BLOCKS, PRIVATE_KEY_MARKER } from './pem-continuation.js';
 import { redact } from './redact.js';
 import { DEFAULT_SECRET_RULES } from './rules.js';
 
@@ -20,59 +20,94 @@ describe('the shared sources are the rule\'s own (#111)', () => {
 
 describe('opensUnterminatedPrivateKey (#111)', () => {
   it.each([
-    ['a header with no fence', `part one:\n${BEGIN}\n${BODY}`, true],
+    ['a header then key body, no fence', `part one:\n${BEGIN}\n${BODY}`, true],
+    ['a header that ends the text (the body comes next)', `here it is:\n${BEGIN}\n`, true],
     ['a closed block', `${BEGIN}\n${BODY}\n${END}`, false],
     ['a closed block then a second, open one', `${BEGIN}\n${END}\nnext:\n${BEGIN}\n${BODY}`, true],
+    ['a header mentioned inside prose (review: no over-redaction)', `Look for the line \`${BEGIN}\` at the top of the file.`, false],
+    ['a header followed by a hex hash, not key body', `${BEGIN}\n${'a'.repeat(20)}${'0'.repeat(20)}`, false],
     ['no header', `${BODY}\n${END}`, false],
     ['a public key header', `-----BEGIN PUBLIC KEY-----\n${BODY}`, false],
     ['nothing', '', false],
-  ])('%s: %s', (_label, text, open) => {
+  ])('%s', (_label, text, open) => {
     expect(opensUnterminatedPrivateKey(text)).toBe(open);
   });
 });
 
 describe('continuePrivateKey (#111)', () => {
   const M = PRIVATE_KEY_MARKER;
+  const go = (text: string) => continuePrivateKey(OPEN_PRIVATE_KEY, text);
 
-  it('body lines through the END fence become one marker; what follows the fence is untouched', () => {
-    expect(continuePrivateKey(`${BODY}\n${BODY}\n${END}\nThat is the key.`)).toEqual({ text: `${M}\nThat is the key.`, redacted: true, open: false });
+  it('a closed carry passes the text through', () => {
+    expect(continuePrivateKey(CLOSED_PRIVATE_KEY, `${BODY}\n${END}`)).toEqual({ text: `${BODY}\n${END}`, redacted: false, carry: CLOSED_PRIVATE_KEY });
   });
 
-  it('a prose lead-in is kept and the body after it still replaced (the issue\'s "part two:")', () => {
-    expect(continuePrivateKey(`part two:\n${BODY}\n${END}`)).toEqual({ text: `part two:\n${M}`, redacted: true, open: false });
+  it('body lines and the END fence become markers; what follows the fence is untouched', () => {
+    expect(go(`${BODY}\n${BODY}\n${END}\nThat is the key.`)).toEqual({ text: `${M}\n${M}\n${M}\nThat is the key.`, redacted: true, carry: CLOSED_PRIVATE_KEY });
   });
 
-  it('armour headers and blank lines inside the block', () => {
-    const text = `Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABC\n\n${BODY}\n${END}`;
-    expect(continuePrivateKey(text)).toEqual({ text: `${M}\n\n${M}`, redacted: true, open: false });
+  it('a prose lead-in is kept and the body after it replaced (the issue\'s "part two:")', () => {
+    expect(go(`part two:\n${BODY}\n${END}`).text).toBe(`part two:\n${M}\n${M}`);
   });
 
-  it('a fence on the same line as body, and one after prose on its line', () => {
-    expect(continuePrivateKey(`${BODY}${END} done`)).toEqual({ text: `${M} done`, redacted: true, open: false });
-    expect(continuePrivateKey(`the line ends with ${END}`)).toEqual({ text: `the line ends with ${M}`, redacted: true, open: false });
+  it.each([
+    ['a blockquote', `> ${BODY}`, `> ${M}`],
+    ['a bullet', `- ${BODY}`, `- ${M}`],
+    ['a line number', `12 | ${BODY}`, `12 | ${M}`],
+    ['backticks', `\`${BODY}\``, `\`${M}\``],
+    ['a trailing comment', `${BODY} # line 2`, `${M} # line 2`],
+    ['base64url', `${BODY.replace(/\+/g, '-').replace(/\//g, '_')}`, M],
+  ])('review: a decorated body line (%s) has its body replaced, the decoration kept', (_label, line, want) => {
+    expect(go(`${line}\n${END}`).text).toBe(`${want}\n${M}`);
   });
 
-  it('a padded short final line is body', () => {
-    expect(continuePrivateKey(`Zq8=\n${END}`)).toEqual({ text: M, redacted: true, open: false });
+  it('review: a JSON-escaped body on one line (literal \\n) is replaced run by run', () => {
+    // The `n` of an escaped `\n` joins the next run, so the marker takes it: cosmetic, the key material is what matters.
+    const { text } = go(`"${BODY}\\n${BODY}\\n${END}"`);
+    expect(text).not.toContain(BODY.slice(0, 20));
+    expect(text).not.toContain(BODY.slice(-20));
+    expect(text).not.toContain('-----END');
+    expect(text.startsWith(`"${M}`)).toBe(true);
   });
 
-  it('body and no fence: the block stays open', () => {
-    expect(continuePrivateKey(`${BODY}\n${BODY}`)).toEqual({ text: M, redacted: true, open: true });
+  it('CRLF line endings', () => {
+    expect(go(`${BODY}\r\n${BODY}\r\n${END}\r\nok`).text).toBe(`${M}\r\n${M}\r\n${M}\r\nok`);
   });
 
-  it('prose only, no fence: nothing replaced and the block ends', () => {
-    expect(continuePrivateKey('Sorry, I should not print that.')).toEqual({ text: 'Sorry, I should not print that.', redacted: false, open: false });
+  it('armour headers, blank lines and a short final line are body when more body or the fence follows', () => {
+    expect(go(`Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABC\n\n${BODY}\nAQAB\n${END}`).text).toBe(`${M}\n${M}\n\n${M}\n${M}\n${M}`);
   });
 
-  it('short words and prose with spaces are never body', () => {
-    expect(continuePrivateKey('ok\nyes\nabc def ghi jkl mno pqr').redacted).toBe(false);
+  it('review: a short base64 remnant on its own (a mid-line block boundary) is body when the fence follows', () => {
+    expect(go(`AQAB\n${END}`).text).toBe(`${M}\n${M}`);
+    expect(go(`AQAB${END} done`).text).toBe(`${M} done`);
   });
 
-  it('a new key opened after the fence leaves the state open', () => {
-    expect(continuePrivateKey(`${BODY}\n${END}\nnext:\n${BEGIN}\n${BODY}`).open).toBe(true);
+  it('a short word with nothing key-like after it is kept', () => {
+    expect(go('Done\nThanks').text).toBe('Done\nThanks');
   });
 
-  it('empty text: nothing replaced, closed', () => {
-    expect(continuePrivateKey('')).toEqual({ text: '', redacted: false, open: false });
+  it('review: hashes, paths, long identifiers and a Version: line are never body (no over-redaction)', () => {
+    const text = `${'a1b2c3d4e5'.repeat(4)}\n/usr/local/bin/node\nInternationalizationServiceFactoryProvider\nVersion: 1.4.2`;
+    expect(go(text)).toEqual({ text, redacted: false, carry: { open: true, idle: 1 } });
+  });
+
+  it('body and no fence: the key stays open with the idle count reset', () => {
+    expect(go(`${BODY}\n${BODY}`)).toEqual({ text: `${M}\n${M}`, redacted: true, carry: OPEN_PRIVATE_KEY });
+  });
+
+  it('review: a blank text leaves the carry as it was', () => {
+    for (const blank of ['', '\n', '  \n\n']) expect(go(blank)).toEqual({ text: blank, redacted: false, carry: OPEN_PRIVATE_KEY });
+  });
+
+  it(`review: prose counts towards ${PRIVATE_KEY_IDLE_BLOCKS} idle texts; the key closes only after that many in a row`, () => {
+    let carry = OPEN_PRIVATE_KEY;
+    for (let i = 1; i < PRIVATE_KEY_IDLE_BLOCKS; i += 1) {
+      carry = continuePrivateKey(carry, 'Let me check the file first.').carry;
+      expect(carry).toEqual({ open: true, idle: i });
+    }
+    expect(continuePrivateKey(carry, 'Moving on.').carry).toEqual(CLOSED_PRIVATE_KEY);
+    // Body before the limit resets it.
+    expect(continuePrivateKey({ open: true, idle: PRIVATE_KEY_IDLE_BLOCKS - 1 }, BODY).carry).toEqual(OPEN_PRIVATE_KEY);
   });
 });

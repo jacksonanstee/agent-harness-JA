@@ -71,6 +71,8 @@ describe('root barrel (src/index.ts)', () => {
     // The scan internals stay off the root barrel.
     expect('scanAgentDefinitions' in barrel).toBe(false);
     expect('createAgentGate' in barrel).toBe(false);
+    // The #111 private-key carry is the session's, not a public API.
+    for (const name of ['continuePrivateKey', 'opensUnterminatedPrivateKey', 'CLOSED_PRIVATE_KEY', 'OPEN_PRIVATE_KEY']) expect(name in barrel, name).toBe(false);
   });
 
   it('exports grantPolicyFor, the D-8 rule a library caller passes to permissionHook (#218)', () => {

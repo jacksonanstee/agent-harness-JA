@@ -134,9 +134,12 @@ export {
   createSecretRedactor,
   redact,
   DEFAULT_SECRET_RULES,
+  CLOSED_PRIVATE_KEY,
   continuePrivateKey,
+  OPEN_PRIVATE_KEY,
   opensUnterminatedPrivateKey,
 } from './secrets/index.js';
+export type { PrivateKeyCarry } from './secrets/index.js';
 // SECRET_CORPUS / SecretCase omitted: test-only fixture, not published (ADR-0022).
 export type {
   RedactResult,

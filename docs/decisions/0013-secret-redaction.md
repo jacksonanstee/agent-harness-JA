@@ -191,13 +191,22 @@ Residual: hook-event records reach a `HookSink` with the reason only control-str
 
 ## Amendment (2026-11-09, issue #111): a private key split across assistant text blocks
 
-- Each assistant text block is redacted on its own, and `private-key-block` needs its BEGIN header. So a reply that started a key, called a tool, then finished it in the next block emitted that block's body and END fence raw. The memory copy was unaffected: it redacts the whole reply in one string.
-- The session now carries the open block across blocks for the run (`privateKeyOpen`, `redactForEmission` in `src/session/session.ts`). When a block ends inside a key (its last private-key header has no END fence after it, `opensUnterminatedPrivateKey`), the next block goes through `continuePrivateKey` (`src/security/secrets/pem-continuation.ts`) before the redactor:
-  - each run of body lines (base64 of 16 or more characters, a padded final line, or a PEM, OpenSSH or PGP armour header) and the END fence becomes one `[REDACTED:private-key-block]`;
-  - other lines are kept, so a lead-in such as "part two:" is not swallowed and the body after it does not leak;
-  - the fence closes the key, and the block's remaining text is redacted as usual.
-- With no fence, the key stays open only if the block carried body. A block of prose closes it, so a reply that moves on after a key it never finished is not blacked out.
+- Each assistant text block is redacted on its own, and `private-key-block` needs its BEGIN header. So a reply that started a key, called a tool, then finished it in a later block emitted that block's body and END fence raw. The memory copy (the result's `resultText`, redacted in one string) did not show it in the issue's run; whether `result` always holds the whole reply across tool calls is an SDK property not checked here.
+- The session now carries the open key across blocks for the run (`privateKeyCarry`, `redactForEmission` in `src/session/session.ts`). The pure helpers are in `src/security/secrets/pem-continuation.ts`, on the security barrel and not the root barrel.
+- **Opening.** A block opens a key when its last private-key header has no END fence after it and either ends the block or is followed by key body (`opensUnterminatedPrivateKey`). A header mentioned in prose ("look for `-----BEGIN ...-----` at the top") opens nothing.
+- **Continuing.** While a key is open, the next block goes through `continuePrivateKey` before the redactor:
+  - Up to an END fence, each run of key body becomes `[REDACTED:private-key-block]` wherever it sits in a line, so a `> `, `- ` or `12 | ` prefix, backticks, a trailing comment or a JSON-escaped `\n` does not hide it.
+  - Key body means 40 or more base64 or base64url characters mixing upper case, lower case and digits. A hex hash, a path or a long identifier does not qualify.
+  - A short base64-only line, or a `Proc-Type`, `DEK-Info`, `Version` or `Comment` header, is replaced only when more body or the fence follows it in the block.
+  - Other lines are kept, so a lead-in such as "part two:" stays and the body after it is replaced.
+  - The fence closes the key; the rest of the block is redacted as usual.
+- **Closing without a fence.** A blank block leaves the state as it was. A block with no key body counts as idle, and three in a row (`PRIVATE_KEY_IDLE_BLOCKS`) close the key. So a "Let me check the file first." between the halves does not end it, and a reply that moves on does not stay open for ever.
+- This runs whatever redactor is injected (it only ever redacts more). A continued block adds one finding to the per-block warning, even when an injected redactor reported none.
 - The header and fence regex sources are shared with the rule, which is now built from them, so the two cannot drift. The built pattern is byte-identical to the old literal.
-- A continued block counts as one finding in the per-block warning.
-- Residual, as the issue said: S-2 is pattern-based and observe-only. An output whose block boundaries an attacker controls can drop the header outright, which no rule catches. A body line shorter than 16 characters that is not padded (a short final line) is kept.
-
+- **Residual.** S-2 is pattern-based and observe-only, as the issue said. What still passes raw in the continuation:
+  - a header split across blocks (no block holds it), or an attacker who drops it outright;
+  - a body run with fewer than 40 characters, or one without all of upper case, lower case and digits, that is not followed by body or the fence;
+  - the body of a key reopened after three idle blocks;
+  - a PGP `=XXXX` checksum line (not key material).
+- **Residual: over-redaction.** While a key is open, a 40-or-more-character mixed-case alphanumeric token in an unrelated sentence is replaced, until the fence or three idle blocks.
+- **Residual: one carry for all assistant messages.** The carry is shared by every assistant message in the stream. If the SDK interleaved a subagent's text blocks between the parent's halves (not observed), they would count towards the idle limit or carry body of their own.

@@ -71,7 +71,8 @@ import { describeError } from './describe-error.js';
 import { redactorFailure, scannerFailure } from './redactor-failure.js';
 import { withIdentifierRuleIds } from './scan-rule-ids.js';
 import { createAgentGate } from './agent-gate.js';
-import { continuePrivateKey, INIT_CHECK_NOT_RUN, initCheckWarning, opensUnterminatedPrivateKey } from '../security/index.js';
+import { CLOSED_PRIVATE_KEY, continuePrivateKey, INIT_CHECK_NOT_RUN, initCheckWarning, OPEN_PRIVATE_KEY, opensUnterminatedPrivateKey } from '../security/index.js';
+import type { PrivateKeyCarry } from '../security/index.js';
 import type { InitCheck } from '../security/index.js';
 import {
   createJudgeRun,
@@ -789,8 +790,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       resolved: boolean;
     }
     const pendingRewrites: PendingRewrite[] = [];
-    /** Issue #111: an assistant text block ended inside a private-key block (redactForEmission). Per run. */
-    let privateKeyOpen = false;
+    /** Issue #111: whether an assistant text block ended inside a private-key block (redactForEmission). Per run. */
+    let privateKeyCarry: PrivateKeyCarry = CLOSED_PRIVATE_KEY;
 
     // Issue #145 B2a (spec D3): withholding is on only when the seam says so.
     // Off is ADR-0037's path, decided once per run().
@@ -1087,20 +1088,16 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Issue #111: the redactor sees one block at a time and the private-key
     // rule needs its BEGIN header, so a key the model starts in one block and
     // finishes in the next (a tool call between them) left the second half
-    // raw. `privateKeyOpen` carries the open block across blocks for this run:
-    // the next block's body lines and END fence are replaced first, then the
-    // redactor runs on the whole result as usual.
+    // raw. `privateKeyCarry` carries the open block across blocks for this
+    // run: the next block's key body and END fence are replaced first, then
+    // the redactor runs on the whole result as usual. This runs whatever
+    // redactor is injected, since it only ever redacts more.
     function redactForEmission(text: string): string {
       if (deps.redactSecrets === undefined) return text;
-      let input = text;
-      let continued = false;
-      if (privateKeyOpen) {
-        const c = continuePrivateKey(text);
-        input = c.text;
-        continued = c.redacted;
-        privateKeyOpen = c.open;
-      }
-      privateKeyOpen = privateKeyOpen || opensUnterminatedPrivateKey(input);
+      const c = continuePrivateKey(privateKeyCarry, text);
+      const input = c.text;
+      const continued = c.redacted;
+      privateKeyCarry = opensUnterminatedPrivateKey(input) ? OPEN_PRIVATE_KEY : c.carry;
       try {
         const { redacted, findings } = deps.redactSecrets(input);
         if (typeof redacted !== 'string') {
