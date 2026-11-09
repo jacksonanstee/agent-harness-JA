@@ -66,7 +66,8 @@ export interface Evaluation {
 
 /**
  * Which tools a rule allow must NOT turn into an SDK grant (#140, D-8). Data
- * computed by the composition root, so this module never imports the sandbox.
+ * computed outside this module by `grantPolicyFor` (../grant-policy.ts), which the
+ * composition root calls, so this module never imports the sandbox.
  */
 export interface GrantPolicy {
   readonly ungrantableTools: ReadonlySet<string>;

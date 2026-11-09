@@ -68,6 +68,7 @@ export {
 export { REMOTE_AGENT_DENY_REASON, remoteAgentDenyHook, RemoteAgentDenied } from './remote-agent-deny.js';
 export { toolNameDenyHook } from './tool-name-deny.js';
 export type { ToolNameDenyOptions } from './tool-name-deny.js';
+export { grantPolicyFor } from './grant-policy.js';
 export {
   AGENT_SCAN_MAX_DEPTH,
   AGENT_SCAN_MAX_FILES,
