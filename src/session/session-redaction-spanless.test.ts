@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { redact } from '../security/index.js';
 import type { RedactResult } from '../security/index.js';
 import { build, closeDbs, drivenQuery, start } from '../../test/session-harness.js';
 import type { Built } from '../../test/session-harness.js';
@@ -24,16 +25,14 @@ const MARKER = '[REDACTED:short-secret]';
 const shortSpanRedactor = (text: string): RedactResult => {
   const start = text.indexOf('xyz');
   if (start < 0) return { redacted: text, findings: [] };
-  return { redacted: text.replace('xyz', MARKER), findings: [{ ruleId: 'short-secret', start, end: start + 3 }] } as unknown as RedactResult;
+  return { redacted: text.replace('xyz', MARKER), findings: [{ rule_id: 'short-secret', start, end: start + 3, length: 3 }] };
 };
 
 async function runOnce(raw: string, modelCopy: string, redactor?: (t: string) => RedactResult) {
   const fake = drivenQuery([{ id: 'toolu_1', tool: 'Bash', output: bashOut(raw) }], { userMessages: [userResult('toolu_1', bashOut(modelCopy))] });
-  const b = build(fake.query, undefined, redactor === undefined ? {} : {
-    redactSecrets: redactor,
-  });
+  const b = build(fake.query, undefined, redactor === undefined ? {} : { redactSecrets: redactor });
   const result = await start(b).run('hi');
-  return { result, rows: rewriteRows(b) };
+  return { result, rows: rewriteRows(b), warnings: b.warnings };
 }
 
 describe('#207: a redaction entry with no recorded span cannot read applied on a planted marker', () => {
@@ -70,6 +69,71 @@ describe('#207: a redaction entry with no recorded span cannot read applied on a
     it('the raw copy echoed: leaked', async () => {
       const { rows } = await runOnce(`key ${key}`, `key ${key}`);
       expect(rows).toEqual([expect.objectContaining({ kind: 'redact', outcome: 'leaked' })]);
+    });
+  });
+
+  describe('review: the markers come from the findings, not from the text (F4)', () => {
+    const key = 'AKIA' + 'IOSFODNN7EXAMPLE';
+
+    it('a planted marker for another rule id is not evidence: the key removed, only the planted marker left, reads neither-token, not applied (N)', async () => {
+      const { rows } = await runOnce(`key ${key} [REDACTED:zzz]`, 'key [REDACTED:zzz]');
+      expect(rows).toEqual([expect.objectContaining({ kind: 'redact', outcome: 'unobserved', reason: 'neither-token' })]);
+    });
+
+    it('a planted marker cannot put its id, or a forged line, into the warning (N)', async () => {
+      const { warnings } = await runOnce(`key ${key} [REDACTED:zzz\nWARN: forged]`, `key ${key}`);
+      const redacted = warnings.filter((w) => w.startsWith('secrets redacted from the Bash output shown to the model'));
+      expect(redacted).toEqual([expect.stringContaining('rules: aws-access-key-id)')]);
+      expect(warnings.join('\n')).not.toMatch(/zzz|forged/);
+    });
+
+    it('the failed-call warning names the finding rules only (N)', async () => {
+      const fake = drivenQuery([{ id: 'toolu_1', tool: 'Bash', failError: `boom ${key} [REDACTED:zzz\nWARN: forged]` }]);
+      const b = build(fake.query, undefined);
+      await start(b).run('hi');
+      const failure = b.warnings.filter((w) => w.startsWith('secrets found in Bash FAILURE output'));
+      expect(failure).toEqual([expect.stringContaining('rules: aws-access-key-id)')]);
+      expect(b.warnings.join('\n')).not.toMatch(/zzz|forged/);
+    });
+  });
+
+  describe('review: an oversized leaf with no finding records a line of its dropped tail', () => {
+    // Over the redactor's 128 KiB cap, numbered lines so the tail's last line appears nowhere in the scanned head.
+    const big = Array.from({ length: 14_000 }, (_, i) => `log line number ${i} of the run`).join('\n');
+    const rewritten = redact(big).redacted;
+
+    it('the fixture is oversized, carries no finding and has its tail dropped', () => {
+      expect(redact(big).findings).toEqual([]);
+      expect(rewritten).toContain('[REDACTED:oversized-input]');
+      expect(rewritten).not.toContain('log line number 13999 of the run');
+    });
+
+    it('the rewrite echoed: applied, not no-content-span', async () => {
+      const { rows } = await runOnce(big, rewritten);
+      expect(rows).toEqual([expect.objectContaining({ kind: 'redact', outcome: 'applied', findings: 0, truncated: true })]);
+    });
+
+    it('the raw copy echoed with a planted marker: both-present, never applied (N)', async () => {
+      const { rows } = await runOnce(`${big} [REDACTED:oversized-input]`, `${big} [REDACTED:oversized-input]`);
+      expect(rows).toEqual([expect.objectContaining({ outcome: 'unobserved', reason: 'both-present' })]);
+    });
+
+    it('the raw copy echoed: leaked', async () => {
+      const { rows } = await runOnce(big, big);
+      expect(rows).toEqual([expect.objectContaining({ outcome: 'leaked' })]);
+    });
+
+    it('a tail line the head also holds is skipped for one the rewrite lacks, so a landed rewrite still reads applied', async () => {
+      // The last lines repeat the head (common in logs); a span from them would sit in the landed copy too and read both-present.
+      const repeating = `${big}\nthe one line only the tail holds\n${Array.from({ length: 5 }, (_, i) => `log line number ${i} of the run`).join('\n')}`;
+      const { rows } = await runOnce(repeating, redact(repeating).redacted);
+      expect(rows).toEqual([expect.objectContaining({ outcome: 'applied', truncated: true })]);
+    });
+
+    it('a tail of only short lines records nothing, so even a landed rewrite reads no-content-span', async () => {
+      const shorts = `${'x'.repeat(140_000)}\n${Array.from({ length: 70 }, () => 'ab').join('\n')}`;
+      const { rows } = await runOnce(shorts, redact(shorts).redacted);
+      expect(rows).toEqual([expect.objectContaining({ outcome: 'unobserved', reason: 'no-content-span' })]);
     });
   });
 });

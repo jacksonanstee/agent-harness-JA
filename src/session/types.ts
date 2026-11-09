@@ -634,7 +634,7 @@ export type OutputRewriteOutcome =
   | 'applied'
   /** A raw secret span survived into the model's copy (verifier alarm). */
   | 'leaked'
-  /** The rewrite could not be confirmed in band (no user message, ambiguous, unwalkable). */
+  /** The rewrite could not be confirmed in band; the row's `reason` says why (`REWRITE_UNOBSERVED_REASONS`, session.ts). */
   | 'unobserved'
   /** The telemetry pass found a secret the per-leaf model pass did not (blind spot, G-9). */
   | 'unrewritten'

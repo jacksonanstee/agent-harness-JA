@@ -175,8 +175,24 @@ const NOTICE_RULE_ID_MAX = 48;
  */
 const NOTICE_TOOL_NAME_MAX = 40;
 
-/** `[REDACTED:<id>]` markers in a rewritten leaf, extracted by pattern (D4). */
-const REDACTION_MARKER_RE = /\[REDACTED:[^\]]+\]/g;
+/** How many tail lines `droppedTailLine` tries, so a huge leaf of repeated lines costs a bounded scan. */
+const TAIL_SPAN_CANDIDATES = 64;
+
+/**
+ * A line of an oversized leaf's dropped tail to watch for in the model's copy
+ * (#207): searching from the end, the first line of at least MIN_SPAN_LINE
+ * characters that the rewrite does not contain. Null when none qualifies, so
+ * the entry stays span-less and reads `no-content-span`.
+ */
+function droppedTailLine(leaf: string, redacted: string): string | null {
+  const lines = leaf.split('\n');
+  const stop = Math.max(0, lines.length - TAIL_SPAN_CANDIDATES);
+  for (let i = lines.length - 1; i >= stop; i -= 1) {
+    const line = lines[i] ?? '';
+    if (line.trim().length >= MIN_SPAN_LINE && !redacted.includes(line)) return line;
+  }
+  return null;
+}
 
 /**
  * The redactor's oversized-tail marker (redact.ts). Shaped like a finding on
@@ -1249,10 +1265,19 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           const span = leaf.slice(f.start, f.end);
           const firstLine = span.split('\n')[0] ?? '';
           if (firstLine.length >= MIN_SPAN_LINE) spanLines.push(firstLine);
+          // #207 review (F4): the markers to watch for come from the redactor's own findings, never from a pattern over the
+          // redacted text, which still holds any `[REDACTED:...]` string the tool output carried (attacker-chosen ids, newlines).
+          const marker = typeof f.rule_id === 'string' ? `[REDACTED:${f.rule_id}]` : null;
+          if (marker !== null && result.redacted.includes(marker)) markers.push(marker);
         }
-        const found = result.redacted.match(REDACTION_MARKER_RE);
-        if (found) for (const m of found) markers.push(m);
-        if (result.redacted.includes(OVERSIZED_REDACTION_MARKER)) anyTruncated = true;
+        if (result.redacted.includes(OVERSIZED_REDACTION_MARKER)) {
+          anyTruncated = true;
+          markers.push(OVERSIZED_REDACTION_MARKER);
+          // #207 review: the marker alone is public text, so record a line of the dropped tail to watch for (one absent from the
+          // rewrite), or a landed truncation with no finding would read `no-content-span`, never `applied`.
+          const tail = droppedTailLine(leaf, result.redacted);
+          if (tail !== null) spanLines.push(tail);
+        }
         return result.redacted;
       };
       let walk: { value: unknown; skipped: boolean };
@@ -1482,7 +1507,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
       const findings = Array.isArray(result.findings) ? result.findings : [];
       if (findings.length > 0) {
-        const ids = ruleIdsFromMarkers(result.redacted.match(REDACTION_MARKER_RE) ?? []);
+        // #207 review (F4): rule ids from the findings, not a pattern over text the tool output controls.
+        const ids = [...new Set(findings.map((f) => f.rule_id).filter((id): id is string => typeof id === 'string'))];
         warn(
           `secrets found in ${tool} FAILURE output (${findings.length}, rules: ${ids.join(', ') || 'unknown'}) ` +
             `— the model received it UNREDACTED (no rewrite channel on a failed call, #84)`,
