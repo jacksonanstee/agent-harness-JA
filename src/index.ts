@@ -78,6 +78,7 @@ export {
   UngatedToolDenied,
   UNGATED_TOOL_DENY_REASON,
   toolNameDenyHook,
+  grantPolicyFor,
   remoteAgentDenyHook,
   UnknownToolDenied,
   UNKNOWN_TOOL_DENY_REASON,

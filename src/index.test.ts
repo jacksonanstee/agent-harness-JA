@@ -73,6 +73,11 @@ describe('root barrel (src/index.ts)', () => {
     expect('createAgentGate' in barrel).toBe(false);
   });
 
+  it('exports grantPolicyFor, the D-8 rule a library caller passes to permissionHook (#218)', () => {
+    expect(barrel.grantPolicyFor).toBe(securityBarrel.grantPolicyFor);
+    expect(barrel.grantPolicyFor({}).ungrantableTools.has('Bash')).toBe(true);
+  });
+
   it('exports the telemetry factories, with DEFAULT_DB_PATH aliased', () => {
     expect(typeof barrel.createTelemetryStore).toBe('function');
     expect(typeof barrel.openTelemetryDatabase).toBe('function');

@@ -151,7 +151,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 // A missing build must be a message and exit 2, not an unhandled rejection.
 const distWithhold = join(repoRoot, 'dist', 'session', 'withhold.js');
-// The shared tool-target table and the CODE_EXECUTING_TOOLS gate map are internal (not on the root barrel); the D-8 policy below reads the map, as src/cli/shared.ts does.
+// The shared tool-target table and the CODE_EXECUTING_TOOLS gate map are internal (not on the root barrel); the D-8 leg reads the map to check grantPolicyFor's output against it.
 const distToolTargets = join(repoRoot, 'dist', 'internal', 'tool-targets.js');
 for (const required of [dist, distConstants, distLines, distWithhold, distToolTargets]) {
   if (!existsSync(required)) {
@@ -175,6 +175,7 @@ const {
   openTelemetryDatabase,
   buildJudge,
   permissionHook,
+  grantPolicyFor,
   createPermissionEvaluator,
   mergeLayers,
   parsePermissionSettings,
@@ -1216,23 +1217,16 @@ const configDirFixtures = (markerDir) => [
   ['settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${markerDir}/user-marker` }] }] }, permissions: { allow: [`Bash(${PROBE_PROGRAM} *)`] } })],
 ];
 
-// ADR-0040 D-8 (#211): mirrors ungrantableTools in src/cli/shared.ts. Every CODE_EXECUTING_TOOLS member (imported from dist
-// above) is withheld unless its gate is `commands` and the USER document has a non-empty sandbox.commands list.
-const ungrantableFor = (userSandbox) => {
-  const commandsConfigured = (userSandbox.commands?.allow.length ?? 0) > 0;
-  return new Set(Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate !== 'commands' || !commandsConfigured).map(([name]) => name));
-};
-
 // Mirrors src/cli/shared.ts composeSecurity: each layer's document feeds both key parsers (parsePermissionSettings and parseSandboxSettings on each document), the
 // layers merge with mergeLayers and the intersect merge mergeSandboxLayers, and the grant policy
-// comes from the USER document's sandbox ONLY (grantPolicy in composeSecurity), so a project document can never unlock it.
+// comes from the USER document's sandbox ONLY (grantPolicyFor, called by composeSecurity; #218), so a project document can never unlock it.
 function composeIsolationSecurity({ user, project }) {
   const userParsed = { permissions: parsePermissionSettings(user), sandbox: parseSandboxSettings(user) };
   const projectParsed = { permissions: parsePermissionSettings(project), sandbox: parseSandboxSettings(project) };
   return {
     permissions: mergeLayers(userParsed.permissions, projectParsed.permissions),
     sandbox: mergeSandboxLayers(userParsed.sandbox, projectParsed.sandbox),
-    grantPolicy: { ungrantableTools: ungrantableFor(userParsed.sandbox) },
+    grantPolicy: grantPolicyFor(userParsed.sandbox),
   };
 }
 
