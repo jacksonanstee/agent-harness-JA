@@ -1456,9 +1456,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       const hasMarker = p.markers.some((m) => rendered.includes(m));
       if (hasSpan && hasMarker) return { outcome: 'unobserved', reason: 'both-present' };
       if (hasSpan) return { outcome: 'leaked' };
-      // Issue #145 review3 H1: the marker is a public constant, so a marker in the copy proves a landed withhold ONLY when a span was recorded
-      // to watch for the raw content. With none, content shaped to carry the marker is indistinguishable from the placeholder: never `applied`.
-      if (hasMarker && p.kind === 'withhold' && p.spanLines.length === 0) return { outcome: 'unobserved', reason: 'no-content-span' };
+      // Issue #145 review3 H1, widened to redaction by #207: a marker (the withhold placeholder or a `[REDACTED:<id>]` token) is public text,
+      // so it proves a landed rewrite ONLY when a span was recorded to watch for the raw content. With none, content shaped to carry the
+      // marker is indistinguishable from the rewrite: never `applied`, whichever pass owns the entry.
+      if (hasMarker && p.spanLines.length === 0) return { outcome: 'unobserved', reason: 'no-content-span' };
       if (hasMarker) return { outcome: 'applied' };
       return { outcome: 'unobserved', reason: 'neither-token' };
     }
