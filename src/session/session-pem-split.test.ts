@@ -127,6 +127,24 @@ describe('#111: a private key split across assistant text blocks is redacted in 
     expect(chunks).toEqual([MARKER, BODY2]);
   });
 
+  it('review: an ENCRYPTED key split after its armour headers: the body in block 2 is replaced (N)', async () => {
+    const { chunks } = await emitted([assistant(`${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B2C\n\n`), toolUse, assistant(`${BODY1}\n${BODY2}\n${END}`)]);
+    expect(chunks[1]).toBe(`${MARKER}\n${MARKER}\n${MARKER}`);
+  });
+
+  it('review: a PGP key split after Version/Comment: the body in block 2 is replaced (N)', async () => {
+    const pgpBegin = '-----BEGIN PGP ' + 'PRIVATE KEY BLOCK-----';
+    const pgpEnd = '-----END PGP ' + 'PRIVATE KEY BLOCK-----';
+    const { chunks } = await emitted([assistant(`${pgpBegin}\nVersion: GnuPG v2\nComment: test\n\n`), assistant(`${BODY1}\n=Zq8w\n${pgpEnd}`)]);
+    expect(chunks[1]).not.toContain(BODY1);
+    expect(chunks[1]).not.toContain('-----END');
+  });
+
+  it('review: CRLF line endings across blocks', async () => {
+    const { chunks } = await emitted([assistant(`${BEGIN}\r\n${BODY1}\r\n`), assistant(`${BODY2}\r\n${END}\r\nok`)]);
+    expect(chunks[1]).toBe(`${MARKER}\r\n${MARKER}\r\nok`);
+  });
+
   it('review: the state is per run: a second run() on the SAME session starts closed', async () => {
     const { perRun } = await emittedRuns([[assistant(`${BEGIN}\n${BODY1}`)], [assistant(BODY2)]]);
     expect(perRun).toEqual([[MARKER], [BODY2]]);

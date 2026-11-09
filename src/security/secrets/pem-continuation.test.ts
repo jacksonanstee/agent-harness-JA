@@ -26,6 +26,10 @@ describe('opensUnterminatedPrivateKey (#111)', () => {
     ['a closed block then a second, open one', `${BEGIN}\n${END}\nnext:\n${BEGIN}\n${BODY}`, true],
     ['a header mentioned inside prose (review: no over-redaction)', `Look for the line \`${BEGIN}\` at the top of the file.`, false],
     ['a header followed by a hex hash, not key body', `${BEGIN}\n${'a'.repeat(20)}${'0'.repeat(20)}`, false],
+    ['review: a header then only armour headers and a blank line (ENCRYPTED PEM, PGP)', `${BEGIN}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0A1B\n\n`, true],
+    ['review: a header then a partial first body line', `${BEGIN}\nMIIEowIBAAKCAQEA0Z3V`, true],
+    ['review: a header then a quoted partial line', `> ${BEGIN}\n> MIIEowIBAAKC`, true],
+    ['a header then prose', `${BEGIN}\nis the line a key starts with.`, false],
     ['no header', `${BODY}\n${END}`, false],
     ['a public key header', `-----BEGIN PUBLIC KEY-----\n${BODY}`, false],
     ['nothing', '', false],
@@ -109,5 +113,27 @@ describe('continuePrivateKey (#111)', () => {
     expect(continuePrivateKey(carry, 'Moving on.').carry).toEqual(CLOSED_PRIVATE_KEY);
     // Body before the limit resets it.
     expect(continuePrivateKey({ open: true, idle: PRIVATE_KEY_IDLE_BLOCKS - 1 }, BODY).carry).toEqual(OPEN_PRIVATE_KEY);
+  });
+
+  it('review: a decorated short line is body when the fence follows, its decoration kept', () => {
+    expect(go(`> ${BODY}\n> AQAB\n> ${END}`).text).toBe(`> ${M}\n> ${M}\n> ${M}`);
+    expect(go(`> AQAB${END}`).text).toBe(`> ${M}`);
+  });
+
+  it('review: a short line right after body is body even with the fence in the next text', () => {
+    expect(go(`${BODY}\nAQAB`)).toEqual({ text: `${M}\n${M}`, redacted: true, carry: OPEN_PRIVATE_KEY });
+  });
+
+  it('review: paths and URLs with a digit and a capital are not key body (they mix / with - or _)', () => {
+    const text = 'Opened https://github.com/jacksonanstee/agent-harness-JA/pull/100\nSee /Users/Jackson/Documents/agent-harness-JA/src/session2/x.ts';
+    expect(go(text)).toEqual({ text, redacted: false, carry: { open: true, idle: 1 } });
+  });
+
+  it('a base64url key line (no / or +) is still body', () => {
+    expect(go(`${'AbCd012_-'.repeat(6)}\n${END}`).text).toBe(`${M}\n${M}`);
+  });
+
+  it('the shared carries are frozen', () => {
+    expect(Object.isFrozen(OPEN_PRIVATE_KEY) && Object.isFrozen(CLOSED_PRIVATE_KEY)).toBe(true);
   });
 });

@@ -24,10 +24,30 @@ const SHORT_BASE64_LINE_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 /** Armour headers inside an encrypted PEM key (Proc-Type, DEK-Info) or a PGP block (Version, Comment), counted like a short line. */
 const ARMOUR_HEADER_RE = /^(?:Proc-Type|DEK-Info|Version|Comment): /;
 
-/** Key body mixes upper case, lower case and digits; a hex hash, a path or a long identifier does not. */
-const isKeyRun = (run: string): boolean => /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run);
+/**
+ * Key body mixes upper case, lower case and digits, so a one-case hex hash or
+ * a digit-free identifier is not key body. It is standard base64 (`+/`) or
+ * base64url (`-_`), never both, so a path or URL that mixes `/` with `-` or
+ * `_` is not either.
+ */
+const isKeyRun = (run: string): boolean =>
+  /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run) && !(/[+/]/.test(run) && /[-_]/.test(run));
 const hasKeyRun = (line: string): boolean => (line.match(BODY_RUN_RE) ?? []).some(isKeyRun);
 const replaceKeyRuns = (line: string): string => line.replace(BODY_RUN_RE, (run) => (isKeyRun(run) ? PRIVATE_KEY_MARKER : run));
+/** A line's content without a quote, bullet, line-number or backtick decoration (`> `, `- `, `* `, `12 | `). */
+const DECORATION_RE = /^\s*(?:>\s*|[-*]\s+|\d+\s*\|\s*|`)*/;
+const coreOf = (line: string): string => line.replace(DECORATION_RE, '').replace(/`?\s*$/, '');
+/** A short base64 line or an armour header, once its decoration is removed. */
+const isMaybeLine = (line: string): boolean => {
+  const core = coreOf(line);
+  return core !== '' && (SHORT_BASE64_LINE_RE.test(core) || ARMOUR_HEADER_RE.test(core));
+};
+/** Replaces a `maybe` line's content, keeping its decoration and line ending. */
+const replaceMaybe = (line: string): string => {
+  const core = coreOf(line);
+  const at = line.indexOf(core);
+  return at < 0 ? line : `${line.slice(0, at)}${PRIVATE_KEY_MARKER}${line.slice(at + core.length)}`;
+};
 
 /**
  * True when `text`'s last private-key header has no END fence after it and
@@ -40,7 +60,11 @@ export function opensUnterminatedPrivateKey(text: string): boolean {
   for (const m of text.matchAll(HEADER_RE)) lastEnd = m.index + m[0].length;
   if (lastEnd < 0) return false;
   const tail = text.slice(lastEnd);
-  return !END_RE.test(tail) && (tail.trim() === '' || hasKeyRun(tail));
+  if (END_RE.test(tail)) return false;
+  // Key body after it, or only what a key's first lines can be: blank lines, armour headers (an ENCRYPTED PEM or PGP key
+  // always has them before the body) or a partial first line (#111 review).
+  // A base64-only line counts here only under 40 characters: a longer one that is not key body (a hex hash) is not a partial key line.
+  return hasKeyRun(tail) || tail.split('\n').every((line) => line.trim() === '' || (isMaybeLine(line) && coreOf(line).length < 40));
 }
 
 /** The carry between texts: whether a key is open, and how many non-blank texts in a row carried none of its body. */
@@ -48,8 +72,8 @@ export interface PrivateKeyCarry {
   readonly open: boolean;
   readonly idle: number;
 }
-export const CLOSED_PRIVATE_KEY: PrivateKeyCarry = { open: false, idle: 0 };
-export const OPEN_PRIVATE_KEY: PrivateKeyCarry = { open: true, idle: 0 };
+export const CLOSED_PRIVATE_KEY: PrivateKeyCarry = Object.freeze({ open: false, idle: 0 });
+export const OPEN_PRIVATE_KEY: PrivateKeyCarry = Object.freeze({ open: true, idle: 0 });
 
 export interface PrivateKeyContinuation {
   /** `text` with the open key's body and END fence replaced by the marker. */
@@ -65,11 +89,16 @@ const kindOf = (line: string): LineKind => {
   const trimmed = line.trim();
   if (trimmed === '') return 'blank';
   if (hasKeyRun(line)) return 'body';
-  if (SHORT_BASE64_LINE_RE.test(trimmed) || ARMOUR_HEADER_RE.test(trimmed)) return 'maybe';
+  if (isMaybeLine(line)) return 'maybe';
   return 'other';
 };
 
-/** Which lines are body: every `body` line, and a `maybe` line when the next line that is not blank or `maybe` is body or the fence. */
+/**
+ * Which lines are body: every `body` line, and a `maybe` line when the next
+ * line that is not blank or `maybe` is body or the fence, or when the line
+ * before it that is not blank is body (a key's short last line, its fence in
+ * the next block).
+ */
 function bodyLines(kinds: readonly LineKind[], fenceFollows: boolean): boolean[] {
   const isBody = kinds.map((kind) => kind === 'body');
   let follows = fenceFollows;
@@ -79,6 +108,11 @@ function bodyLines(kinds: readonly LineKind[], fenceFollows: boolean): boolean[]
     else if (kind === 'maybe') isBody[i] = follows;
     else if (kind === 'other') follows = false;
   }
+  let afterBody = false;
+  kinds.forEach((kind, i) => {
+    if (kind === 'maybe' && afterBody) isBody[i] = true;
+    if (kind !== 'blank') afterBody = isBody[i] === true;
+  });
   return isBody;
 }
 
@@ -102,7 +136,7 @@ export function continuePrivateKey(carry: PrivateKeyCarry, text: string): Privat
   const out = scanned.map((line, i) => {
     if (isBody[i] !== true) return line;
     replaced = true;
-    return kinds[i] === 'body' ? replaceKeyRuns(line) : line.replace(/\S[^\r]*/, PRIVATE_KEY_MARKER);
+    return kinds[i] === 'body' ? replaceKeyRuns(line) : replaceMaybe(line);
   });
   if (fenceAt >= 0) {
     const fenceLine = lines[fenceAt] ?? '';
@@ -111,7 +145,8 @@ export function continuePrivateKey(carry: PrivateKeyCarry, text: string): Privat
     const end = fence === null ? 0 : start + fence[0].length;
     const before = fenceLine.slice(0, start);
     // A short base64 remnant right before the fence (`AQAB-----END ...`) is the body's last characters.
-    const lead = SHORT_BASE64_LINE_RE.test(before.trim()) ? before.slice(0, before.length - before.trimStart().length) : replaceKeyRuns(before);
+    const core = coreOf(before);
+    const lead = core !== '' && SHORT_BASE64_LINE_RE.test(core) ? before.slice(0, before.lastIndexOf(core)) : replaceKeyRuns(before);
     out.push(`${lead}${PRIVATE_KEY_MARKER}`);
     const rest = [fenceLine.slice(end), ...lines.slice(fenceAt + 1)].join('\n');
     return { text: out.join('\n') + rest, redacted: true, carry: CLOSED_PRIVATE_KEY };

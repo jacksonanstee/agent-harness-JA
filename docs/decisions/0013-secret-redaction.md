@@ -193,11 +193,11 @@ Residual: hook-event records reach a `HookSink` with the reason only control-str
 
 - Each assistant text block is redacted on its own, and `private-key-block` needs its BEGIN header. So a reply that started a key, called a tool, then finished it in a later block emitted that block's body and END fence raw. The memory copy (the result's `resultText`, redacted in one string) did not show it in the issue's run; whether `result` always holds the whole reply across tool calls is an SDK property not checked here.
 - The session now carries the open key across blocks for the run (`privateKeyCarry`, `redactForEmission` in `src/session/session.ts`). The pure helpers are in `src/security/secrets/pem-continuation.ts`, on the security barrel and not the root barrel.
-- **Opening.** A block opens a key when its last private-key header has no END fence after it and either ends the block or is followed by key body (`opensUnterminatedPrivateKey`). A header mentioned in prose ("look for `-----BEGIN ...-----` at the top") opens nothing.
+- **Opening.** A block opens a key when its last private-key header has no END fence after it and is followed by key body, or by nothing but what a key's first lines can be: blank lines, armour headers (an ENCRYPTED PEM or PGP key always has them before the body) and base64-only lines under 40 characters (a partial first line) (`opensUnterminatedPrivateKey`). A header mentioned mid-sentence ("look for `-----BEGIN ...-----` at the top") opens nothing; a header that is the last thing in a block does.
 - **Continuing.** While a key is open, the next block goes through `continuePrivateKey` before the redactor:
   - Up to an END fence, each run of key body becomes `[REDACTED:private-key-block]` wherever it sits in a line, so a `> `, `- ` or `12 | ` prefix, backticks, a trailing comment or a JSON-escaped `\n` does not hide it.
-  - Key body means 40 or more base64 or base64url characters mixing upper case, lower case and digits. A hex hash, a path or a long identifier does not qualify.
-  - A short base64-only line, or a `Proc-Type`, `DEK-Info`, `Version` or `Comment` header, is replaced only when more body or the fence follows it in the block.
+  - Key body means 40 or more base64 or base64url characters mixing upper case, lower case and digits, and not mixing `/` or `+` with `-` or `_` (a key is one alphabet or the other). A one-case hex hash, a digit-free identifier, and a path or URL that mixes `/` with `-` or `_`, do not qualify.
+  - A short base64-only line, or a `Proc-Type`, `DEK-Info`, `Version` or `Comment` header, is replaced when more body or the fence follows it in the block, or when it comes right after body (a key's short last line). A quote, bullet, line-number or backtick decoration is ignored when judging it, and kept.
   - Other lines are kept, so a lead-in such as "part two:" stays and the body after it is replaced.
   - The fence closes the key; the rest of the block is redacted as usual.
 - **Closing without a fence.** A blank block leaves the state as it was. A block with no key body counts as idle, and three in a row (`PRIVATE_KEY_IDLE_BLOCKS`) close the key. So a "Let me check the file first." between the halves does not end it, and a reply that moves on does not stay open for ever.
@@ -205,8 +205,8 @@ Residual: hook-event records reach a `HookSink` with the reason only control-str
 - The header and fence regex sources are shared with the rule, which is now built from them, so the two cannot drift. The built pattern is byte-identical to the old literal.
 - **Residual.** S-2 is pattern-based and observe-only, as the issue said. What still passes raw in the continuation:
   - a header split across blocks (no block holds it), or an attacker who drops it outright;
-  - a body run with fewer than 40 characters, or one without all of upper case, lower case and digits, that is not followed by body or the fence;
-  - the body of a key reopened after three idle blocks;
+  - a base64-only line that is not key body (under 40 characters, or without all of upper case, lower case and digits) when it is neither right after body nor followed by body or the fence, such as a lone fragment between prose lines;
+  - the rest of a key after the carry closed it (three idle blocks between its halves);
   - a PGP `=XXXX` checksum line (not key material).
-- **Residual: over-redaction.** While a key is open, a 40-or-more-character mixed-case alphanumeric token in an unrelated sentence is replaced, until the fence or three idle blocks.
+- **Residual: over-redaction.** While a key is open, a 40-or-more-character run of one base64 alphabet mixing upper case, lower case and digits in an unrelated sentence is replaced (an identifier with digits, a path that uses only `/`), and each such block resets the idle count, so text that keeps carrying one holds the key open until the fence or the end of the run. A header that ends a block, in prose, opens a key the same way.
 - **Residual: one carry for all assistant messages.** The carry is shared by every assistant message in the stream. If the SDK interleaved a subagent's text blocks between the parent's halves (not observed), they would count towards the idle limit or carry body of their own.

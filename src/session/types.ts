@@ -390,7 +390,8 @@ export interface SessionDeps {
    * only for `[REDACTED:<rule_id>]` markers built from the returned findings,
    * so a redactor must emit that marker for each finding (#207). Whatever the
    * redactor, assistant text also passes the session's private-key carry
-   * first (#111), so a key split across text blocks is replaced in both.
+   * first (#111), so the rest of a key split across text blocks is replaced
+   * in the later blocks (the opening block is the redactor's to replace).
    */
   redactSecrets?: (text: string) => RedactResult;
   /**
