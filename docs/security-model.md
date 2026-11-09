@@ -399,7 +399,9 @@ access to the machine.
 The secret redactor (S-2, ADR-0013) runs on tool output, on the memory
 summary, and on each assistant text block before it reaches `onText`, which
 is the CLI's stdout and so any CI log that captures it (issue #91; the stdout
-copy used to go out raw while the memory copy was redacted). It carries 25
+copy used to go out raw while the memory copy was redacted). The session
+also carries a private key the model splits across blocks from one block to
+the next (issue #111, ADR-0013 amendment of 2026-11-09). The redactor carries 25
 rules drawn from the gitleaks/trufflehog lineage. Two properties matter more
 than rule
 count: findings carry `rule_id` + offsets + length and **never the secret

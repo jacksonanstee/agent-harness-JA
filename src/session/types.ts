@@ -388,7 +388,10 @@ export interface SessionDeps {
    * Failures fail CLOSED per leaf/sink to the `[REDACTION FAILED]` sentinel,
    * never the raw text. The rewrite verifier (ADR-0035 D4) confirms `applied`
    * only for `[REDACTED:<rule_id>]` markers built from the returned findings,
-   * so a redactor must emit that marker for each finding (#207).
+   * so a redactor must emit that marker for each finding (#207). Whatever the
+   * redactor, assistant text also passes the session's private-key carry
+   * first (#111), so the rest of a key split across text blocks is replaced
+   * in the later blocks (the opening block is the redactor's to replace).
    */
   redactSecrets?: (text: string) => RedactResult;
   /**
