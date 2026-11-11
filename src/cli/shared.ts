@@ -29,6 +29,7 @@ import {
   sandboxHook,
 } from '../security/index.js';
 import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig, SettingSource } from '../security/index.js';
+import { JUDGE_MODEL } from '../session/index.js';
 import type { QueryFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -70,7 +71,13 @@ export const WARNING_PREFIX = 'warning: ';
 // bump that retires an id changes the usage text and the rejection together.
 // The router is not USED for the judge (ADR-0016 decision 6); only its list
 // of known ids is read.
-export const JUDGE_MODEL_IDS: readonly string[] = [...new Set(DEFAULT_ROUTING_TABLE.map((rule) => rule.model))];
+// JUDGE_MODEL is appended (issue #242): the judge is decoupled from the
+// router, so a router refresh no longer has to carry the measured judge's id
+// in its table for an operator to be able to name it. The Set deduplicates if
+// a later table names it again. Frozen: a push would widen the validator.
+export const JUDGE_MODEL_IDS: readonly string[] = Object.freeze([
+  ...new Set<string>([...DEFAULT_ROUTING_TABLE.map((rule) => rule.model), JUDGE_MODEL]),
+]);
 
 export const USAGE =
   `Usage: agent-harness-ja run "<prompt>" [--skills-dir <dir>] [--db <path>] [--max-turns <n>] [--shape <${TASK_SHAPES.join('|')}>] [--sensitivity <${TASK_SENSITIVITIES.join('|')}>] [--expected-tokens <n>] [--expected-output-tokens <n>] [--max-budget-usd <usd>]\n` +

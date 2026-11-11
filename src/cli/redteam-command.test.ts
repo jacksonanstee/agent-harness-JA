@@ -19,7 +19,7 @@ import {
   runRedteamCommand,
 } from './redteam-command.js';
 import type { RedteamArgs, RedteamCommandDeps } from './redteam-command.js';
-import { EVAL_OUT_DIR, USAGE } from './shared.js';
+import { EVAL_OUT_DIR, JUDGE_MODEL_IDS, USAGE } from './shared.js';
 
 const dirs: string[] = [];
 
@@ -301,13 +301,40 @@ describe('parseRedteamArgs', () => {
       }
     });
 
-    it('--judge-model not in the router table is a usage error naming the valid ids', () => {
+    it('--judge-model not in the accepted list is a usage error naming the valid ids', () => {
       const result = parseRedteamArgs(['--judge', '--judge-model', 'claude-nonexistent-9']);
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error).toContain(TABLE_MODEL_IDS.join('|'));
+      expect(result.error).toContain(`(${[...TABLE_MODEL_IDS, JUDGE_MODEL].join('|')})`);
       expect(result.error).toContain(USAGE);
     });
+
+    // Issue #242, decision D4: the judge is decoupled from the router table.
+    // The accepted list is the table's ids plus JUDGE_MODEL, deduplicated.
+    it('JUDGE_MODEL_IDS is the router-table ids then JUDGE_MODEL, deduplicated', () => {
+      expect(TABLE_MODEL_IDS).not.toContain(JUDGE_MODEL);
+      expect([...JUDGE_MODEL_IDS]).toEqual([...TABLE_MODEL_IDS, JUDGE_MODEL]);
+      expect(new Set(JUDGE_MODEL_IDS).size).toBe(JUDGE_MODEL_IDS.length);
+      expect(Object.isFrozen(JUDGE_MODEL_IDS)).toBe(true);
+    });
+
+    it('the measured judge model is accepted as --judge-model although the router table no longer names it', () => {
+      const result = parseRedteamArgs(['--judge', '--judge-model', 'claude-sonnet-5']);
+      expect(result).toMatchObject({ ok: true, value: { judgeModel: 'claude-sonnet-5' } });
+    });
+
+    it.each(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'])('the current router id %s is accepted as --judge-model', (id) => {
+      expect(parseRedteamArgs(['--judge', '--judge-model', id])).toMatchObject({ ok: true, value: { judgeModel: id } });
+    });
+
+    it.each(['claude-opus-5', 'claude-haiku-4-5', 'claude-fable-5', 'claude-fable-5-2', 'claude-sonnet-5-20260101'])(
+      'the id %j (retired, never defaulted, or dated) is rejected as --judge-model, naming the valid ids',
+      (id) => {
+        const result = parseRedteamArgs(['--judge', '--judge-model', id]);
+        expect(result.ok, id).toBe(false);
+        if (!result.ok) expect(result.error).toContain(`(${JUDGE_MODEL_IDS.join('|')})`);
+      },
+    );
 
     it('every router-table id is accepted as --judge-model', () => {
       expect(TABLE_MODEL_IDS.length).toBeGreaterThan(1);

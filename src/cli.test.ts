@@ -378,7 +378,7 @@ describe('formatModelClaim', () => {
 // so the run line and the CLI-denial warning are pure functions tested here.
 describe('formatRunSummaryLine', () => {
   const base: Parameters<typeof formatRunSummaryLine>[0] = {
-    modelChoice: { model: 'claude-sonnet-5', rule_id: 'r1', reason: 'test' },
+    modelChoice: { model: 'claude-sonnet-5-5', rule_id: 'r1', reason: 'test' },
     refusal: null,
     numTurns: 2,
     costUsd: 0.05,
@@ -397,7 +397,7 @@ describe('formatRunSummaryLine', () => {
       ],
     });
     expect(line).toContain(' denied=1 cli-denied=2 memory=session-abc');
-    expect(line).toContain('model=claude-sonnet-5 (rule=r1) turns=2 cost=$0.0500');
+    expect(line).toContain('model=claude-sonnet-5-5 (rule=r1) turns=2 cost=$0.0500');
   });
 
   it('prints cli-denied=0 when the result named none', () => {

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createRouter, route } from './route.js';
 import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from './table.js';
 import {
+  MODELS,
   TASK_SENSITIVITIES,
   TASK_SHAPES,
   type RoutingRule,
@@ -21,25 +22,25 @@ const base: TaskDescriptor = {
 describe('router: default table — shape routing', () => {
   it('routes lookup to haiku', () => {
     const c = route({ ...base, shape: 'lookup' });
-    expect(c.model).toBe('claude-haiku-4-5');
+    expect(c.model).toBe('claude-haiku-5-5');
     expect(c.rule_id).toBe('shape-lookup');
   });
 
   it('routes research to opus', () => {
     const c = route({ ...base, shape: 'research' });
-    expect(c.model).toBe('claude-opus-5');
+    expect(c.model).toBe('claude-opus-5-5');
     expect(c.rule_id).toBe('shape-research');
   });
 
   it('routes small review to sonnet', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 5_000 });
-    expect(c.model).toBe('claude-sonnet-5');
+    expect(c.model).toBe('claude-sonnet-5-5');
     expect(c.rule_id).toBe('shape-review-small');
   });
 
   it('routes small build to sonnet', () => {
     const c = route({ ...base, shape: 'build', expected_tokens: 10_000 });
-    expect(c.model).toBe('claude-sonnet-5');
+    expect(c.model).toBe('claude-sonnet-5-5');
     expect(c.rule_id).toBe('shape-build-small');
   });
 
@@ -49,13 +50,13 @@ describe('router: default table — shape routing', () => {
       sensitivity: 'medium',
       expected_tokens: 100_000,
     });
-    expect(c.model).toBe('claude-opus-5');
+    expect(c.model).toBe('claude-opus-5-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
   it('escalates large review to opus via fallthrough', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 50_000 });
-    expect(c.model).toBe('claude-opus-5');
+    expect(c.model).toBe('claude-opus-5-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 });
@@ -65,7 +66,7 @@ describe('router: high sensitivity beats every shape', () => {
   for (const shape of shapes) {
     it(`high + ${shape} → opus`, () => {
       const c = route({ ...base, shape, sensitivity: 'high' });
-      expect(c.model).toBe('claude-opus-5');
+      expect(c.model).toBe('claude-opus-5-5');
       expect(c.rule_id).toBe('sensitivity-high');
     });
   }
@@ -75,25 +76,25 @@ describe('router: token threshold boundaries', () => {
   it('review at 19_999 tokens → sonnet', () => {
     expect(
       route({ ...base, shape: 'review', expected_tokens: 19_999 }).model,
-    ).toBe('claude-sonnet-5');
+    ).toBe('claude-sonnet-5-5');
   });
 
   it('review at exactly 20_000 tokens → fallthrough opus', () => {
     const c = route({ ...base, shape: 'review', expected_tokens: 20_000 });
-    expect(c.model).toBe('claude-opus-5');
+    expect(c.model).toBe('claude-opus-5-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
   it('build at 49_999 tokens → sonnet', () => {
     expect(
       route({ ...base, shape: 'build', expected_tokens: 49_999 }).model,
-    ).toBe('claude-sonnet-5');
+    ).toBe('claude-sonnet-5-5');
   });
 
   it('build at exactly 50_000 tokens → fallthrough opus', () => {
     expect(
       route({ ...base, shape: 'build', expected_tokens: 50_000 }).model,
-    ).toBe('claude-opus-5');
+    ).toBe('claude-opus-5-5');
   });
 });
 
@@ -136,18 +137,18 @@ describe('router: custom table', () => {
       {
         id: 'all-haiku',
         match: () => true,
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'custom: always haiku',
       },
     ];
     const c = createRouter({ table }).route({ ...base, sensitivity: 'high' });
-    expect(c.model).toBe('claude-haiku-4-5');
+    expect(c.model).toBe('claude-haiku-5-5');
     expect(c.rule_id).toBe('all-haiku');
   });
 
   it('falls through to opus when no custom rule matches', () => {
     const c = createRouter({ table: [] }).route(base);
-    expect(c.model).toBe('claude-opus-5');
+    expect(c.model).toBe('claude-opus-5-5');
     expect(c.rule_id).toBe('fallthrough');
   });
 
@@ -158,18 +159,18 @@ describe('router: custom table', () => {
         match: () => {
           throw new Error('predicate blew up');
         },
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'never reached',
       },
       {
         id: 'after-buggy',
         match: () => true,
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         reason: 'after-buggy reached',
       },
     ];
     const c = createRouter({ table }).route(base);
-    expect(c.model).toBe('claude-sonnet-5');
+    expect(c.model).toBe('claude-sonnet-5-5');
     expect(c.rule_id).toBe('after-buggy');
   });
 
@@ -178,7 +179,7 @@ describe('router: custom table', () => {
       {
         id: 'malicious',
         match: () => true,
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'line1\nFAKE LOG ENTRY\rmore',
       },
     ];
@@ -194,7 +195,7 @@ describe('router: contract locks (issue #2)', () => {
       {
         id: 'unicode-separator',
         match: () => true,
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'line1\u2028FAKE LOG ENTRY\u2029more',
       },
     ];
@@ -208,7 +209,7 @@ describe('router: contract locks (issue #2)', () => {
       {
         id: 'truthy-not-true',
         match: () => 1 as unknown as boolean,
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'must never be selected',
       },
     ];
@@ -220,6 +221,9 @@ describe('router: contract locks (issue #2)', () => {
     const c = route({ ...base, expected_tokens: 0 });
     expect(typeof c.model).toBe('string');
     expect(c.rule_id.length).toBeGreaterThan(0);
+    // Pinned to the rule 0 tokens actually selects (#242: the shape-only
+    // assertions above survived a route() stubbed to a constant).
+    expect(c).toMatchObject({ model: 'claude-sonnet-5-5', rule_id: 'shape-build-small' });
   });
 
   it('lets a custom rule route on descriptor.hint', () => {
@@ -227,33 +231,48 @@ describe('router: contract locks (issue #2)', () => {
       {
         id: 'hint-fastpath',
         match: (d) => d.hint === 'cheap-please',
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'hint requested the cheap model',
       },
     ];
     const router = createRouter({ table });
     const hit = router.route({ ...base, hint: 'cheap-please' });
     expect(hit.rule_id).toBe('hint-fastpath');
-    expect(hit.model).toBe('claude-haiku-4-5');
+    expect(hit.model).toBe('claude-haiku-5-5');
     const miss = router.route(base);
     expect(miss.rule_id).toBe('fallthrough');
   });
 });
 
 describe('router: Fable is nameable but never defaulted (ADR-0024)', () => {
-  // ADR-0024 decision 1: `claude-fable-5` is a member of the Model union so a
-  // consumer can target it from a custom table, but no shipped default rule
-  // selects it. Defaulting to it would roughly double baseline cost ($10/$50
-  // vs Opus 5 at $5/$25) and hard-fail zero-data-retention orgs, which get a
-  // 400 on every Fable request. These two tests are the lock: prose in an ADR
-  // does not stop someone quietly adding it to the table.
+  // ADR-0024 decision 1 (amended 2026-11-12): `claude-fable-5-2` is a member of
+  // the Model union so a consumer can target it from a custom table, but no
+  // shipped default rule selects it. Defaulting to it would double baseline
+  // cost ($8/$40 vs Opus 5.5 at $4/$20) and hard-fail zero-data-retention
+  // orgs, which get a 400 on every Fable request. These tests are the lock:
+  // prose in an ADR does not stop someone quietly adding it to the table.
   it('no shipped default rule selects fable', () => {
     const defaulted = DEFAULT_ROUTING_TABLE.map((r) => r.model);
-    expect(defaulted).not.toContain('claude-fable-5');
+    expect(defaulted).not.toContain('claude-fable-5-2');
   });
 
   it('the implicit fallthrough does not select fable', () => {
-    expect(FALLTHROUGH_MODEL).not.toBe('claude-fable-5');
+    expect(FALLTHROUGH_MODEL).not.toBe('claude-fable-5-2');
+  });
+
+  // Issue #242: the union is exactly the current generation. The previous
+  // generation's ids are no longer members (their price rows are kept for
+  // historic telemetry, see RETIRED_ROUTER_MODELS in internal/pricing.ts).
+  it('MODELS is exactly the four current-generation ids, and fable is one of them', () => {
+    expect([...MODELS]).toEqual(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-2']);
+  });
+
+  it('every shipped default, and the fallthrough, is a non-fable member of MODELS', () => {
+    const defaulted = [...DEFAULT_ROUTING_TABLE.map((r) => r.model), FALLTHROUGH_MODEL];
+    for (const id of defaulted) {
+      expect(MODELS, id).toContain(id);
+      expect(id).not.toMatch(/fable/);
+    }
   });
 
   it('a custom rule can name fable and routes to it', () => {
@@ -261,12 +280,12 @@ describe('router: Fable is nameable but never defaulted (ADR-0024)', () => {
       {
         id: 'opt-in-fable',
         match: (d) => d.sensitivity === 'high',
-        model: 'claude-fable-5',
+        model: 'claude-fable-5-2',
         reason: 'custom: escalate high sensitivity to fable',
       },
     ];
     const c = createRouter({ table }).route({ ...base, sensitivity: 'high' });
-    expect(c.model).toBe('claude-fable-5');
+    expect(c.model).toBe('claude-fable-5-2');
     expect(c.rule_id).toBe('opt-in-fable');
   });
 });
@@ -278,6 +297,8 @@ describe('router: ModelChoice shape', () => {
     expect(c.rule_id.length).toBeGreaterThan(0);
     expect(typeof c.reason).toBe('string');
     expect(c.reason.length).toBeGreaterThan(0);
+    // The exact choice for `base`, so a route() stubbed to a constant fails here too (#242).
+    expect(c).toEqual({ model: 'claude-sonnet-5-5', rule_id: 'shape-build-small', reason: 'shape=build + tokens<50k → sonnet' });
   });
 });
 
@@ -302,12 +323,12 @@ describe('router: the documented absence of a sensitivity floor', () => {
       {
         id: 'catch-all',
         match: () => true,
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-5-5',
         reason: 'custom: everything to haiku',
       },
     ];
     const choice = createRouter({ table }).route({ ...base, sensitivity: 'high' });
-    expect(choice.model).toBe('claude-haiku-4-5');
+    expect(choice.model).toBe('claude-haiku-5-5');
     expect(choice.rule_id).toBe('catch-all');
   });
 
@@ -365,9 +386,9 @@ describe('router: exported constants are frozen at runtime (issue #123)', () => 
     const first = DEFAULT_ROUTING_TABLE[0]!;
     const modelBefore = first.model;
     expect(() => {
-      (first as { model: string }).model = 'claude-fable-5';
+      (first as { model: string }).model = 'claude-fable-5-2';
     }).toThrow(TypeError);
     expect(first.model).toBe(modelBefore);
-    expect(DEFAULT_ROUTING_TABLE[0]!.model).toBe('claude-opus-5');
+    expect(DEFAULT_ROUTING_TABLE[0]!.model).toBe('claude-opus-5-5');
   });
 });
