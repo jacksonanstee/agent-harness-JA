@@ -79,7 +79,7 @@ const priced = (r: Omit<PriceRow, 'source' | 'checked' | 'longContext'>): Readon
  * were added, #242; Haiku 5.5 was added on 03/11/2026, #219).
  *
  * Each rate is the page's own figure, never derived from a multiplier: the
- * cache-hit price is 0.1x input on the older rows but 0.05x on Sonnet 5.5 and
+ * cache-hit price is 0.1x input on every other row (Haiku 5.5 included) but 0.05x on Sonnet 5.5 and
  * Opus 5.5 and 0.025x on Fable 5.2.
  */
 export const PRICE_TABLE: readonly Readonly<PriceRow>[] = Object.freeze([

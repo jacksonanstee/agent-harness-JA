@@ -119,6 +119,16 @@ Each default rule and `FALLTHROUGH_MODEL` targets the same tier as before, at it
 
 **Not confirmed by this change: that each id is served.** Decision 1 recorded `GET /v1/models/{id}` returning 200 for every member. That call needs an API key, and this change was made without one. The ids above are the vendor's published ones; the served check is the keyed `run` per default id that issue #242 lists, and it had not been run when this amendment was written. Also not confirmed: that SDK 0.3.312 accepts each new id, and how its `total_cost_usd`, the figure the dollar cap checks, prices them. Both are that keyed run's job, so the cap's accuracy on the three new default ids is unmeasured until it happens.
 
+**Keyed run, 2026-11-12 10:36 AEDT (observed, after the paragraph above was written).** One `run` per default route on this branch, SDK 0.3.312, prompt "Reply with the single word ok.", `--max-budget-usd 0.50`, isolated `--db`. Each exited 0 and answered "ok":
+
+| Route | Model reported | Harness-priced `cost=` | SDK `sdk-cost=` |
+|---|---|---|---|
+| `shape-lookup` | `claude-haiku-5-5` | $0.0019 | $0.0019 |
+| `shape-build-small` | `claude-sonnet-5-5` | $0.0372 | $0.0372 |
+| `shape-research` | `claude-opus-5-5` | $0.0744 | $0.0744 |
+
+So the three default ids are served and accepted by SDK 0.3.312, and its `total_cost_usd` equals the harness's list price on these runs: no budget line printed. Scope: one short single-turn run each. Neither the Haiku 5.5 long-context step nor `claude-fable-5-2` (not on a default route) was exercised; the Fable reading above stays a binary reading.
+
 **Fable is still nameable and still never defaulted**, on the two grounds that survived the 2026-07-28 amendment, restated against the 5.2 figures:
 
 - **Cost.** Fable 5.2 is $8/$40 per MTok against Opus 5.5 at $4/$20: twice the input, output and cache-write price, and the same $0.20 per MTok cache-hit price. Three of the default rules' targets (high sensitivity, research, fallthrough) resolve to the top tier, so defaulting them to Fable would still roughly double that spend, by less on a cache-heavy run.
