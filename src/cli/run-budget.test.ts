@@ -318,11 +318,10 @@ describe('the budget gap line (#212, D4): the cap is enforced on the SDK figure'
     );
   });
 
-  it('prints nothing within 5% either way, or when either figure is missing or zero', () => {
+  it('prints nothing within 5% either way, or when the SDK figure is missing or either figure is zero', () => {
     expect(formatBudgetGapLine({ costUsd: 0.104, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
     expect(formatBudgetGapLine({ costUsd: 0.096, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
     expect(formatBudgetGapLine({ costUsd: null, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
-    expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: null, maxBudgetUsd: 1 })).toBeNull();
     expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: 0, maxBudgetUsd: 1 })).toBeNull();
     expect(formatBudgetGapLine({ costUsd: 0, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
   });
@@ -353,5 +352,59 @@ describe('the budget gap line (#212, D4): the cap is enforced on the SDK figure'
   it('main prints no gap line when the run carries no per-model usage', async () => {
     const { stderr } = await runMain([], scripted([INIT, SUCCESS]).query);
     expect(stderr).not.toContain('cap is enforced on');
+  });
+});
+
+// Issue #242 (security review M2). The gap line above needs BOTH figures. When
+// the harness cannot price a run, it used to print nothing, so the #212
+// detector (the SDK mispricing a model) went quiet with no sign that it had.
+// That now matters on a shipped route: `lookup` goes to Claude Haiku 5.5, the
+// one row with a long-context step, and a run whose cumulative prompt is over
+// 100,000 tokens is unpriced by design (ADR-0043, amended #219).
+describe('the budget unchecked line (#242): the SDK figure has no cross-check', () => {
+  const UNCHECKED =
+    "[harness] budget: this run's cost could not be cross-checked against list prices, " +
+    "so the $1.0000 cap relies on the SDK's cost figure alone (#212)";
+  const MU = { inputTokens: 1000, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.01, contextWindow: 1, maxOutputTokens: 1 };
+  const uncheckedLines = (stderr: string): string[] => stderr.split('\n').filter((line) => line.includes('could not be cross-checked'));
+
+  it('says so when the SDK figure is usable and there is no harness-priced figure', () => {
+    expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: null, maxBudgetUsd: 1 })).toBe(UNCHECKED);
+  });
+
+  it('prints nothing when there is no usable SDK figure either (null, zero, negative or not finite)', () => {
+    for (const costUsd of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(formatBudgetGapLine({ costUsd, pricedCostUsd: null, maxBudgetUsd: 1 }), String(costUsd)).toBeNull();
+    }
+  });
+
+  it('is never printed when the run was priced: agreeing figures print nothing, differing ones print the gap line', () => {
+    expect(formatBudgetGapLine({ costUsd: 0.1, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).toBeNull();
+    expect(formatBudgetGapLine({ costUsd: 0.15, pricedCostUsd: 0.1, maxBudgetUsd: 1 })).not.toContain('cross-checked');
+  });
+
+  it('main prints it once for a Haiku 5.5 run whose cumulative prompt is over the long-context step', async () => {
+    const over = { ...MU, inputTokens: 100_001 };
+    const result: SdkMessage = { ...SUCCESS, total_cost_usd: 0.02, modelUsage: { 'claude-haiku-5-5': over } };
+    const { code, stderr, db } = await runMain(['--max-budget-usd', '1'], scripted([INIT, result]).query);
+    expect(code).toBe(0);
+    expect(turnCostPayload(db).pricedCostUsd).toBeNull();
+    expect(uncheckedLines(stderr)).toEqual([UNCHECKED]);
+  });
+
+  it('main prints it once when the run names a model with no price row, or carries no per-model usage', async () => {
+    const unpriced: SdkMessage = { ...SUCCESS, total_cost_usd: 0.02, modelUsage: { 'claude-fable-5-3': MU } };
+    for (const result of [unpriced, SUCCESS]) {
+      const { stderr } = await runMain(['--max-budget-usd', '1'], scripted([INIT, result]).query);
+      expect(uncheckedLines(stderr)).toEqual([UNCHECKED]);
+    }
+  });
+
+  it('main does not print it for a Haiku 5.5 run at or under the step, which the harness prices', async () => {
+    const atStep = { ...MU, inputTokens: 100_000 };
+    const result: SdkMessage = { ...SUCCESS, total_cost_usd: 0.01, modelUsage: { 'claude-haiku-5-5': atStep } };
+    const { stderr, db } = await runMain(['--max-budget-usd', '1'], scripted([INIT, result]).query);
+    expect(turnCostPayload(db).pricedCostUsd).not.toBeNull();
+    expect(uncheckedLines(stderr)).toEqual([]);
   });
 });

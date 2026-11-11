@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../cli.js';
-import { JUDGE_SESSION_STATES } from '../session/index.js';
+import { JUDGE_MODEL, JUDGE_SESSION_STATES } from '../session/index.js';
 import type { JudgeSummary, QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from '../session/index.js';
 import { JUDGE_SYSTEM_PROMPT } from '../session/judge.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
@@ -113,6 +113,22 @@ const summaryOf = (over: Partial<JudgeSummary>): JudgeSummary => ({
 });
 
 describe('run path with the judge on (D2, D7; pins 3, 16, 32)', () => {
+  // Issue #242 (security review M1): `run` builds its judge with JUDGE_MODEL
+  // and nothing pinned it; swapping the literal in run-judge.ts for a router
+  // id left the whole suite green. The assertion is on the model the judge
+  // QUERY carries, so it holds whichever way the composition is rewritten.
+  it("the run path's judge query carries JUDGE_MODEL (the measured claude-sonnet-5), never a router default", async () => {
+    const sdk = fakeSdk('{"verdict":"pass"}');
+    const { code } = await runMain(runArgs().argv, { judge: { mode: 'always', maxCallsPerRun: 3 } }, undefined, sdk.query);
+    expect(code).toBe(0);
+    expect(sdk.judge).toHaveLength(1);
+    expect(sdk.judge.map((o) => o.model)).toEqual([JUDGE_MODEL]);
+    expect(JUDGE_MODEL).toBe('claude-sonnet-5');
+    // The primary session of the same run is routed, and is not the judge's model.
+    expect(sdk.primary).toHaveLength(1);
+    expect(sdk.primary[0]?.model).not.toBe(JUDGE_MODEL);
+  });
+
   it('composes deps.judge, prints the start and summary lines, writes a judge-call row, and the judge query carries the abort key and no post hooks', async () => {
     const sdk = fakeSdk('{"verdict":"block"}');
     const { argv, db } = runArgs();

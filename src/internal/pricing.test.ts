@@ -168,9 +168,10 @@ describe('estimateRunCostUsd', () => {
     expect(r.longContext).toBeNull();
   });
 
-  // Issue #242, decision D5: the previous generation left the router's union
-  // but telemetry from older runs (and the judge, still claude-sonnet-5) names
-  // these ids, so their rows stay at the rates re-read on 12/11/2026.
+  // Issue #242, decision D5: the previous generation left the router's union,
+  // but a live run can still name one of these ids (a cast, an untyped
+  // consumer) and the judge is still claude-sonnet-5, so their rows stay at
+  // the rates re-read on 12/11/2026. Stored telemetry is not re-priced.
   it.each([
     ['claude-haiku-4-5', [1, 5, 1.25, 0.1]],
     ['claude-sonnet-5', [2, 10, 2.5, 0.2]],

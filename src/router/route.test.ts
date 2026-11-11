@@ -247,9 +247,12 @@ describe('router: contract locks (issue #2)', () => {
 describe('router: Fable is nameable but never defaulted (ADR-0024)', () => {
   // ADR-0024 decision 1 (amended 2026-11-12): `claude-fable-5-2` is a member of
   // the Model union so a consumer can target it from a custom table, but no
-  // shipped default rule selects it. Defaulting to it would double baseline
-  // cost ($8/$40 vs Opus 5.5 at $4/$20) and hard-fail zero-data-retention
-  // orgs, which get a 400 on every Fable request. These tests are the lock:
+  // shipped default rule selects it. Defaulting to it would roughly double
+  // baseline cost ($8/$40 vs Opus 5.5 at $4/$20: twice the input, output and
+  // cache-write price, the same $0.20/MTok cache-hit price), and it is
+  // unavailable to zero-data-retention orgs unless Anthropic expressly
+  // authorises them (status code not re-verified 2026-11-12). These tests are
+  // the lock:
   // prose in an ADR does not stop someone quietly adding it to the table.
   it('no shipped default rule selects fable', () => {
     const defaulted = DEFAULT_ROUTING_TABLE.map((r) => r.model);
@@ -261,8 +264,9 @@ describe('router: Fable is nameable but never defaulted (ADR-0024)', () => {
   });
 
   // Issue #242: the union is exactly the current generation. The previous
-  // generation's ids are no longer members (their price rows are kept for
-  // historic telemetry, see RETIRED_ROUTER_MODELS in internal/pricing.ts).
+  // generation's ids are no longer members (their price rows are kept so a
+  // live run that still names one is priced, see RETIRED_ROUTER_MODELS in
+  // internal/pricing.ts).
   it('MODELS is exactly the four current-generation ids, and fable is one of them', () => {
     expect([...MODELS]).toEqual(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-2']);
   });

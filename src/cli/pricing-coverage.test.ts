@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CLI_SIDE_CALL_MODELS, PRICE_TABLE, RETIRED_ROUTER_MODELS } from '../internal/pricing.js';
 import { DEFAULT_ROUTING_TABLE, FALLTHROUGH_MODEL } from '../router/table.js';
 import { MODELS, type Model } from '../router/types.js';
+import { JUDGE_INPUT_USD_PER_MTOK, JUDGE_OUTPUT_USD_PER_MTOK } from '../security/injection/judge-settings.js';
 import { JUDGE_MODEL } from '../session/index.js';
 
 // Lives in cli (the composition layer) because internal may import no domain:
@@ -25,7 +26,10 @@ describe('PRICE_TABLE coverage', () => {
   });
 
   // #242: a row is allowed for a router model, a CLI side-call model, or a
-  // retired router model (kept so telemetry from older runs still prices).
+  // retired router model (kept so a live run that still names one, through a
+  // cast or an untyped consumer, is priced when it ends).
+  // Stored telemetry does not depend on these rows: `telemetry cost` reads
+  // the figure already on each row.
   it('has no row for a model outside MODELS, CLI_SIDE_CALL_MODELS or RETIRED_ROUTER_MODELS, and no duplicate rows', () => {
     const named = new Set<string>([...MODELS, ...CLI_SIDE_CALL_MODELS, ...RETIRED_ROUTER_MODELS]);
     for (const r of PRICE_TABLE) expect(named.has(r.model), r.model).toBe(true);
@@ -45,7 +49,7 @@ describe('PRICE_TABLE coverage', () => {
     expect([...CLI_SIDE_CALL_MODELS]).not.toContain('claude-haiku-5-5');
   });
 
-  it('every RETIRED_ROUTER_MODELS entry is still priced (historic telemetry prices against it)', () => {
+  it('every RETIRED_ROUTER_MODELS entry is still priced (a live run can still name it)', () => {
     expect(RETIRED_ROUTER_MODELS.length).toBeGreaterThan(0);
     for (const id of RETIRED_ROUTER_MODELS) expect(priced(), id).toContain(id);
   });
@@ -67,5 +71,18 @@ describe('PRICE_TABLE coverage', () => {
   // fails here.
   it('the judge model has a PRICE_TABLE row, whether or not it is a router model', () => {
     expect(priced()).toContain(JUDGE_MODEL);
+  });
+
+  // #242 (security review LOW-1): the judge's money ceiling
+  // (JUDGE_WORST_CASE_USD_PER_CALL) is derived from two hand-written list
+  // prices in security/injection/judge-settings.ts. This ties them to the
+  // judge's PRICE_TABLE row, so the pin above is about the judge's PRICES and
+  // not only about a row existing: re-pricing the row, or moving JUDGE_MODEL
+  // to a differently priced id, fails here until the ceiling is re-derived.
+  it("the judge's list-price constants equal its PRICE_TABLE row", () => {
+    const row = PRICE_TABLE.find((r) => r.model === JUDGE_MODEL);
+    expect(row).toBeDefined();
+    expect(row?.longContext).toBeNull();
+    expect([JUDGE_INPUT_USD_PER_MTOK, JUDGE_OUTPUT_USD_PER_MTOK]).toEqual([row?.inputUsdPerMTok, row?.outputUsdPerMTok]);
   });
 });

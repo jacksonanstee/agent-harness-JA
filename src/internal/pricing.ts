@@ -50,11 +50,15 @@ export const CLI_SIDE_CALL_MODELS: readonly string[] = Object.freeze([]);
 /**
  * Ids that were members of the router's `Model` union and no longer are (#242,
  * the refresh to the 5.5 / 5.2 generation). Their PRICE_TABLE rows are kept on
- * purpose: stored telemetry from older runs names them, and `telemetry cost`
- * prices a run from this table, so dropping a row would turn an old run's
- * harness-priced cost into "unpriced". `claude-sonnet-5` is also still the
- * judge's model (`JUDGE_MODEL`, never routed). The router cannot select any
- * of these; pricing-coverage.test.ts keeps this list disjoint from MODELS.
+ * purpose, for a LIVE run: `priceModelUsage` prices a run when it ends, from
+ * the SDK's `modelUsage`, and a run can still name one of these ids (a custom
+ * table built with a cast, or an untyped JavaScript consumer). Without the
+ * row that run would be unpriced. The rows are not what keeps old telemetry
+ * readable: `telemetry cost` reads the figure stored on each row and never
+ * re-prices it. `claude-sonnet-5` is also still the judge's model
+ * (`JUDGE_MODEL`, never routed), and its row is the one the judge pin checks.
+ * No shipped default rule or the fallthrough selects any of these;
+ * pricing-coverage.test.ts keeps this list disjoint from MODELS.
  */
 export const RETIRED_ROUTER_MODELS: readonly string[] = Object.freeze([
   'claude-haiku-4-5',
