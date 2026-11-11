@@ -55,7 +55,7 @@ export interface RedteamArgs {
   baselinePath: string;
   /** `--judge`: run the keyed, report-only judge arm after the heuristic gate. */
   judge: boolean;
-  /** `--judge-model <id>`: a router-table model id. Default `JUDGE_MODEL`. */
+  /** `--judge-model <id>`: a router-table model id, or `JUDGE_MODEL` itself (#242). Default `JUDGE_MODEL`. */
   judgeModel: string;
   /** `--holdout <path>`: the private held-out slice, or null for the corpus only. */
   holdoutPath: string | null;
@@ -124,7 +124,7 @@ function crossFlagRules(d: RedteamDraft): string | null {
   if (d.judgeModel !== null && !JUDGE_MODEL_IDS.includes(d.judgeModel)) {
     // The supplied value is not echoed: it is operator argv, but the valid
     // list says everything the operator needs.
-    return `--judge-model must be a router-table model id (${JUDGE_MODEL_IDS.join('|')}). ${USAGE}`;
+    return `--judge-model must be a router-table model id or the default judge model (${JUDGE_MODEL_IDS.join('|')}). ${USAGE}`;
   }
   return null;
 }
@@ -136,8 +136,8 @@ function crossFlagRules(d: RedteamDraft): string | null {
  * matters: `--judge-model`, `--holdout` and `--samples` each require
  * `--judge`; `--judge` cannot ride with `--update-baseline` (the update
  * path stays keyless and pure); and `--judge-model` must be a router-table
- * id (the rejection names the valid ids, the same list the usage text
- * renders).
+ * id or `JUDGE_MODEL` itself (the rejection names the valid ids, the same
+ * list the usage text renders).
  */
 export function parseRedteamArgs(argv: string[]): RedteamParseResult {
   // Hand-written if-ladder on purpose, not a parser library: 7 flags, 2 boolean

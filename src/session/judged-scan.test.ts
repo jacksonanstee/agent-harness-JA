@@ -561,7 +561,11 @@ describe('live lines (U-1, U-3, A-6, E-3; pin 27)', () => {
       judgeCapWarning(2, 1),
     ]);
     expect(judgeFirstFailureWarning('failed')).toBe(
-      'a judge call failed; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY and the network (a tool result\'s content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.',
+      'a judge call failed; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY, the network and that the judge model id is not retired (a tool result\'s content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.',
+    );
+    // #242: a retired model id fails the call, it does not stall it, so the timeout line does not name it.
+    expect(judgeFirstFailureWarning('timed out')).toBe(
+      'a judge call timed out; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY and the network (a tool result\'s content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.',
     );
     expect(judgeEarlyStopWarning()).toBe(
       'the judge failed 3 times in a row with nothing answered, so it is off for the rest of this run; results use the heuristic only. Check ANTHROPIC_API_KEY and the network; if they are fine, a tool result\'s content may have slowed the judge.',

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHookRuntime } from '../hooks/index.js';
 import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
+import { JUDGE_MODEL } from '../session/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
 
 import { apiKeyMissingMessage, loadSdkQuery, parseSafeInt, readPackageVersion, registerSecurityHooks, sanitizeDiagnostic, sanitizeForTerminal, SDK_PACKAGE, USAGE, writeScorecard } from './shared.js';
@@ -67,12 +68,14 @@ describe('USAGE', () => {
   // three flags, and the `--judge-model` list is RENDERED from the router
   // table the same way --shape/--type are (an empty or reordered table fails
   // here; a hand-copied list goes red the day the table changes).
-  it('the redteam line names --judge, --holdout and a --judge-model list derived from the router table', () => {
+  // Issue #242: the list is the table's ids plus the judge's own model, which
+  // the table no longer names (the judge is decoupled from the router).
+  it('the redteam line names --judge, --holdout and a --judge-model list derived from the router table plus JUDGE_MODEL', () => {
     const redteamLine = USAGE.split('\n').find((line) => line.includes(' redteam '));
     expect(redteamLine).toBeDefined();
     expect(TABLE_MODEL_IDS.length).toBeGreaterThan(1);
     expect(redteamLine).toBe(
-      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${TABLE_MODEL_IDS.join('|')}>] [--holdout <path>] [--samples <n>]`,
+      `       agent-harness-ja redteam [--out <dir>] [--update-baseline] [--baseline <path>] [--judge] [--judge-model <${[...TABLE_MODEL_IDS, JUDGE_MODEL].join('|')}>] [--holdout <path>] [--samples <n>]`,
     );
   });
 });

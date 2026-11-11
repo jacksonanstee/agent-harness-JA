@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHARS_PER_TOKEN,
+  CLI_SIDE_CALL_MODELS,
   DEFAULT_EXPECTED_OUTPUT_TOKENS,
   estimateRunCostUsd,
   PRICE_MAX_AGE_DAYS,
   PRICE_TABLE,
+  PRICE_TABLE_CHECKED,
   priceModelUsage,
+  RETIRED_ROUTER_MODELS,
   stalePriceRows,
   WEB_SEARCH_USD_PER_REQUEST,
   type ModelUsageRow,
@@ -15,7 +18,7 @@ import {
 
 const DAY_MS = 86_400_000;
 /** Pinned clock: the day the table was checked. Tests never read the real clock. */
-const PINNED_NOW = Date.parse('2026-11-03T00:00:00Z');
+const PINNED_NOW = Date.parse('2026-11-12T00:00:00Z');
 
 function row(model: string): PriceRow {
   const found = PRICE_TABLE.find((r) => r.model === model);
@@ -57,6 +60,14 @@ describe('PRICE_TABLE', () => {
 describe('stalePriceRows (clock seam)', () => {
   it('passes the shipped table at the pinned clock', () => {
     expect(stalePriceRows(PINNED_NOW)).toEqual([]);
+  });
+
+  // Issue #242: every row was re-read from the page on 12/11/2026, so the one
+  // shared date moved with the refresh and the pinned clock is that day.
+  it('every row carries the 2026-11-12 checked date, which is the pinned clock', () => {
+    expect(PRICE_TABLE_CHECKED).toBe('2026-11-12');
+    expect(Date.parse(`${PRICE_TABLE_CHECKED}T00:00:00Z`)).toBe(PINNED_NOW);
+    for (const r of PRICE_TABLE) expect(r.checked, r.model).toBe(PRICE_TABLE_CHECKED);
   });
 
   it('flags every row once the clock passes checked + PRICE_MAX_AGE_DAYS, not before', () => {
@@ -143,7 +154,41 @@ describe('estimateRunCostUsd', () => {
     expect(PRICE_TABLE.filter((r) => r.longContext !== null).map((r) => r.model)).toEqual(['claude-haiku-5-5']);
   });
 
-  // Read from the "Model pricing" table of the source page on 03/11/2026; prompts over 100,000 tokens pay the step.
+  // Issue #242. Read from the "Model pricing" table of the source page on
+  // 12/11/2026 (input, output, 5m cache write, cache hit). Hand-written page
+  // figures on purpose: a row re-derived from the table could not catch a
+  // mistyped rate. The cache-hit prices are NOT 0.1x input for these models.
+  it.each([
+    ['claude-sonnet-5-5', [2, 10, 2.5, 0.1]],
+    ['claude-opus-5-5', [4, 20, 5, 0.2]],
+    ['claude-fable-5-2', [8, 40, 10, 0.2]],
+  ] as const)('prices %s at the page rates, with no long-context step', (model, rates) => {
+    const r = row(model);
+    expect([r.inputUsdPerMTok, r.outputUsdPerMTok, r.cacheWriteUsdPerMTok, r.cacheReadUsdPerMTok]).toEqual([...rates]);
+    expect(r.longContext).toBeNull();
+  });
+
+  // Issue #242, decision D5: the previous generation left the router's union,
+  // but a live run can still name one of these ids (a cast, an untyped
+  // consumer) and the judge is still claude-sonnet-5, so their rows stay at
+  // the rates re-read on 12/11/2026. Stored telemetry is not re-priced.
+  it.each([
+    ['claude-haiku-4-5', [1, 5, 1.25, 0.1]],
+    ['claude-sonnet-5', [2, 10, 2.5, 0.2]],
+    ['claude-opus-5', [5, 25, 6.25, 0.5]],
+    ['claude-fable-5', [10, 50, 12.5, 1]],
+  ] as const)('keeps the retired router model %s priced at the page rates', (model, rates) => {
+    const r = row(model);
+    expect([r.inputUsdPerMTok, r.outputUsdPerMTok, r.cacheWriteUsdPerMTok, r.cacheReadUsdPerMTok]).toEqual([...rates]);
+  });
+
+  it('RETIRED_ROUTER_MODELS is exactly the previous generation, frozen; CLI_SIDE_CALL_MODELS is frozen', () => {
+    expect([...RETIRED_ROUTER_MODELS]).toEqual(['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']);
+    expect(Object.isFrozen(RETIRED_ROUTER_MODELS)).toBe(true);
+    expect(Object.isFrozen(CLI_SIDE_CALL_MODELS)).toBe(true);
+  });
+
+  // Re-read from the "Model pricing" table of the source page on 12/11/2026; prompts over 100,000 tokens pay the step.
   it('prices Claude Haiku 5.5 at the page rates, with its step at 100,000 prompt tokens', () => {
     const r = row('claude-haiku-5-5');
     expect([r.inputUsdPerMTok, r.outputUsdPerMTok, r.cacheWriteUsdPerMTok, r.cacheReadUsdPerMTok]).toEqual([0.1, 0.5, 0.125, 0.01]);
@@ -196,10 +241,15 @@ describe('priceModelUsage (#212): the harness prices a run from its own table, p
     expect((priceModelUsage([three]) as number) - (priceModelUsage([none]) as number)).toBeCloseTo(0.03, 12);
   });
 
-  it('matches a dated model id to its row, and only a trailing date (claude-opus-5-5 is not claude-opus-5)', () => {
+  it('matches a dated model id to its row, and only a trailing date (claude-fable-5-3 is not claude-fable-5)', () => {
     const dated = usageRow('claude-haiku-4-5-20251001');
     expect(priceModelUsage([dated])).toBeCloseTo(byHand('claude-haiku-4-5', dated), 12);
-    expect(priceModelUsage([usageRow('claude-opus-5-5')])).toBeNull();
+    // An id with a version suffix and no row of its own is unpriced: `-3` is not a date.
+    expect(priceModelUsage([usageRow('claude-fable-5-3')])).toBeNull();
+    // And one WITH its own row prices at that row, not at its prefix's (#242: Opus 5.5 is $4 in, Opus 5 is $5).
+    const opus55 = usageRow('claude-opus-5-5');
+    expect(priceModelUsage([opus55])).toBeCloseTo(byHand('claude-opus-5-5', opus55), 12);
+    expect(priceModelUsage([opus55])).not.toBeCloseTo(byHand('claude-opus-5', opus55), 12);
     expect(priceModelUsage([usageRow('claude-sonnet-5-preview')])).toBeNull();
   });
 

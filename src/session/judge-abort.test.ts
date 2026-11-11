@@ -2,6 +2,7 @@ import { getEventListeners } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
+import { PRICE_TABLE } from '../internal/pricing.js';
 import { DEFAULT_ROUTING_TABLE } from '../router/index.js';
 import { buildJudge, JUDGE_MODEL } from './judge.js';
 import type { QueryFn, QueryOptions, SdkMessage } from './types.js';
@@ -88,8 +89,16 @@ describe('buildJudge carries its own AbortController (spec D4, K-2, pin 10)', ()
 });
 
 describe('JUDGE_MODEL lives beside buildJudge (spec D1, A-9; the S-18 pin moved from redteam-command.test.ts)', () => {
-  it('is the sonnet literal (issue #148) and a model id present in the router table', () => {
+  // S-18, reworded by issue #242: the judge is decoupled from the router
+  // (ADR-0016 decision 6), so the pin is no longer "present in the router
+  // table". It is "the measured literal, and priced": a judge moved to an id
+  // with no PRICE_TABLE row, or a refresh that drops the judge's row, fails.
+  it('is the sonnet literal (issue #148) and a model id with a PRICE_TABLE row', () => {
     expect(JUDGE_MODEL).toBe('claude-sonnet-5');
-    expect(DEFAULT_ROUTING_TABLE.map((rule) => rule.model)).toContain(JUDGE_MODEL);
+    expect(PRICE_TABLE.map((row) => row.model)).toContain(JUDGE_MODEL);
+  });
+
+  it('is no longer a router-table id: the router moved a generation on without it (#242)', () => {
+    expect(DEFAULT_ROUTING_TABLE.map((rule) => rule.model as string)).not.toContain(JUDGE_MODEL);
   });
 });

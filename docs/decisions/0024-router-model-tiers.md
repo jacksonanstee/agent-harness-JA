@@ -87,3 +87,61 @@ Either class, three sourcing rules:
 - **A tier is retired upstream.** Removal is Class B and forces a decision about what the vacated rules target.
 - **A real consumer needs a model the closed union does not name.** The cheap fix is adding the member; reopening the closed-union decision should require the additive fix having actually failed them.
 - **The tier count stops matching the routing thesis.** The three defaulted tiers exist because they map onto cheap-lookup, routine-work, and hard-reasoning. If the vendor's line-up stops supporting that split, the table needs rethinking rather than renumbering.
+
+## Amendment (2026-11-12, issue #242): Class A refresh to Haiku 5.5, Sonnet 5.5, Opus 5.5 and Fable 5.2
+
+This is the first refresh run under decision 3. All four swaps are Class A (same tier, newer version), so the body above is unchanged and stays the record of its date. What changed in code:
+
+```ts
+type Model =
+  | 'claude-haiku-5-5'
+  | 'claude-sonnet-5-5'
+  | 'claude-opus-5-5'
+  | 'claude-fable-5-2';
+```
+
+Each default rule and `FALLTHROUGH_MODEL` targets the same tier as before, at its new id. The rule ids, thresholds and `reason` strings are unchanged. The four previous ids (`claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`) are no longer union members.
+
+**Sourcing (decision 3's rules).** The ids and prices were read from the vendor's pages on 2026-11-12, not from memory or from the issue:
+
+- Ids, from the "Claude API ID" row of <https://platform.claude.com/docs/en/about-claude/models/overview>: `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
+- Prices, from the "Model pricing" table of <https://platform.claude.com/docs/en/about-claude/pricing>, in USD per MTok:
+
+| Model | Input | Output | 5m cache write | 1h cache write | Cache hit |
+|---|---|---|---|---|---|
+| Claude Fable 5.2 | $8 | $40 | $10 | $16 | $0.20 |
+| Claude Opus 5.5 | $4 | $20 | $5 | $8 | $0.20 |
+| Claude Sonnet 5.5 | $2 | $10 | $2.50 | $4 | $0.10 |
+| Claude Haiku 5.5, prompts up to 100,000 tokens | $0.10 | $0.50 | $0.125 | $0.20 | $0.01 |
+| Claude Haiku 5.5, prompts over 100,000 tokens | $0.50 | $2.50 | $0.625 | $1 | $0.05 |
+
+`PRICE_TABLE` (`src/internal/pricing.ts`) carries the input, output, 5-minute cache write and cache hit figures; it does not model the 1-hour write. The cache hit is not a fixed fraction of input any more: the same page gives 0.025x for Fable 5.2 and 0.05x for Opus 5.5 and Sonnet 5.5, against 0.1x for every other row in `PRICE_TABLE`, Haiku 5.5 included, so each rate is the page's own figure rather than a derived one. The rows for the four previous ids were re-read on the same day and are unchanged.
+
+**Not confirmed by this change: that each id is served.** Decision 1 recorded `GET /v1/models/{id}` returning 200 for every member. That call needs an API key, and this change was made without one. The ids above are the vendor's published ones; the served check is the keyed `run` per default id that issue #242 lists, and it had not been run when this amendment was written. Also not confirmed: that SDK 0.3.312 accepts each new id, and how its `total_cost_usd`, the figure the dollar cap checks, prices them. Both are that keyed run's job, so the cap's accuracy on the three new default ids is unmeasured until it happens.
+
+**Keyed run, 2026-11-12 10:36 AEDT (observed, after the paragraph above was written).** One `run` per default route on this branch, SDK 0.3.312, prompt "Reply with the single word ok.", `--max-budget-usd 0.50`, isolated `--db`. Each exited 0 and answered "ok":
+
+| Route | Model reported | Harness-priced `cost=` | SDK `sdk-cost=` |
+|---|---|---|---|
+| `shape-lookup` | `claude-haiku-5-5` | $0.0019 | $0.0019 |
+| `shape-build-small` | `claude-sonnet-5-5` | $0.0372 | $0.0372 |
+| `shape-research` | `claude-opus-5-5` | $0.0744 | $0.0744 |
+
+So the three default ids are served and accepted by SDK 0.3.312, and its `total_cost_usd` equals the harness's list price on these runs: no budget line printed. Scope: one short single-turn run each. Neither the Haiku 5.5 long-context step nor `claude-fable-5-2` (not on a default route) was exercised; the Fable reading above stays a binary reading.
+
+**Fable is still nameable and still never defaulted**, on the two grounds that survived the 2026-07-28 amendment, restated against the 5.2 figures:
+
+- **Cost.** Fable 5.2 is $8/$40 per MTok against Opus 5.5 at $4/$20: twice the input, output and cache-write price, and the same $0.20 per MTok cache-hit price. Three of the default rules' targets (high sensitivity, research, fallthrough) resolve to the top tier, so defaulting them to Fable would still roughly double that spend, by less on a cache-heavy run.
+- **Availability.** The Fable 5.2 model page (<https://platform.claude.com/docs/en/models/fable-5-2/overview>, read 2026-11-12) says: "Claude Fable 5.2 requires 30-day data retention and isn't available under zero data retention unless expressly authorized by Anthropic." Decision 1's 2026-07-27 paraphrase of the vendor's Fable 5 documentation has no such qualifier: an organisation with that express authorisation is not hard-failed. Without it the ground holds as before. This amendment did not re-read what status code a ZDR organisation receives.
+
+The guard tests in `src/router/route.test.ts` now name `claude-fable-5-2`, and two more were added: one pins `MODELS` to exactly the four ids above, and one asserts that every shipped default and the fallthrough is a member of `MODELS` that is not a Fable id.
+
+**Previous ids keep their price rows.** The rows are for a live run, not for stored telemetry. `priceModelUsage` prices a run when it ends, from the SDK's `modelUsage`, and a run can still name a previous id: a custom table built with a cast, or an untyped JavaScript consumer. Without the row that run would be unpriced. Stored telemetry does not depend on them, because `telemetry cost` reads the figure already on each row and never re-prices it. The `claude-sonnet-5` row is also the one the judge pin checks. `RETIRED_ROUTER_MODELS` (`src/internal/pricing.ts`) lists the four, and `src/cli/pricing-coverage.test.ts` allows a row only for a member of `MODELS`, `CLI_SIDE_CALL_MODELS` or that list, and keeps the three lists disjoint. "Retired" here means retired from this router's union. It is not a claim about the vendor's lifecycle: all four still appear on the pricing page. `CLI_SIDE_CALL_MODELS` is empty, because Haiku 5.5 is now a router model.
+
+**The judge did not move, so it is no longer tied to the router table.** `JUDGE_MODEL` stays `claude-sonnet-5`, because moving it means re-measuring it ([ADR-0036](./0036-s5-judge-implemented-and-measured.md) D8). The consequences for `--judge-model` and the S-18 pin are recorded in ADR-0036's amendment of the same date.
+
+**A reading of the bundled CLI binary, not an observation of a run.** The SDK 0.3.312 package and its `claude` binary (darwin-arm64) contain no `claude-fable-5-2` string. The binary's model-name canonicaliser returns `claude-fable-5-1` for an id containing that string and `claude-fable-5` for any other id containing `claude-fable-5`, so `claude-fable-5-2` canonicalises to `claude-fable-5`. If the CLI's cost table keys on that canonical name, its `total_cost_usd` prices a Fable 5.2 run at Fable 5 rates ($10/$50 against $8/$40), and the cap would stop that run early. This is inferred from the strings and has not been run. It is reachable only from a custom table, since no default selects Fable. Which id the CLI reports for such a run in `modelUsage` has not been read either, so whether the budget gap line (ADR-0043) would show the difference is also unverified.
+
+**A consequence of `lookup` moving to Haiku 5.5.** That row is the only one with a long-context step, and a run whose cumulative prompt is over 100,000 tokens is left unpriced by design (ADR-0043, amended for #219). On such a run there is no harness figure to compare the SDK's against. `run` now prints one stderr line saying the cost could not be cross-checked and the cap relies on the SDK's figure alone, and prints the same line for any other unpriced run. The cap itself is unchanged.
+
+Routing thresholds and rule targets are out of scope (issue #98).

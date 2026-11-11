@@ -182,14 +182,18 @@ function costOf(result: SdkResultMessage): number | null {
 }
 
 /**
- * The judge's fixed model (issue #96, ADR-0036 D3; PR-B1 spec D1): the same
- * literal as `src/router/table.ts` (ADR-0016 names it), deliberately NOT
- * obtained through `route()` (ADR-0016 decision 6: the router is never used
- * for the judge). It lives here, beside `buildJudge` and the frozen prompt
- * strings, so the measured unit (model, prompt, query keys, parser;
- * ADR-0036 D8) is one module (architect A-9); `run` and `redteam` both
- * import it from the session barrel. A pin asserts it is present in the
- * router table so a tier bump cannot retire it silently (S-18).
+ * The judge's fixed model (issue #96, ADR-0036 D3; PR-B1 spec D1),
+ * deliberately NOT obtained through `route()` (ADR-0016 decision 6: the
+ * router is never used for the judge). It lives here, beside `buildJudge`
+ * and the frozen prompt strings, so the measured unit (model, prompt, query
+ * keys, parser; ADR-0036 D8) is one module (architect A-9); `run` and
+ * `redteam` both import it from the session barrel.
+ * Since issue #242 it is NOT a router-table id and not a member of the
+ * router's `Model` union: the router moved to the 5.5 generation and the
+ * judge stayed, because another model means re-measuring. The S-18 pin is
+ * now "this literal has a PRICE_TABLE row" (judge-abort.test.ts and
+ * pricing-coverage.test.ts), and `--judge-model` accepts it by name
+ * (`JUDGE_MODEL_IDS`, cli/shared.ts; ADR-0036 amendment 2026-11-12).
  * `redteam --judge-model` overrides it for a measurement run; the session
  * takes no model setting (ADR-0036 D8: another model means re-measuring).
  * Sonnet since issue #148 (07/10/2026): over 5 samples haiku made 7

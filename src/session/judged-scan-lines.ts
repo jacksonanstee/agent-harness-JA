@@ -10,8 +10,11 @@ export const JUDGE_HOOK_CANCELLED_WARNING =
   "a tool result reached the model WITHOUT the harness's note or secret redaction, because its hook ran past the SDK's hook timeout.";
 
 export function judgeFirstFailureWarning(kind: 'failed' | 'timed out'): string {
+  // #242: the judge's model id is no longer tied to the router table, and a
+  // retired id fails every call the same opaque way a bad key does.
+  const check = kind === 'failed' ? 'check ANTHROPIC_API_KEY, the network and that the judge model id is not retired' : 'check ANTHROPIC_API_KEY and the network';
   return (
-    `a judge call ${kind}; that result used the heuristic only. If this repeats, check ANTHROPIC_API_KEY and the network ` +
+    `a judge call ${kind}; that result used the heuristic only. If this repeats, ${check} ` +
     `(a tool result's content can also slow the judge), or set judge.mode to "off" in ~/.harness/settings.json.`
   );
 }

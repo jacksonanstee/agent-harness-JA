@@ -3,7 +3,7 @@
  * feeding #98). Zero-dep leaf: it knows model ids as plain strings, never the
  * router's `Model` union, so internal stays below every domain. A test in
  * src/cli/pricing-coverage.test.ts proves every id in the router's MODELS
- * list has a row.
+ * list has a row, and that the judge's model has one.
  *
  * Nothing here changes routing. It exists so the estimate can be stored beside
  * the actual cost and compared (`telemetry cost --estimate`).
@@ -33,16 +33,39 @@ export interface PriceRow extends PriceRates {
 }
 
 const PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing';
-const CHECKED = '2026-11-03';
+const CHECKED = '2026-11-12';
 
 /**
  * Models the harness never routes to but the bundled CLI calls on its own in a
  * run, so their usage arrives in `modelUsage` and must be priced or the whole
  * run falls back to the SDK figure (#219: the SDK 0.3.312 CLI made a Haiku 5.5
- * side call in each of three keyed runs on 03/11/2026). pricing-coverage.test.ts
- * allows a PRICE_TABLE row only for a router model or one listed here.
+ * side call in each of three keyed runs on 03/11/2026). Empty since #242:
+ * Haiku 5.5 became a router model, so it is covered as one. The list stays as
+ * the place the next observed side-call model goes. pricing-coverage.test.ts
+ * allows a PRICE_TABLE row only for a router model, one listed here, or one in
+ * RETIRED_ROUTER_MODELS.
  */
-export const CLI_SIDE_CALL_MODELS: readonly string[] = Object.freeze(['claude-haiku-5-5']);
+export const CLI_SIDE_CALL_MODELS: readonly string[] = Object.freeze([]);
+
+/**
+ * Ids that were members of the router's `Model` union and no longer are (#242,
+ * the refresh to the 5.5 / 5.2 generation). Their PRICE_TABLE rows are kept on
+ * purpose, for a LIVE run: `priceModelUsage` prices a run when it ends, from
+ * the SDK's `modelUsage`, and a run can still name one of these ids (a custom
+ * table built with a cast, or an untyped JavaScript consumer). Without the
+ * row that run would be unpriced. The rows are not what keeps old telemetry
+ * readable: `telemetry cost` reads the figure stored on each row and never
+ * re-prices it. `claude-sonnet-5` is also still the judge's model
+ * (`JUDGE_MODEL`, never routed), and its row is the one the judge pin checks.
+ * No shipped default rule or the fallthrough selects any of these;
+ * pricing-coverage.test.ts keeps this list disjoint from MODELS.
+ */
+export const RETIRED_ROUTER_MODELS: readonly string[] = Object.freeze([
+  'claude-haiku-4-5',
+  'claude-sonnet-5',
+  'claude-opus-5',
+  'claude-fable-5',
+]);
 
 /** The date every PRICE_TABLE row was last checked; stored beside a harness-priced cost (#212). */
 export const PRICE_TABLE_CHECKED = CHECKED;
@@ -52,8 +75,12 @@ const priced = (r: Omit<PriceRow, 'source' | 'checked' | 'longContext'>): Readon
 
 /**
  * Rows were read from the "Model pricing" table of PRICING_URL on CHECKED
- * (every row re-read on 03/11/2026 when Haiku 5.5 was added, #219: the SDK
- * 0.3.312 CLI made a Haiku 5.5 side call in each of three keyed runs).
+ * (every row re-read on 12/11/2026 when Sonnet 5.5, Opus 5.5 and Fable 5.2
+ * were added, #242; Haiku 5.5 was added on 03/11/2026, #219).
+ *
+ * Each rate is the page's own figure, never derived from a multiplier: the
+ * cache-hit price is 0.1x input on every other row (Haiku 5.5 included) but 0.05x on Sonnet 5.5 and
+ * Opus 5.5 and 0.025x on Fable 5.2.
  */
 export const PRICE_TABLE: readonly Readonly<PriceRow>[] = Object.freeze([
   priced({
@@ -75,6 +102,27 @@ export const PRICE_TABLE: readonly Readonly<PriceRow>[] = Object.freeze([
       overPromptTokens: 100_000,
       rates: { inputUsdPerMTok: 0.5, cacheWriteUsdPerMTok: 0.625, cacheReadUsdPerMTok: 0.05, outputUsdPerMTok: 2.5 },
     },
+  }),
+  priced({
+    model: 'claude-sonnet-5-5',
+    inputUsdPerMTok: 2,
+    cacheWriteUsdPerMTok: 2.5,
+    cacheReadUsdPerMTok: 0.1,
+    outputUsdPerMTok: 10,
+  }),
+  priced({
+    model: 'claude-opus-5-5',
+    inputUsdPerMTok: 4,
+    cacheWriteUsdPerMTok: 5,
+    cacheReadUsdPerMTok: 0.2,
+    outputUsdPerMTok: 20,
+  }),
+  priced({
+    model: 'claude-fable-5-2',
+    inputUsdPerMTok: 8,
+    cacheWriteUsdPerMTok: 10,
+    cacheReadUsdPerMTok: 0.2,
+    outputUsdPerMTok: 40,
   }),
   priced({
     model: 'claude-sonnet-5',

@@ -427,7 +427,8 @@ a verify-pass finding).
 ADR-0024).** The provider-pluggability note below blocks a cross-provider
 adversary because primary output may carry un-rewritten secrets (R-4) into a
 trust domain with no redaction gate. The same reasoning applies *within*
-provider: `claude-fable-5` is nameable from a custom routing table and
+provider: `claude-fable-5-2` (the union's Fable member since the 2026-11-12
+refresh, issue #242) is nameable from a custom routing table and
 requires 30-day data retention, so a consumer who opts into it converts their
 retention posture and composes that with R-4 — a flagged-but-unredacted
 secret in a Fable-routed turn is retained vendor-side for 30 days. No shipped

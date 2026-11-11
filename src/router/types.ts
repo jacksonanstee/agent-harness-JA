@@ -6,15 +6,15 @@ export type TaskSensitivity = 'low' | 'medium' | 'high';
  * Models this harness knows how to name. Closed on purpose (ADR-0007, ADR-0024):
  * a refresh is a compiler-enforced event, not a silent string swap.
  *
- * Membership is not endorsement. `claude-fable-5` is nameable from a custom
+ * Membership is not endorsement. `claude-fable-5-2` is nameable from a custom
  * table but no shipped default rule selects it — see ADR-0024 decision 1 and
  * the guard tests in `route.test.ts`.
  */
 export type Model =
-  | 'claude-haiku-4-5'
-  | 'claude-sonnet-5'
-  | 'claude-opus-5'
-  | 'claude-fable-5';
+  | 'claude-haiku-5-5'
+  | 'claude-sonnet-5-5'
+  | 'claude-opus-5-5'
+  | 'claude-fable-5-2';
 
 // Presence record (the house idiom, see TELEMETRY_EVENT_TYPES): `satisfies
 // Record<Model, true>` makes a union member without an entry a compile error,
@@ -23,10 +23,10 @@ export type Model =
 // re-exported from the router barrel and `Model` does not reference it, so the
 // public surface (ADR-0023) is unchanged.
 const MODEL_PRESENCE = Object.freeze({
-  'claude-haiku-4-5': true,
-  'claude-sonnet-5': true,
-  'claude-opus-5': true,
-  'claude-fable-5': true,
+  'claude-haiku-5-5': true,
+  'claude-sonnet-5-5': true,
+  'claude-opus-5-5': true,
+  'claude-fable-5-2': true,
 } satisfies Record<Model, true>);
 export const MODELS: readonly Model[] = Object.freeze(Object.keys(MODEL_PRESENCE) as Model[]);
 

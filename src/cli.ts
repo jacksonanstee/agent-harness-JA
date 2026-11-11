@@ -516,12 +516,26 @@ const BUDGET_GAP_TOLERANCE = 0.05;
  * $0.67 at list prices; 0.3.312 prices it at list (keyed run, 03/11/2026,
  * #219), so the warning stays quiet there. Read from the run itself, never from a stored reading
  * of the CLI's prices, so it goes quiet once the SDK's figure is right.
+ *
+ * When the run has a usable SDK figure and NO harness-priced one, the
+ * comparison cannot be made, and a different line says that instead (#242):
+ * an unpriced run would otherwise look the same as one whose figures agree.
+ * The harness leaves a run unpriced when a model has no price row, when the
+ * SDK sent no per-model usage, and when a Claude Haiku 5.5 run's cumulative
+ * prompt is over that row's long-context step (`priceModelUsage`).
  */
 export function formatBudgetGapLine(
   result: Pick<SessionResult, 'costUsd' | 'pricedCostUsd' | 'maxBudgetUsd'>,
 ): string | null {
   const { costUsd, pricedCostUsd } = result;
-  if (costUsd === null || pricedCostUsd === null || costUsd <= 0 || pricedCostUsd <= 0) return null;
+  if (costUsd === null || !Number.isFinite(costUsd) || costUsd <= 0) return null;
+  if (pricedCostUsd === null) {
+    return (
+      "[harness] budget: this run's cost could not be cross-checked against list prices, " +
+      `so the ${formatUsd(result.maxBudgetUsd)} cap relies on the SDK's cost figure alone (#212)`
+    );
+  }
+  if (pricedCostUsd <= 0) return null;
   const ratio = costUsd / pricedCostUsd;
   const stop = result.maxBudgetUsd / ratio;
   if (!Number.isFinite(ratio) || !Number.isFinite(stop) || Math.abs(ratio - 1) <= BUDGET_GAP_TOLERANCE) return null;
