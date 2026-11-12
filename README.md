@@ -222,6 +222,12 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ---
 
+## Working on this repo
+
+- **Node:** `.nvmrc` pins 22, the newest version CI runs (20 and 22). Vitest uses the `forks` pool, because the `threads` pool crashed the suite with SIGSEGV on Node 26.
+- **"Does X reach the model?":** `scripts/mock-cli-probe.mjs` drives the real `run` and the bundled CLI against a loopback mock of the Messages API, with no key and no spend. Run `--list` for scenarios; the header has usage.
+- **Fix-first disclosure:** run `git config core.hooksPath .githooks` once per clone. The hooks run `scripts/check-embargo.sh`, which blocks any commit or push that contains a term listed in the gitignored `tasks/embargo.txt`.
+
 ## Status
 
 | Milestone | Status |
