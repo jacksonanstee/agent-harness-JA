@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CODE_EXECUTING_TOOLS } from '../internal/tool-targets.js';
-import { CODE_EXECUTION_DENY_REASON, codeExecutionDenial, CodeExecutionDenied } from './code-execution-deny.js';
+import { CODE_EXECUTION_DENY_REASON, codeExecutionDenial, CodeExecutionDenied, MONITOR_DENY_REASON } from './code-execution-deny.js';
 
 describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since #230): a built-in deny for tools no gate can check and the CLI allows', () => {
   // "Whatever the arguments" is now structural (the function takes only the name) and is pinned on
@@ -11,10 +11,22 @@ describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since
     expect(codeExecutionDenial('REPL')?.message).toBe(CODE_EXECUTION_DENY_REASON);
   });
 
-  // #248: Monitor's output reaches the model as task-notification text that no hook sees, so it is refused like REPL.
-  it('denies Monitor with the same fixed reason (#248)', () => {
+  // #248: Monitor's output reaches the model as task-notification text that no hook sees, so it is refused
+  // like REPL, with its own reason (owner, 12/11/2026): it is the output, not the code, that no gate can check.
+  it('denies Monitor with its own fixed reason (#248)', () => {
     expect(codeExecutionDenial('Monitor')).toBeInstanceOf(CodeExecutionDenied);
-    expect(codeExecutionDenial('Monitor')?.message).toBe(CODE_EXECUTION_DENY_REASON);
+    expect(codeExecutionDenial('Monitor')?.message).toBe(MONITOR_DENY_REASON);
+  });
+
+  // Literal pins, not the constants compared to themselves: swapping the two texts, or giving both
+  // tools one text, fails here.
+  it('the two reasons are the pinned texts: REPL keeps its #211 wording, Monitor has the #248 one', () => {
+    expect(codeExecutionDenial('REPL')?.message).toBe(
+      'built-in deny: this tool runs code that no harness gate can check, so the harness refuses it whatever the rules say (ADR-0040 D-8)',
+    );
+    expect(codeExecutionDenial('Monitor')?.message).toBe(
+      'built-in deny: Monitor delivers command output outside a tool result, so no harness gate can check it (#248)',
+    );
   });
 
   it('passes the tools whose gate is not `denied` (the permission and sandbox gates decide them)', () => {
@@ -37,5 +49,13 @@ describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since
   it('the reason names no argument (ADR-0031) and says why', () => {
     expect(CODE_EXECUTION_DENY_REASON).toMatch(/^built-in deny: /);
     expect(CODE_EXECUTION_DENY_REASON).toContain('ADR-0040 D-8');
+    expect(MONITOR_DENY_REASON).toMatch(/^built-in deny: /);
+    expect(MONITOR_DENY_REASON).toContain('#248');
+    expect(MONITOR_DENY_REASON).not.toBe(CODE_EXECUTION_DENY_REASON);
+  });
+
+  it('the reason is fixed per tool: the same text on every call, whatever was asked', () => {
+    expect(codeExecutionDenial('Monitor')?.message).toBe(codeExecutionDenial('Monitor')?.message);
+    expect(new CodeExecutionDenied().message).toBe(CODE_EXECUTION_DENY_REASON);
   });
 });

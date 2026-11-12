@@ -1303,7 +1303,7 @@ async function isolationLoadChecks() {
     // #248: Monitor's output reaches the model outside every post-tool hook, so it is refused by name, whatever the rules say.
     check(CODE_EXECUTING_TOOLS.Monitor === 'denied', `Monitor must be a denied code runner (#248), got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
     const monitorRefusal = await toolNameDenyHook()({ event: 'pre-tool', tool: 'Monitor', args: { command: 'git status' }, redactions: null }).then(() => null, (error) => error);
-    check(monitorRefusal instanceof Error && monitorRefusal.message.startsWith('built-in deny: '), `the tool-name deny must refuse Monitor with the built-in reason, got ${monitorRefusal instanceof Error ? monitorRefusal.message : JSON.stringify(monitorRefusal)}`);
+    check(monitorRefusal instanceof Error && monitorRefusal.message.startsWith('built-in deny: Monitor delivers command output outside a tool result'), `the tool-name deny must refuse Monitor with its own built-in reason, got ${monitorRefusal instanceof Error ? monitorRefusal.message : JSON.stringify(monitorRefusal)}`);
     const commandRule = { permissions: { rules: [{ tool: 'Bash', decision: 'allow' }] } };
     const commandPayload = { tool: 'Bash', args: { command: 'git status; echo y' } };
     const ungrantable = composeIsolationSecurity({ user: commandRule, project: {} });

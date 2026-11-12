@@ -57,7 +57,7 @@ export type { PreToolLike } from './pre-tool-like.js';
 export { hasSdkKey, parseSdkAllowedMcpServers, parseSdkSettings, SDK_ALLOWED_MCP_SERVERS_MESSAGE, SDK_SETTING_SOURCES_MESSAGE, SdkSettingsError, SETTING_SOURCES } from './sdk-settings.js';
 export type { SettingSource } from './sdk-settings.js';
 export { buildProtectedRoots, SELF_PROTECTION_REASON, selfProtectionHook, SelfProtectionViolation } from './self-protection.js';
-export { CODE_EXECUTION_DENY_REASON, CodeExecutionDenied } from './code-execution-deny.js';
+export { CODE_EXECUTION_DENY_REASON, CodeExecutionDenied, MONITOR_DENY_REASON } from './code-execution-deny.js';
 export { UNGATED_TOOL_DENY_REASON, UngatedToolDenied } from './ungated-tool-deny.js';
 export {
   MCP_SERVER_DENY_REASON,

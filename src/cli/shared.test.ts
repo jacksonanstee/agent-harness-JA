@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
+import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, MONITOR_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { JUDGE_MODEL } from '../session/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -403,7 +403,7 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
       const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool: 'Monitor', args, redactions: null });
       expect(result.denied).toBe(true);
       if (!result.denied) throw new Error('unreachable');
-      expect(result.reason).toBe(CODE_EXECUTION_DENY_REASON);
+      expect(result.reason).toBe(MONITOR_DENY_REASON);
     });
   }
 

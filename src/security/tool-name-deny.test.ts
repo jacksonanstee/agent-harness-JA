@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ALLOWED_TOOL_NAMES, DENIED_TOOL_PREFIXES } from '../internal/tool-targets.js';
-import { CODE_EXECUTION_DENY_REASON, CodeExecutionDenied } from './code-execution-deny.js';
+import { CODE_EXECUTION_DENY_REASON, CodeExecutionDenied, MONITOR_DENY_REASON } from './code-execution-deny.js';
 import { toolNameDenyHook } from './tool-name-deny.js';
 import { UNGATED_TOOL_DENY_REASON, UngatedToolDenied } from './ungated-tool-deny.js';
 import { MCP_SERVER_DENY_REASON, McpServerDenied, UNKNOWN_TOOL_DENY_REASON, UnknownToolDenied } from './unknown-tool-deny.js';
@@ -29,7 +29,7 @@ describe('toolNameDenyHook (#230): the built-in denies that are pure functions o
   // (step 4 would refuse them) and the artifacts server is also MCP (step 3 would): first match wins.
   const steps = [
     { tool: 'REPL', error: CodeExecutionDenied, reason: CODE_EXECUTION_DENY_REASON },
-    { tool: 'Monitor', error: CodeExecutionDenied, reason: CODE_EXECUTION_DENY_REASON },
+    { tool: 'Monitor', error: CodeExecutionDenied, reason: MONITOR_DENY_REASON },
     { tool: 'Artifact', error: UngatedToolDenied, reason: UNGATED_TOOL_DENY_REASON },
     { tool: 'mcp__claude-artifacts__publish_files', error: UngatedToolDenied, reason: UNGATED_TOOL_DENY_REASON },
     { tool: 'mcp__ide__executeCode', error: McpServerDenied, reason: MCP_SERVER_DENY_REASON },

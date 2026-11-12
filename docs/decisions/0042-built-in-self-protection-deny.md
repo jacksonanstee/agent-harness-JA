@@ -32,7 +32,7 @@ The other path tools carry `writes: false` and pass to the next gate:
 - `Workflow` reads and runs a script;
 - `EnterWorktree` switches into a worktree, or creates one by `name`, so a checkout could in principle be placed under a protected directory (unverified where the CLI roots it; the harm is bounded, because it cannot overwrite an existing file).
 
-`Bash` and `Monitor` are covered by D4.
+`Bash` and `Monitor` are covered by D4. *(Amended, #248: Bash only; see the amendment in D4.)*
 
 A tool outside the table passes this guard untouched, as it passes the configurable gates (R-9). That includes an MCP tool (off by default, `strictMcpConfig`) and the SDK's `REPL` tool, whose `code` field has no path. Restricting the exposed tool set is #105's decision.
 
@@ -67,7 +67,7 @@ The guard belongs to the CLI's composition, not to `createSession`. A library ca
 
 ## Consequences
 
-- **The Bash and Monitor half is defence in depth, not containment.** It reads text after a light rewrite, so anything that builds the path at run time, or spells it in a form D4 does not rewrite, gets past it:
+- **The Bash and Monitor half is defence in depth, not containment.** *(Amended, #248: the Bash half; see the amendment in D4.)* It reads text after a light rewrite, so anything that builds the path at run time, or spells it in a form D4 does not rewrite, gets past it:
   - a variable other than `HOME` (`H=~/.har; cp x "${H}ness/settings.json"`), a glob (`~/.harnes?/s*`), brace expansion, or `printf` and `base64` tricks;
   - `cd` somewhere else and a relative name from there (`cd .. && cp x proj/.harness/x`);
   - `~user/…` and `~-/…`, which are not expanded, and escapes inside `$'…'` (`$'\x2eharness'`), which are not decoded;

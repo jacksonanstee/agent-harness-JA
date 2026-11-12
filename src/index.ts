@@ -75,6 +75,7 @@ export {
   SELF_PROTECTION_REASON,
   CodeExecutionDenied,
   CODE_EXECUTION_DENY_REASON,
+  MONITOR_DENY_REASON,
   UngatedToolDenied,
   UNGATED_TOOL_DENY_REASON,
   toolNameDenyHook,
