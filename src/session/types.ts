@@ -321,8 +321,9 @@ export interface QueryOptions {
    * The child process environment, the SDK's `Options.env` (issue #250). The
    * SDK REPLACES the child's environment with it rather than merging, so the
    * session's primary query passes `buildChildEnv(process.env)`: every
-   * inherited variable plus the harness's forced table. The judge and the
-   * eval adversary pass none (they run with `tools: []`).
+   * inherited variable plus the harness's forced table. Since issues #254 and
+   * #255 the judge and the eval adversary pass the same (`tools: []` did not
+   * stop a scheduled job or an `@path` expansion in either).
    */
   env?: Record<string, string | undefined>;
   /**
@@ -330,7 +331,8 @@ export interface QueryOptions {
    * The primary query passes `buildChildSettings()`: an `env` block repeating
    * the forced table. Its value won over the user, project and local
    * settings files and the global config file (observed); that it is applied
-   * later is inferred from that. The judge and the eval adversary pass none.
+   * later is inferred from that. The judge and the eval adversary pass the
+   * same table (issues #254, #255).
    */
   settings?: { env: Record<string, string> };
   /**

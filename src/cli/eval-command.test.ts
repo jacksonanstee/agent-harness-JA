@@ -2,8 +2,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { FORCED_CHILD_ENV } from '../internal/child-env.js';
 import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore } from '../memory/index.js';
 import { createSession } from '../session/index.js';
@@ -200,6 +201,38 @@ describe('buildAdversary', () => {
       tools: [],
       skills: [],
       persistSession: false,
+    });
+  });
+
+  // #254, #255: the adversary is its own CLI child, so it gets the forced table on both layers too.
+  describe('the child environment (#254, #255)', () => {
+    // Literals, not the table: these must fail if the table loses a switch.
+    const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS'] as const;
+    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1' };
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each(FORCED_NAMES)('forces %s to "1" in env and in flag settings, over an inherited empty value', async (name) => {
+      vi.stubEnv(name, '');
+      const fake = fakeQuery([RESULT]);
+      await buildAdversary(fake.query, 'claude-adversary-model')('p');
+      expect(fake.captured[0]?.options?.env?.[name]).toBe('1');
+      expect(fake.captured[0]?.options?.settings).toEqual({ env: FORCED_ON });
+    });
+
+    it('carries every inherited variable, read at call time', async () => {
+      const fake = fakeQuery([RESULT]);
+      const adversary = buildAdversary(fake.query, 'claude-adversary-model');
+      vi.stubEnv('HARNESS_254_LATE', 'late');
+      await adversary('p');
+      const env = fake.captured[0]?.options?.env;
+      expect(env?.['HARNESS_254_LATE']).toBe('late');
+      expect(env).not.toBe(process.env);
+      for (const [name, value] of Object.entries(process.env)) {
+        if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
+      }
     });
   });
 

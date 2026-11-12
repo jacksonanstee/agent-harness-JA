@@ -5,7 +5,12 @@
 //
 // Protected (Jackson's ruling 29/10/2026): both `.harness` directories whole
 // (`~/.harness/`, `<cwd>/.harness/`), the run's skills root, and the `--db`
-// file with its SQLite sidecars when it lies outside them.
+// file with its SQLite sidecars when it lies outside them. Since issue #254
+// (amended 13/11/2026) also `<cwd>/.claude/scheduled_tasks.json`: the bundled
+// CLI sends a due job in that file to the model as a user turn, so an agent
+// that could write it could prompt a later Claude Code session started in the
+// same directory. The harness turns scheduled tasks off in its own children
+// (`src/internal/child-env.ts`); the deny is for every other session.
 //
 // Unlike the paths gate (ADR-0015 §2, lexical only) this guard ALSO resolves
 // real paths, walking the RAW components as the kernel does: each symlink is
@@ -20,12 +25,13 @@
 import { lstatSync, readlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
+import { SCHEDULED_TASKS_FILE } from '../internal/child-env.js';
 import { CASE_INSENSITIVE_PLATFORM, canonicalizePath, TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import type { PreToolLike } from './pre-tool-like.js';
 
 /** The one reason the model reads. Fixed text: it never echoes a path (ADR-0031). */
 export const SELF_PROTECTION_REASON =
-  "self-protection: the agent may not change the harness's own settings, telemetry or skills; " +
+  "self-protection: the agent may not change the harness's own settings, telemetry or skills, or the scheduled-tasks file; " +
   'edit the file yourself if the change is intended (ADR-0042)';
 
 export class SelfProtectionViolation extends Error {
@@ -146,7 +152,8 @@ export function buildProtectedRoots(input: ProtectedRootsInput): ProtectedRoots 
   const cwd = resolve(input.projectDir);
   const dirs = [join(input.userDir, '.harness'), join(cwd, '.harness')];
   if (input.skillsDir !== null) dirs.push(resolve(cwd, input.skillsDir));
-  const files: string[] = [];
+  // #254: the one file, not `.claude` whole (settings and agents there are the scans' business).
+  const files: string[] = [join(cwd, '.claude', SCHEDULED_TASKS_FILE)];
   if (input.dbPath !== null && input.dbPath !== ':memory:' && input.dbPath !== '') {
     const db = resolve(cwd, input.dbPath);
     for (const suffix of DB_SIDECARS) files.push(db + suffix);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { SCHEDULED_TASKS_FILE } from '../internal/child-env.js';
 import { CASE_INSENSITIVE_PLATFORM, TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
 import {
   buildProtectedRoots,
@@ -182,6 +183,52 @@ describe('aliases (D3: as written and by real path)', () => {
     await expect(h({ tool: 'Write', args: { file_path: join(realHome, '.harness', 'settings.json') } } as never)).rejects.toThrowError(
       SelfProtectionViolation,
     );
+  });
+});
+
+// Issue #254 (ADR-0042 as amended 13/11/2026): the bundled CLI reads durable scheduled jobs from
+// `<cwd>/.claude/scheduled_tasks.json` and sends each due job's prompt to the model as a user
+// turn. The harness turns that off in its own children; the deny stops the agent planting one
+// for any other Claude Code session started in the same directory.
+describe('the scheduled-tasks file (#254)', () => {
+  const planted = join(project, '.claude', 'scheduled_tasks.json');
+
+  it('is the file name the CLI reads', () => {
+    expect(SCHEDULED_TASKS_FILE).toBe('scheduled_tasks.json');
+  });
+
+  it.each(['Write', 'Edit'])('denies %s to it, absolute and relative', async (tool) => {
+    await denied(tool, { file_path: planted });
+    await denied(tool, { file_path: '.claude/scheduled_tasks.json' });
+    await denied(tool, { file_path: './.claude/../.claude/scheduled_tasks.json' });
+  });
+
+  it('denies NotebookEdit to it', async () => {
+    await denied('NotebookEdit', { notebook_path: planted });
+  });
+
+  it('denies a Bash command that names it, absolute, relative or through a redirect', async () => {
+    await denied('Bash', { command: `echo '{}' > ${planted}` });
+    await denied('Bash', { command: 'mkdir -p .claude && cp /tmp/x .claude/scheduled_tasks.json' });
+    await denied('Bash', { command: 'tee .claude/scheduled_tasks.json < /tmp/x' });
+  });
+
+  it('denies a write through a symlink set up before the call', async () => {
+    mkdirSync(join(project, '.claude'), { recursive: true });
+    symlinkSync(planted, join(outside, 'tasks-alias.json'));
+    await denied('Write', { file_path: join(outside, 'tasks-alias.json') });
+  });
+
+  it('protects the one file, not the directory: its neighbours and a prefix-sharing name stay writable', async () => {
+    await allowed('Write', { file_path: join(project, '.claude', 'settings.local.json') });
+    await allowed('Write', { file_path: join(project, '.claude', 'scheduled_tasks.json.bak') });
+    await allowed('Write', { file_path: join(project, 'scheduled_tasks.json') });
+    await allowed('Read', { file_path: planted });
+  });
+
+  it('is protected whatever the skills root and db are', async () => {
+    const bare = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
+    await expect(bare({ tool: 'Write', args: { file_path: planted } } as never)).rejects.toThrowError(SelfProtectionViolation);
   });
 });
 

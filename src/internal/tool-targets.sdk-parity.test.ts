@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { BACKGROUND_TASKS_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
+import { ATTACHMENTS_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV, SCHEDULED_TASKS_FILE } from './child-env.js';
 import {
   ACKNOWLEDGED_NON_TARGET_FIELDS,
   ACKNOWLEDGED_TOOLS,
@@ -584,7 +584,15 @@ describe('the background-tasks switch and field still exist in the installed SDK
   it('the platform binary names every variable the harness forces into the child', () => {
     const names = Object.keys(FORCED_CHILD_ENV);
     expect(names).toContain(BACKGROUND_TASKS_SWITCH);
+    expect(names).toContain(CRON_SWITCH);
+    expect(names).toContain(ATTACHMENTS_SWITCH);
     expect(names.filter((name) => !binaryHolds(name))).toEqual([]);
+  });
+
+  // #254: the self-protection deny names the file the CLI reads durable jobs from. This catches the
+  // file name going away; a new location is what the keyless `cron-plant` probe is for.
+  it('the platform binary still names the scheduled-tasks file the self-protection deny covers', () => {
+    expect(binaryHolds(SCHEDULED_TASKS_FILE)).toBe(true);
   });
 
   it('the SDK still declares the Bash field the background deny reads', () => {

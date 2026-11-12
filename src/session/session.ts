@@ -1882,7 +1882,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           maxBudgetUsd,
           abortController,
           ...isolation,
-          // #250 (ADR-0040 D-8 as amended): read at run time; background tasks off in the child.
+          // #250, #254, #255 (ADR-0040 D-8 as amended): read at run time; background tasks, scheduled
+          // tasks and attachments off in the child.
           env: buildChildEnv(process.env),
           settings: buildChildSettings(),
           hooks: {

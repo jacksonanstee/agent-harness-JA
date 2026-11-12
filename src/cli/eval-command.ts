@@ -10,6 +10,7 @@ import {
 } from '../eval/index.js';
 import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
+import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
 import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
@@ -112,6 +113,8 @@ export function parseEvalArgs(argv: string[]): EvalParseResult {
 // model attempts in its one turn. Never wrapped in createSession (no memory/
 // telemetry pollution). Both controls exist in the typed QueryOptions today.
 // #140 D-4: always isolated (never the operator's settingSources), the judge's five keys.
+// #254, #255: those keys do not stop the CLI running a scheduled job or expanding an `@path` in
+// the prompt, so the child gets the forced environment on both layers too, read at call time.
 export const buildAdversary =
   (query: QueryFn, model: string): AdversaryFn =>
   async (prompt: string): Promise<AdversaryResult> => {
@@ -134,6 +137,8 @@ export const buildAdversary =
         tools: [],
         skills: [],
         persistSession: false,
+        env: buildChildEnv(process.env),
+        settings: buildChildSettings(),
         hooks: { PreToolUse: [{ hooks: [denyAll] }] },
       },
     })) {

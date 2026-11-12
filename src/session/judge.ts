@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
+import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
 import { isVerdict } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
 import { isProviderRefusal } from './sdk-refusal.js';
@@ -209,7 +210,10 @@ export const JUDGE_MODEL = 'claude-sonnet-5';
  * attempts in its one turn (defence in depth beside `tools: []`), and the
  * SDK's six isolation keys keep the subprocess away from settings layers,
  * CLAUDE.md, MCP servers, built-in tools, discovered skills, the preset
- * system prompt and the transcript sink. Never wrapped in `createSession`
+ * system prompt and the transcript sink. None of those keys stops the CLI
+ * running a scheduled job or expanding an `@path` in the judged text, so the
+ * child also gets the forced environment on both layers (issues #254, #255;
+ * `src/internal/child-env.ts`), read at call time. Never wrapped in `createSession`
  * (no memory or telemetry pollution). One call, no harness retries; a
  * stream with no result message, an error-subtype result, or a transport
  * that throws, is one opaque `call-failed` (the model id is checked before
@@ -256,6 +260,9 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
           tools: [],
           skills: [],
           persistSession: false,
+          // #254, #255 (ADR-0040 D-8 as amended 13/11/2026): scheduled tasks and attachments off in the child.
+          env: buildChildEnv(process.env),
+          settings: buildChildSettings(),
           hooks: { PreToolUse: [{ hooks: [denyAll] }] },
           abortController,
         },
