@@ -48,11 +48,13 @@ symlinkSync(join(home, '.harness', 'sub'), join(outside, 'sublink'));
 symlinkSync(join(home, '.harness', 'not-yet.json'), join(outside, 'dangling'));
 const outsideDb = join(outside, 'tel.db');
 
+const configDir = tmp('sp-cfg-');
 const roots = buildProtectedRoots({
   userDir: home,
   projectDir: project,
   skillsDir: join(project, 'skills'),
   dbPath: outsideDb,
+  claudeConfigDir: configDir,
 });
 const hook = selfProtectionHook(roots);
 const call = (tool: string, args: Record<string, unknown>) => hook({ tool, args } as never);
@@ -219,16 +221,148 @@ describe('the scheduled-tasks file (#254)', () => {
     await denied('Write', { file_path: join(outside, 'tasks-alias.json') });
   });
 
-  it('protects the one file, not the directory: its neighbours and a prefix-sharing name stay writable', async () => {
+  it('protects the file, not the directory: its neighbours and a prefix-sharing name stay writable', async () => {
     await allowed('Write', { file_path: join(project, '.claude', 'settings.local.json') });
     await allowed('Write', { file_path: join(project, '.claude', 'scheduled_tasks.json.bak') });
-    await allowed('Write', { file_path: join(project, 'scheduled_tasks.json') });
+    await allowed('Write', { file_path: join(project, '.claude', 'my-scheduled_tasks.json') });
     await allowed('Read', { file_path: planted });
   });
 
   it('is protected whatever the skills root and db are', async () => {
     const bare = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
     await expect(bare({ tool: 'Write', args: { file_path: planted } } as never)).rejects.toThrowError(SelfProtectionViolation);
+  });
+});
+
+// Review of #254 (code, architecture and security lenses, 13/11/2026): a file root had no bare-word
+// coverage, so `cd .claude && echo {} > scheduled_tasks.json` passed. The rule now is by NAME: a
+// writer target or a Bash path word whose last component folds (case) to a protected file's name
+// is refused wherever it points. It also covers the same file under a subdirectory, which a later
+// session started there would read.
+describe('a protected file is refused by name, wherever the path points (#254 review)', () => {
+  it.each([
+    'cd .claude && echo {} > scheduled_tasks.json',
+    'cd .claude; cp /tmp/x scheduled_tasks.json',
+    'pushd .claude; tee scheduled_tasks.json',
+    '(cd alias && cp /tmp/x scheduled_tasks.json)',
+    'cd .claude && echo {} >scheduled_tasks.json',
+    'cd .claude && echo {} >>scheduled_tasks.json',
+    'cd .claude && cp /tmp/x SCHEDULED_TASKS.JSON',
+    'cd .claude && cp /tmp/x "scheduled_tasks.json"',
+    "cd .claude && cp /tmp/x 'scheduled_tasks.json'",
+    'cd .claude && dd if=/tmp/x of=scheduled_tasks.json',
+    'cp /tmp/x sub/.claude/scheduled_tasks.json',
+    'cp /tmp/x /somewhere/else/scheduled_tasks.json',
+    'cd .claude && mv tmp.json ./scheduled_tasks.json',
+    'cat scheduled_tasks.json',
+    `cd ${outside} && cp /tmp/x tel.db`,
+    `cd ${outside} && rm tel.db-wal`,
+    `cd ${outside} && sqlite3 TEL.DB 'delete from events'`,
+  ])('denies %s', async (command) => {
+    await denied('Bash', { command });
+  });
+
+  it.each(['Write', 'Edit'])('denies %s to the scheduled-tasks file under any directory, in any letter case', async (tool) => {
+    await denied(tool, { file_path: join(project, 'sub', '.claude', 'scheduled_tasks.json') });
+    await denied(tool, { file_path: join(project, 'scheduled_tasks.json') });
+    await denied(tool, { file_path: join(outside, 'x', 'Scheduled_Tasks.JSON') });
+    await denied(tool, { file_path: 'scheduled_tasks.json' });
+  });
+
+  // Mutation M13: a trailing separator must not hide the name.
+  it('denies the name with a trailing slash, in a writer target and in a Bash word', async () => {
+    await denied('Write', { file_path: `${join(project, 'sub', 'scheduled_tasks.json')}/` });
+    await denied('Bash', { command: 'cd .claude && cp /tmp/x ./scheduled_tasks.json/' });
+  });
+
+  it('denies a writer target named like the outside database or a sidecar of it', async () => {
+    await denied('Write', { file_path: join(project, 'tel.db') });
+    await denied('Write', { file_path: join(project, 'deep', 'tel.db-shm') });
+    await denied('NotebookEdit', { notebook_path: join(project, 'TEL.db-journal') });
+  });
+
+  it('does not take the name of a database INSIDE a protected directory: only the directory protects it', async () => {
+    const inside = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: join(project, '.harness', 'telemetry.db'), claudeConfigDir: null });
+    const h = selfProtectionHook(inside);
+    await expect(h({ tool: 'Write', args: { file_path: join(project, 'data', 'telemetry.db') } } as never)).resolves.toBeUndefined();
+    await expect(h({ tool: 'Bash', args: { command: 'cd data && cp /tmp/x telemetry.db' } } as never)).resolves.toBeUndefined();
+    await expect(h({ tool: 'Write', args: { file_path: join(project, '.harness', 'telemetry.db') } } as never)).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  it('leaves other names alone: a longer name, the name inside quoted prose, and a read by the Read tool', async () => {
+    await allowed('Bash', { command: 'cp /tmp/x scheduled_tasks.json.bak' });
+    await allowed('Bash', { command: 'cp /tmp/x my-scheduled_tasks.json' });
+    await allowed('Bash', { command: 'git commit -m "document scheduled_tasks.json handling"' });
+    await allowed('Bash', { command: 'cp /tmp/x other.db' });
+    await allowed('Write', { file_path: join(project, 'scheduled_tasks.json.md') });
+    await allowed('Read', { file_path: join(project, 'sub', '.claude', 'scheduled_tasks.json') });
+  });
+});
+
+// Security review of #254/#255 (13/11/2026): the bundled CLI delivers the project's auto-memory index
+// to the model at the start of a session and let the agent write it with no grant. The harness turns
+// auto-memory off in its own children; the deny stops the agent leaving a note for any other session.
+// The index is <config dir>/projects/<project slug>/memory/MEMORY.md; the whole `projects` directory
+// is protected, so the rule does not depend on how the CLI builds the slug.
+describe('the auto-memory directory (#254/#255 security review)', () => {
+  const underHome = join(home, '.claude', 'projects', '-some-project', 'memory', 'MEMORY.md');
+  const underConfig = join(configDir, 'projects', '-some-project', 'memory', 'MEMORY.md');
+
+  it.each(['Write', 'Edit'])('denies %s under ~/.claude/projects and under the named config directory', async (tool) => {
+    await denied(tool, { file_path: underHome });
+    await denied(tool, { file_path: underConfig });
+    await denied(tool, { file_path: '~/.claude/projects/-p/memory/notes.md' });
+    await denied(tool, { file_path: join(configDir, 'projects', 'new-slug', 'memory', 'MEMORY.md') });
+  });
+
+  it.each([
+    `echo note > ${underHome}`,
+    `echo note > ${underConfig}`,
+    'echo note > ~/.claude/projects/-p/memory/MEMORY.md',
+    'echo note >> $HOME/.claude/projects/-p/memory/MEMORY.md',
+    'cd ~/.claude/projects/-p/memory && echo note > MEMORY.md',
+    'cd ~/.claude && echo note > projects/-p/memory/MEMORY.md',
+    `cd ${configDir} && mkdir -p projects/-p/memory && cp /tmp/x projects/-p/memory/MEMORY.md`,
+    'cd ~/.claude && tee ./projects/-p/memory/topic.md',
+  ])('denies %s', async (command) => {
+    await denied('Bash', { command });
+  });
+
+  it('protects only that directory: the rest of the config directory, and a project folder of the same name, stay writable', async () => {
+    await allowed('Write', { file_path: join(home, '.claude', 'notes.md') });
+    await allowed('Write', { file_path: join(configDir, 'notes.md') });
+    await allowed('Write', { file_path: join(project, 'projects', 'readme.md') });
+    await allowed('Write', { file_path: join(project, 'memory', 'MEMORY.md') });
+    await allowed('Bash', { command: 'ls projects' });
+    await allowed('Bash', { command: 'cat memory/notes.md' });
+    await allowed('Read', { file_path: underHome });
+  });
+
+  it('reads CLAUDE_CONFIG_DIR when no config directory is passed, and always protects the one under the user directory', async () => {
+    const previous = process.env['CLAUDE_CONFIG_DIR'];
+    const fromEnv = tmp('sp-envcfg-');
+    process.env['CLAUDE_CONFIG_DIR'] = fromEnv;
+    try {
+      const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
+      await expect(h({ tool: 'Write', args: { file_path: join(fromEnv, 'projects', 's', 'memory', 'MEMORY.md') } } as never)).rejects.toThrowError(SelfProtectionViolation);
+      await expect(h({ tool: 'Write', args: { file_path: underHome } } as never)).rejects.toThrowError(SelfProtectionViolation);
+      await expect(h({ tool: 'Write', args: { file_path: underConfig } } as never)).resolves.toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = previous;
+    }
+  });
+
+  it('an empty CLAUDE_CONFIG_DIR is read as unset, not as the working directory', async () => {
+    const previous = process.env['CLAUDE_CONFIG_DIR'];
+    process.env['CLAUDE_CONFIG_DIR'] = '';
+    try {
+      const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
+      await expect(h({ tool: 'Write', args: { file_path: join(project, 'projects', 'readme.md') } } as never)).resolves.toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = previous;
+    }
   });
 });
 

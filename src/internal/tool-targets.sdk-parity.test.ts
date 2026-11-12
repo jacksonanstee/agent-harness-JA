@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ATTACHMENTS_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV, SCHEDULED_TASKS_FILE } from './child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV, SCHEDULED_TASKS_FILE } from './child-env.js';
 import {
   ACKNOWLEDGED_NON_TARGET_FIELDS,
   ACKNOWLEDGED_TOOLS,
@@ -586,6 +586,7 @@ describe('the background-tasks switch and field still exist in the installed SDK
     expect(names).toContain(BACKGROUND_TASKS_SWITCH);
     expect(names).toContain(CRON_SWITCH);
     expect(names).toContain(ATTACHMENTS_SWITCH);
+    expect(names).toContain(AUTO_MEMORY_SWITCH);
     expect(names.filter((name) => !binaryHolds(name))).toEqual([]);
   });
 

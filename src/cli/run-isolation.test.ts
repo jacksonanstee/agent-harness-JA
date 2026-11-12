@@ -258,7 +258,7 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
   });
 
   // #254, #255: the gate keys off the forced table, so the two new switches are refused the same way.
-  it.each(['CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS'])(
+  it.each(['CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'])(
     'a user settings file whose env sets %s to "" refuses the run under sdk.settingSources [user], the SDK never called',
     async (name) => {
       const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { [name]: '' } });

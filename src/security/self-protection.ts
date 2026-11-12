@@ -11,6 +11,14 @@
 // that could write it could prompt a later Claude Code session started in the
 // same directory. The harness turns scheduled tasks off in its own children
 // (`src/internal/child-env.ts`); the deny is for every other session.
+// Since the review of that change (13/11/2026) two more rules. A protected
+// FILE outside the protected directories is also refused by NAME, wherever
+// the path points: a file root had no bare-word coverage, so
+// `cd .claude && echo {} > scheduled_tasks.json` passed. And the CLI's
+// `projects` directory, which holds each project's auto-memory, is protected
+// whole under the user's `.claude` and under `CLAUDE_CONFIG_DIR`: the CLI
+// delivers a project's memory index to the model at the start of a session and
+// let the agent write it with no grant (OBSERVED, loopback mock, CLI 2.1.312).
 //
 // Unlike the paths gate (ADR-0015 §2, lexical only) this guard ALSO resolves
 // real paths, walking the RAW components as the kernel does: each symlink is
@@ -31,7 +39,7 @@ import type { PreToolLike } from './pre-tool-like.js';
 
 /** The one reason the model reads. Fixed text: it never echoes a path (ADR-0031). */
 export const SELF_PROTECTION_REASON =
-  "self-protection: the agent may not change the harness's own settings, telemetry or skills, or the scheduled-tasks file; " +
+  "self-protection: the agent may not change the harness's own settings, telemetry or skills, or the bundled CLI's scheduled-tasks and memory files; " +
   'edit the file yourself if the change is intended (ADR-0042)';
 
 export class SelfProtectionViolation extends Error {
@@ -59,6 +67,12 @@ export interface ProtectedRoot {
 
 export interface ProtectedRoots {
   readonly roots: readonly ProtectedRoot[];
+  /**
+   * Folded last components of the protected FILES that lie outside every
+   * protected directory: a path with one of these names is refused wherever it
+   * points. A file inside a protected directory is covered by the directory.
+   */
+  readonly fileNames: ReadonlySet<string>;
   /** The user directory as given, for expanding `~` and `$HOME`. */
   readonly home: string;
   /** The base a relative target or command word resolves against. */
@@ -76,7 +90,24 @@ export interface ProtectedRootsInput {
   skillsDir: string | null;
   /** The telemetry DB path; `:memory:` or null protects nothing extra. */
   dbPath: string | null;
+  /**
+   * The bundled CLI's config directory besides `<userDir>/.claude`, whose
+   * `projects` directory is protected too. Omitted: `CLAUDE_CONFIG_DIR` is
+   * read from the environment (an empty value counts as unset). Null: none.
+   */
+  claudeConfigDir?: string | null;
 }
+
+/** The directory under the CLI's config directory that holds each project's auto-memory (and its transcripts). */
+const CLI_PROJECTS_DIR = 'projects';
+/**
+ * A relative path that walks into a project's auto-memory from the config
+ * directory (`projects/<slug>/memory`), for a command that changed directory
+ * first. Matched on a path word only, so it costs a project that has its own
+ * `projects/<name>/memory` folder a refusal in Bash; the writer tools are not
+ * affected, because their targets are resolved.
+ */
+const MEMORY_WALK = /(?:^|\/)projects\/[^/]+\/memory(?:\/|$)/u;
 
 function fold(text: string): string {
   const nfc = text.normalize('NFC');
@@ -150,7 +181,9 @@ function under(child: string, parent: string): boolean {
 /** Builds the protected set once per session, before any tool call. */
 export function buildProtectedRoots(input: ProtectedRootsInput): ProtectedRoots {
   const cwd = resolve(input.projectDir);
-  const dirs = [join(input.userDir, '.harness'), join(cwd, '.harness')];
+  const dirs = [join(input.userDir, '.harness'), join(cwd, '.harness'), join(input.userDir, '.claude', CLI_PROJECTS_DIR)];
+  const configDir = input.claudeConfigDir === undefined ? process.env['CLAUDE_CONFIG_DIR'] : input.claudeConfigDir;
+  if (typeof configDir === 'string' && configDir !== '') dirs.push(join(resolve(cwd, configDir), CLI_PROJECTS_DIR));
   if (input.skillsDir !== null) dirs.push(resolve(cwd, input.skillsDir));
   // #254: the one file, not `.claude` whole (settings and agents there are the scans' business).
   const files: string[] = [join(cwd, '.claude', SCHEDULED_TASKS_FILE)];
@@ -159,11 +192,27 @@ export function buildProtectedRoots(input: ProtectedRootsInput): ProtectedRoots 
     for (const suffix of DB_SIDECARS) files.push(db + suffix);
   }
   const root = (kind: 'dir' | 'file', path: string): ProtectedRoot => ({ kind, forms: forms(resolve(path)).forms });
+  const dirRoots = dirs.map((d) => root('dir', d));
+  const fileRoots = files.map((f) => root('file', f));
+  const insideADir = (file: ProtectedRoot): boolean =>
+    file.forms.some((form) => dirRoots.some((dir) => dir.forms.some((d) => under(form, d))));
   return {
-    roots: [...dirs.map((d) => root('dir', d)), ...files.map((f) => root('file', f))],
+    roots: [...dirRoots, ...fileRoots],
+    fileNames: new Set(fileRoots.filter((file) => !insideADir(file)).flatMap((file) => file.forms.map(lastComponent))),
     home: resolve(input.userDir),
     cwd,
   };
+}
+
+/** The last component of a path, folded for comparison on every platform (a name match over-refuses by design). */
+function lastComponent(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/u, '');
+  return trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1).normalize('NFC').toLowerCase();
+}
+
+/** True when the path's last component is the name of a protected file (see `ProtectedRoots.fileNames`). */
+function namesProtectedFile(path: string, roots: ProtectedRoots): boolean {
+  return roots.fileNames.has(lastComponent(path));
 }
 
 function expandTilde(path: string, home: string): string {
@@ -275,14 +324,14 @@ function mentionsAbsolute(folded: string, roots: ProtectedRoots): boolean {
 function commandIsProtected(command: string, roots: ProtectedRoots): boolean {
   const expanded = expandHome(command, roots);
   return (
-    candidatePaths(expanded).some((path) => isProtected(path, roots)) ||
+    candidatePaths(expanded).some((path) => isProtected(path, roots) || namesProtectedFile(path, roots) || MEMORY_WALK.test(path)) ||
     mentionsAbsolute(fold(expanded.replace(/["'\\]/gu, '')), roots)
   );
 }
 
 /**
  * The pre-tool handler. A writer tool (`writes` in the shared table) whose
- * target is protected, or is not a string, is denied. A command tool whose
+ * target is protected, is named like a protected file, or is not a string, is denied. A command tool whose
  * command mentions a protected path, or is present but not a string, is
  * denied; an absent command has nothing to match.
  * Reads and every tool outside the table pass to the next gate.
@@ -298,7 +347,9 @@ export function selfProtectionHook(roots: ProtectedRoots): (payload: PreToolLike
       return Promise.resolve();
     }
     if (!gate.writes) return Promise.resolve();
-    if (typeof value !== 'string' || isProtected(value, roots)) return Promise.reject(new SelfProtectionViolation());
+    if (typeof value !== 'string' || isProtected(value, roots) || namesProtectedFile(value, roots)) {
+      return Promise.reject(new SelfProtectionViolation());
+    }
     return Promise.resolve();
   };
 }

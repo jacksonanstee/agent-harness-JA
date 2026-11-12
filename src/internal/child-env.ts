@@ -1,7 +1,8 @@
 /**
  * The environment the harness hands every bundled-CLI child it starts: the
  * primary session (issue #250, ADR-0040 D-8 as amended 12/11/2026) and, since
- * issues #254 and #255 (amended 13/11/2026), the judge and the eval adversary.
+ * issues #254 and #255 and their review (amended 13/11/2026), the judge and
+ * the eval adversary.
  *
  * The SDK's `Options.env` REPLACES the child's environment; it is not merged
  * with `process.env` (sdk.d.ts, SDK 0.3.312). So the builder carries every
@@ -39,8 +40,9 @@ export const BACKGROUND_TASKS_SWITCH = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
  * primary session the job fired in each of the 4 runs made one at a time
  * whose logs are kept, and not in one earlier run made beside six others, so
  * whether it fires is a race). With the switch set the job's prompt reached no
- * request and `CronCreate`, `CronDelete` and `CronList` left the tool list the
- * CLI reports at start-up (OBSERVED, same date). READ: one gate function tests
+ * request and `CronCreate`, `CronDelete` and `CronList` left the `tools` array
+ * of the SDK's init message (22 names without it, 19 with; OBSERVED, same
+ * date, primary session). READ: one gate function tests
  * the variable, and it is what those three tools' `isEnabled` return; no other
  * effect was found in the binary or seen in a run.
  */
@@ -66,25 +68,42 @@ export const SCHEDULED_TASKS_FILE = 'scheduled_tasks.json';
  * same date).
  *
  * It is a broad switch, and what else it removes is the cost (OBSERVED in the
- * primary session, same date, unless marked READ). The model is no longer told:
- * its working directory, platform, shell and OS version; its model name and
- * knowledge cutoff; the names of the tools it can load through ToolSearch; the
- * CLI's own bundled skills; the tokens and dollars left; and a nested
- * CLAUDE.md beside a file it reads (under an opted-in project source). READ,
- * not seen in a run: file-changed-on-disk notices, MCP server instructions and
- * `@` mentions of MCP resources, plan-mode and todo reminders and IDE
- * diagnostics go the same way. Unchanged in the same runs: the harness's
- * system prompt and the skills it carries, the tool list, the agent list, a
- * root CLAUDE.md, ToolSearch by name, a Read by relative path, and redaction
- * of a tool result.
+ * primary session, same date, unless marked READ). The model is no longer
+ * given: the names of the tools it can load through ToolSearch; the CLI's own
+ * bundled skills; the tokens and dollars left; and a nested CLAUDE.md beside a
+ * file it reads (under an opted-in project source). READ, and not seen in a
+ * run with the switch or without it: file-changed-on-disk notices, MCP server
+ * instructions, `@` mentions of MCP resources, plan-mode and todo reminders
+ * and IDE diagnostics go the same way. Unchanged in the same runs: the
+ * environment block (working directory, platform, shell, OS version) and the
+ * model line, the harness's system prompt and the skills it carries, the tool
+ * list, the agent list, a root CLAUDE.md, ToolSearch by name, a Read by
+ * relative path, and redaction of a tool result.
  */
 export const ATTACHMENTS_SWITCH = 'CLAUDE_CODE_DISABLE_ATTACHMENTS';
 
-/** Variables the harness sets in every child whatever the inherited environment says. Frozen; three entries. */
+/**
+ * The bundled CLI's switch for auto-memory (found by the security review of
+ * the #254 and #255 change). Without it the CLI added the project's memory
+ * index, `MEMORY.md` in `projects/<slug>/memory` under its config directory,
+ * to the first turn of the primary session, the judge, the adversary and a
+ * subagent, under the default isolation and outside every hook (OBSERVED
+ * 13/11/2026, 1 run each). With the switch set the index reached no request
+ * in any of the four, and nothing else changed in the primary session's
+ * requests (OBSERVED, same date). The switch does NOT stop the agent writing
+ * that file: Write, Edit and a Bash redirect still changed it with the switch
+ * set (OBSERVED), which is why self-protection covers the directory
+ * (ADR-0042). READ: an inherited value the CLI reads as false would force
+ * auto-memory on; the forced "1" replaces any inherited value.
+ */
+export const AUTO_MEMORY_SWITCH = 'CLAUDE_CODE_DISABLE_AUTO_MEMORY';
+
+/** Variables the harness sets in every child whatever the inherited environment says. Frozen; four entries. */
 export const FORCED_CHILD_ENV: Readonly<Record<string, string>> = Object.freeze({
   [BACKGROUND_TASKS_SWITCH]: '1',
   [CRON_SWITCH]: '1',
   [ATTACHMENTS_SWITCH]: '1',
+  [AUTO_MEMORY_SWITCH]: '1',
 });
 
 /** A process environment as Node and the SDK type it: a name maps to a string, or to undefined when unset. */

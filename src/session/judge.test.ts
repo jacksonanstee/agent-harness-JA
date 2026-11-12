@@ -254,8 +254,8 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
   // job or expanding an @path in the judged text, so it gets the forced table on both layers too.
   describe('the child environment (#254, #255)', () => {
     // Literals, not the table: these must fail if the table loses a switch.
-    const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS'] as const;
-    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1' };
+    const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'] as const;
+    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
 
     afterEach(() => {
       vi.unstubAllEnvs();

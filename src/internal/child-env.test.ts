@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { ATTACHMENTS_SWITCH, BACKGROUND_TASKS_SWITCH, buildChildEnv, buildChildSettings, CRON_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, buildChildEnv, buildChildSettings, CRON_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
 
-// Every switch the harness forces: #250 (background tasks), #254 (scheduled tasks), #255 (attachments).
-const SWITCHES = [BACKGROUND_TASKS_SWITCH, CRON_SWITCH, ATTACHMENTS_SWITCH] as const;
+// Every switch the harness forces: #250 (background tasks), #254 (scheduled tasks), #255 (attachments), and auto-memory.
+const SWITCHES = [BACKGROUND_TASKS_SWITCH, CRON_SWITCH, ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH] as const;
 const ALL_ON = {
   CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
   CLAUDE_CODE_DISABLE_CRON: '1',
   CLAUDE_CODE_DISABLE_ATTACHMENTS: '1',
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
 };
 
 describe('buildChildEnv (#250, #254, #255): the environment the harness hands every bundled-CLI child', () => {
@@ -40,10 +41,11 @@ describe('buildChildEnv (#250, #254, #255): the environment the harness hands ev
     expect(inherited).toEqual({ PATH: '/bin', [BACKGROUND_TASKS_SWITCH]: '0', [CRON_SWITCH]: '0', [ATTACHMENTS_SWITCH]: '' });
   });
 
-  it('the forced table is frozen and holds exactly the three switches, by their CLI names', () => {
+  it('the forced table is frozen and holds exactly the four switches, by their CLI names', () => {
     expect(BACKGROUND_TASKS_SWITCH).toBe('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
     expect(CRON_SWITCH).toBe('CLAUDE_CODE_DISABLE_CRON');
     expect(ATTACHMENTS_SWITCH).toBe('CLAUDE_CODE_DISABLE_ATTACHMENTS');
+    expect(AUTO_MEMORY_SWITCH).toBe('CLAUDE_CODE_DISABLE_AUTO_MEMORY');
     expect(Object.isFrozen(FORCED_CHILD_ENV)).toBe(true);
     expect(FORCED_CHILD_ENV).toEqual(ALL_ON);
   });
