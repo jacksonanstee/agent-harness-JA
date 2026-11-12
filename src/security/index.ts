@@ -66,6 +66,8 @@ export {
   UnknownToolDenied,
 } from './unknown-tool-deny.js';
 export { REMOTE_AGENT_DENY_REASON, remoteAgentDenyHook, RemoteAgentDenied } from './remote-agent-deny.js';
+export { BACKGROUND_BASH_DENY_REASON, BackgroundBashDenied } from './background-bash-deny.js';
+export { argumentDenyHook } from './argument-deny.js';
 export { toolNameDenyHook } from './tool-name-deny.js';
 export type { ToolNameDenyOptions } from './tool-name-deny.js';
 export { grantPolicyFor } from './grant-policy.js';

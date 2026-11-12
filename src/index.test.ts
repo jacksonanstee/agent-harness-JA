@@ -82,6 +82,7 @@ describe('root barrel (src/index.ts)', () => {
     const root = barrel as Readonly<Record<string, unknown>>;
     const reasons = Object.keys(security).filter((name) => name.endsWith('_REASON')).sort();
     expect(reasons).toEqual([
+      'BACKGROUND_BASH_DENY_REASON',
       'CODE_EXECUTION_DENY_REASON',
       'MCP_SERVER_DENY_REASON',
       'MONITOR_DENY_REASON',

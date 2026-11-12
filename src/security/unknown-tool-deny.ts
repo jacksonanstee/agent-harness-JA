@@ -47,7 +47,7 @@ export const mcpServerPrefixes = (servers: readonly string[]): readonly string[]
  * allows a tool outright when it defines no permission check, so only an
  * allowlist fails closed when an SDK bump adds one. A pure function of the
  * name, applied by `toolNameDenyHook` (#230); the Agent argument check is
- * `remoteAgentDenyHook`'s.
+ * `remoteAgentDenial`, a step of `argumentDenyHook` (#250).
  */
 export function unreviewedToolDenial(tool: string, mcpPrefixes: readonly string[]): McpServerDenied | UnknownToolDenied | undefined {
   if (tool.startsWith(MCP_TOOL_PREFIX)) return underListedServer(tool, mcpPrefixes) ? undefined : new McpServerDenied();

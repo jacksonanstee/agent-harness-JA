@@ -8,6 +8,7 @@ import {
   MCP_TOOL_PREFIX,
   REVIEWED_REFUSED_TOOLS,
 } from '../internal/tool-targets.js';
+import { BACKGROUND_BASH_DENY_REASON } from './background-bash-deny.js';
 import { CODE_EXECUTION_DENY_REASON } from './code-execution-deny.js';
 import { REMOTE_AGENT_DENY_REASON } from './remote-agent-deny.js';
 import { SELF_PROTECTION_REASON } from './self-protection.js';
@@ -149,7 +150,7 @@ describe('unreviewedToolDenial (#225; a toolNameDenyHook step since #230): defau
     expect(MCP_SERVER_DENY_REASON).toMatch(/^mcp server deny: /);
     expect(MCP_SERVER_DENY_REASON).toContain('sdk.allowedMcpServers');
     const prefixOf = (reason: string): string => reason.slice(0, reason.indexOf(': ') + 2);
-    const prefixes = [UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON, UNGATED_TOOL_DENY_REASON, CODE_EXECUTION_DENY_REASON, SELF_PROTECTION_REASON].map(prefixOf);
+    const prefixes = [BACKGROUND_BASH_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON, UNGATED_TOOL_DENY_REASON, CODE_EXECUTION_DENY_REASON, SELF_PROTECTION_REASON].map(prefixOf);
     expect(new Set(prefixes).size).toBe(prefixes.length);
   });
 });

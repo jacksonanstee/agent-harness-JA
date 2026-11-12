@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { BACKGROUND_BASH_DENY_REASON } from './background-bash-deny.js';
 import { builtInDenyHooks } from './built-in-denies.js';
 import { REMOTE_AGENT_DENY_REASON } from './remote-agent-deny.js';
 import { buildProtectedRoots, SELF_PROTECTION_REASON } from './self-protection.js';
@@ -25,7 +26,7 @@ describe('builtInDenyHooks (#219): the shipped built-in denies, in their one ord
     { tool: 'Agent', args: { prompt: 'p', isolation: 'remote' }, reason: REMOTE_AGENT_DENY_REASON },
   ];
 
-  it('is exactly self-protection, the tool-name deny, the remote-agent deny, in that order (#230)', async () => {
+  it('is exactly self-protection, the tool-name deny, the argument deny (remote agent, #225; background Bash, #250), in that order (#230)', async () => {
     const hooks = builtInDenyHooks(roots);
     expect(hooks).toHaveLength(probes.length);
     for (const [i, hook] of hooks.entries()) {
@@ -35,6 +36,18 @@ describe('builtInDenyHooks (#219): the shipped built-in denies, in their one ord
         else await expect(outcome, `hook ${i} on probe ${j}`).resolves.toBeUndefined();
       }
     }
+  });
+
+  // #250: the third hook carries both argument-reading denies, so the hook count (and handlerIndex) is unchanged.
+  it('refuses a background Bash call in the third hook only, with its own reason (#250)', async () => {
+    const hooks = builtInDenyHooks(roots);
+    const probe = { tool: 'Bash', args: { command: 'ls', run_in_background: true } };
+    for (const [i, hook] of hooks.entries()) {
+      const outcome = hook(preTool(probe.tool, probe.args));
+      if (i === 2) await expect(outcome, `hook ${i}`).rejects.toThrow(BACKGROUND_BASH_DENY_REASON);
+      else await expect(outcome, `hook ${i}`).resolves.toBeUndefined();
+    }
+    for (const hook of hooks) await expect(hook(preTool('Bash', { command: 'ls' }))).resolves.toBeUndefined();
   });
 
   it('passes allowedMcpServers through to the tool-name deny (default none)', async () => {

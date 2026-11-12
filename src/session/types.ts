@@ -318,6 +318,14 @@ export interface QueryOptions {
    */
   maxBudgetUsd?: number;
   /**
+   * The child process environment, the SDK's `Options.env` (issue #250). The
+   * SDK REPLACES the child's environment with it rather than merging, so the
+   * session's primary query passes `buildChildEnv(process.env)`: every
+   * inherited variable plus the harness's forced table. The judge and the
+   * eval adversary pass none (they run with `tools: []`).
+   */
+  env?: Record<string, string | undefined>;
+  /**
    * The SDK's cancellation channel (issue #96 PR-B1, spec D4). `buildJudge`
    * always passes one, linked to the scanner's per-call signal; since #187
    * the session's primary query passes one too, linked to

@@ -3,10 +3,12 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { BACKGROUND_TASKS_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
 import {
   ACKNOWLEDGED_NON_TARGET_FIELDS,
   ACKNOWLEDGED_TOOLS,
   ALLOWED_TOOL_NAMES,
+  BASH_BACKGROUND_FIELD,
   BINARY_ONLY_TOOLS,
   CODE_EXECUTING_TOOLS,
   DENIED_TOOL_PREFIXES,
@@ -568,5 +570,26 @@ describe('the default-deny allowlist is reviewed against the installed SDK and b
     binaryHolds('CLAUDE_CODE_REPL'); // loads the binary, failing loudly when it is missing
     const sites = (platformBinaryBytes ?? Buffer.alloc(0)).toString('latin1').match(BINARY_TOOL_DEFINITION_NEEDLE) ?? [];
     expect(sites.length, 'tool definitions in the binary changed: re-read it, rule each new tool, then update the count').toBe(BINARY_TOOL_DEFINITIONS);
+  });
+});
+
+// Issue #250 (ADR-0040 D-8 as amended 12/11/2026). The harness turns the CLI's
+// background tasks off by forcing an environment variable into the child. That
+// rests on the CLI still reading the name, which no type declares, so the
+// evidence is the binary itself (the #219 pattern): a missing binary or a
+// missing name FAILS, never skips. This catches the name going away; it cannot
+// catch the CLI keeping the name and changing what it does, which is what the
+// keyless mock runs recorded in R-28 are for.
+describe('the background-tasks switch and field still exist in the installed SDK and binary (issue #250)', () => {
+  it('the platform binary names every variable the harness forces into the child', () => {
+    const names = Object.keys(FORCED_CHILD_ENV);
+    expect(names).toContain(BACKGROUND_TASKS_SWITCH);
+    expect(names.filter((name) => !binaryHolds(name))).toEqual([]);
+  });
+
+  it('the SDK still declares the Bash field the background deny reads', () => {
+    const bash = loadSdkTools().find((tool) => tool.tool === 'Bash');
+    expect(bash, 'could not check: Bash did not parse').toBeDefined();
+    expect(bash?.fields.map((field) => field.name)).toContain(BASH_BACKGROUND_FIELD);
   });
 });

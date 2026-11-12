@@ -48,6 +48,7 @@ import {
   sanitizeControlChars,
   truncateWellFormed,
 } from '../internal/sanitize.js';
+import { buildChildEnv } from '../internal/child-env.js';
 import {
   DEFAULT_MAX_BUDGET_USD,
   isBudgetUsd,
@@ -1877,6 +1878,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           maxBudgetUsd,
           abortController,
           ...isolation,
+          // #250 (ADR-0040 D-8 as amended): read at run time; background tasks off in the child.
+          env: buildChildEnv(process.env),
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
