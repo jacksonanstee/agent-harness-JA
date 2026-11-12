@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -145,6 +146,74 @@ describe('scanSettingsEnv (#250): a settings file that names a forced variable i
     const c = file(dir, 'c.json', JSON.stringify({ env: { C: '' } }));
     expect(scanSettingsEnv([a, b, c], ['A', 'B']).map((r) => r.path)).toEqual([a.path, b.path]);
     expect(scanSettingsEnv([a, b, c], [])).toEqual([]);
+  });
+});
+
+describe('scanSettingsEnv refuses what it cannot read as the CLI would (#250, security re-review)', () => {
+  const envJson = JSON.stringify({ env: { [KEY]: '' } });
+  const bytesFile = (bytes: Buffer): SettingsEnvFile => {
+    const path = join(tmp(), 'settings.json');
+    writeFileSync(path, bytes);
+    return { source: 'user', path };
+  };
+  const swap16 = (le: Buffer): Buffer => Buffer.from(le).swap16();
+  const utf32le = (text: string): Buffer => Buffer.concat([...text].map((ch) => { const b = Buffer.alloc(4); b.writeUInt32LE(ch.codePointAt(0) ?? 0); return b; }));
+
+  // Real encoded bytes: the CLI decodes such a file and applies its env block, while a UTF-8 read of it never spells the name.
+  it.each([
+    ['UTF-16LE with a BOM', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(envJson, 'utf16le')])],
+    ['UTF-16BE with a BOM', Buffer.concat([Buffer.from([0xfe, 0xff]), swap16(Buffer.from(envJson, 'utf16le'))])],
+    ['UTF-16LE with no BOM', Buffer.from(envJson, 'utf16le')],
+    ['UTF-32LE with a BOM', Buffer.concat([Buffer.from([0xff, 0xfe, 0x00, 0x00]), utf32le(envJson)])],
+    ['UTF-32BE BOM alone', Buffer.from([0x00, 0x00, 0xfe, 0xff])],
+    ['UTF-16LE that does not name the key', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"model":"x"}', 'utf16le')])],
+    ['a bare UTF-16LE BOM', Buffer.from([0xff, 0xfe])],
+    ['a bare UTF-16BE BOM', Buffer.from([0xfe, 0xff])],
+    ['UTF-8 with one NUL byte', Buffer.concat([Buffer.from('{"model":"x"}'), Buffer.from([0])])],
+  ])('refuses %s as encoding', (_label, bytes) => {
+    expect(scanSettingsEnv([bytesFile(bytes)], FORCED)).toEqual([expect.objectContaining({ reason: 'encoding' })]);
+  });
+
+  it('the UTF-16LE fixture really is UTF-16 and really names the key once decoded', () => {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(envJson, 'utf16le')]);
+    expect(bytes.toString('utf8')).not.toContain(KEY);
+    expect(bytes.subarray(2).toString('utf16le')).toBe(envJson);
+  });
+
+  it('a UTF-8 BOM is not an encoding refusal: the file is judged on its text', () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    expect(scanSettingsEnv([bytesFile(Buffer.concat([bom, Buffer.from('{"model":"x"}')]))], FORCED)).toEqual([]);
+    expect(scanSettingsEnv([bytesFile(Buffer.concat([bom, Buffer.from(envJson)]))], FORCED)).toHaveLength(1);
+  });
+
+  // mkfifo must exist: where it does not, this test fails rather than skips, so the guard is never silently untested.
+  it('refuses a FIFO at a scanned path without blocking on it', () => {
+    const fifo = join(tmp(), 'settings.json');
+    execFileSync('mkfifo', [fifo]);
+    const started = Date.now();
+    const refusals = scanSettingsEnv([{ source: 'project', path: fifo }], FORCED);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(refusals).toEqual([{ source: 'project', path: fifo, reason: 'unreadable' }]);
+  }, 4000);
+
+  it('refuses a symlink to something that is not a regular file, and a device', () => {
+    const dir = tmp();
+    mkdirSync(join(dir, 'real-dir'));
+    symlinkSync(join(dir, 'real-dir'), join(dir, 'settings.json'));
+    expect(scanSettingsEnv([{ source: 'user', path: join(dir, 'settings.json') }], FORCED)[0]).toMatchObject({ reason: 'unreadable' });
+    expect(scanSettingsEnv([{ source: 'user', path: '/dev/null' }], FORCED)[0]).toMatchObject({ reason: 'unreadable' });
+  });
+
+  it('skips a dangling symlink (the CLI finds no file there)', () => {
+    const dir = tmp();
+    symlinkSync(join(dir, 'gone.json'), join(dir, 'settings.json'));
+    expect(scanSettingsEnv([{ source: 'user', path: join(dir, 'settings.json') }], FORCED)).toEqual([]);
+  });
+
+  it('reads a file exactly at the size limit and refuses one byte over', () => {
+    const exact = file(tmp(), 'a.json', envJson);
+    expect(scanSettingsEnv([exact], FORCED, { maxFileBytes: Buffer.byteLength(envJson) })[0]).toMatchObject({ reason: 'env' });
+    expect(scanSettingsEnv([exact], FORCED, { maxFileBytes: Buffer.byteLength(envJson) - 1 })[0]).toMatchObject({ reason: 'unreadable' });
   });
 });
 

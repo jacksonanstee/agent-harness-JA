@@ -328,8 +328,9 @@ export interface QueryOptions {
   /**
    * Flag settings for the child, the SDK's `Options.settings` (issue #250).
    * The primary query passes `buildChildSettings()`: an `env` block repeating
-   * the forced table, which the CLI applies after the user, project and
-   * local settings files. The judge and the eval adversary pass none.
+   * the forced table. Its value won over the user, project and local
+   * settings files and the global config file (observed); that it is applied
+   * later is inferred from that. The judge and the eval adversary pass none.
    */
   settings?: { env: Record<string, string> };
   /**

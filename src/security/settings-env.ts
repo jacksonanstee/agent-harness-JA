@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeControlChars, stripBidi, truncateTailWellFormed } from '../internal/sanitize.js';
 import { projectConfigDirs } from './agent-definitions.js';
@@ -37,9 +37,12 @@ export interface SettingsEnvFile {
  * `env`: the file parses and its top-level `env` object names a forced
  * variable. `unparsable`: the file is not a JSON object this scan can read
  * and its text names one, so the scan cannot vouch for it. `unreadable`: the
- * path exists and could not be read, or is over the size limit.
+ * path exists and could not be read, is not a regular file (a directory, a
+ * FIFO, a device; a symlink is followed first), or is over the size limit.
+ * `encoding`: the bytes are not UTF-8 text this scan can search (a UTF-16 or
+ * UTF-32 byte-order mark, or any NUL byte).
  */
-export type SettingsEnvRefusalReason = 'env' | 'unparsable' | 'unreadable';
+export type SettingsEnvRefusalReason = 'env' | 'unparsable' | 'unreadable' | 'encoding';
 
 export interface SettingsEnvRefusal {
   readonly source: SettingsEnvSource;
@@ -145,6 +148,54 @@ function textVerdict(raw: string, forced: readonly string[]): SettingsEnvRefusal
   return Object.keys(env).some((name) => forced.includes(name.toUpperCase())) ? 'env' : null;
 }
 
+/**
+ * The file's bytes, `'missing'`, or `'unreadable'`. A symlink is followed, as
+ * the CLI follows it. The path is opened without blocking and judged on the
+ * open descriptor, so a FIFO put there cannot hang the scan and the file
+ * checked is the file read. Only a regular file is read, and never more than
+ * one byte past `maxBytes`: a larger one is `'unreadable'`.
+ */
+function readBounded(path: string, maxBytes: number): Buffer | 'missing' | 'unreadable' {
+  let fd: number;
+  try {
+    // O_NONBLOCK is absent on Windows, where there is no FIFO to block on.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error: unknown) {
+    return isMissing(error) ? 'missing' : 'unreadable';
+  }
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile()) return 'unreadable';
+    // The read itself enforces the limit: at most one byte past it, so the stat's size is only a hint.
+    const buffer = Buffer.alloc(Math.min(stats.size, maxBytes) + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    return length > maxBytes ? 'unreadable' : buffer.subarray(0, length);
+  } catch {
+    return 'unreadable';
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * True for bytes the CLI may decode differently from a UTF-8 read: a UTF-16
+ * or UTF-32 byte-order mark, or any NUL byte (UTF-16 and UTF-32 text without
+ * a mark is full of them, and JSON text has none). OBSERVED by the security
+ * review (mock API, CLI 2.1.312, 12/11/2026): the CLI applied the env block of
+ * a UTF-16LE settings file whose UTF-8 reading never spells the variable. A
+ * UTF-8 mark is not refused here; such a file is judged on its text.
+ */
+function isForeignEncoding(bytes: Buffer): boolean {
+  const [a, b] = [bytes[0], bytes[1]];
+  if ((a === 0xff && b === 0xfe) || (a === 0xfe && b === 0xff)) return true;
+  return bytes.includes(0);
+}
+
 export interface SettingsEnvScanLimits {
   readonly maxFileBytes?: number;
 }
@@ -152,8 +203,10 @@ export interface SettingsEnvScanLimits {
 /**
  * Refusals for the files that name a forced variable. Per file:
  * - missing: skipped (the CLI loads nothing from it);
- * - present but unreadable, or over the size limit: refused, since the scan
- *   cannot vouch for it;
+ * - present but unreadable, not a regular file, or over the size limit:
+ *   refused, since the scan cannot vouch for it;
+ * - a UTF-16 or UTF-32 byte-order mark, or a NUL byte: refused, whatever the
+ *   text says, since a UTF-8 search of it proves nothing;
  * - text that names no forced variable, in any letter case and after `\u`
  *   escapes are decoded: passed without parsing, whatever its syntax (the CLI
  *   cannot find a name the text does not hold);
@@ -175,17 +228,17 @@ export function scanSettingsEnv(
   const maxFileBytes = limits.maxFileBytes ?? SETTINGS_ENV_MAX_FILE_BYTES;
   const refusals: SettingsEnvRefusal[] = [];
   for (const file of files) {
-    let raw: string;
-    try {
-      if (statSync(file.path).size > maxFileBytes) {
-        refusals.push({ ...file, reason: 'unreadable' });
-        continue;
-      }
-      raw = readFileSync(file.path, 'utf8');
-    } catch (error: unknown) {
-      if (!isMissing(error)) refusals.push({ ...file, reason: 'unreadable' });
+    const read = readBounded(file.path, maxFileBytes);
+    if (read === 'missing') continue;
+    if (read === 'unreadable') {
+      refusals.push({ ...file, reason: 'unreadable' });
       continue;
     }
+    if (isForeignEncoding(read)) {
+      refusals.push({ ...file, reason: 'encoding' });
+      continue;
+    }
+    const raw = read.toString('utf8');
     const reason = textVerdict(raw, forced);
     if (reason !== null) refusals.push({ ...file, reason });
   }
