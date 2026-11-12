@@ -1,2 +1,7 @@
 #!/usr/bin/env bash
-exec bash "$(dirname "$0")/check-embargo.sh" staged
+here=$(dirname "$0")
+repo_copy="$(git rev-parse --show-toplevel)/scripts/check-embargo.sh"
+if [[ -f "$repo_copy" ]] && ! cmp -s "$repo_copy" "$here/check-embargo.sh"; then
+  echo "check-embargo: the installed check differs from scripts/check-embargo.sh; run bash scripts/install-hooks.sh" >&2
+fi
+exec bash "$here/check-embargo.sh" staged

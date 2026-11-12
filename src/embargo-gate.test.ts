@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -198,6 +198,34 @@ describe('check-embargo.sh range and ref', () => {
     const sha = git(dir, 'rev-parse', 'v1').stdout.trim();
     expect(check(dir, 'ref', 'refs/tags/v1', sha).status).toBe(1);
     expect(check(dir, 'ref', 'refs/heads/main').status).toBe(0);
+  });
+});
+
+describe('install-hooks.sh', () => {
+  it('moves a foreign hook aside, reports a core.hooksPath it removes, and is idempotent', () => {
+    const dir = makeRepo();
+    const hooks = join(dir, '.git', 'hooks');
+    writeFileSync(join(hooks, 'pre-push'), '#!/bin/sh\necho foreign\n', { mode: 0o755 });
+    git(dir, 'config', 'core.hooksPath', '.husky');
+    const first = run('bash', [join(dir, 'scripts', 'install-hooks.sh')], dir);
+    expect(first.status).toBe(0);
+    expect(first.stderr).toContain('was: .husky');
+    expect(first.stderr).toContain('pre-push moved to');
+    expect(readFileSync(join(hooks, 'pre-push.pre-embargo'), 'utf8')).toContain('foreign');
+    expect(git(dir, 'config', 'core.hooksPath').status).not.toBe(0);
+    const second = run('bash', [join(dir, 'scripts', 'install-hooks.sh')], dir);
+    expect(second.stderr).not.toContain('moved to');
+  });
+
+  it('warns at commit time when the installed check differs from the checkout', () => {
+    const dir = makeRepo();
+    run('bash', [join(dir, 'scripts', 'install-hooks.sh')], dir);
+    appendFileSync(join(dir, 'scripts', 'check-embargo.sh'), '\n# edited\n');
+    writeFileSync(join(dir, 'a.txt'), 'clean\n');
+    git(dir, 'add', 'a.txt');
+    const r = git(dir, 'commit', '-q', '-m', 'clean');
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('installed check differs');
   });
 });
 
