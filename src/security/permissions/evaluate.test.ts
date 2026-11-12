@@ -243,7 +243,7 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('Grep', { pattern: 'x', path: '/home/ok' }).decision).toBe('allow');
   });
 
-  it('match rules reach the five tools the table lacked at the pinned SDK (issue #86)', () => {
+  it('match rules reach the tools the table lacked at the pinned SDK (issue #86; Artifact left in #219, Monitor in #248)', () => {
     // Before #86 the match target for each was JSON.stringify(args), which
     // starts with `{"` and so no path or command glob could ever fire.
     const evaluator = createPermissionEvaluator({
@@ -256,14 +256,6 @@ describe('createPermissionEvaluator', () => {
     expect(evaluator.evaluate('EnterWorktree', { path: '/etc' }).decision).toBe('deny');
     expect(
       evaluator.evaluate('Projects', { method: 'project_write', local_path: '/etc/shadow' }).decision,
-    ).toBe('deny');
-    expect(
-      evaluator.evaluate('Monitor', {
-        description: 'd',
-        timeout_ms: 1,
-        persistent: false,
-        command: 'rm -rf /',
-      }).decision,
     ).toBe('deny');
     expect(evaluator.evaluate('Workflow', { scriptPath: '/home/ok/wf.js' }).decision).toBe('allow');
   });

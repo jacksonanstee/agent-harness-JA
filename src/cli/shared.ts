@@ -323,7 +323,7 @@ export interface SecurityComposition {
   permissions: EvaluatorOptions;
   /**
    * Which tools a rule allow must not grant (D-8, #211): every CODE_EXECUTING_TOOLS
-   * member, except the `commands`-gated ones (Bash, Monitor) while the USER layer's
+   * member, except the `commands`-gated one (Bash) while the USER layer's
    * sandbox has a non-empty `commands` list (`grantPolicyFor`, #218), so the argv check runs before any
    * explicit SDK allow. Computed once; registerSecurityHooks
    * passes it to permissionHook.

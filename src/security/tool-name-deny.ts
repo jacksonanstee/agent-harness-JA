@@ -12,7 +12,7 @@ export interface ToolNameDenyOptions {
  * Pre-tool hook for every built-in deny that is a pure function of the tool
  * name (issue #230, ADR-0045). First match wins, in this order, so each tool
  * keeps the reason it had when these were separate hooks:
- * 1. a CODE_EXECUTING_TOOLS member whose gate is `denied` (REPL; #211);
+ * 1. a CODE_EXECUTING_TOOLS member whose gate is `denied` (REPL, #211; Monitor, #248);
  * 2. a DENIED_TOOLS name or DENIED_TOOL_PREFIXES prefix (the Artifact family
  *    and its MCP server; #219). Before step 3, so the artifacts server keeps
  *    the ungated reason rather than the MCP-server one;

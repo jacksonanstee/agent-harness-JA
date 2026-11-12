@@ -427,16 +427,17 @@ describe('README `A first user file` and `Inheriting Claude Code settings` (#140
   it('without user sandbox lists every code-executing tool is ungrantable, and a project file\'s lists never unlock them (D-8, #211)', () => {
     const { firstUserDoc, section } = loaded();
     // The README names the set the policy reads, and each tool's condition.
-    expect(section).toContain('A tool that runs code (`CODE_EXECUTING_TOOLS` in `src/internal/tool-targets.ts`: Bash, Monitor, Workflow and REPL)');
+    expect(section).toContain('A tool that runs code (`CODE_EXECUTING_TOOLS` in `src/internal/tool-targets.ts`: Bash, Workflow, Monitor and REPL)');
     expect(section).toContain('A `Workflow` allow is never a grant');
     expect(section).toContain('the harness refuses every REPL call before reading any rule');
+    expect(section).toContain('The harness refuses every Monitor call the same way');
     const rulesOnly = JSON.stringify({ permissions: (JSON.parse(firstUserDoc) as { permissions: object }).permissions });
     const projectLists = JSON.stringify({ sandbox: { commands: { allow: ['git'] }, paths: { allow: ['.'] } } });
     for (const projectDoc of [undefined, projectLists]) {
       const composed = compose(rulesOnly, projectDoc);
       expect([...composed.grantPolicy.ungrantableTools].sort()).toEqual(['Bash', 'Monitor', 'REPL', 'Workflow']);
       const evaluate = createPermissionEvaluator(composed.permissions).evaluate;
-      expect(grantFor('Monitor', { ...evaluate('Bash', { command: 'git status' }), layer: 'user' }, composed.grantPolicy)).toBeUndefined();
+      expect(grantFor('Workflow', { ...evaluate('Bash', { command: 'git status' }), layer: 'user' }, composed.grantPolicy)).toBeUndefined();
       expect(grantFor('Bash', evaluate('Bash', { command: 'git status' }), composed.grantPolicy)).toBeUndefined();
       expect(grantFor('Edit', evaluate('Edit', { file_path: '/repo/x.ts' }), composed.grantPolicy)).toBeDefined();
     }

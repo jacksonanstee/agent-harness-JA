@@ -220,6 +220,10 @@ function loadSdkTools(): SdkTool[] {
 
 const isTargetShaped = (field: SdkField): boolean => TARGET_FIELD_NAME.test(field.name);
 
+/** Refused by name whatever its arguments: a DENIED_TOOLS entry (#219) or a `denied` code runner (#211, #248). */
+const refusedByName = (tool: string): boolean =>
+  Object.hasOwn(DENIED_TOOLS, tool) || CODE_EXECUTING_TOOLS[tool] === 'denied';
+
 describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (issue #86, ADR-0033)', () => {
   let sdkTools: SdkTool[] = [];
   let targetBearing: SdkTool[] = [];
@@ -252,10 +256,11 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
   });
 
   // #219: a tool refused by name (DENIED_TOOLS) is covered by the refusal and has no table entry,
-  // the same rule as a `denied` CODE_EXECUTING_TOOLS member (REPL).
+  // the same rule as a `denied` CODE_EXECUTING_TOOLS member (REPL; and Monitor since #248, the
+  // first such member with a target-shaped field, `command`).
   it('every SDK tool that declares a path/command field has a table entry or is refused by name (completeness direction)', () => {
     const missing = targetBearing
-      .filter((tool) => TOOL_TARGET_FIELDS[tool.tool] === undefined && DENIED_TOOLS[tool.tool] === undefined)
+      .filter((tool) => TOOL_TARGET_FIELDS[tool.tool] === undefined && !refusedByName(tool.tool))
       .map(
         (tool) =>
           `${tool.tool} (${tool.iface}: ${tool.fields.filter(isTargetShaped).map((f) => f.name).join(', ')})`,
@@ -267,8 +272,8 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
     const unacknowledged: string[] = [];
     const visited: string[] = [];
     for (const tool of targetBearing) {
-      // #219: a tool refused by name (DENIED_TOOLS) has every field covered by the refusal.
-      if (DENIED_TOOLS[tool.tool] !== undefined) continue;
+      // #219, #248: a tool refused by name has every field covered by the refusal.
+      if (refusedByName(tool.tool)) continue;
       visited.push(...tool.fields.filter(isTargetShaped).map((field) => `${tool.tool}.${field.name}`));
       const entry = TOOL_TARGET_FIELDS[tool.tool];
       const acknowledged = ACKNOWLEDGED_NON_TARGET_FIELDS[tool.tool] ?? {};
@@ -282,12 +287,15 @@ describe('TOOL_TARGET_FIELDS is derived from the installed SDK declarations (iss
     // Non-vacuity (a mutation widening the skip to every tool survived without this): the walk must
     // visit exactly the target fields of every target-bearing tool that is NOT refused by name,
     // computed here from the SDK list by name alone, so any wider or narrower skip fails.
-    const refused = new Set(Object.keys(DENIED_TOOLS));
+    // Literal, not derived from the maps the skip reads (a rebuilt expected set passes by construction).
+    const refused = new Set(['Artifact', 'Monitor']);
     const expected = sdkTools
       .filter((tool) => !refused.has(tool.tool))
       .flatMap((tool) => tool.fields.filter((field) => TARGET_FIELD_NAME.test(field.name)).map((field) => `${tool.tool}.${field.name}`));
     expect([...visited].sort()).toEqual([...expected].sort());
     expect(visited).toContain('Projects.path');
+    expect(visited).toContain('Bash.command');
+    expect(visited).not.toContain('Monitor.command');
     expect(unacknowledged).toEqual([]);
 
     const stale: string[] = [];

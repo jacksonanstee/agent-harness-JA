@@ -75,6 +75,30 @@ describe('root barrel (src/index.ts)', () => {
     for (const name of ['continuePrivateKey', 'opensUnterminatedPrivateKey', 'CLOSED_PRIVATE_KEY', 'OPEN_PRIVATE_KEY']) expect(name in barrel, name).toBe(false);
   });
 
+  it('every security deny reason is public on the root barrel as the same non-empty string (#248)', () => {
+    // Table-driven so a future reason is covered without a hand-added line; the
+    // literal list makes adding or dropping one a deliberate edit, not a silent pass.
+    const security = securityBarrel as Readonly<Record<string, unknown>>;
+    const root = barrel as Readonly<Record<string, unknown>>;
+    const reasons = Object.keys(security).filter((name) => name.endsWith('_REASON')).sort();
+    expect(reasons).toEqual([
+      'CODE_EXECUTION_DENY_REASON',
+      'MCP_SERVER_DENY_REASON',
+      'MONITOR_DENY_REASON',
+      'REMOTE_AGENT_DENY_REASON',
+      'SELF_PROTECTION_REASON',
+      'UNGATED_TOOL_DENY_REASON',
+      'UNKNOWN_TOOL_DENY_REASON',
+      'UNSCANNED_AGENT_DENY_REASON',
+    ]);
+    for (const name of reasons) {
+      const value = security[name];
+      expect(typeof value, name).toBe('string');
+      expect((value as string).length, name).toBeGreaterThan(0);
+      expect(root[name], name).toBe(value);
+    }
+  });
+
   it('exports grantPolicyFor, the D-8 rule a library caller passes to permissionHook (#218)', () => {
     expect(barrel.grantPolicyFor).toBe(securityBarrel.grantPolicyFor);
     expect(barrel.grantPolicyFor({}).ungrantableTools.has('Bash')).toBe(true);

@@ -92,12 +92,12 @@ describe('composeSecurity: grantPolicy (#140, D-8; #211 every code-executing too
     expect(ungrantable(policyFor(undefined))).toEqual(ALL);
     expect(ungrantable(policyFor(undefined))).toEqual(Object.keys(CODE_EXECUTING_TOOLS).sort());
   });
-  it('a user commands list makes Bash and Monitor grantable, nothing else', () => {
-    expect(ungrantable(policyFor({ commands: { allow: ['git'] } }))).toEqual(['REPL', 'Workflow']);
+  it('a user commands list makes Bash grantable, nothing else (Monitor is `denied` since #248)', () => {
+    expect(ungrantable(policyFor({ commands: { allow: ['git'] } }))).toEqual(['Monitor', 'REPL', 'Workflow']);
   });
   it('a user paths list unlocks nothing: Workflow is withheld (paths checks where a script is, not what it runs)', () => {
     expect(ungrantable(policyFor({ paths: { allow: ['/x'] } }))).toEqual(ALL);
-    expect(ungrantable(policyFor({ paths: { allow: ['/x'] }, commands: { allow: ['git'] } }))).toEqual(['REPL', 'Workflow']);
+    expect(ungrantable(policyFor({ paths: { allow: ['/x'] }, commands: { allow: ['git'] } }))).toEqual(['Monitor', 'REPL', 'Workflow']);
   });
   it('an empty commands list does not count as configured', () => {
     expect(ungrantable(policyFor({ commands: { allow: [] } }))).toEqual(ALL);
@@ -112,8 +112,8 @@ describe('composeSecurity: grantPolicy (#140, D-8; #211 every code-executing too
   it('project-only sandbox lists unlock nothing (a cloned repo cannot unlock the grant)', () => {
     expect(ungrantable(policyBoth(undefined, { commands: { allow: ['curl'] }, paths: { allow: ['.'] } }))).toEqual(ALL);
   });
-  it('user commands present: Bash and Monitor are grantable, with or without a project list (the gate is the merged list)', () => {
-    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, undefined))).toEqual(['REPL', 'Workflow']);
-    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }))).toEqual(['REPL', 'Workflow']);
+  it('user commands present: Bash is grantable, with or without a project list (the gate is the merged list)', () => {
+    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, undefined))).toEqual(['Monitor', 'REPL', 'Workflow']);
+    expect(ungrantable(policyBoth({ commands: { allow: ['git'] } }, { commands: { allow: ['git', 'ls'] } }))).toEqual(['Monitor', 'REPL', 'Workflow']);
   });
 });

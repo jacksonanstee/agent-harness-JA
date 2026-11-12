@@ -293,8 +293,8 @@ export function sandboxHook(sandbox: Sandbox): (payload: PreToolLike) => Promise
     if (typeof value !== 'string') {
       // Absent and present-but-wrong-type get different reasons. A missing
       // OPTIONAL field is a legitimate mode with no filesystem/command target
-      // the sandbox can gate (a Workflow inline script, a Monitor websocket, an
-      // EnterWorktree by name, a Projects search), not a malformed call, so
+      // the sandbox can gate (a Workflow inline script, an EnterWorktree by
+      // name, a Projects search), not a malformed call, so
       // "requires a string" would misdiagnose it (ADR-0033). These reasons
       // persist to telemetry and the memory denied[] list, so they get the same
       // care as any deny reason (ADR-0031).

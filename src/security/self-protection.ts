@@ -12,7 +12,7 @@
 // followed (a dangling one too) BEFORE a later `..` is applied, so an alias
 // set up before the call is caught. It cannot close a link created between
 // the check and the write, nor a hard link: TOCTOU and inode aliasing are the
-// documented limits (R-23). The Bash/Monitor check expands `HOME` and `~`
+// documented limits (R-23). The Bash check expands `HOME` and `~`
 // spellings, splits the command into shell-style words and runs every
 // candidate path (a word with a `/`, its pieces, and a bare argument,
 // quoted or not) through the same real-path test, plus any absolute mention; it is
@@ -277,7 +277,7 @@ function commandIsProtected(command: string, roots: ProtectedRoots): boolean {
  * The pre-tool handler. A writer tool (`writes` in the shared table) whose
  * target is protected, or is not a string, is denied. A command tool whose
  * command mentions a protected path, or is present but not a string, is
- * denied; an absent command (Monitor's websocket mode) has nothing to match.
+ * denied; an absent command has nothing to match.
  * Reads and every tool outside the table pass to the next gate.
  */
 export function selfProtectionHook(roots: ProtectedRoots): (payload: PreToolLike) => Promise<void> {

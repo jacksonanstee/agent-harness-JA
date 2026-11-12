@@ -11,13 +11,13 @@ describe('TOOL_TARGET_FIELDS', () => {
     // under this test), which is tool-targets.sdk-parity.test.ts's job.
     // MultiEdit left the list in #86: the pinned SDK never declared it.
     // Artifact left the table in #219: it is refused by name (DENIED_TOOLS), and a refused tool has no entry.
+    // Monitor left it in #248 for the same reason (`denied` in CODE_EXECUTING_TOOLS).
     expect(Object.keys(TOOL_TARGET_FIELDS).sort()).toEqual([
       'Bash',
       'Edit',
       'EnterWorktree',
       'Glob',
       'Grep',
-      'Monitor',
       'NotebookEdit',
       'Projects',
       'Read',

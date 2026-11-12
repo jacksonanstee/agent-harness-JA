@@ -15,7 +15,7 @@ import {
 // Issue #188 (ADR-0042): a built-in, non-configurable deny on agent writes to
 // the harness's own state. Jackson's rulings 29/10/2026: both `.harness`
 // directories whole, plus the run's skills root and an outside `--db`; the
-// target compared as written AND by real path; any Bash/Monitor mention of a
+// target compared as written AND by real path; any Bash mention of a
 // protected path denied, a relative name only when it is path-shaped;
 // registered first. Real temp dirs, so the symlink cases are real symlinks.
 
@@ -65,7 +65,7 @@ describe('the writes marker (D2)', () => {
     expect(entries.every(([, t]) => typeof t.writes === 'boolean')).toBe(true);
     expect(entries.filter(([, t]) => t.writes).map(([n]) => n).sort()).toEqual(['Edit', 'NotebookEdit', 'Write']);
     expect(entries.filter(([, t]) => !t.writes).map(([n]) => n).sort()).toEqual([
-      'Bash', 'EnterWorktree', 'Glob', 'Grep', 'Monitor', 'Projects', 'Read', 'Workflow',
+      'Bash', 'EnterWorktree', 'Glob', 'Grep', 'Projects', 'Read', 'Workflow',
     ]);
   });
 
@@ -218,7 +218,15 @@ describe('negative controls', () => {
     }
   });
 
-  it("lets Monitor's websocket mode through: no command means nothing to match (architecture H1)", async () => {
+  it('lets a command tool with no command through: nothing to match (architecture H1)', async () => {
+    await allowed('Bash', { description: 'x' });
+  });
+
+  // #248: Monitor left the table (the tool-name deny refuses it by name, in every mode), so this
+  // hook no longer reads its command. Pinned so re-adding a table entry is a visible act.
+  it('does not see Monitor: it is outside the table since #248', async () => {
+    await allowed('Monitor', { command: `cp /tmp/x ${join(home, '.harness', 'settings.json')}` });
+    await allowed('Monitor', { command: 42 });
     await allowed('Monitor', { ws: { url: 'wss://example.invalid' }, description: 'x' });
   });
 
@@ -227,7 +235,7 @@ describe('negative controls', () => {
   });
 });
 
-describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', () => {
+describe('Bash: any path-shaped mention of a protected path (D4)', () => {
   const abs = join(home, '.harness', 'settings.json');
   it.each([
     `cp /tmp/x ${abs}`,
@@ -296,12 +304,11 @@ describe('Bash and Monitor: any path-shaped mention of a protected path (D4)', (
     `python3 -c "import shutil; shutil.copy('/tmp/x','${join(outside, 'cfg')}/settings.json')"`,
   ])('denies %s', async (command) => {
     await denied('Bash', { command });
-    await denied('Monitor', { command });
   });
 
   it('denies a present command that is not a string (fail closed)', async () => {
     await denied('Bash', { command: ['cp', 'x'] });
-    await denied('Monitor', { command: 42 });
+    await denied('Bash', { command: 42 });
   });
 });
 

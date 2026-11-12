@@ -32,7 +32,7 @@ The other path tools carry `writes: false` and pass to the next gate:
 - `Workflow` reads and runs a script;
 - `EnterWorktree` switches into a worktree, or creates one by `name`, so a checkout could in principle be placed under a protected directory (unverified where the CLI roots it; the harm is bounded, because it cannot overwrite an existing file).
 
-`Bash` and `Monitor` are covered by D4.
+`Bash` and `Monitor` are covered by D4. *(Amended, #248: Bash only; see the amendment in D4.)*
 
 A tool outside the table passes this guard untouched, as it passes the configurable gates (R-9). That includes an MCP tool (off by default, `strictMcpConfig`) and the SDK's `REPL` tool, whose `code` field has no path. Restricting the exposed tool set is #105's decision.
 
@@ -57,7 +57,7 @@ It is then split into shell-style words: quoted parts join their neighbours (`"$
 
 Each candidate goes through D3's test. Separately, any form of a protected root that appears anywhere in the rewritten command is a match when it is followed by the end, a `/`, whitespace, a quote, a shell operator or a glob or brace character, so `rm -rf ~/.harness*` is denied.
 
-Reads are denied like writes: `cat ~/.harness/settings.json`, `ls skills` and `grep skills README.md` are refused, although the `Read` tool may read the same files. A command that is present but not a string is denied. An absent command, which is Monitor's websocket mode, has nothing to match and passes.
+Reads are denied like writes: `cat ~/.harness/settings.json`, `ls skills` and `grep skills README.md` are refused, although the `Read` tool may read the same files. A command that is present but not a string is denied. An absent command, which is Monitor's websocket mode, has nothing to match and passes. *Amended 12/11/2026 (issue #248): Monitor left the tool table and is refused by name in every mode by the tool-name deny (ADR-0040 D-8), so D4 now reads Bash commands only; a Monitor call passes this hook unread and is refused by the next one.*
 
 **D5. Order and configurability.** `registerSecurityHooks` registers the guard first, before the permission hook and the sandbox. That is the one registration site for `run` and `eval`, and both now pass it the protected roots (`tsc` enforces the argument). Its reason is therefore the one reported. Because the guard throws before the permission hook runs, no rule can grant past it: not a user `{"tool": "*", "decision": "allow"}`, not an absent sandbox. No settings key reads or removes it.
 
@@ -67,7 +67,7 @@ The guard belongs to the CLI's composition, not to `createSession`. A library ca
 
 ## Consequences
 
-- **The Bash and Monitor half is defence in depth, not containment.** It reads text after a light rewrite, so anything that builds the path at run time, or spells it in a form D4 does not rewrite, gets past it:
+- **The Bash and Monitor half is defence in depth, not containment.** *(Amended, #248: the Bash half; see the amendment in D4.)* It reads text after a light rewrite, so anything that builds the path at run time, or spells it in a form D4 does not rewrite, gets past it:
   - a variable other than `HOME` (`H=~/.har; cp x "${H}ness/settings.json"`), a glob (`~/.harnes?/s*`), brace expansion, or `printf` and `base64` tricks;
   - `cd` somewhere else and a relative name from there (`cd .. && cp x proj/.harness/x`);
   - `~user/…` and `~-/…`, which are not expanded, and escapes inside `$'…'` (`$'\x2eharness'`), which are not decoded;
