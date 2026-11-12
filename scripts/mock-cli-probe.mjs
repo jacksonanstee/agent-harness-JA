@@ -1,20 +1,30 @@
 #!/usr/bin/env node
 // Keyless probe for "does X reach the model?" questions (R-28 and its issues). It drives the
 // harness's real `run` from a built dist and the real bundled CLI against a LOOPBACK mock of the
-// Messages API. No Anthropic endpoint is reachable (dead proxy for non-loopback), no credential is
-// used (dummy key string, isolated CLAUDE_CONFIG_DIR), so it spends nothing.
+// Messages API. The base URL is loopback, other traffic goes to a dead proxy, cloud-provider
+// switches are cleared, and the key is a dummy string with an isolated CLAUDE_CONFIG_DIR, so no
+// Anthropic endpoint should be reachable and nothing is spent (this rests on the CLI honouring
+// those variables).
 //
 // Usage (after `npm run build`):
 //   SCEN=<scenario> OUT=<empty or earlier probe dir> [DIST=./dist] node scripts/mock-cli-probe.mjs
 //   node scripts/mock-cli-probe.mjs --list          scenario names
 //   node scripts/mock-cli-probe.mjs --show <OUT>    one compact line per logged event
-// Every model request is logged to <OUT>/requests.jsonl: per request, how often the fixture's raw
-// AWS example key appears inside a tool_result versus elsewhere in a user message
-// (`other_user_raw` > 0 is the unhooked channel), and the redaction marker count. Request bodies
-// are kept in <OUT>/bodies/. Stall scenarios wait about 60 s by design. Add scenarios to the
-// table below; keep a scenario for an undisclosed issue out of this file until its fix lands.
+// Every Messages request except count_tokens is logged to <OUT>/requests.jsonl: per request, how
+// often the fixture's raw AWS example key appears inside a tool_result versus elsewhere in a user
+// message (`other_user_raw` > 0 is the unhooked channel), and the redaction marker count. Each
+// request's messages array is kept in <OUT>/bodies/. Stall scenarios wait 58 s by design
+// (sub-stall 75 s); STALL_WAIT_MS shortens stall, fg-timeout and bg-timeout. Positive control: a
+// run in which no request carried the main prompt exits 3, because then every reply was a
+// placeholder and all-zero counters would mean nothing.
+// Optional knobs: INHERIT=1 (inherit permissive settings); SOURCES=user,project,local (harness
+// opts in to CLI setting sources); SENV, PENV, LENV, GENV (an `env` block in the user, project,
+// local or global settings file: a value, __none__, __malformed__, or for SENV __utf16__);
+// FLAGSET=1 (pass the switch as flag settings); HOOKSPY=1, HOOKFULL=1, HOOKBLOCK=1 (log, dump or
+// block UserPromptSubmit). Add scenarios to the table below; keep a scenario for an undisclosed
+// issue out of this file until its fix lands (scripts/check-embargo.sh text <this file>).
 import http from 'node:http';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, statSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -22,8 +32,11 @@ import { pathToFileURL } from 'node:url';
 const PROBE_MARK = '.mock-cli-probe';
 if (process.argv[2] === '--show') {
   const keep = ['kind', 'assistantTurns', 'tool_result_raw', 'tool_result_marker', 'other_user_raw', 'other_user_marker', 'notes', 'lastResults', 'reply'];
-  for (const line of readFileSync(join(resolve(process.argv[3] ?? '.'), 'requests.jsonl'), 'utf8').split('\n').filter(Boolean)) {
-    const o = JSON.parse(line);
+  const logFile = join(resolve(process.argv[3] ?? '.'), 'requests.jsonl');
+  if (!existsSync(logFile)) { console.error(`mock-cli-probe: no ${logFile}`); process.exit(2); }
+  for (const line of readFileSync(logFile, 'utf8').split('\n').filter(Boolean)) {
+    let o;
+    try { o = JSON.parse(line); } catch { console.log(`(unparsable line) ${line.slice(0, 120)}`); continue; }
     const out = o.event === 'request' ? Object.fromEntries(keep.map((k) => [k, o[k]])) : o.event === 'init' ? { ...o, tools: o.tools?.length } : o;
     console.log(JSON.stringify(out).slice(0, 700));
   }
@@ -34,8 +47,17 @@ const SCEN = process.env.SCEN;
 if (!LISTING && (!SCEN || !process.env.OUT)) { console.error('set SCEN and OUT, or pass --list / --show <OUT>'); process.exit(2); }
 const OUT = LISTING ? mkdtempSync(join(tmpdir(), 'mock-cli-probe-')) : resolve(process.env.OUT);
 const DIST = resolve(process.env.DIST ?? 'dist');
+// A dist older than the source answers for old code: warn, since the probe exists to test the code.
+try {
+  const built = statSync(join(DIST, 'cli.js')).mtimeMs;
+  const src = join(DIST, '..', 'src');
+  const newer = readdirSync(src, { recursive: true }).filter((f) => String(f).endsWith('.ts') && statSync(join(src, String(f))).mtimeMs > built);
+  if (newer.length > 0) console.error(`mock-cli-probe: WARNING ${newer.length} file(s) under src/ are newer than ${join(DIST, 'cli.js')}; run npm run build`);
+} catch (e) { console.error(`mock-cli-probe: cannot check dist freshness (${e.message})`); }
 // OUT is wiped before each run, so only an empty or missing directory, or one an earlier probe
 // marked, is accepted: a mistyped OUT must never delete someone's work.
+// Scenario commands interpolate OUT into shell text, so it must be a plain path.
+if (/[^\w./-]/.test(OUT)) { console.error(`refusing OUT ${JSON.stringify(OUT)}: use letters, digits, '.', '_', '-' and '/' only`); process.exit(2); }
 if (existsSync(OUT) && readdirSync(OUT).length > 0 && !existsSync(join(OUT, PROBE_MARK))) {
   console.error(`refusing to wipe ${OUT}: not empty and not an earlier probe output`); process.exit(2);
 }
@@ -159,6 +181,7 @@ if (!scen) { console.error('SCEN one of ' + Object.keys(SCENARIOS).join('|')); p
 
 const flat = (v) => { try { return typeof v === 'string' ? v : JSON.stringify(v ?? null); } catch { return ''; } };
 let n = 0;
+let sawMain = false;
 function summarise(body) {
   const msgs = Array.isArray(body.messages) ? body.messages : [];
   const first = flat(msgs[0]?.content);
@@ -214,6 +237,7 @@ const server = http.createServer((req, res) => {
     if (req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100}'); return; }
     mkdirSync(join(OUT, 'bodies'), { recursive: true }); writeFileSync(join(OUT, 'bodies', `${Date.now()}.json`), JSON.stringify(body.messages, null, 1));
     const s = summarise(body);
+    if (s.kind === 'main') sawMain = true;
     const steps = scen[s.kind] ?? [];
     let step = steps[Math.min(s.assistantTurns, steps.length - 1)] ?? text('ok');
     if (s.kind === 'aux') step = text('ok');
@@ -230,7 +254,7 @@ Object.assign(process.env, {
   HTTPS_PROXY: 'http://127.0.0.1:1', HTTP_PROXY: 'http://127.0.0.1:1', https_proxy: 'http://127.0.0.1:1', http_proxy: 'http://127.0.0.1:1', NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
   DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_ERROR_REPORTING: '1',
 });
-delete process.env.ANTHROPIC_AUTH_TOKEN; delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+for (const k of ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_BEARER_TOKEN_BEDROCK', 'GOOGLE_APPLICATION_CREDENTIALS']) delete process.env[k];
 process.chdir(join(OUT, 'proj'));
 const messages = [];
 const importSdk = async () => {
@@ -250,5 +274,6 @@ const argv = ['run', 'MAIN-TASK probe', '--db', join(OUT, 'run.db'), '--max-turn
 let code;
 try { code = await main(argv, { importSdk, userDir: join(OUT, 'home') }); } catch (e) { console.error('main threw', e); code = 99; }
 log({ event: 'exit', code });
+if (!sawMain) { console.error('mock-cli-probe: no request carried the main prompt, so the counters are meaningless (exit 3); has the CLI changed its request shape?'); process.exit(3); }
 server.close();
 process.exit(code ?? 0);

@@ -1,3 +1,2 @@
 #!/usr/bin/env bash
-# Enabled per clone with: git config core.hooksPath .githooks
-exec bash "$(git rev-parse --show-toplevel)/scripts/check-embargo.sh" staged
+exec bash "$(dirname "$0")/check-embargo.sh" staged

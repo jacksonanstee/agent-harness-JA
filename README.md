@@ -224,9 +224,9 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 
 ## Working on this repo
 
-- **Node:** `.nvmrc` pins 22, the newest version CI runs (20 and 22). Vitest uses the `forks` pool, because the `threads` pool crashed the suite with SIGSEGV on Node 26.
+- **Node:** `.nvmrc` pins 22, the newest version CI runs (20 and 22). Vitest uses the `forks` pool, because the `threads` pool crashed the suite locally with SIGSEGV (exit 139) under Node 26 and vitest 1.6.1.
 - **"Does X reach the model?":** `scripts/mock-cli-probe.mjs` drives the real `run` and the bundled CLI against a loopback mock of the Messages API, with no key and no spend. Run `--list` for scenarios; the header has usage.
-- **Fix-first disclosure:** run `git config core.hooksPath .githooks` once per clone. The hooks run `scripts/check-embargo.sh`, which blocks any commit or push that contains a term listed in the gitignored `tasks/embargo.txt`.
+- **Fix-first disclosure:** run `bash scripts/install-hooks.sh` once per clone (again after changing the hooks). The hooks run `scripts/check-embargo.sh` on each commit's added lines, file names and message, and on each push's commits, branch and tag names, blocking any term listed in the gitignored `tasks/embargo.txt`. Hooks cannot see PR or issue text: run `bash scripts/check-embargo.sh text <file>` on a body before posting it. `--no-verify` skips them, and there is no server-side check, since the list is never published.
 
 ## Status
 
@@ -238,7 +238,7 @@ Full diagram and module boundaries in [docs/architecture.md](./docs/architecture
 | Security layer (injection, secrets, permissions, sandbox) | Complete (Week 2; hardened Week 4) |
 | Eval layer (golden, red-team gate, adversarial verify) | Complete (Week 3) |
 | ADRs | 0001–0046 |
-| Tests | 3610 at the 2026-11-12 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
+| Tests | 3633 at the 2026-11-13 snapshot ([live status: CI](https://github.com/jacksonanstee/agent-harness-JA/actions/workflows/ci.yml)) |
 | Docs polish + blog series | Complete (Week 4) |
 | npm publish (OIDC trusted publishing + provenance, [ADR-0022](./docs/decisions/0022-npm-publish.md)) | Publish path shipped; v0.1.0 releases on the next tagged GitHub Release |
 

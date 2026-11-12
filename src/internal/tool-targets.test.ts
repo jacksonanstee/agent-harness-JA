@@ -69,7 +69,8 @@ describe('canonicalizePath', () => {
   // Note: canonicalizePath normalizes AFTER resolve() specifically so a
   // relative input's cwd component is folded too (V10/V11 review HIGH). That
   // path can only be exercised by changing process.cwd() to a non-NFC
-  // directory, which vitest's worker pool disallows (process.chdir throws), so
+  // directory, which vitest's threads pool disallowed (process.chdir throws;
+  // the suite runs on forks since 13/11/2026, where a chdir would leak cwd), so
   // it is verified by the reviewer's live repro rather than a unit test here.
 });
 

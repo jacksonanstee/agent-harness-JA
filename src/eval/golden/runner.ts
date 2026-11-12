@@ -145,8 +145,8 @@ function finiteCostOrNull(value: number | null): number | null {
  * `cwd` is a parameter rather than a direct `process.cwd()` read, following
  * the injected-seam style used throughout this codebase. It is what lets the
  * `root === cwd` boundary be tested at all: reaching it through `run()` would
- * require a `process.chdir`, which is unavailable in a worker thread and is
- * shared mutable state besides.
+ * require a `process.chdir`, which is unavailable in a worker thread (the
+ * test suite's pool until 13/11/2026) and is shared mutable state besides.
  *
  * Precondition, ENFORCED rather than trusted: both arguments must be
  * resolved absolute paths, which the sole caller guarantees

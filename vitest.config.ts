@@ -2,9 +2,12 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // Child processes, not worker threads: under Node 26 the threads pool
-    // crashes the whole run with SIGSEGV (exit 139), on main as well as on
-    // branches, while forks passes the same suite. CI's Node 20/22 ran either.
+    // Child processes, not worker threads: locally under Node 26 and vitest
+    // 1.6.1 the threads pool crashed the suite with SIGSEGV (exit 139), on main
+    // too, while forks passed it. Root cause unconfirmed (the #175 flake in
+    // scripts/check-test-count.sh may be the same). CI (Node 20/22) passed on
+    // threads. Forks changes isolation: process.chdir now works in a test but
+    // leaks cwd to the rest of its file.
     pool: 'forks',
     // Spec D8a, pin 30: the keyless guard runs in every worker.
     setupFiles: ['./test/sdk-guard.setup.ts'],
