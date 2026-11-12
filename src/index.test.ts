@@ -67,6 +67,9 @@ describe('root barrel (src/index.ts)', () => {
     expect(barrel.AgentDefinitionRefused).toBe(securityBarrel.AgentDefinitionRefused);
     expect(barrel.UnscannedAgentDenied).toBe(securityBarrel.UnscannedAgentDenied);
     expect(barrel.UNSCANNED_AGENT_DENY_REASON).toBe(securityBarrel.UNSCANNED_AGENT_DENY_REASON);
+    expect(barrel.CODE_EXECUTION_DENY_REASON).toBe(securityBarrel.CODE_EXECUTION_DENY_REASON);
+    expect(barrel.MONITOR_DENY_REASON).toBe(securityBarrel.MONITOR_DENY_REASON);
+    expect(typeof barrel.MONITOR_DENY_REASON).toBe('string');
     expect(barrel.agentScanFor).toBe(sessionBarrel.agentScanFor);
     // The scan internals stay off the root barrel.
     expect('scanAgentDefinitions' in barrel).toBe(false);

@@ -54,8 +54,9 @@ describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since
     expect(MONITOR_DENY_REASON).not.toBe(CODE_EXECUTION_DENY_REASON);
   });
 
-  it('the reason is fixed per tool: the same text on every call, whatever was asked', () => {
-    expect(codeExecutionDenial('Monitor')?.message).toBe(codeExecutionDenial('Monitor')?.message);
+  it('the reason is fixed per tool: Monitor gets its own text, REPL and the default constructor the shared one', () => {
+    expect(codeExecutionDenial('Monitor')?.message).toBe(MONITOR_DENY_REASON);
+    expect(codeExecutionDenial('REPL')?.message).toBe(CODE_EXECUTION_DENY_REASON);
     expect(new CodeExecutionDenied().message).toBe(CODE_EXECUTION_DENY_REASON);
   });
 });
