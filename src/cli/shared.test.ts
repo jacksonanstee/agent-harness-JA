@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { buildProtectedRoots, CODE_EXECUTION_DENY_REASON, MONITOR_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
+import { BACKGROUND_BASH_DENY_REASON, buildProtectedRoots, CODE_EXECUTION_DENY_REASON, MONITOR_DENY_REASON, mergeLayers, mergeSandboxLayers, parsePermissionSettings, parseSandboxSettings, SELF_PROTECTION_REASON, UNGATED_TOOL_DENY_REASON, UNKNOWN_TOOL_DENY_REASON, REMOTE_AGENT_DENY_REASON, MCP_SERVER_DENY_REASON } from '../security/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { JUDGE_MODEL } from '../session/index.js';
 import { TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
@@ -406,6 +406,37 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
       expect(result.reason).toBe(MONITOR_DENY_REASON);
     });
   }
+
+  // #250: a background shell's output can reach the model as task-notification text (the CLI's stall
+  // notice), outside every post-tool hook. A Bash call that asks for the background is refused: under
+  // defaults, and when the user file grants Bash and the program.
+  const backgroundSettings = [
+    { label: 'harness defaults (no rules, no sandbox)', user: {}, sandbox: {}, ungrantable: ['Bash', 'Monitor', 'REPL', 'Workflow'] },
+    {
+      label: 'a user allow-everything rule plus a sandbox.commands list naming the program',
+      user: { permissions: { rules: [{ tool: 'Bash', decision: 'allow' }, { tool: '*', decision: 'allow' }] } },
+      sandbox: { sandbox: { commands: { allow: ['tail'] } } },
+      ungrantable: [],
+    },
+  ];
+  for (const { label, user, sandbox, ungrantable } of backgroundSettings) {
+    it(`refuses Bash with run_in_background under ${label}; the built-in reason is reported`, async () => {
+      const hooks = createHookRuntime();
+      registerSecurityHooks(hooks, compose(user, ungrantable, sandbox), roots);
+      const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool: 'Bash', args: { command: 'tail -f app.log', run_in_background: true }, redactions: null });
+      expect(result.denied).toBe(true);
+      if (!result.denied) throw new Error('unreachable');
+      expect(result.reason).toBe(BACKGROUND_BASH_DENY_REASON);
+    });
+  }
+
+  it('the same granted Bash call without run_in_background is not refused by a built-in deny (#250 control)', async () => {
+    const hooks = createHookRuntime();
+    const { user, sandbox, ungrantable } = backgroundSettings[1]!;
+    registerSecurityHooks(hooks, compose(user, ungrantable, sandbox), roots);
+    const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool: 'Bash', args: { command: 'tail -f app.log' }, redactions: null });
+    expect(result.denied).toBe(false);
+  });
 
   // #225: default-deny. No rule or sandbox list can let an unreviewed tool, or a cloud subagent, through.
   it.each([

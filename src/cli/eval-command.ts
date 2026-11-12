@@ -14,10 +14,11 @@ import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
-import { agentScanFor, createSession } from '../session/index.js';
+import { agentScanFor, createSession, settingsEnvScanFor } from '../session/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
   AgentDefinitionRefused,
+  SettingsEnvRefused,
   redact,
   scan,
   buildProtectedRoots,
@@ -200,6 +201,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         redactSecrets: (text) => redact(text),
         // #229: the same home directory the settings were read from.
         scanAgents: agentScanFor(deps.selfProtection.userDir),
+        scanSettingsEnv: settingsEnvScanFor(deps.selfProtection.userDir),
       },
       {
         skillsDir: config.skillsDir,
@@ -263,6 +265,13 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
   const agentScan = agentScanFor(seams.userDir ?? homedir())(security.sdk.settingSources);
   if (agentScan.refusals.length > 0) {
     process.stderr.write(`refusing to run: ${sanitizeDiagnostic(new AgentDefinitionRefused(agentScan.refusals).message)}\n`);
+    return 2;
+  }
+
+  // #250: the same pre-flight for the settings-env scan; the per-task scan stays as the backstop.
+  const settingsEnvRefusals = settingsEnvScanFor(seams.userDir ?? homedir())(security.sdk.settingSources);
+  if (settingsEnvRefusals.length > 0) {
+    process.stderr.write(`refusing to run: ${sanitizeDiagnostic(new SettingsEnvRefused(settingsEnvRefusals).message)}\n`);
     return 2;
   }
 

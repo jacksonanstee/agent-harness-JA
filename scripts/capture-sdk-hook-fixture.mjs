@@ -64,6 +64,9 @@ const recorder = () => async (input) => {
 };
 
 const MARKER = 'harness-fixture-capture-marker';
+// By design this calls sdk.query directly: no harness session, so none of the harness's hooks and none of the
+// child environment it builds (issue #250). It captures the SDK's own hook payloads for a fixture, and the
+// prompts ask for foreground Bash calls and a Read, nothing in the background.
 const q = sdk.query({
   prompt:
     `Call the Bash tool exactly once to run: echo ${MARKER}. ` +

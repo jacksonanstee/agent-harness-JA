@@ -43,10 +43,11 @@ import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
-import { agentScanFor, createSession, DEFAULT_DESCRIPTOR } from './session/index.js';
+import { agentScanFor, createSession, DEFAULT_DESCRIPTOR, settingsEnvScanFor } from './session/index.js';
 import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session/index.js';
 import {
   AgentDefinitionRefused,
+  SettingsEnvRefused,
   redact,
   scan,
   buildProtectedRoots,
@@ -734,6 +735,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       redactSecrets: (text) => redact(text),
       // #229: the agent-file scan reads the same home directory as the settings.
       scanAgents: agentScanFor(seams.userDir ?? homedir()),
+      // #250: the settings-env scan reads the same home directory.
+      scanSettingsEnv: settingsEnvScanFor(seams.userDir ?? homedir()),
       ...runJudgeDeps(security.judge, query),
     },
     {
@@ -760,6 +763,11 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
   } catch (error: unknown) {
     // #229: a loadable agent file the harness cannot vouch for refuses the run before the SDK is called.
     if (error instanceof AgentDefinitionRefused) {
+      process.stderr.write(`refusing to run: ${sanitizeDiagnostic(error.message)}\n`);
+      return 2;
+    }
+    // #250: a settings file whose env block would undo a forced child variable refuses the run the same way.
+    if (error instanceof SettingsEnvRefused) {
       process.stderr.write(`refusing to run: ${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }

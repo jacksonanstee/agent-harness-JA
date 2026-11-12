@@ -511,7 +511,8 @@ export function composeSecurity(deps: ComposeSecurityDeps): SecurityComposition 
  * come first, from `builtInDenyHooks` in its order: self-protection (#188,
  * ADR-0042), the tool-name deny (#230: the code-execution, ungated-tool and
  * unreviewed-tool denies of #211, #219 and #225, given the USER layer's
- * `sdk.allowedMcpServers`), and the remote-agent deny (#225, ADR-0045). They
+ * `sdk.allowedMcpServers`), and the argument deny (the remote-agent deny,
+ * #225, ADR-0045, and the background-Bash deny, #250, in one hook). They
  * read no settings themselves, so no rule, grant or absent sandbox dimension
  * can let a call they deny through, and
  * their reason is the one reported. Then permissions, then the sandbox as the

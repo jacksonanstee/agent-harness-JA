@@ -54,7 +54,7 @@ describe('toolNameDenyHook (#230): the built-in denies that are pure functions o
       for (const { tool, error } of steps) {
         await expect(hook(preTool(tool, args)), `${tool} ${JSON.stringify(args)}`).rejects.toThrow(error);
       }
-      // A remote Agent call passes HERE: the argument check is remoteAgentDenyHook's.
+      // A remote Agent call passes HERE: the argument check is argumentDenyHook's (remoteAgentDenial).
       await expect(hook(preTool('Agent', args)), JSON.stringify(args)).resolves.toBeUndefined();
     }
   });

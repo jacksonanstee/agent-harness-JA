@@ -3,7 +3,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { AgentScanResult, InitCheck, JudgeCall, RedactResult, ScanResult, SettingSource } from '../security/index.js';
+import type { AgentScanResult, InitCheck, JudgeCall, RedactResult, ScanResult, SettingSource, SettingsEnvRefusal } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -318,6 +318,22 @@ export interface QueryOptions {
    */
   maxBudgetUsd?: number;
   /**
+   * The child process environment, the SDK's `Options.env` (issue #250). The
+   * SDK REPLACES the child's environment with it rather than merging, so the
+   * session's primary query passes `buildChildEnv(process.env)`: every
+   * inherited variable plus the harness's forced table. The judge and the
+   * eval adversary pass none (they run with `tools: []`).
+   */
+  env?: Record<string, string | undefined>;
+  /**
+   * Flag settings for the child, the SDK's `Options.settings` (issue #250).
+   * The primary query passes `buildChildSettings()`: an `env` block repeating
+   * the forced table. Its value won over the user, project and local
+   * settings files and the global config file (observed); that it is applied
+   * later is inferred from that. The judge and the eval adversary pass none.
+   */
+  settings?: { env: Record<string, string> };
+  /**
    * The SDK's cancellation channel (issue #96 PR-B1, spec D4). `buildJudge`
    * always passes one, linked to the scanner's per-call signal; since #187
    * the session's primary query passes one too, linked to
@@ -401,6 +417,15 @@ export interface SessionDeps {
    * library caller should leave it unset.
    */
   scanAgents?: (settingSources: readonly SettingSource[]) => AgentScanResult;
+  /**
+   * The settings-env scan (#250), run at the start of every `run()` with the
+   * config's setting sources: the run is refused (`SettingsEnvRefused`) when a
+   * settings file the CLI would load names, in its `env` block, a variable
+   * the harness forces into the child. Default: the real files (the managed
+   * and global ones always). A seam for tests; a library caller should leave
+   * it unset.
+   */
+  scanSettingsEnv?: (settingSources: readonly SettingSource[]) => readonly SettingsEnvRefusal[];
   /**
    * The S-5 judge (issue #96 PR-B1, spec D3, R1): the call and the per-run
    * cap. When present, every non-block PostToolUse and PostToolUseFailure

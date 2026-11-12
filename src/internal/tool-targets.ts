@@ -92,6 +92,9 @@ export type CodeExecutionGate = 'commands' | 'withheld' | 'denied';
  * member has a table entry.
  */
 export const CODE_EXECUTING_TOOLS: Readonly<Record<string, CodeExecutionGate>> = {
+  // A Bash call that asks for the background is refused whatever this gate says
+  // (BASH_BACKGROUND_FIELD below, issue #250): a background shell's stall notice
+  // reaches the model the way Monitor's lines do.
   Bash: 'commands',
   // Each line the command prints reaches the model as task-notification text, not
   // as a tool result, so no post-tool hook sees it: no secret redaction, no
@@ -106,6 +109,14 @@ export const CODE_EXECUTING_TOOLS: Readonly<Record<string, CodeExecutionGate>> =
   // the bundled binary, 30/10/2026). Off in SDK runs unless CLAUDE_CODE_REPL is set.
   REPL: 'denied',
 };
+
+/**
+ * The Bash input field that asks the CLI to run the command in the background
+ * (`BashInput.run_in_background`, SDK 0.3.312). `backgroundBashDenial` refuses
+ * a Bash call that sets it (issue #250); tool-targets.sdk-parity.test.ts fails
+ * when the SDK stops declaring it.
+ */
+export const BASH_BACKGROUND_FIELD = 'run_in_background';
 
 /**
  * Target-shaped SDK fields (name says path or command) that are deliberately

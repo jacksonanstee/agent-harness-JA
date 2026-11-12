@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
+import { BACKGROUND_TASKS_SWITCH } from '../internal/child-env.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { SettingSource } from '../security/index.js';
@@ -84,4 +85,57 @@ describe('createSession isolates Claude Code settings by default (#140, ADR-0040
       expect(fake.captured).toHaveLength(0);
     },
   );
+});
+
+describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR-0040 D-8 amended 12/11/2026)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('passes an env that carries the switch as "1" and every inherited variable', async () => {
+    vi.stubEnv('HARNESS_250_SENTINEL', 'kept');
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null }).run('p');
+    const env = fake.captured[0]?.options?.env;
+    expect(env?.[BACKGROUND_TASKS_SWITCH]).toBe('1');
+    expect(env?.['HARNESS_250_SENTINEL']).toBe('kept');
+    // The SDK's `env` replaces the child environment, so nothing inherited may be dropped.
+    for (const [name, value] of Object.entries(process.env)) {
+      if (name !== BACKGROUND_TASKS_SWITCH) expect(env?.[name], name).toBe(value);
+    }
+  });
+
+  it.each(['0', '', 'false'])('the harness value wins over an inherited %j', async (inherited) => {
+    vi.stubEnv(BACKGROUND_TASKS_SWITCH, inherited);
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null }).run('p');
+    expect(fake.captured[0]?.options?.env?.[BACKGROUND_TASKS_SWITCH]).toBe('1');
+  });
+
+  it('reads the environment at run time, not at construction, and never hands the SDK process.env itself', async () => {
+    const fake = fakeQuery([INIT, RESULT]);
+    const session = createSession(makeDeps(fake), { skillsDir: null });
+    const before = process.env[BACKGROUND_TASKS_SWITCH];
+    vi.stubEnv('HARNESS_250_LATE', 'late');
+    await session.run('p');
+    const env = fake.captured[0]?.options?.env;
+    expect(env?.['HARNESS_250_LATE']).toBe('late');
+    expect(env).not.toBe(process.env);
+    // The harness's own environment is not mutated.
+    expect(process.env[BACKGROUND_TASKS_SWITCH]).toBe(before);
+  });
+
+  // The CLI applies a settings file's env block over its environment; flag settings are applied after the
+  // user, project and local files, so the same table goes in as flag settings too.
+  it.each([[[]], [['user', 'project', 'local']]] as const)('passes the forced table as flag settings as well (sources %j)', async (sources) => {
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null, settingSources: [...sources] }).run('p');
+    expect(fake.captured[0]?.options?.settings).toEqual({ env: { [BACKGROUND_TASKS_SWITCH]: '1' } });
+  });
+
+  it('is set whatever settingSources says (the switch is not part of the isolation opt-in)', async () => {
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null, settingSources: ['user', 'project', 'local'] }).run('p');
+    expect(fake.captured[0]?.options?.env?.[BACKGROUND_TASKS_SWITCH]).toBe('1');
+  });
 });

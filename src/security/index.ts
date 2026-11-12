@@ -66,6 +66,18 @@ export {
   UnknownToolDenied,
 } from './unknown-tool-deny.js';
 export { REMOTE_AGENT_DENY_REASON, remoteAgentDenyHook, RemoteAgentDenied } from './remote-agent-deny.js';
+export { BACKGROUND_BASH_DENY_REASON, BackgroundBashDenied } from './background-bash-deny.js';
+export { argumentDenyHook } from './argument-deny.js';
+export { scanSettingsEnv, SETTINGS_ENV_MAX_FILE_BYTES, SETTINGS_ENV_REFUSED_REASON, settingsEnvFiles, SettingsEnvRefused } from './settings-env.js';
+export type {
+  SettingsEnvFile,
+  SettingsEnvFilesInput,
+  SettingsEnvIo,
+  SettingsEnvRefusal,
+  SettingsEnvRefusalReason,
+  SettingsEnvScanLimits,
+  SettingsEnvSource,
+} from './settings-env.js';
 export { toolNameDenyHook } from './tool-name-deny.js';
 export type { ToolNameDenyOptions } from './tool-name-deny.js';
 export { grantPolicyFor } from './grant-policy.js';

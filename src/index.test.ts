@@ -75,6 +75,18 @@ describe('root barrel (src/index.ts)', () => {
     for (const name of ['continuePrivateKey', 'opensUnterminatedPrivateKey', 'CLOSED_PRIVATE_KEY', 'OPEN_PRIVATE_KEY']) expect(name in barrel, name).toBe(false);
   });
 
+  it('exports the #250 surface: the argument deny, the background-Bash error, the settings-env refusal and its scan seam', () => {
+    expect(barrel.argumentDenyHook).toBe(securityBarrel.argumentDenyHook);
+    expect(typeof barrel.argumentDenyHook).toBe('function');
+    expect(barrel.BackgroundBashDenied).toBe(securityBarrel.BackgroundBashDenied);
+    expect(new barrel.BackgroundBashDenied()).toBeInstanceOf(Error);
+    expect(barrel.SettingsEnvRefused).toBe(securityBarrel.SettingsEnvRefused);
+    expect(new barrel.SettingsEnvRefused([])).toBeInstanceOf(Error);
+    expect(barrel.settingsEnvScanFor).toBe(sessionBarrel.settingsEnvScanFor);
+    // The scan internals and the env builder stay off the root barrel.
+    for (const name of ['scanSettingsEnv', 'settingsEnvFiles', 'backgroundBashDenial', 'buildChildEnv', 'FORCED_CHILD_ENV']) expect(name in barrel, name).toBe(false);
+  });
+
   it('every security deny reason is public on the root barrel as the same non-empty string (#248)', () => {
     // Table-driven so a future reason is covered without a hand-added line; the
     // literal list makes adding or dropping one a deliberate edit, not a silent pass.
@@ -82,11 +94,13 @@ describe('root barrel (src/index.ts)', () => {
     const root = barrel as Readonly<Record<string, unknown>>;
     const reasons = Object.keys(security).filter((name) => name.endsWith('_REASON')).sort();
     expect(reasons).toEqual([
+      'BACKGROUND_BASH_DENY_REASON',
       'CODE_EXECUTION_DENY_REASON',
       'MCP_SERVER_DENY_REASON',
       'MONITOR_DENY_REASON',
       'REMOTE_AGENT_DENY_REASON',
       'SELF_PROTECTION_REASON',
+      'SETTINGS_ENV_REFUSED_REASON',
       'UNGATED_TOOL_DENY_REASON',
       'UNKNOWN_TOOL_DENY_REASON',
       'UNSCANNED_AGENT_DENY_REASON',

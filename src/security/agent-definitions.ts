@@ -188,26 +188,35 @@ function mainCheckoutOf(dotGit: string): string | null {
   }
 }
 
-/** `<dir>/.claude/agents` from cwd up to the git root (inclusive) or $HOME (exclusive), plus a worktree's main checkout. */
-function projectRoots(cwd: string, homeDir: string): AgentRoot[] {
-  const roots: AgentRoot[] = [];
+/**
+ * Every `<dir>/.claude` from cwd up to the git root (inclusive) or $HOME
+ * (exclusive), plus a worktree's main checkout: where the CLI looks for
+ * project-scoped configuration. Shared with the settings-env scan (#250).
+ */
+export function projectConfigDirs(cwd: string, homeDir: string): string[] {
+  const dirs: string[] = [];
   // resolve() normalises separators and a trailing slash; a case or symlink difference only over-scans.
   const home = resolve(homeDir);
   let dir = resolve(cwd);
   for (;;) {
     if (dir === home) break;
-    roots.push({ source: 'project', dir: join(dir, '.claude', 'agents') });
+    dirs.push(join(dir, '.claude'));
     const dotGit = join(dir, '.git');
     if (existsSync(dotGit)) {
       const main = mainCheckoutOf(dotGit);
-      if (main !== null && main !== dir) roots.push({ source: 'project', dir: join(main, '.claude', 'agents') });
+      if (main !== null && main !== dir) dirs.push(join(main, '.claude'));
       break;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return roots;
+  return dirs;
+}
+
+/** `<dir>/.claude/agents` for each project configuration directory. */
+function projectRoots(cwd: string, homeDir: string): AgentRoot[] {
+  return projectConfigDirs(cwd, homeDir).map((dir) => ({ source: 'project' as const, dir: join(dir, 'agents') }));
 }
 
 /**

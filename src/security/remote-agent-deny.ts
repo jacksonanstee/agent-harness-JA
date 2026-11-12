@@ -33,7 +33,10 @@ function isLocalAgentCall(args: unknown): boolean {
 /**
  * Pre-tool hook refusing an Agent call whose own arguments do not keep it
  * local (issue #225, ADR-0045 D4; its own hook since #230, because the
- * name-based denies read no arguments). Every other tool passes. An agent
+ * name-based denies read no arguments). Since #250 the shipped stack registers
+ * `argumentDenyHook` (`argument-deny.ts`), which composes `remoteAgentDenial`
+ * with the background-Bash check; this hook stays for a caller that wants the
+ * Agent check alone. Every other tool passes. An agent
  * definition can also set `isolation: remote` in its frontmatter, which the
  * CLI applies when the call omits the field; this hook cannot see that (the
  * agent-definition scan covers the files it can read, ADR-0046).
@@ -47,9 +50,10 @@ export function remoteAgentDenyHook(): (payload: PreToolLike) => Promise<void> {
 
 /**
  * The remote-agent refusal for a call, or undefined: the argument-reading
- * counterpart of the name checks' `*Denial(tool)` functions (#230). A later
- * built-in deny that reads arguments becomes another step composed with this
- * one in the same hook, so it does not shift `handlerIndex`.
+ * counterpart of the name checks' `*Denial(tool)` functions (#230). A
+ * built-in deny that reads arguments is another step composed with this one
+ * in `argumentDenyHook`, so it does not shift `handlerIndex` (the first such
+ * step is `backgroundBashDenial`, #250).
  */
 export function remoteAgentDenial(payload: PreToolLike): RemoteAgentDenied | undefined {
   return payload.tool === 'Agent' && !isLocalAgentCall(payload.args) ? new RemoteAgentDenied() : undefined;
