@@ -1316,8 +1316,9 @@ describe('main (pre-SDK paths)', () => {
 
   // The symlinked-.harness refusal cannot be driven through main() here:
   // lstatSync('.harness') resolves relative to the OS-level cwd, and
-  // process.chdir() throws ERR_WORKER_UNSUPPORTED_OPERATION under vitest's
-  // threads pool. The branch is covered directly by the refuseSymlinkedDir
+  // process.chdir() threw ERR_WORKER_UNSUPPORTED_OPERATION under vitest's
+  // threads pool (the suite runs on forks since 13/11/2026, where chdir works
+  // but would leak cwd across the file). The branch is covered directly by the refuseSymlinkedDir
   // unit tests above; runEval calls it verbatim.
   it('returns 2 for eval when project settings are malformed (SettingsLoadError)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'eval-cwd-'));

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref pushed.
+set -uo pipefail
+check="$(dirname "$0")/check-embargo.sh"
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r lref lsha rref rsha; do
+  bash "$check" ref "$lref" "$lsha" || status=1
+  bash "$check" ref "$rref" || status=1
+  [[ "$lsha" == "$zero" ]] && continue
+  # Commits the remote does not have yet. A new branch, or a remote sha not held
+  # locally (someone else pushed), falls back to everything on no remote ref.
+  if [[ "$rsha" != "$zero" ]] && git cat-file -e "$rsha^{commit}" 2>/dev/null; then
+    bash "$check" range "$rsha..$lsha" || status=1
+  else
+    bash "$check" range "$lsha" --not --remotes || status=1
+  fi
+done
+exit $status
