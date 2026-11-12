@@ -16,11 +16,12 @@ import { resolve } from 'node:path';
  * weeks under a pin test that only pinned the table to itself.
  *
  * A gated tool whose field is absent is DENIED by the sandbox unless the SDK
- * defines "missing" as cwd (ADR-0015 §2). For Workflow, Monitor, EnterWorktree
- * and Projects the field is optional and absence means a mode the gates
- * cannot see (an inline script, a websocket, a new worktree by name, a remote
- * doc operation); denying those under an enabled sandbox dimension is the
- * accepted cost (ADR-0033).
+ * defines "missing" as cwd (ADR-0015 §2). For Workflow, EnterWorktree and
+ * Projects the field is optional and absence means a mode the gates cannot
+ * see (an inline script, a new worktree by name, a remote doc operation);
+ * denying those under an enabled sandbox dimension is the accepted cost
+ * (ADR-0033). Monitor (`command`) left the table in issue #248: it is refused
+ * by name (`denied` in CODE_EXECUTING_TOOLS), and a refused tool has no entry.
  *
  * Network-egress tools (WebFetch/WebSearch) are deliberately absent: gating
  * them needs a URL/domain dimension, not a path prefix — tracked as future
@@ -61,7 +62,6 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
   Glob: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
   Grep: { field: 'path', kind: 'path', missingMeansCwd: true, writes: false },
   Workflow: { field: 'scriptPath', kind: 'path', writes: false },
-  Monitor: { field: 'command', kind: 'command', writes: false },
   EnterWorktree: { field: 'path', kind: 'path', writes: false },
   // Projects has two target-shaped fields; only local_path is a filesystem
   // path (an upload read from the working directory). See the acknowledgement
@@ -76,7 +76,8 @@ export const TOOL_TARGET_FIELDS: Readonly<Record<string, ToolTarget>> = {
  * - `withheld`: never a grant; the bundled CLI's own permission check decides,
  *   and it asks, which a headless run refuses;
  * - `denied`: refused by a built-in hook before any rule is read
- *   (`codeExecutionDenial`, step 1 of `toolNameDenyHook`), because the CLI's own check allows it.
+ *   (`codeExecutionDenial`, step 1 of `toolNameDenyHook`), because the CLI's own check allows it
+ *   (REPL), or because what the tool returns never passes a harness hook (Monitor, issue #248).
  */
 export type CodeExecutionGate = 'commands' | 'withheld' | 'denied';
 
@@ -92,7 +93,13 @@ export type CodeExecutionGate = 'commands' | 'withheld' | 'denied';
  */
 export const CODE_EXECUTING_TOOLS: Readonly<Record<string, CodeExecutionGate>> = {
   Bash: 'commands',
-  Monitor: 'commands',
+  // Each line the command prints reaches the model as task-notification text, not
+  // as a tool result, so no post-tool hook sees it: no secret redaction, no
+  // injection scan, no judge, no tool-trace row (issue #248; observed in a keyed
+  // run on 12/11/2026 at SDK 0.3.312, where an ungranted `cat` under harness
+  // defaults put a raw credential in front of the model). A grant cannot make
+  // that safe, so there is no `commands` variant: the tool is refused by name.
+  Monitor: 'denied',
   // The CLI's check is `ask` for an inline script, a name and a scriptPath alike.
   Workflow: 'withheld',
   // `code` is arbitrary JavaScript; the CLI's check is a flat `allow` (read from

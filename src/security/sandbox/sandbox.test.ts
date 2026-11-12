@@ -281,17 +281,16 @@ describe('sandboxHook', () => {
     await expect(
       hook(preTool('Projects', { method: 'project_write', local_path: '/etc/passwd' })),
     ).rejects.toThrowError(SandboxViolation);
-    await expect(
-      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' })),
-    ).rejects.toThrowError(SandboxViolation);
     // An entry is a gate, not a blanket deny: allowlisted targets pass.
     await expect(hook(preTool('Workflow', { scriptPath: '/safe/wf.js' }))).resolves.toBeUndefined();
-    await expect(
-      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'git status' })),
-    ).resolves.toBeUndefined();
     // #219: no table entry, so the sandbox does not see Artifact; ungated-tool-deny.test.ts pins the refusal.
     await expect(
       hook(preTool('Artifact', { file_path: '/etc/passwd', favicon: 'x' })),
+    ).resolves.toBeUndefined();
+    // #248: Monitor left the table too (refused by name, `denied` in CODE_EXECUTING_TOOLS), so the sandbox
+    // does not see it either; code-execution-deny.test.ts and cli/shared.test.ts pin the refusal.
+    await expect(
+      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, command: 'rm -rf /' })),
     ).resolves.toBeUndefined();
   });
 
@@ -305,9 +304,6 @@ describe('sandboxHook', () => {
     await expect(hook(preTool('Workflow', { name: 'deploy' }))).rejects.toThrow(
       /Workflow has no scriptPath; this mode has no path target/,
     );
-    await expect(
-      hook(preTool('Monitor', { description: 'd', timeout_ms: 1, persistent: false, ws: { url: 'wss://x' } })),
-    ).rejects.toThrow(/Monitor has no command; this mode has no command target/);
     await expect(hook(preTool('EnterWorktree', { name: 'feature' }))).rejects.toThrow(
       /EnterWorktree has no path; this mode has no path target/,
     );

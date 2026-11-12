@@ -16,6 +16,7 @@ describe('isRuledTool: every name the harness has ruled on', () => {
     ['Read', 'a gated table tool'],
     ['Bash', 'a gated code runner'],
     ['REPL', 'a denied code runner'],
+    ['Monitor', 'a denied code runner (#248)'],
     ['Artifact', 'DENIED_TOOLS'],
     ['ArtifactCheck', 'DENIED_TOOLS (binary-only)'],
     ['AskUserQuestion', 'an acknowledged tool'],

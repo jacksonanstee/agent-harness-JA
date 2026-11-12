@@ -113,10 +113,10 @@ describe('unreviewedToolDenial (#225; a toolNameDenyHook step since #230): defau
   // Literal anchors, not a re-derivation of ALLOWED_TOOL_NAMES (code review: a rebuilt expected set passes by construction).
   it('allows the anchor tools and refuses the anchor refusals, by literal name', () => {
     expect(ALLOWED_TOOL_NAMES.size).toBeGreaterThan(0);
-    for (const tool of ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'Monitor', 'Workflow', 'Agent', 'WebFetch', 'ToolSearch', 'TodoWrite']) {
+    for (const tool of ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'Workflow', 'Agent', 'WebFetch', 'ToolSearch', 'TodoWrite']) {
       expect(ALLOWED_TOOL_NAMES.has(tool), tool).toBe(true);
     }
-    for (const tool of ['REPL', 'Artifact', 'PowerShell', 'Skill', 'SendMessage', 'SendUserFile', 'LSP', 'CronCreate', 'ExitWorktree', 'ReadMcpResourceTool', 'ListMcpResourcesTool']) {
+    for (const tool of ['REPL', 'Monitor', 'Artifact', 'PowerShell', 'Skill', 'SendMessage', 'SendUserFile', 'LSP', 'CronCreate', 'ExitWorktree', 'ReadMcpResourceTool', 'ListMcpResourcesTool']) {
       expect(ALLOWED_TOOL_NAMES.has(tool), tool).toBe(false);
     }
     expect([...ALLOWED_TOOL_NAMES].filter((tool) => tool.startsWith(MCP_TOOL_PREFIX))).toEqual([]);

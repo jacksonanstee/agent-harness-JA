@@ -25,10 +25,11 @@ const untouchable = (): unknown =>
 describe('toolNameDenyHook (#230): the built-in denies that are pure functions of the tool name, as one hook', () => {
   const hook = toolNameDenyHook();
 
-  // One probe per step, each the earliest step that refuses it. REPL and Artifact are also unlisted
+  // One probe per step, each the earliest step that refuses it. REPL, Monitor and Artifact are also unlisted
   // (step 4 would refuse them) and the artifacts server is also MCP (step 3 would): first match wins.
   const steps = [
     { tool: 'REPL', error: CodeExecutionDenied, reason: CODE_EXECUTION_DENY_REASON },
+    { tool: 'Monitor', error: CodeExecutionDenied, reason: CODE_EXECUTION_DENY_REASON },
     { tool: 'Artifact', error: UngatedToolDenied, reason: UNGATED_TOOL_DENY_REASON },
     { tool: 'mcp__claude-artifacts__publish_files', error: UngatedToolDenied, reason: UNGATED_TOOL_DENY_REASON },
     { tool: 'mcp__ide__executeCode', error: McpServerDenied, reason: MCP_SERVER_DENY_REASON },

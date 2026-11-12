@@ -20,9 +20,11 @@ const DENIED_CODE_TOOLS: ReadonlySet<string> = new Set(
 
 /**
  * The refusal for a CODE_EXECUTING_TOOLS member whose gate is `denied` (today
- * REPL; issue #211), or undefined. A pure function of the name, applied by
- * `toolNameDenyHook` (#230). Without it, withholding the grant would refuse
- * nothing for such a tool, since the CLI's own check is `allow`.
+ * REPL, issue #211, and Monitor, issue #248), or undefined. A pure function of
+ * the name, applied by `toolNameDenyHook` (#230). Without it, withholding the
+ * grant would refuse nothing for REPL, since the CLI's own check is `allow`;
+ * for Monitor no grant condition helps, because its output reaches the model
+ * outside every post-tool hook.
  */
 export const codeExecutionDenial = (tool: string): CodeExecutionDenied | undefined =>
   DENIED_CODE_TOOLS.has(tool) ? new CodeExecutionDenied() : undefined;

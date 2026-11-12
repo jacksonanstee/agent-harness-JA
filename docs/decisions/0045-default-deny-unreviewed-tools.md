@@ -29,7 +29,7 @@ The owner ruled on 05/11/2026, in three rounds:
 
 **D1. An allowlist for non-MCP tools.** `ALLOWED_TOOL_NAMES` in `src/internal/tool-targets.ts` is the union of:
 - every `TOOL_TARGET_FIELDS` entry (the gated table);
-- every `CODE_EXECUTING_TOOLS` member whose gate is not `denied` (Bash, Monitor, Workflow);
+- every `CODE_EXECUTING_TOOLS` member whose gate is not `denied` (Bash, Monitor, Workflow); *Amended 12/11/2026 (issue #248): Monitor's gate is now `denied`, so it left the allowlist and is refused at step 1 of the tool-name deny (ADR-0040 D-8, R-28).*
 - every `ACKNOWLEDGED_TOOLS` entry, each with the reason it was ruled safe.
 
 `ACKNOWLEDGED_TOOLS` holds 19 tools: Agent, AskUserQuestion, EndConversation, EnterPlanMode, ExitPlanMode, RefreshMcpTools, ReportFindings, StructuredOutput, SubagentHandback, the five task tools, TodoWrite, ToolSearch, WaitForMcpServers, WebFetch and WebSearch. WebFetch and WebSearch stay network egress that no gate checks, as ADR-0015 and R-3 already record. An entry means "no reach a headless run needs gated", not "harmless". EnterPlanMode and ExitPlanMode are permission-mode transitions; their reasons say so. A test pins the list, so growing it is a reviewed change.

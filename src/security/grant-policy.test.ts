@@ -26,9 +26,9 @@ describe('grantPolicyFor (#218)', () => {
   it('a non-empty user commands list frees only the commands-gated tools', () => {
     const policy = grantPolicyFor({ commands: { allow: ['git'] } });
     expect(sorted(policy.ungrantableTools)).toEqual(members((gate) => gate !== 'commands'));
-    // Today: Bash and Monitor become grantable; Workflow and REPL never do.
+    // Today: Bash becomes grantable; Workflow, REPL and Monitor (#248) never do.
     expect(policy.ungrantableTools.has('Bash')).toBe(false);
-    expect(policy.ungrantableTools.has('Monitor')).toBe(false);
+    expect(policy.ungrantableTools.has('Monitor')).toBe(true);
     expect(policy.ungrantableTools.has('Workflow')).toBe(true);
     expect(policy.ungrantableTools.has('REPL')).toBe(true);
   });

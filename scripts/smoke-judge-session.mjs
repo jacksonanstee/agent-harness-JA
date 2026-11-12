@@ -1182,7 +1182,7 @@ const READ_ONLY_PROBE_DENYLIST = new Set([
 const PROBE_PROGRAM = 'touch';
 const probeCommand = (nonce) => `${PROBE_PROGRAM} harness-ok-${nonce}`;
 const BASH_RULE = { tool: 'Bash', match: `${PROBE_PROGRAM} *`, decision: 'allow' };
-// D-8 (owner ruling 21/10/2026, generalised 22/10/2026 and by #211): a Bash (or Monitor) rule allow is a grant ONLY when the USER layer has a non-empty
+// D-8 (owner ruling 21/10/2026, generalised 22/10/2026 and by #211; Monitor is refused outright since #248): a Bash rule allow is a grant ONLY when the USER layer has a non-empty
 // sandbox.commands.allow. So the grant leg's user document carries both.
 const GRANT_USER_DOC = { permissions: { rules: [BASH_RULE] }, sandbox: { commands: { allow: [PROBE_PROGRAM] } } };
 const RULE_ONLY_DOC = { permissions: { rules: [BASH_RULE] } };
@@ -1299,21 +1299,25 @@ async function isolationLoadChecks() {
   });
   await attempt('D-8 for every code-executing tool (lens 1 H-1, #211)', async () => {
     const fromTable = Object.entries(TOOL_TARGET_FIELDS).filter(([, target]) => target.kind === 'command').map(([name]) => name);
-    check(fromTable.includes('Bash') && fromTable.includes('Monitor'), `the shared table must list Bash and Monitor as command-kind tools, got ${JSON.stringify(fromTable)}`);
-    const monitorRule = { permissions: { rules: [{ tool: 'Monitor', decision: 'allow' }] } };
-    const monitorPayload = { tool: 'Monitor', args: { command: 'git status; echo y' } };
-    const ungrantable = composeIsolationSecurity({ user: monitorRule, project: {} });
+    check(fromTable.includes('Bash') && !fromTable.includes('Monitor'), `the shared table must list Bash as a command-kind tool and must not list Monitor (#248), got ${JSON.stringify(fromTable)}`);
+    // #248: Monitor's output reaches the model outside every post-tool hook, so it is refused by name, whatever the rules say.
+    check(CODE_EXECUTING_TOOLS.Monitor === 'denied', `Monitor must be a denied code runner (#248), got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
+    const monitorRefusal = await toolNameDenyHook()({ event: 'pre-tool', tool: 'Monitor', args: { command: 'git status' }, redactions: null }).then(() => null, (error) => error);
+    check(monitorRefusal instanceof Error && monitorRefusal.message.startsWith('built-in deny: '), `the tool-name deny must refuse Monitor with the built-in reason, got ${monitorRefusal instanceof Error ? monitorRefusal.message : JSON.stringify(monitorRefusal)}`);
+    const commandRule = { permissions: { rules: [{ tool: 'Bash', decision: 'allow' }] } };
+    const commandPayload = { tool: 'Bash', args: { command: 'git status; echo y' } };
+    const ungrantable = composeIsolationSecurity({ user: commandRule, project: {} });
     const allMembers = Object.keys(CODE_EXECUTING_TOOLS).sort();
     check(fromTable.every((name) => CODE_EXECUTING_TOOLS[name] === 'commands'), `every command-kind table entry must be commands-gated, got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
     check([...ungrantable.grantPolicy.ungrantableTools].sort().join(',') === allMembers.join(','), `with no user sandbox list the ungrantable set must equal every CODE_EXECUTING_TOOLS member ${JSON.stringify(allMembers)}, got ${JSON.stringify([...ungrantable.grantPolicy.ungrantableTools])}`);
-    const withheld = await permissionHook(createPermissionEvaluator(ungrantable.permissions), undefined, ungrantable.grantPolicy)(monitorPayload);
-    check(withheld === undefined, `without a user sandbox.commands.allow a Monitor allow must not be a grant, got ${JSON.stringify(withheld)}`);
-    const grantable = composeIsolationSecurity({ user: { ...monitorRule, sandbox: { commands: { allow: ['git'] } } }, project: {} });
+    const withheld = await permissionHook(createPermissionEvaluator(ungrantable.permissions), undefined, ungrantable.grantPolicy)(commandPayload);
+    check(withheld === undefined, `without a user sandbox.commands.allow a Bash allow must not be a grant, got ${JSON.stringify(withheld)}`);
+    const grantable = composeIsolationSecurity({ user: { ...commandRule, sandbox: { commands: { allow: ['git'] } } }, project: {} });
     const stillWithheld = Object.entries(CODE_EXECUTING_TOOLS).filter(([, gate]) => gate !== 'commands').map(([name]) => name).sort();
-    check(stillWithheld.includes('Workflow') && stillWithheld.includes('REPL'), `Workflow and REPL must never be commands-gated, got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
+    check(stillWithheld.includes('Workflow') && stillWithheld.includes('REPL') && stillWithheld.includes('Monitor'), `Workflow, REPL and Monitor must never be commands-gated, got ${JSON.stringify(CODE_EXECUTING_TOOLS)}`);
     check([...grantable.grantPolicy.ungrantableTools].sort().join(',') === stillWithheld.join(','), `with a user commands list only the non-commands members stay withheld (${JSON.stringify(stillWithheld)}), got ${JSON.stringify([...grantable.grantPolicy.ungrantableTools])}`);
-    const projectOnly = composeIsolationSecurity({ user: monitorRule, project: { sandbox: { commands: { allow: ['git'] } } } });
-    check(projectOnly.grantPolicy.ungrantableTools.has('Monitor'), 'a project-only sandbox list must not make Monitor grantable');
+    const projectOnly = composeIsolationSecurity({ user: commandRule, project: { sandbox: { commands: { allow: ['git'] } } } });
+    check(projectOnly.grantPolicy.ungrantableTools.has('Bash'), 'a project-only sandbox list must not make Bash grantable');
   });
   await attempt('project surface fixtures and oracle (lens 1 security M-1)', async () => {
     const files = new Map(isolationFixtures('/placeholder/markers'));

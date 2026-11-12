@@ -379,6 +379,34 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
     expect(result.reason).toBe(CODE_EXECUTION_DENY_REASON);
   });
 
+  // #248: Monitor's output reaches the model as task-notification text, never as a tool result, so no
+  // post-tool hook (redaction, the injection scan, the judge) sees it. It is refused by name: under
+  // defaults, and when the user file grants everything a `commands` tool needs.
+  const monitorModes = [
+    ['a command', { description: 'd', timeout_ms: 1000, persistent: false, command: 'git status' }],
+    ['a websocket', { description: 'd', timeout_ms: 1000, persistent: false, ws: { url: 'wss://example.invalid' } }],
+    ['no arguments', {}],
+  ] as const;
+  const monitorSettings = [
+    { label: 'harness defaults (no rules, no sandbox)', user: {}, sandbox: {}, ungrantable: ['Bash', 'Monitor', 'REPL', 'Workflow'] },
+    {
+      label: 'a user Monitor allow rule plus a sandbox.commands list naming the program',
+      user: { permissions: { rules: [{ tool: 'Monitor', decision: 'allow' }, { tool: '*', decision: 'allow' }] } },
+      sandbox: { sandbox: { commands: { allow: ['git'] } } },
+      ungrantable: [],
+    },
+  ];
+  for (const { label, user, sandbox, ungrantable } of monitorSettings) {
+    it.each(monitorModes)(`refuses Monitor (%s) under ${label}; the built-in reason is reported`, async (_mode, args) => {
+      const hooks = createHookRuntime();
+      registerSecurityHooks(hooks, compose(user, ungrantable, sandbox), roots);
+      const result = await hooks.fire('pre-tool', { event: 'pre-tool', tool: 'Monitor', args, redactions: null });
+      expect(result.denied).toBe(true);
+      if (!result.denied) throw new Error('unreachable');
+      expect(result.reason).toBe(CODE_EXECUTION_DENY_REASON);
+    });
+  }
+
   // #225: default-deny. No rule or sandbox list can let an unreviewed tool, or a cloud subagent, through.
   it.each([
     ['PowerShell', { command: 'Get-Content ~/.ssh/id_rsa' }, UNKNOWN_TOOL_DENY_REASON],

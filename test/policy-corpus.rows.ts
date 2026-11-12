@@ -15,7 +15,7 @@
  *           reason. Every non-allow row's reason must carry that rule's text:
  *             perm:<layer>:<n>   the winning permission rule, by its position
  *                                in that layer's own settings file
- *             sandbox:command    Bash/Monitor command refused by the allowlist
+ *             sandbox:command    Bash command refused by the allowlist
  *             sandbox:path       path tool refused by the allowlist
  *             sandbox:no-target  gated field absent (ADR-0033)
  *             sandbox:not-string gated field present but not a string

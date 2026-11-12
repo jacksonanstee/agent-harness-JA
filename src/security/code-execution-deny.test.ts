@@ -11,8 +11,14 @@ describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since
     expect(codeExecutionDenial('REPL')?.message).toBe(CODE_EXECUTION_DENY_REASON);
   });
 
+  // #248: Monitor's output reaches the model as task-notification text that no hook sees, so it is refused like REPL.
+  it('denies Monitor with the same fixed reason (#248)', () => {
+    expect(codeExecutionDenial('Monitor')).toBeInstanceOf(CodeExecutionDenied);
+    expect(codeExecutionDenial('Monitor')?.message).toBe(CODE_EXECUTION_DENY_REASON);
+  });
+
   it('passes the tools whose gate is not `denied` (the permission and sandbox gates decide them)', () => {
-    for (const tool of ['Bash', 'Workflow', 'Read', 'mcp__x__y', 'repl', 'REPL ']) {
+    for (const tool of ['Bash', 'Workflow', 'Read', 'mcp__x__y', 'repl', 'REPL ', 'monitor', 'Monitor ']) {
       expect(codeExecutionDenial(tool), tool).toBeUndefined();
     }
   });
@@ -21,7 +27,7 @@ describe('codeExecutionDenial (#211, ADR-0040 D-8; a toolNameDenyHook step since
     const denied = Object.entries(CODE_EXECUTING_TOOLS)
       .filter(([, gate]) => gate === 'denied')
       .map(([tool]) => tool);
-    expect(denied).toEqual(['REPL']);
+    expect([...denied].sort()).toEqual(['Monitor', 'REPL']);
     for (const [tool, gate] of Object.entries(CODE_EXECUTING_TOOLS)) {
       if (gate === 'denied') expect(codeExecutionDenial(tool), tool).toBeInstanceOf(CodeExecutionDenied);
       else expect(codeExecutionDenial(tool), tool).toBeUndefined();
