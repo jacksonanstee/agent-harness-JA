@@ -125,6 +125,14 @@ describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR
     expect(process.env[BACKGROUND_TASKS_SWITCH]).toBe(before);
   });
 
+  // The CLI applies a settings file's env block over its environment; flag settings are applied after the
+  // user, project and local files, so the same table goes in as flag settings too.
+  it.each([[[]], [['user', 'project', 'local']]] as const)('passes the forced table as flag settings as well (sources %j)', async (sources) => {
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null, settingSources: [...sources] }).run('p');
+    expect(fake.captured[0]?.options?.settings).toEqual({ env: { [BACKGROUND_TASKS_SWITCH]: '1' } });
+  });
+
   it('is set whatever settingSources says (the switch is not part of the isolation opt-in)', async () => {
     const fake = fakeQuery([INIT, RESULT]);
     await createSession(makeDeps(fake), { skillsDir: null, settingSources: ['user', 'project', 'local'] }).run('p');

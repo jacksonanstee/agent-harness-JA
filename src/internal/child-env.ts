@@ -40,3 +40,24 @@ export type ChildEnv = Record<string, string | undefined>;
 export function buildChildEnv(inherited: Readonly<ChildEnv>): ChildEnv {
   return { ...inherited, ...FORCED_CHILD_ENV };
 }
+
+/** The harness's flag settings for the child: an `env` block and nothing else. */
+export interface ChildSettings {
+  env: Record<string, string>;
+}
+
+/**
+ * FORCED_CHILD_ENV again, as the SDK's `Options.settings` (the CLI's flag
+ * settings). The CLI applies each loaded settings file's `env` block over its
+ * own environment, so a file that names a forced variable replaces the value
+ * `buildChildEnv` set. Flag settings are applied after the user, project and
+ * local files and after the global config file, and their value won (OBSERVED,
+ * loopback mock API, CLI 2.1.312, 12/11/2026, for the user, project and local
+ * settings files and the global config file). Managed settings are applied after
+ * flag settings (a binary reading), so this is a second layer and not a
+ * replacement for the settings-env scan, which refuses such a file outright.
+ * Fresh objects each call.
+ */
+export function buildChildSettings(): ChildSettings {
+  return { env: { ...FORCED_CHILD_ENV } };
+}

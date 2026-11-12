@@ -135,7 +135,7 @@ describe('SDK hook-input type parity', () => {
 //      pin drops `abortController` or `maxBudgetUsd`, or changes the shape of
 //      its retry report, the rows' rationale is stale and typecheck reddens here.
 //   2. The harness seam (`QueryOptions`) carries exactly the keys pinned below
-//      (twelve since issue #250 added `env`, ADR-0040 D-8 as amended). Any further
+//      (thirteen since issue #250 added `env` and `settings`, ADR-0040 D-8 as amended). Any further
 //      channel (a token or wall-clock ceiling, H-7's remainder; retries, H-8)
 //      grows the seam, this reddens, and the row is rewritten in the same change.
 
@@ -186,7 +186,8 @@ const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMe
 // `abortController` (PR-B1 spec D4 for the judge; since #187 the primary
 // query too) and `maxBudgetUsd` (#187, ADR-0041, primary query only).
 // and `env` (#250, primary query only: the child environment from `buildChildEnv`).
-// Twelve keys. The judge passes all five isolation keys; since ADR-0040 the
+// and `settings` (#250, primary query only: the same table as flag settings, `buildChildSettings`).
+// Thirteen keys. The judge passes all five isolation keys; since ADR-0040 the
 // SESSION passes `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
 const _seamExact: ExactKeys<
   QueryOptions,
@@ -202,6 +203,7 @@ const _seamExact: ExactKeys<
   | 'abortController'
   | 'maxBudgetUsd'
   | 'env'
+  | 'settings'
 > = true;
 // PR-B1 (spec D4, pin 12): the abort key mirrors the SDK's type, harness -> SDK.
 const _abortMirrorsSdk: Assignable<
@@ -218,6 +220,9 @@ const _sdkDeclaresEnv: Assignable<'env', keyof Options> = true;
 const _sdkEnvNotAny: IsAny<Options['env']> = false;
 const _seamCarriesEnv: Assignable<'env', keyof QueryOptions> = true;
 const _envMirrorsSdk: Assignable<NonNullable<QueryOptions['env']>, NonNullable<Options['env']>> = true;
+const _sdkDeclaresSettings: Assignable<'settings', keyof Options> = true;
+const _sdkSettingsNotAny: IsAny<Options['settings']> = false;
+const _settingsMirrorsSdk: Assignable<NonNullable<QueryOptions['settings']>, NonNullable<Options['settings']>> = true;
 // #187 (ADR-0041): the seam carries the dollar budget, mirroring the SDK's type.
 const _seamCarriesBudget: Assignable<'maxBudgetUsd', keyof QueryOptions> = true;
 const _budgetMirrorsSdk: Assignable<
@@ -289,6 +294,9 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _sdkEnvNotAny,
       _seamCarriesEnv,
       _envMirrorsSdk,
+      _sdkDeclaresSettings,
+      _sdkSettingsNotAny,
+      _settingsMirrorsSdk,
       _settingSourcesMirrorsSdk,
       _settingSourceToSdk,
       _settingSourceFromSdk,

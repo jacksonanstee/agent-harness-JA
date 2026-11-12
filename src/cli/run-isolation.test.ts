@@ -226,6 +226,57 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
     expect(sdk.primary).toHaveLength(1);
   });
 
+  // #250: a settings file the CLI would load whose env block names a forced child variable would undo the switch.
+  async function runWithSettingsEnv(settingSources: string[], place: 'user' | 'global', settings: unknown) {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    const sdk = fakeSdk([]);
+    const userDir = dir();
+    mkdirSync(join(userDir, '.claude'), { recursive: true });
+    writeFileSync(place === 'user' ? join(userDir, '.claude', 'settings.json') : join(userDir, '.claude.json'), JSON.stringify(settings));
+    mkdirSync(join(userDir, '.harness'));
+    writeFileSync(join(userDir, '.harness', 'settings.json'), JSON.stringify({ sdk: { settingSources } }));
+    process.env.ANTHROPIC_API_KEY = 'dummy';
+    const err: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    vi.spyOn(process, 'cwd').mockReturnValue(dir());
+    try {
+      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: sdk.query }) });
+      return { code, sdk, stderr: err.join('') };
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+  const undo = { env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: 'SENTINEL-VALUE' } };
+
+  it('a user settings file whose env names the forced variable refuses the run, exit 2, the SDK never called, no value echoed (#250)', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', undo);
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
+    expect(stderr).not.toContain('SENTINEL-VALUE');
+  });
+
+  it('the same user file is not read when the user source is not inherited (#250)', async () => {
+    const { code, sdk } = await runWithSettingsEnv([], 'user', undo);
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+  });
+
+  it('the global config file is read whatever the sources say, and refuses under the default isolation (#250)', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv([], 'global', undo);
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: global:.*\.claude\.json \(env\)\. /m);
+  });
+
+  it('a user settings file with an env block naming other variables runs (#250 control)', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { FOO: '1' } });
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+    expect(stderr).not.toMatch(/refusing to run/);
+  });
+
   it('a clean user agent file runs, and an Agent call naming it is not refused by the gate', async () => {
     const calls = [
       { tool: 'Agent', input: { subagent_type: 'helper', prompt: 'p' } },

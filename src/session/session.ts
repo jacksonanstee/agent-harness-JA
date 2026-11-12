@@ -48,7 +48,8 @@ import {
   sanitizeControlChars,
   truncateWellFormed,
 } from '../internal/sanitize.js';
-import { buildChildEnv } from '../internal/child-env.js';
+import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
+import { assertSettingsEnv } from './settings-env-gate.js';
 import {
   DEFAULT_MAX_BUDGET_USD,
   isBudgetUsd,
@@ -653,6 +654,9 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // isolation is built first so a non-array settingSources throws its TypeError.
     const isolation = buildSessionIsolation(config);
     const agentGate = createAgentGate(isolation.settingSources ?? [], deps.scanAgents);
+    // Step 1b (#250): a settings file whose env block would replace a forced
+    // child variable refuses the run; throws SettingsEnvRefused.
+    assertSettingsEnv(isolation.settingSources ?? [], deps.scanSettingsEnv);
 
     // Step 2: model selection.
     const descriptor = config.descriptor ?? DEFAULT_DESCRIPTOR;
@@ -1880,6 +1884,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           ...isolation,
           // #250 (ADR-0040 D-8 as amended): read at run time; background tasks off in the child.
           env: buildChildEnv(process.env),
+          settings: buildChildSettings(),
           hooks: {
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
