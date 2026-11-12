@@ -91,6 +91,23 @@ describe('run registers the self-protection deny (#188)', () => {
     expect(outputs).toEqual([DENY, DENY, DENY, DENY]);
   });
 
+  // Round 3: the config directory is the one in the environment the child is handed, not a guess.
+  it('protects the projects and agent-memory directories of the CLAUDE_CONFIG_DIR the child receives', async () => {
+    const d = dirs();
+    const cfg = dir();
+    vi.stubEnv('CLAUDE_CONFIG_DIR', cfg);
+    try {
+      const { outputs } = await drive(d, [
+        { tool: 'Write', input: { file_path: join(cfg, 'projects', '-p', 'memory', 'MEMORY.md') } },
+        { tool: 'Write', input: { file_path: join(cfg, 'agent-memory', 'general-purpose', 'MEMORY.md') } },
+        { tool: 'Write', input: { file_path: join(d.project, '.claude', 'agent-memory', 'general-purpose', 'MEMORY.md') } },
+      ]);
+      expect(outputs).toEqual([DENY, DENY, DENY]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('still lets an ordinary project write through to the policy (the allow rule grants it)', async () => {
     const d = dirs();
     const { outputs } = await drive(d, [{ tool: 'Write', input: { file_path: join(d.project, 'notes.md') } }]);

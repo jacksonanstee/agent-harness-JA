@@ -62,6 +62,14 @@ const denied = (tool: string, args: Record<string, unknown>) =>
   expect(call(tool, args)).rejects.toThrowError(SelfProtectionViolation);
 const allowed = (tool: string, args: Record<string, unknown>) => expect(call(tool, args)).resolves.toBeUndefined();
 
+describe('the reason the model reads', () => {
+  it('says the CLI files are refused by name, and never echoes a path', () => {
+    expect(SELF_PROTECTION_REASON).toContain('refused by name');
+    expect(SELF_PROTECTION_REASON).toMatch(/^self-protection: /u);
+    expect(SELF_PROTECTION_REASON).not.toContain('/');
+  });
+});
+
 describe('the writes marker (D2)', () => {
   it('is an explicit choice on every table entry: exactly Write, Edit and NotebookEdit write', () => {
     const entries = Object.entries(TOOL_TARGET_FIELDS);
@@ -181,7 +189,7 @@ describe('aliases (D3: as written and by real path)', () => {
     mkdirSync(join(realHome, '.harness'));
     const linkHome = join(tmp('sp-linkparent-'), 'home');
     symlinkSync(realHome, linkHome);
-    const h = selfProtectionHook(buildProtectedRoots({ userDir: linkHome, projectDir: project, skillsDir: null, dbPath: null }));
+    const h = selfProtectionHook(buildProtectedRoots({ userDir: linkHome, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: undefined }));
     await expect(h({ tool: 'Write', args: { file_path: join(realHome, '.harness', 'settings.json') } } as never)).rejects.toThrowError(
       SelfProtectionViolation,
     );
@@ -229,7 +237,7 @@ describe('the scheduled-tasks file (#254)', () => {
   });
 
   it('is protected whatever the skills root and db are', async () => {
-    const bare = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
+    const bare = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: undefined }));
     await expect(bare({ tool: 'Write', args: { file_path: planted } } as never)).rejects.toThrowError(SelfProtectionViolation);
   });
 });
@@ -282,7 +290,7 @@ describe('a protected file is refused by name, wherever the path points (#254 re
   });
 
   it('does not take the name of a database INSIDE a protected directory: only the directory protects it', async () => {
-    const inside = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: join(project, '.harness', 'telemetry.db'), claudeConfigDir: null });
+    const inside = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: join(project, '.harness', 'telemetry.db'), claudeConfigDir: undefined });
     const h = selfProtectionHook(inside);
     await expect(h({ tool: 'Write', args: { file_path: join(project, 'data', 'telemetry.db') } } as never)).resolves.toBeUndefined();
     await expect(h({ tool: 'Bash', args: { command: 'cd data && cp /tmp/x telemetry.db' } } as never)).resolves.toBeUndefined();
@@ -338,31 +346,85 @@ describe('the auto-memory directory (#254/#255 security review)', () => {
     await allowed('Read', { file_path: underHome });
   });
 
-  it('reads CLAUDE_CONFIG_DIR when no config directory is passed, and always protects the one under the user directory', async () => {
+  // Review round 3: the builder takes the config directory as an explicit input and reads no environment.
+  // The caller passes the value the child receives (`childConfigDir`, src/internal/child-env.ts).
+  it('does not read CLAUDE_CONFIG_DIR itself: an unset input protects only the directory under the user directory', async () => {
     const previous = process.env['CLAUDE_CONFIG_DIR'];
     const fromEnv = tmp('sp-envcfg-');
     process.env['CLAUDE_CONFIG_DIR'] = fromEnv;
     try {
-      const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
-      await expect(h({ tool: 'Write', args: { file_path: join(fromEnv, 'projects', 's', 'memory', 'MEMORY.md') } } as never)).rejects.toThrowError(SelfProtectionViolation);
+      const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: undefined }));
+      await expect(h({ tool: 'Write', args: { file_path: join(fromEnv, 'projects', 's', 'memory', 'MEMORY.md') } } as never)).resolves.toBeUndefined();
       await expect(h({ tool: 'Write', args: { file_path: underHome } } as never)).rejects.toThrowError(SelfProtectionViolation);
-      await expect(h({ tool: 'Write', args: { file_path: underConfig } } as never)).resolves.toBeUndefined();
+      const passed = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: fromEnv }));
+      await expect(passed({ tool: 'Write', args: { file_path: join(fromEnv, 'projects', 's', 'memory', 'MEMORY.md') } } as never)).rejects.toThrowError(SelfProtectionViolation);
     } finally {
       if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
       else process.env['CLAUDE_CONFIG_DIR'] = previous;
     }
   });
 
-  it('an empty CLAUDE_CONFIG_DIR is read as unset, not as the working directory', async () => {
-    const previous = process.env['CLAUDE_CONFIG_DIR'];
-    process.env['CLAUDE_CONFIG_DIR'] = '';
-    try {
-      const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null }));
-      await expect(h({ tool: 'Write', args: { file_path: join(project, 'projects', 'readme.md') } } as never)).resolves.toBeUndefined();
-    } finally {
-      if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
-      else process.env['CLAUDE_CONFIG_DIR'] = previous;
-    }
+  it('an empty config directory counts as unset, not as the working directory', async () => {
+    const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: '' }));
+    await expect(h({ tool: 'Write', args: { file_path: join(project, 'projects', 'readme.md') } } as never)).resolves.toBeUndefined();
+  });
+
+  // OBSERVED (loopback mock, CLI 2.1.312, 13/11/2026): handed CLAUDE_CONFIG_DIR="~/cfgt" with HOME set, the CLI made
+  // its config directory at <cwd>/~/cfgt and nothing under HOME. It does not expand the tilde, so neither does this.
+  it('takes a tilde in the config directory literally, against the working directory, as the CLI does', async () => {
+    const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: '~/cfgt' }));
+    await expect(h({ tool: 'Write', args: { file_path: join(project, '~', 'cfgt', 'projects', 's', 'memory', 'MEMORY.md') } } as never)).rejects.toThrowError(SelfProtectionViolation);
+    await expect(h({ tool: 'Write', args: { file_path: join(home, 'cfgt', 'projects', 's', 'memory', 'MEMORY.md') } } as never)).resolves.toBeUndefined();
+  });
+
+  it('resolves a relative config directory against the working directory', async () => {
+    const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: 'rel/cfg' }));
+    await expect(h({ tool: 'Write', args: { file_path: join(project, 'rel', 'cfg', 'projects', 's', 'memory', 'MEMORY.md') } } as never)).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  it.each([null, 42, {}, ['x'], true])('throws a TypeError for a config directory that is not a string or undefined (%j)', (bad) => {
+    expect(() => buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: bad as never })).toThrow(
+      new TypeError('ProtectedRootsInput.claudeConfigDir must be a string or undefined'),
+    );
+  });
+
+  it('requires the field at compile time (a public-surface pin)', () => {
+    // @ts-expect-error claudeConfigDir is required: a caller must say which config directory the child gets
+    const missing: Parameters<typeof buildProtectedRoots>[0] = { userDir: home, projectDir: project, skillsDir: null, dbPath: null };
+    expect('claudeConfigDir' in missing).toBe(false);
+  });
+});
+
+// Review round 3 (security, OBSERVED): an ungranted Write succeeded to the CLI's per-agent memory, in
+// <config>/agent-memory/<agent>/, <cwd>/.claude/agent-memory/<agent>/ and <cwd>/.claude/agent-memory-local/<agent>/
+// (the three scopes the binary names: user, project, local). All are protected directories now.
+describe('the per-agent memory directories (#254/#255 review, round 3)', () => {
+  it.each([
+    ['the user scope under ~/.claude', () => join(home, '.claude', 'agent-memory', 'general-purpose', 'MEMORY.md')],
+    ['the user scope under the config directory', () => join(configDir, 'agent-memory', 'general-purpose', 'MEMORY.md')],
+    ['the project scope', () => join(project, '.claude', 'agent-memory', 'general-purpose', 'MEMORY.md')],
+    ['the local scope', () => join(project, '.claude', 'agent-memory-local', 'general-purpose', 'MEMORY.md')],
+  ])('denies Write, Edit and a Bash redirect to %s', async (_label, path) => {
+    await denied('Write', { file_path: path() });
+    await denied('Edit', { file_path: path() });
+    await denied('Bash', { command: `echo note > ${path()}` });
+  });
+
+  it.each([
+    'echo note > .claude/agent-memory/general-purpose/MEMORY.md',
+    'cd .claude && echo note > agent-memory/general-purpose/MEMORY.md',
+    'cd .claude && mkdir -p agent-memory-local/x && cp /tmp/n agent-memory-local/x/MEMORY.md',
+    'cd ~/.claude && tee ./agent-memory/general-purpose/MEMORY.md',
+    'cd .claude && rm -rf agent-memory',
+  ])('denies %s', async (command) => {
+    await denied('Bash', { command });
+  });
+
+  it('leaves the neighbours alone: agent definitions, a longer name, and a read by the Read tool', async () => {
+    await allowed('Write', { file_path: join(project, '.claude', 'agents', 'helper.md') });
+    await allowed('Write', { file_path: join(project, '.claude', 'agent-memory-notes.md') });
+    await allowed('Bash', { command: 'cat docs/agent-memory-design.md' });
+    await allowed('Read', { file_path: join(project, '.claude', 'agent-memory', 'general-purpose', 'MEMORY.md') });
   });
 });
 
@@ -495,7 +557,7 @@ describe('Bash: any path-shaped mention of a protected path (D4)', () => {
 
 describe('buildProtectedRoots', () => {
   it('skips an in-memory database and a null skills root', () => {
-    const r = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: ':memory:' });
+    const r = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: ':memory:', claudeConfigDir: undefined });
     const h = selfProtectionHook(r);
     return expect(h({ tool: 'Write', args: { file_path: join(project, 'skills', 'x') } } as never)).resolves.toBeUndefined();
   });
@@ -506,6 +568,7 @@ describe('buildProtectedRoots', () => {
       projectDir: project,
       skillsDir: join(outside, 'not-yet'),
       dbPath: join(outside, 'later', 'x.db'),
+      claudeConfigDir: undefined,
     });
     const h = selfProtectionHook(r);
     await expect(h({ tool: 'Write', args: { file_path: join(outside, 'not-yet', 'a') } } as never)).rejects.toThrowError(
@@ -517,7 +580,7 @@ describe('buildProtectedRoots', () => {
   });
 
   it('works with the filesystem root as the project directory (code review M3)', async () => {
-    const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: '/', skillsDir: null, dbPath: null }));
+    const h = selfProtectionHook(buildProtectedRoots({ userDir: home, projectDir: '/', skillsDir: null, dbPath: null, claudeConfigDir: undefined }));
     await expect(h({ tool: 'Bash', args: { command: 'echo x > /.harness/settings.json' } } as never)).rejects.toThrowError(
       SelfProtectionViolation,
     );

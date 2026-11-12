@@ -10,7 +10,7 @@ import {
 } from '../eval/index.js';
 import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
-import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
+import { buildChildEnv, buildChildSettings, childConfigDir } from '../internal/child-env.js';
 import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
@@ -163,7 +163,7 @@ export interface EvalSessionFactoryDeps {
   /** Test seam: the session factory (R5 pin). Default `createSession`. */
   create?: typeof createSession;
   /** Where the protected `.harness` directories are (#188); each task adds its own skills root. */
-  selfProtection: { userDir: string; projectDir: string };
+  selfProtection: { userDir: string; projectDir: string; claudeConfigDir: string | undefined };
 }
 
 /**
@@ -314,7 +314,7 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
       security,
       telemetry,
       memory,
-      selfProtection: { userDir: seams.userDir ?? homedir(), projectDir: process.cwd() },
+      selfProtection: { userDir: seams.userDir ?? homedir(), projectDir: process.cwd(), claudeConfigDir: childConfigDir(process.env) },
     });
 
     const runner = createGoldenRunner({

@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, buildChildEnv, buildChildSettings, CRON_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, buildChildEnv, buildChildSettings, childConfigDir, CRON_SWITCH, FORCED_CHILD_ENV } from './child-env.js';
 
 // Every switch the harness forces: #250 (background tasks), #254 (scheduled tasks), #255 (attachments), and auto-memory.
 const SWITCHES = [BACKGROUND_TASKS_SWITCH, CRON_SWITCH, ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH] as const;
@@ -48,6 +51,21 @@ describe('buildChildEnv (#250, #254, #255): the environment the harness hands ev
     expect(AUTO_MEMORY_SWITCH).toBe('CLAUDE_CODE_DISABLE_AUTO_MEMORY');
     expect(Object.isFrozen(FORCED_CHILD_ENV)).toBe(true);
     expect(FORCED_CHILD_ENV).toEqual(ALL_ON);
+  });
+});
+
+describe('childConfigDir: the config directory the child is handed', () => {
+  it('is the CLAUDE_CONFIG_DIR of the environment buildChildEnv builds, as written', () => {
+    expect(childConfigDir({ CLAUDE_CONFIG_DIR: '/cfg' })).toBe('/cfg');
+    expect(childConfigDir({ CLAUDE_CONFIG_DIR: '~/cfg' })).toBe('~/cfg');
+    expect(childConfigDir({ CLAUDE_CONFIG_DIR: '' })).toBe('');
+    expect(childConfigDir({})).toBeUndefined();
+    expect(childConfigDir({ CLAUDE_CONFIG_DIR: '/cfg' })).toBe(buildChildEnv({ CLAUDE_CONFIG_DIR: '/cfg' })['CLAUDE_CONFIG_DIR']);
+  });
+
+  // A text pin, as test/policy-corpus.test.ts keeps for the hook registration: both entry points pass it.
+  it.each(['src/cli.ts', 'src/cli/eval-command.ts'])('%s hands the roots builder childConfigDir(process.env)', (file) => {
+    expect(readFileSync(join(process.cwd(), file), 'utf8')).toContain('claudeConfigDir: childConfigDir(process.env)');
   });
 });
 

@@ -19,6 +19,7 @@ import {
   USAGE,
   WARNING_PREFIX,
 } from './cli/shared.js';
+import { childConfigDir } from './internal/child-env.js';
 import { DEFAULT_MAX_TURNS } from './internal/limits.js';
 import { escapeJsonText } from './internal/sanitize.js';
 import { GuardedReadError, refuseSymlink } from './internal/guarded-read.js';
@@ -709,6 +710,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     projectDir: process.cwd(),
     skillsDir,
     dbPath,
+    // The same CLAUDE_CONFIG_DIR the child is handed (round 3 of the #254/#255 review).
+    claudeConfigDir: childConfigDir(process.env),
   });
   registerSecurityHooks(hooks, security, protectedRoots);
 

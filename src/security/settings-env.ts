@@ -42,7 +42,21 @@ export interface SettingsEnvFile {
  * `encoding`: the bytes are not UTF-8 text this scan can search (a UTF-16 or
  * UTF-32 byte-order mark, or any NUL byte).
  */
-export type SettingsEnvRefusalReason = 'env' | 'unparsable' | 'unreadable' | 'encoding';
+export type SettingsEnvRefusalReason = 'env' | 'setting' | 'unparsable' | 'unreadable' | 'encoding';
+
+/**
+ * Top-level settings keys that refuse a run when a settings file the CLI would
+ * load sets them. `autoMemoryDirectory` moves the CLI's memory to a directory
+ * self-protection does not know; an ungranted Write there succeeded (OBSERVED,
+ * loopback mock, CLI 2.1.312, 13/11/2026, user settings under an inherited
+ * `user` source; with no source inherited the same Write was refused).
+ */
+export const REFUSED_SETTINGS_KEYS: readonly string[] = Object.freeze(['autoMemoryDirectory']);
+
+/** The fixed reason for a `setting` refusal. It names the key and echoes no value. */
+export const SETTINGS_KEY_REFUSED_REASON =
+  "A settings file the bundled CLI would load sets autoMemoryDirectory, which moves the CLI's memory outside the " +
+  'directories the harness protects: remove that key, or drop the setting source';
 
 export interface SettingsEnvRefusal {
   readonly source: SettingsEnvSource;
@@ -67,7 +81,11 @@ export class SettingsEnvRefused extends Error {
   constructor(refusals: readonly SettingsEnvRefusal[]) {
     const listed = refusals.slice(0, MAX_LISTED_REFUSALS).map((r) => `${r.source}:${reportPath(r.path)} (${r.reason})`);
     const more = refusals.length > MAX_LISTED_REFUSALS ? `; and ${refusals.length - MAX_LISTED_REFUSALS} more` : '';
-    super(`settings env refused: ${listed.join('; ')}${more}. ${SETTINGS_ENV_REFUSED_REASON}`);
+    const reasons = [
+      ...(refusals.some((r) => r.reason !== 'setting') ? [SETTINGS_ENV_REFUSED_REASON] : []),
+      ...(refusals.some((r) => r.reason === 'setting') ? [SETTINGS_KEY_REFUSED_REASON] : []),
+    ];
+    super(`settings env refused: ${listed.join('; ')}${more}. ${reasons.join(' ')}`);
     this.name = 'SettingsEnvRefused';
     this.refusals = [...refusals];
   }
@@ -132,9 +150,9 @@ const isMissing = (error: unknown): boolean =>
 const comparable = (text: string): string =>
   text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16))).toUpperCase();
 
-function textVerdict(raw: string, forced: readonly string[]): SettingsEnvRefusalReason | null {
+function textVerdict(raw: string, forced: readonly string[], settingKeys: readonly string[]): SettingsEnvRefusalReason | null {
   const upper = comparable(raw);
-  if (!forced.some((key) => upper.includes(key))) return null;
+  if (!forced.some((key) => upper.includes(key)) && !settingKeys.some((key) => upper.includes(key))) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -142,6 +160,7 @@ function textVerdict(raw: string, forced: readonly string[]): SettingsEnvRefusal
     return 'unparsable';
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'unparsable';
+  if (Object.keys(parsed).some((name) => settingKeys.includes(name.toUpperCase()))) return 'setting';
   if (!Object.hasOwn(parsed, 'env')) return null;
   const env: unknown = (parsed as Record<string, unknown>)['env'];
   if (typeof env !== 'object' || env === null || Array.isArray(env)) return null;
@@ -214,6 +233,12 @@ export interface SettingsEnvScanLimits {
   readonly maxFileBytes?: number;
   /** The fs calls to read with. Default: node's. A seam for tests. */
   readonly io?: SettingsEnvIo;
+  /**
+   * Top-level keys that refuse a file which sets them (reason `setting`),
+   * compared without regard to case. Default: none. The session's gate passes
+   * `REFUSED_SETTINGS_KEYS`.
+   */
+  readonly refusedTopLevelKeys?: readonly string[];
 }
 
 /**
@@ -226,8 +251,10 @@ export interface SettingsEnvScanLimits {
  * - text that names no forced variable, in any letter case and after `\u`
  *   escapes are decoded: passed without parsing, whatever its syntax (the CLI
  *   cannot find a name the text does not hold);
- * - a JSON object: refused when its own top-level `env` object has a key that
- *   is a forced variable, whatever the value; a mention anywhere else passes;
+ * - a JSON object: refused when one of its own top-level keys is a refused
+ *   settings key (`refusedTopLevelKeys`), or when its own top-level `env`
+ *   object has a key that is a forced variable, whatever the value; a mention
+ *   anywhere else passes;
  * - anything else that names one (not JSON, or JSON that is not an object):
  *   refused. The CLI's parser is not this one, so a file this scan cannot
  *   read the way the CLI does is not waved through.
@@ -240,7 +267,8 @@ export function scanSettingsEnv(
   limits: SettingsEnvScanLimits = {},
 ): SettingsEnvRefusal[] {
   const forced = forcedKeys.map((key) => key.toUpperCase());
-  if (forced.length === 0) return [];
+  const settingKeys = (limits.refusedTopLevelKeys ?? []).map((key) => key.toUpperCase());
+  if (forced.length === 0 && settingKeys.length === 0) return [];
   const maxFileBytes = limits.maxFileBytes ?? SETTINGS_ENV_MAX_FILE_BYTES;
   const refusals: SettingsEnvRefusal[] = [];
   for (const file of files) {
@@ -255,7 +283,7 @@ export function scanSettingsEnv(
       continue;
     }
     const raw = read.toString('utf8');
-    const reason = textVerdict(raw, forced);
+    const reason = textVerdict(raw, forced, settingKeys);
     if (reason !== null) refusals.push({ ...file, reason });
   }
   return refusals;

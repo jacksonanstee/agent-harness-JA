@@ -15,7 +15,7 @@ const preTool = (tool: string, args: unknown) => ({ event: 'pre-tool' as const, 
 describe('builtInDenyHooks (#219): the shipped built-in denies, in their one order', () => {
   const home = mkdtempSync(join(tmpdir(), 'bid-home-'));
   const project = mkdtempSync(join(tmpdir(), 'bid-proj-'));
-  const roots = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: ':memory:' });
+  const roots = buildProtectedRoots({ userDir: home, projectDir: project, skillsDir: null, dbPath: ':memory:', claudeConfigDir: undefined });
 
   // Position i must deny probe i with reason i and pass every OTHER probe, so a
   // reorder, a dropped hook or a duplicate fails here rather than only in the CLI.

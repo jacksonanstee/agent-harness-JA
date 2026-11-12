@@ -268,6 +268,21 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
     },
   );
 
+  // Round 3: a settings file that moves the CLI's memory directory is refused the same way.
+  it('a user settings file that sets autoMemoryDirectory refuses the run under sdk.settingSources [user], no value echoed', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { autoMemoryDirectory: '/SENTINEL-DIR' });
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(setting\)\. /m);
+    expect(stderr).not.toContain('SENTINEL-DIR');
+  });
+
+  it('that file is not read when the user source is not inherited', async () => {
+    const { code, sdk } = await runWithSettingsEnv([], 'user', { autoMemoryDirectory: '/SENTINEL-DIR' });
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+  });
+
   it('the same user file is not read when the user source is not inherited (#250)', async () => {
     const { code, sdk } = await runWithSettingsEnv([], 'user', undo);
     expect(code).toBe(0);

@@ -93,6 +93,7 @@ export {
   AgentDefinitionRefused,
   SettingsEnvRefused,
   SETTINGS_ENV_REFUSED_REASON,
+  SETTINGS_KEY_REFUSED_REASON,
   UNSCANNED_AGENT_DENY_REASON,
   UnscannedAgentDenied,
   builtInDenyHooks,

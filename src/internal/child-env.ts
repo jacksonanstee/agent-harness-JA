@@ -117,6 +117,18 @@ export function buildChildEnv(inherited: Readonly<ChildEnv>): ChildEnv {
   return { ...inherited, ...FORCED_CHILD_ENV };
 }
 
+/**
+ * The `CLAUDE_CONFIG_DIR` the child is handed, exactly as written: read from
+ * the environment `buildChildEnv` builds, so a later rule that sets or strips
+ * the variable moves this with it. Self-protection protects directories under
+ * it, and must be told the same value the CLI gets. The CLI does not expand a
+ * leading `~` in it (OBSERVED, loopback mock, CLI 2.1.312, 13/11/2026: given
+ * `~/cfgt` with HOME set it made `<cwd>/~/cfgt`), so neither does anything here.
+ */
+export function childConfigDir(inherited: Readonly<ChildEnv>): string | undefined {
+  return buildChildEnv(inherited)['CLAUDE_CONFIG_DIR'];
+}
+
 /** The harness's flag settings for the child: an `env` block and nothing else. */
 export interface ChildSettings {
   env: Record<string, string>;

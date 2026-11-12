@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { FORCED_CHILD_ENV } from '../internal/child-env.js';
-import { managedSettingsDir, scanSettingsEnv, SettingsEnvRefused, settingsEnvFiles } from '../security/index.js';
+import { managedSettingsDir, REFUSED_SETTINGS_KEYS, scanSettingsEnv, SettingsEnvRefused, settingsEnvFiles } from '../security/index.js';
 import type { SettingSource, SettingsEnvRefusal } from '../security/index.js';
 
 /**
@@ -25,6 +25,7 @@ export function settingsEnvScanFor(homeDir: string): SettingsEnvScanFn {
         managedDir: managedSettingsDir(process.platform),
       }),
       Object.keys(FORCED_CHILD_ENV),
+      { refusedTopLevelKeys: REFUSED_SETTINGS_KEYS },
     );
 }
 

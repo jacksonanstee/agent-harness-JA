@@ -19,6 +19,20 @@
 // whole under the user's `.claude` and under `CLAUDE_CONFIG_DIR`: the CLI
 // delivers a project's memory index to the model at the start of a session and
 // let the agent write it with no grant (OBSERVED, loopback mock, CLI 2.1.312).
+// The CLI's per-agent memory directories are protected the same way (round 3:
+// an ungranted Write succeeded in each): `agent-memory` under the config
+// directory and under `<cwd>/.claude`, and `<cwd>/.claude/agent-memory-local`.
+//
+// What these rules cost, on purpose (false positives accepted by the owner):
+// - Bash refuses READS too, as D4 always has: `cat scheduled_tasks.json`,
+//   `ls` or `jq` over `~/.claude/projects`, and a repository's own
+//   `projects/<x>/memory/` or `agent-memory/` folder named in a command. The
+//   Read, Grep and Glob tools are not affected.
+// - A file named like a `--db` that lies outside `.harness`, or like one of
+//   its sidecars, is refused under every folder, by the writer tools and Bash.
+// - The name rule sees a name that is written out. A glob, a variable or a
+//   script that builds the name gets past it, as it gets past the rest of the
+//   Bash half (R-23).
 //
 // Unlike the paths gate (ADR-0015 §2, lexical only) this guard ALSO resolves
 // real paths, walking the RAW components as the kernel does: each symlink is
@@ -39,7 +53,8 @@ import type { PreToolLike } from './pre-tool-like.js';
 
 /** The one reason the model reads. Fixed text: it never echoes a path (ADR-0031). */
 export const SELF_PROTECTION_REASON =
-  "self-protection: the agent may not change the harness's own settings, telemetry or skills, or the bundled CLI's scheduled-tasks and memory files; " +
+  "self-protection: the agent may not change the harness's own settings, telemetry or skills, " +
+  "or the bundled CLI's scheduled-tasks and memory files, which are refused by name under any folder; " +
   'edit the file yourself if the change is intended (ADR-0042)';
 
 export class SelfProtectionViolation extends Error {
@@ -91,15 +106,31 @@ export interface ProtectedRootsInput {
   /** The telemetry DB path; `:memory:` or null protects nothing extra. */
   dbPath: string | null;
   /**
-   * The bundled CLI's config directory besides `<userDir>/.claude`, whose
-   * `projects` directory is protected too. Omitted: `CLAUDE_CONFIG_DIR` is
-   * read from the environment (an empty value counts as unset). Null: none.
+   * The `CLAUDE_CONFIG_DIR` the bundled CLI child receives, as written, or
+   * undefined when it gets none. REQUIRED, and never read from the environment
+   * here: the caller passes the value the child is handed (`childConfigDir`,
+   * `src/internal/child-env.ts`), so the guard and the CLI cannot disagree.
+   * An empty string counts as unset. A relative value, and one that starts
+   * with `~`, resolve against the working directory, as the CLI resolves them
+   * (the tilde is OBSERVED; see `childConfigDir`). Anything that is not a
+   * string or undefined throws a TypeError. `<userDir>/.claude` is protected
+   * whatever this says.
    */
-  claudeConfigDir?: string | null;
+  claudeConfigDir: string | undefined;
 }
 
 /** The directory under the CLI's config directory that holds each project's auto-memory (and its transcripts). */
 const CLI_PROJECTS_DIR = 'projects';
+/**
+ * The CLI's per-agent memory directories (2.1.312, READ for the names and the
+ * three scopes; an ungranted Write to each was OBSERVED): the user scope is
+ * `agent-memory` under the config directory, the project scope
+ * `<cwd>/.claude/agent-memory`, the local scope `<cwd>/.claude/agent-memory-local`.
+ */
+const AGENT_MEMORY_DIR = 'agent-memory';
+const AGENT_MEMORY_LOCAL_DIR = 'agent-memory-local';
+/** A path word that walks into a per-agent memory directory, for a command that changed directory first. */
+const AGENT_MEMORY_WALK = /(?:^|\/)agent-memory(?:-local)?(?:\/|$)/u;
 /**
  * A relative path that walks into a project's auto-memory from the config
  * directory (`projects/<slug>/memory`), for a command that changed directory
@@ -181,9 +212,20 @@ function under(child: string, parent: string): boolean {
 /** Builds the protected set once per session, before any tool call. */
 export function buildProtectedRoots(input: ProtectedRootsInput): ProtectedRoots {
   const cwd = resolve(input.projectDir);
-  const dirs = [join(input.userDir, '.harness'), join(cwd, '.harness'), join(input.userDir, '.claude', CLI_PROJECTS_DIR)];
-  const configDir = input.claudeConfigDir === undefined ? process.env['CLAUDE_CONFIG_DIR'] : input.claudeConfigDir;
-  if (typeof configDir === 'string' && configDir !== '') dirs.push(join(resolve(cwd, configDir), CLI_PROJECTS_DIR));
+  const configured: unknown = input.claudeConfigDir;
+  if (configured !== undefined && typeof configured !== 'string') {
+    throw new TypeError('ProtectedRootsInput.claudeConfigDir must be a string or undefined');
+  }
+  // The CLI's config directories: the default under the user directory, always, and the one the child is handed.
+  const configDirs = [join(input.userDir, '.claude')];
+  if (configured !== undefined && configured !== '') configDirs.push(resolve(cwd, configured));
+  const dirs = [
+    join(input.userDir, '.harness'),
+    join(cwd, '.harness'),
+    ...configDirs.flatMap((dir) => [join(dir, CLI_PROJECTS_DIR), join(dir, AGENT_MEMORY_DIR)]),
+    join(cwd, '.claude', AGENT_MEMORY_DIR),
+    join(cwd, '.claude', AGENT_MEMORY_LOCAL_DIR),
+  ];
   if (input.skillsDir !== null) dirs.push(resolve(cwd, input.skillsDir));
   // #254: the one file, not `.claude` whole (settings and agents there are the scans' business).
   const files: string[] = [join(cwd, '.claude', SCHEDULED_TASKS_FILE)];
@@ -324,7 +366,7 @@ function mentionsAbsolute(folded: string, roots: ProtectedRoots): boolean {
 function commandIsProtected(command: string, roots: ProtectedRoots): boolean {
   const expanded = expandHome(command, roots);
   return (
-    candidatePaths(expanded).some((path) => isProtected(path, roots) || namesProtectedFile(path, roots) || MEMORY_WALK.test(path)) ||
+    candidatePaths(expanded).some((path) => isProtected(path, roots) || namesProtectedFile(path, roots) || MEMORY_WALK.test(path) || AGENT_MEMORY_WALK.test(path)) ||
     mentionsAbsolute(fold(expanded.replace(/["'\\]/gu, '')), roots)
   );
 }

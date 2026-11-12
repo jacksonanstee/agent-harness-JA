@@ -291,7 +291,7 @@ describe('R5: eval stays heuristic (pin 23)', () => {
 });
 
 // #188: a throwaway home/project for the self-protection roots.
-const SP_DIRS = { userDir: mkdtempSync(join(tmpdir(), 'ev-home-')), projectDir: mkdtempSync(join(tmpdir(), 'ev-proj-')) };
+const SP_DIRS = { userDir: mkdtempSync(join(tmpdir(), 'ev-home-')), projectDir: mkdtempSync(join(tmpdir(), 'ev-proj-')), claudeConfigDir: undefined };
 
 // Issue #140 I-1: the behavioural guard for the eval path's security-hook
 // registration (test/policy-corpus.test.ts keeps only a text pin on the call).
