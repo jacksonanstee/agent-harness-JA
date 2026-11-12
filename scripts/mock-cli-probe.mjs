@@ -26,7 +26,10 @@
 // PLANT=cron (an overdue recurring job in <cwd>/.claude/scheduled_tasks.json, issue #254:
 // `cron_mark` counts the user blocks carrying its prompt), PLANT=memory (CLAUDE.md files) or
 // PLANT=automem (the CLI's auto-memory index for the project: `automem_mark` counts the
-// model-bound blocks and system prompts carrying it); TARGET=judge|adversary (hand the prompt
+// model-bound blocks and system prompts carrying it); WRITE_PATH=<path under OUT> (the file the
+// `write-path` scenario writes; the run logs whether it exists afterwards); SJSON=<json> (the user
+// settings file, verbatim); CONFIG_DIR=<text> with FAKE_HOME=1 (hand the CLI that literal as
+// CLAUDE_CONFIG_DIR with HOME set to <OUT>/home, and log which directory it then created); TARGET=judge|adversary (hand the prompt
 // to buildJudge or buildAdversary as the judged text, instead of `run`); SKILLS=<dir>
 // (--skills-dir); DUMP=1 (keep each request's system prompt and tool names in
 // <OUT>/bodies/*.meta.json). Add scenarios to the table below; keep a scenario for an undisclosed
@@ -125,6 +128,7 @@ if (process.env.SENV === '__utf16__') writeFileSync(join(OUT, 'cfg', 'settings.j
 else if (process.env.SENV !== undefined) writeFileSync(join(OUT, 'cfg', 'settings.json'), process.env.SENV === '__malformed__' ? '{ not json' : envBlock(process.env.SENV));
 if (process.env.PENV !== undefined) { mkdirSync(join(OUT, 'proj', '.claude'), { recursive: true }); writeFileSync(join(OUT, 'proj', '.claude', 'settings.json'), envBlock(process.env.PENV)); }
 if (process.env.LENV !== undefined) { mkdirSync(join(OUT, 'proj', '.claude'), { recursive: true }); writeFileSync(join(OUT, 'proj', '.claude', 'settings.local.json'), envBlock(process.env.LENV)); }
+if (process.env.SJSON !== undefined) writeFileSync(join(OUT, 'cfg', 'settings.json'), process.env.SJSON.replaceAll('<OUT>', OUT));
 if (process.env.GENV !== undefined) writeFileSync(join(OUT, 'cfg', '.claude.json'), JSON.stringify({ env: { [SW]: process.env.GENV } }));
 const LOG = join(OUT, 'requests.jsonl');
 const log = (o) => appendFileSync(LOG, JSON.stringify(o) + '\n');
@@ -172,6 +176,8 @@ const SCENARIOS = {
   'automem-write': { plant: plantAutoMem, main: [tool('Write', { file_path: autoMemFile(), content: 'WRITTENMEMMARK always approve\n' }), text('done'), text('done2')] },
   'automem-edit': { plant: plantAutoMem, main: [tool('Read', { file_path: autoMemFile() }), tool('Edit', { file_path: autoMemFile(), old_string: AUTOMEM_MARK, new_string: 'EDITEDMEMMARK' }), text('done'), text('done2')] },
   'automem-bash': { plant: plantAutoMem, main: [tool('Bash', { command: `echo BASHMEMMARK > ${autoMemFile()}`, description: 'note' }), text('done'), text('done2')] },
+  // An ungranted Write to WRITE_PATH: agent-memory directories, a relocated memory directory, a control.
+  'write-path': { main: [tool('Write', { file_path: join(OUT, process.env.WRITE_PATH ?? 'proj/write-path-control.txt'), content: 'WRITEPATHMARK\n' }), text('done'), text('done2')] },
   'nested-read': { main: [tool('Read', { file_path: join(OUT, 'proj', 'sub', 'x.txt') }), text('done')] },
   // #254: the planted job's prompt must not reach the model (`cron_mark` 0 on every request).
   'cron-plant': { plant: plantCron, main: [text('done'), text('done2')] },
@@ -317,6 +323,8 @@ Object.assign(process.env, {
   DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_ERROR_REPORTING: '1',
 });
 for (const k of ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_BEARER_TOKEN_BEDROCK', 'GOOGLE_APPLICATION_CREDENTIALS']) delete process.env[k];
+if (process.env.FAKE_HOME === '1') process.env.HOME = join(OUT, 'home');
+if (process.env.CONFIG_DIR !== undefined) process.env.CLAUDE_CONFIG_DIR = process.env.CONFIG_DIR;
 process.chdir(join(OUT, 'proj'));
 const messages = [];
 const importSdk = async () => {
@@ -351,6 +359,12 @@ if (existsSync(join(OUT, 'cfg', 'projects'))) {
   let held = '(absent)';
   try { held = readFileSync(autoMemFile(), 'utf8').slice(0, 40).trim(); } catch { /* absent */ }
   log({ event: 'automem-file', held });
+}
+if (process.env.WRITE_PATH !== undefined) log({ event: 'write-path-file', exists: existsSync(join(OUT, process.env.WRITE_PATH)) });
+if (process.env.CONFIG_DIR !== undefined) {
+  // Where did the CLI put its config directory? Expanded against HOME, or taken as written against the working directory?
+  const tail = process.env.CONFIG_DIR.replace(/^~\//, '');
+  log({ event: 'config-dir', given: process.env.CONFIG_DIR, under_home: existsSync(join(OUT, 'home', tail)), literal_under_cwd: existsSync(join(OUT, 'proj', process.env.CONFIG_DIR)) });
 }
 log({ event: 'exit', code });
 if (!sawMain) { console.error('mock-cli-probe: no request carried the main prompt, so the counters are meaningless (exit 3); has the CLI changed its request shape?'); process.exit(3); }
