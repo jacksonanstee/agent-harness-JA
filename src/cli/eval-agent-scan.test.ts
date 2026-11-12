@@ -93,6 +93,13 @@ describe('eval pre-flights the settings-env scan (#250)', () => {
     return { code, stderr: err.join(''), sdkLoaded, base };
   }
 
+  it.each(['CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'])('a user settings file whose env sets %s is refused the same way (#254, #255)', async (name) => {
+    const { code, stderr, sdkLoaded } = await evalWithUserSettings({ env: { [name]: '' } });
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
+    expect(sdkLoaded).toBe(false);
+  });
+
   it('a user settings file whose env names the forced variable: exit 2, the refusal named, the SDK never loaded, no scorecard', async () => {
     const { code, stderr, sdkLoaded, base } = await evalWithUserSettings({ env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '' } });
     expect(code).toBe(2);

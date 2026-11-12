@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { BACKGROUND_TASKS_SWITCH } from '../internal/child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV } from '../internal/child-env.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { SettingSource } from '../security/index.js';
@@ -101,7 +101,7 @@ describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR
     expect(env?.['HARNESS_250_SENTINEL']).toBe('kept');
     // The SDK's `env` replaces the child environment, so nothing inherited may be dropped.
     for (const [name, value] of Object.entries(process.env)) {
-      if (name !== BACKGROUND_TASKS_SWITCH) expect(env?.[name], name).toBe(value);
+      if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
     }
   });
 
@@ -130,7 +130,18 @@ describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR
   it.each([[[]], [['user', 'project', 'local']]] as const)('passes the forced table as flag settings as well (sources %j)', async (sources) => {
     const fake = fakeQuery([INIT, RESULT]);
     await createSession(makeDeps(fake), { skillsDir: null, settingSources: [...sources] }).run('p');
-    expect(fake.captured[0]?.options?.settings).toEqual({ env: { [BACKGROUND_TASKS_SWITCH]: '1' } });
+    expect(fake.captured[0]?.options?.settings).toEqual({
+      env: { [BACKGROUND_TASKS_SWITCH]: '1', [CRON_SWITCH]: '1', [ATTACHMENTS_SWITCH]: '1', [AUTO_MEMORY_SWITCH]: '1' },
+    });
+  });
+
+  // #254 (scheduled tasks) and #255 (attachments): the same two layers, the same precedence.
+  it.each([CRON_SWITCH, ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH])('forces %s to "1" over an inherited empty value, under any sources', async (name) => {
+    vi.stubEnv(name, '');
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null, settingSources: ['user', 'project', 'local'] }).run('p');
+    expect(fake.captured[0]?.options?.env?.[name]).toBe('1');
+    expect(fake.captured[0]?.options?.settings?.env[name]).toBe('1');
   });
 
   it('is set whatever settingSources says (the switch is not part of the isolation opt-in)', async () => {

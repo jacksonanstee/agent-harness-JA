@@ -327,7 +327,7 @@ describe('registerSecurityHooks (#140, ADR-0040 D3; the one registration site fo
   // #188: a real roots set over a throwaway home and project.
   const spHome = mkdtempSync(join(tmpdir(), 'rsh-home-'));
   const spProject = mkdtempSync(join(tmpdir(), 'rsh-proj-'));
-  const roots = buildProtectedRoots({ userDir: spHome, projectDir: spProject, skillsDir: null, dbPath: ':memory:' });
+  const roots = buildProtectedRoots({ userDir: spHome, projectDir: spProject, skillsDir: null, dbPath: ':memory:', claudeConfigDir: undefined });
 
   it('registers permissionHook then sandboxHook: when both would deny, the permission reason is the one reported', async () => {
     const hooks = createHookRuntime();

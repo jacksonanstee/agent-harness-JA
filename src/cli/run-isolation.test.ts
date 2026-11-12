@@ -257,6 +257,32 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
     expect(stderr).not.toContain('SENTINEL-VALUE');
   });
 
+  // #254, #255: the gate keys off the forced table, so the two new switches are refused the same way.
+  it.each(['CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'])(
+    'a user settings file whose env sets %s to "" refuses the run under sdk.settingSources [user], the SDK never called',
+    async (name) => {
+      const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { [name]: '' } });
+      expect(code).toBe(2);
+      expect(sdk.primary).toEqual([]);
+      expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
+    },
+  );
+
+  // Round 3: a settings file that moves the CLI's memory directory is refused the same way.
+  it('a user settings file that sets autoMemoryDirectory refuses the run under sdk.settingSources [user], no value echoed', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { autoMemoryDirectory: '/SENTINEL-DIR' });
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(setting\)\. /m);
+    expect(stderr).not.toContain('SENTINEL-DIR');
+  });
+
+  it('that file is not read when the user source is not inherited', async () => {
+    const { code, sdk } = await runWithSettingsEnv([], 'user', { autoMemoryDirectory: '/SENTINEL-DIR' });
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+  });
+
   it('the same user file is not read when the user source is not inherited (#250)', async () => {
     const { code, sdk } = await runWithSettingsEnv([], 'user', undo);
     expect(code).toBe(0);

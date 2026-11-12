@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { FORCED_CHILD_ENV } from '../internal/child-env.js';
 import { createJudgedScanner, toInjectionJudge } from '../security/index.js';
 import type { JudgeCallResult, ScanResult } from '../security/index.js';
 import { buildJudge, buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse } from './judge.js';
@@ -236,7 +237,7 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     const options = fake.captured[0]?.options;
     if (options === undefined) throw new Error('query received no options');
     expect(Object.keys(options).sort()).toEqual(
-      ['abortController', 'hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'skills', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
+      ['abortController', 'env', 'hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'settings', 'skills', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
     );
     expect(options.model).toBe('claude-sonnet-5');
     expect(options.maxTurns).toBe(1);
@@ -247,6 +248,39 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     expect(options.systemPrompt).toBe(JUDGE_SYSTEM_PROMPT);
     expect(options.persistSession).toBe(false);
     expect(Object.keys(options.hooks ?? {})).toEqual(['PreToolUse']);
+  });
+
+  // #254, #255: the judge is its own CLI child. `tools: []` does not stop the CLI running a scheduled
+  // job or expanding an @path in the judged text, so it gets the forced table on both layers too.
+  describe('the child environment (#254, #255)', () => {
+    // Literals, not the table: these must fail if the table loses a switch.
+    const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'] as const;
+    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each(FORCED_NAMES)('forces %s to "1" in env and in flag settings, over an inherited empty value', async (name) => {
+      vi.stubEnv(name, '');
+      const fake = fakeQuery([resultMessage('{"verdict":"block"}', 0.002)]);
+      await buildJudge(fake.query, MODEL, fixedNonce)(TEXT);
+      expect(fake.captured[0]?.options?.env?.[name]).toBe('1');
+      expect(fake.captured[0]?.options?.settings).toEqual({ env: FORCED_ON });
+    });
+
+    it('carries every inherited variable, read at call time (the SDK env replaces the child environment)', async () => {
+      const fake = fakeQuery([resultMessage('{"verdict":"block"}', 0.002)]);
+      const call = buildJudge(fake.query, MODEL, fixedNonce);
+      vi.stubEnv('HARNESS_254_LATE', 'late');
+      await call(TEXT);
+      const env = fake.captured[0]?.options?.env;
+      expect(env?.['HARNESS_254_LATE']).toBe('late');
+      expect(env).not.toBe(process.env);
+      for (const [name, value] of Object.entries(process.env)) {
+        if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
+      }
+    });
   });
 
   it('the PreToolUse hook is a single deny-all with the pinned reason', async () => {

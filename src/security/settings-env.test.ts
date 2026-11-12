@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { scanSettingsEnv, SETTINGS_ENV_REFUSED_REASON, settingsEnvFiles, SettingsEnvRefused } from './settings-env.js';
+import { REFUSED_SETTINGS_KEYS, scanSettingsEnv, SETTINGS_ENV_REFUSED_REASON, SETTINGS_KEY_REFUSED_REASON, settingsEnvFiles, SettingsEnvRefused } from './settings-env.js';
 import type { SettingsEnvFile } from './settings-env.js';
 
 const KEY = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
@@ -257,6 +257,65 @@ describe('scanSettingsEnv reads to the end of the file, not to the size it was a
     asked.length = 0;
     expect(scanSettingsEnv([big], FORCED, { maxFileBytes: 1000, io: counting })[0]).toMatchObject({ reason: 'unreadable' });
     expect(asked.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(1001);
+  });
+});
+
+// Review of #254/#255, round 3 (security, OBSERVED with the loopback mock): a user settings file's
+// `autoMemoryDirectory` moved the CLI's memory to a directory self-protection does not know, and an
+// ungranted Write there succeeded. A settings file the CLI would load that sets the key refuses the run.
+describe('scanSettingsEnv refuses a settings file that sets a refused top-level key', () => {
+  const scanKey = (text: string, forced: readonly string[] = FORCED) =>
+    scanSettingsEnv([file(tmp(), 'settings.json', text)], forced, { refusedTopLevelKeys: REFUSED_SETTINGS_KEYS });
+
+  it('the refused keys are exactly autoMemoryDirectory', () => {
+    expect([...REFUSED_SETTINGS_KEYS]).toEqual(['autoMemoryDirectory']);
+    expect(Object.isFrozen(REFUSED_SETTINGS_KEYS)).toBe(true);
+  });
+
+  it('refuses the key at the top level, whatever its value and letter case', () => {
+    for (const value of ['/elsewhere', '~/m', '', null, 7]) {
+      expect(scanKey(JSON.stringify({ autoMemoryDirectory: value }))).toMatchObject([{ source: 'user', reason: 'setting' }]);
+    }
+    expect(scanKey('{"AUTOMEMORYDIRECTORY": "/x"}')).toMatchObject([{ reason: 'setting' }]);
+    expect(scanKey('{"auto\\u004demoryDirectory": "/x"}')).toMatchObject([{ reason: 'setting' }]);
+  });
+
+  it('passes a mention that is not a top-level key, and a file that never names it', () => {
+    expect(scanKey(JSON.stringify({ env: { autoMemoryDirectory: '/x' } }))).toEqual([]);
+    expect(scanKey(JSON.stringify({ note: 'autoMemoryDirectory is refused', nested: { autoMemoryDirectory: '/x' } }))).toEqual([]);
+    expect(scanKey(JSON.stringify({ model: 'x' }))).toEqual([]);
+    expect(scanKey('// not json at all')).toEqual([]);
+  });
+
+  it('refuses a file it cannot parse that names the key', () => {
+    expect(scanKey('// c\n{ "autoMemoryDirectory": "/x", }')).toMatchObject([{ reason: 'unparsable' }]);
+    expect(scanKey('["autoMemoryDirectory"]')).toMatchObject([{ reason: 'unparsable' }]);
+  });
+
+  it('scans for the key even when no variable is forced, and does nothing when asked for neither', () => {
+    expect(scanKey(JSON.stringify({ autoMemoryDirectory: '/x' }), [])).toMatchObject([{ reason: 'setting' }]);
+    expect(scanSettingsEnv([file(tmp(), 'settings.json', JSON.stringify({ autoMemoryDirectory: '/x' }))], [])).toEqual([]);
+  });
+
+  it('is off unless asked for: the env scan alone passes the key', () => {
+    expect(scanText(JSON.stringify({ autoMemoryDirectory: '/x' }))).toEqual([]);
+  });
+
+  it('a file with both reports the key', () => {
+    expect(scanKey(JSON.stringify({ autoMemoryDirectory: '/x', env: { [KEY]: '' } }))).toMatchObject([{ reason: 'setting' }]);
+  });
+
+  it('the error names the file and gives the key reason, fixed text, no value', () => {
+    const one = new SettingsEnvRefused([{ source: 'user', path: '/cfg/settings.json', reason: 'setting' }]);
+    expect(one.message).toBe(`settings env refused: user:/cfg/settings.json (setting). ${SETTINGS_KEY_REFUSED_REASON}`);
+    expect(SETTINGS_KEY_REFUSED_REASON).toContain('autoMemoryDirectory');
+    const both = new SettingsEnvRefused([
+      { source: 'user', path: '/cfg/settings.json', reason: 'setting' },
+      { source: 'global', path: '/cfg/.claude.json', reason: 'env' },
+    ]);
+    expect(both.message).toBe(
+      `settings env refused: user:/cfg/settings.json (setting); global:/cfg/.claude.json (env). ${SETTINGS_ENV_REFUSED_REASON} ${SETTINGS_KEY_REFUSED_REASON}`,
+    );
   });
 });
 
