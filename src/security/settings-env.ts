@@ -148,37 +148,51 @@ function textVerdict(raw: string, forced: readonly string[]): SettingsEnvRefusal
   return Object.keys(env).some((name) => forced.includes(name.toUpperCase())) ? 'env' : null;
 }
 
+/** The four fs calls the bounded read makes; a seam so a test can change the file between them. */
+export interface SettingsEnvIo {
+  openSync(path: string, flags: number): number;
+  fstatSync(fd: number): { isFile(): boolean };
+  readSync(fd: number, buffer: Buffer, offset: number, length: number, position: null): number;
+  closeSync(fd: number): void;
+}
+
+const NODE_IO: SettingsEnvIo = { openSync, fstatSync, readSync, closeSync };
+/** Bytes asked for per read call. Memory follows the file, never the limit. */
+const READ_CHUNK_BYTES = 64 * 1024;
+
 /**
  * The file's bytes, `'missing'`, or `'unreadable'`. A symlink is followed, as
  * the CLI follows it. The path is opened without blocking and judged on the
  * open descriptor, so a FIFO put there cannot hang the scan and the file
- * checked is the file read. Only a regular file is read, and never more than
- * one byte past `maxBytes`: a larger one is `'unreadable'`.
+ * checked is the file read. Only a regular file is read. It is read in chunks
+ * to END OF FILE, not to the size a stat reported, so bytes appended after
+ * the stat are read too; the read stops, as `'unreadable'`, once it holds one
+ * byte more than `maxBytes`.
  */
-function readBounded(path: string, maxBytes: number): Buffer | 'missing' | 'unreadable' {
+function readBounded(path: string, maxBytes: number, io: SettingsEnvIo): Buffer | 'missing' | 'unreadable' {
   let fd: number;
   try {
     // O_NONBLOCK is absent on Windows, where there is no FIFO to block on.
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    fd = io.openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   } catch (error: unknown) {
     return isMissing(error) ? 'missing' : 'unreadable';
   }
   try {
-    const stats = fstatSync(fd);
-    if (!stats.isFile()) return 'unreadable';
-    // The read itself enforces the limit: at most one byte past it, so the stat's size is only a hint.
-    const buffer = Buffer.alloc(Math.min(stats.size, maxBytes) + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const read = readSync(fd, buffer, length, buffer.length - length, null);
-      if (read === 0) break;
-      length += read;
+    if (!io.fstatSync(fd).isFile()) return 'unreadable';
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, maxBytes + 1 - total));
+      const read = io.readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) return Buffer.concat(chunks, total);
+      chunks.push(chunk.subarray(0, read));
+      total += read;
     }
-    return length > maxBytes ? 'unreadable' : buffer.subarray(0, length);
+    return 'unreadable';
   } catch {
     return 'unreadable';
   } finally {
-    closeSync(fd);
+    io.closeSync(fd);
   }
 }
 
@@ -186,7 +200,7 @@ function readBounded(path: string, maxBytes: number): Buffer | 'missing' | 'unre
  * True for bytes the CLI may decode differently from a UTF-8 read: a UTF-16
  * or UTF-32 byte-order mark, or any NUL byte (UTF-16 and UTF-32 text without
  * a mark is full of them, and JSON text has none). OBSERVED by the security
- * review (mock API, CLI 2.1.312, 12/11/2026): the CLI applied the env block of
+ * re-review (mock API, CLI 2.1.312, 12/11/2026): the CLI applied the env block of
  * a UTF-16LE settings file whose UTF-8 reading never spells the variable. A
  * UTF-8 mark is not refused here; such a file is judged on its text.
  */
@@ -198,6 +212,8 @@ function isForeignEncoding(bytes: Buffer): boolean {
 
 export interface SettingsEnvScanLimits {
   readonly maxFileBytes?: number;
+  /** The fs calls to read with. Default: node's. A seam for tests. */
+  readonly io?: SettingsEnvIo;
 }
 
 /**
@@ -228,7 +244,7 @@ export function scanSettingsEnv(
   const maxFileBytes = limits.maxFileBytes ?? SETTINGS_ENV_MAX_FILE_BYTES;
   const refusals: SettingsEnvRefusal[] = [];
   for (const file of files) {
-    const read = readBounded(file.path, maxFileBytes);
+    const read = readBounded(file.path, maxFileBytes, limits.io ?? NODE_IO);
     if (read === 'missing') continue;
     if (read === 'unreadable') {
       refusals.push({ ...file, reason: 'unreadable' });

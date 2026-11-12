@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -214,6 +214,49 @@ describe('scanSettingsEnv refuses what it cannot read as the CLI would (#250, se
     const exact = file(tmp(), 'a.json', envJson);
     expect(scanSettingsEnv([exact], FORCED, { maxFileBytes: Buffer.byteLength(envJson) })[0]).toMatchObject({ reason: 'env' });
     expect(scanSettingsEnv([exact], FORCED, { maxFileBytes: Buffer.byteLength(envJson) - 1 })[0]).toMatchObject({ reason: 'unreadable' });
+  });
+});
+
+describe('scanSettingsEnv reads to the end of the file, not to the size it was at the stat (#250)', () => {
+  // A test double for the four fs calls: the real ones, with an append slipped in straight after the fstat.
+  const growingIo = (path: string, appended: string) => ({
+    openSync,
+    readSync,
+    closeSync,
+    fstatSync: (fd: number) => {
+      const stats = fstatSync(fd);
+      appendFileSync(path, appended);
+      return stats;
+    },
+  });
+
+  it('a name appended between the stat and the read is seen', () => {
+    const f = file(tmp(), 'settings.json', 'x'.repeat(100));
+    const refusals = scanSettingsEnv([f], FORCED, { io: growingIo(f.path, `${'y'.repeat(100)} ${KEY}`) });
+    expect(refusals).toEqual([{ source: 'user', path: f.path, reason: 'unparsable' }]);
+  });
+
+  it('an env block completed between the stat and the read is seen', () => {
+    const f = file(tmp(), 'settings.json', '{"env":{');
+    expect(scanSettingsEnv([f], FORCED, { io: growingIo(f.path, `"${KEY}":""}}`) })[0]).toMatchObject({ reason: 'env' });
+  });
+
+  it('a file that grows past the limit between the stat and the read is refused', () => {
+    const f = file(tmp(), 'settings.json', 'x'.repeat(10));
+    expect(scanSettingsEnv([f], FORCED, { maxFileBytes: 50, io: growingIo(f.path, 'y'.repeat(41)) })[0]).toMatchObject({ reason: 'unreadable' });
+    const g = file(tmp(), 'settings.json', 'x'.repeat(10));
+    expect(scanSettingsEnv([g], FORCED, { maxFileBytes: 50, io: growingIo(g.path, 'y'.repeat(40)) })).toEqual([]);
+  });
+
+  it('never asks for more than one byte past the limit, and reads a large file in more than one call', () => {
+    const big = file(tmp(), 'settings.json', `${'x'.repeat(300_000)} ${KEY}`);
+    const asked: number[] = [];
+    const counting = { openSync, fstatSync, closeSync, readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: null) => (asked.push(length), readSync(fd, buffer, offset, length, position)) };
+    expect(scanSettingsEnv([big], FORCED, { io: counting })[0]).toMatchObject({ reason: 'unparsable' });
+    expect(asked.length).toBeGreaterThan(1);
+    asked.length = 0;
+    expect(scanSettingsEnv([big], FORCED, { maxFileBytes: 1000, io: counting })[0]).toMatchObject({ reason: 'unreadable' });
+    expect(asked.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(1001);
   });
 });
 

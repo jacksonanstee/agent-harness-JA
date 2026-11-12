@@ -72,6 +72,7 @@ export { scanSettingsEnv, SETTINGS_ENV_MAX_FILE_BYTES, SETTINGS_ENV_REFUSED_REAS
 export type {
   SettingsEnvFile,
   SettingsEnvFilesInput,
+  SettingsEnvIo,
   SettingsEnvRefusal,
   SettingsEnvRefusalReason,
   SettingsEnvScanLimits,
