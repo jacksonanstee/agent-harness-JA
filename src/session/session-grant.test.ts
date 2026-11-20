@@ -15,7 +15,8 @@ import {
   sandboxHook,
 } from '../security/index.js';
 import type { GrantPolicy, PermissionEvaluator } from '../security/index.js';
-import { createSession, HARNESS_HOOK_ALLOW_REASON } from './session.js';
+import { HARNESS_HOOK_ALLOW_REASON } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkPreToolUseInput, SessionDeps, SessionResult } from './types.js';
 
 // Issue #140, ADR-0040 D3; spec 6a.3. The grant canary: a USER-layer rule allow

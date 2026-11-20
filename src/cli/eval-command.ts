@@ -10,12 +10,15 @@ import {
 } from '../eval/index.js';
 import type { AdversaryFn, AdversaryResult, TaskSessionConfig, Verifier } from '../eval/index.js';
 import { createHookRuntime } from '../hooks/index.js';
-import { buildChildEnv, buildChildSettings, childConfigDir } from '../internal/child-env.js';
+import { buildChildSettings, buildToollessChildEnv, childConfigDir } from '../internal/child-env.js';
 import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { agentScanFor, createSession, settingsEnvScanFor } from '../session/index.js';
+// #251: off the session barrel on purpose (it is not package API); the adversary is a CLI child like the judge.
+import { spawnChildProcess } from '../session/child-process.js';
+import type { SpawnChildFn } from '../session/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage, Session } from '../session/index.js';
 import {
   AgentDefinitionRefused,
@@ -137,8 +140,11 @@ export const buildAdversary =
         tools: [],
         skills: [],
         persistSession: false,
-        env: buildChildEnv(process.env),
+        // #251: the adversary runs no tool, so it inherits an allowlist and not the operator's environment.
+        env: buildToollessChildEnv(process.env),
         settings: buildChildSettings(),
+        // #251: every CLI child is started by the harness's own spawn function.
+        spawnClaudeCodeProcess: spawnChildProcess,
         hooks: { PreToolUse: [{ hooks: [denyAll] }] },
       },
     })) {
@@ -164,6 +170,8 @@ export interface EvalSessionFactoryDeps {
   create?: typeof createSession;
   /** Where the protected `.harness` directories are (#188); each task adds its own skills root. */
   selfProtection: { userDir: string; projectDir: string; claudeConfigDir: string | undefined };
+  /** Test seam (#251): how each task session starts the bundled CLI. Default: the session's own, a Node spawn. */
+  spawnChild?: SpawnChildFn;
 }
 
 /**
@@ -207,6 +215,7 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         // #229: the same home directory the settings were read from.
         scanAgents: agentScanFor(deps.selfProtection.userDir),
         scanSettingsEnv: settingsEnvScanFor(deps.selfProtection.userDir),
+        ...(deps.spawnChild === undefined ? {} : { spawnChild: deps.spawnChild }),
       },
       {
         skillsDir: config.skillsDir,

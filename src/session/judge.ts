@@ -2,9 +2,10 @@ import { randomBytes } from 'node:crypto';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 
-import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
+import { buildChildSettings, buildToollessChildEnv } from '../internal/child-env.js';
 import { isVerdict } from '../security/index.js';
 import type { JudgeCall, JudgeCallResult, Verdict } from '../security/index.js';
+import { spawnChildProcess } from './child-process.js';
 import { isProviderRefusal } from './sdk-refusal.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkResultMessage } from './types.js';
 
@@ -261,8 +262,11 @@ export function buildJudge(query: QueryFn, model: string, randomHex: () => strin
           skills: [],
           persistSession: false,
           // #254, #255 (ADR-0040 D-8 as amended 13/11/2026): scheduled tasks and attachments off in the child.
-          env: buildChildEnv(process.env),
+          // #251: the judge runs no tool, so it inherits an allowlist and not the operator's environment.
+          env: buildToollessChildEnv(process.env),
           settings: buildChildSettings(),
+          // #251: every CLI child is started by the harness's own spawn function.
+          spawnClaudeCodeProcess: spawnChildProcess,
           hooks: { PreToolUse: [{ hooks: [denyAll] }] },
           abortController,
         },

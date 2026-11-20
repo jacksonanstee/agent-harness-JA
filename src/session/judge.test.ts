@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FORCED_CHILD_ENV } from '../internal/child-env.js';
+import { isToollessAllowedName } from '../internal/child-env-policy.js';
 import { createJudgedScanner, toInjectionJudge } from '../security/index.js';
 import type { JudgeCallResult, ScanResult } from '../security/index.js';
+import { spawnChildProcess } from './child-process.js';
 import { buildJudge, buildJudgePrompt, JUDGE_SYSTEM_PROMPT, parseJudgeResponse } from './judge.js';
 import type { ParsedJudgeWire } from './judge.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from './types.js';
@@ -237,8 +239,10 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
     const options = fake.captured[0]?.options;
     if (options === undefined) throw new Error('query received no options');
     expect(Object.keys(options).sort()).toEqual(
-      ['abortController', 'env', 'hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'settings', 'skills', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
+      ['abortController', 'env', 'hooks', 'maxTurns', 'model', 'persistSession', 'settingSources', 'settings', 'skills', 'spawnClaudeCodeProcess', 'strictMcpConfig', 'systemPrompt', 'tools'].sort(),
     );
+    // #251: the judge's CLI is started by the harness's own spawn function, like every child.
+    expect(options.spawnClaudeCodeProcess).toBe(spawnChildProcess);
     expect(options.model).toBe('claude-sonnet-5');
     expect(options.maxTurns).toBe(1);
     expect(options.settingSources).toEqual([]);
@@ -255,7 +259,8 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
   describe('the child environment (#254, #255)', () => {
     // Literals, not the table: these must fail if the table loses a switch.
     const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'] as const;
-    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+    // #251: the same table also holds the CLI's bare mode off.
+    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_SIMPLE: '0' };
 
     afterEach(() => {
       vi.unstubAllEnvs();
@@ -269,17 +274,39 @@ describe('pin 18: buildJudge is a de-fanged, isolated single completion', () => 
       expect(fake.captured[0]?.options?.settings).toEqual({ env: FORCED_ON });
     });
 
-    it('carries every inherited variable, read at call time (the SDK env replaces the child environment)', async () => {
+    // #251, #261: a tool-less child inherits an allowlist, not the operator's environment.
+    it.each(['1', 'TRUE', 'on'])('holds bare mode off in env and in flag settings over an inherited %j', async (inherited) => {
+      vi.stubEnv('CLAUDE_CODE_SIMPLE', inherited);
       const fake = fakeQuery([resultMessage('{"verdict":"block"}', 0.002)]);
       const call = buildJudge(fake.query, MODEL, fixedNonce);
-      vi.stubEnv('HARNESS_254_LATE', 'late');
       await call(TEXT);
-      const env = fake.captured[0]?.options?.env;
-      expect(env?.['HARNESS_254_LATE']).toBe('late');
+      expect(fake.captured[0]?.options?.env?.['CLAUDE_CODE_SIMPLE']).toBe('0');
+      expect(fake.captured[0]?.options?.settings?.env['CLAUDE_CODE_SIMPLE']).toBe('0');
+    });
+
+    it('passes the allowlisted names and the keep list, read at call time, and nothing else of the operator\'s environment', async () => {
+      const fake = fakeQuery([resultMessage('{"verdict":"block"}', 0.002)]);
+      const call = buildJudge(fake.query, MODEL, fixedNonce);
+      vi.stubEnv('HARNESS_251_LATE', 'late');
+      vi.stubEnv('NPM_TOKEN', 'not-for-the-child');
+      vi.stubEnv('NODE_OPTIONS', '--max-old-space-size=4096');
+      vi.stubEnv('CLAUDE_CODE_MESSAGING_SOCKET', '/tmp/parent.sock');
+      vi.stubEnv('CLAUDECODE', '1');
+      vi.stubEnv('ANTHROPIC_MODEL', 'operator-model');
+      vi.stubEnv('PATH', '/usr/bin:/bin');
+      vi.stubEnv('LC_ALL', 'C');
+      vi.stubEnv('https_proxy', 'http://127.0.0.1:1');
+      vi.stubEnv('AWS_PROFILE', 'bedrock');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'fake-k');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:1');
+      vi.stubEnv('CLAUDE_CONFIG_DIR', '/cfg');
+      await call(TEXT);
+      const env = fake.captured[0]?.options?.env ?? {};
       expect(env).not.toBe(process.env);
-      for (const [name, value] of Object.entries(process.env)) {
-        if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
-      }
+      for (const name of ['HARNESS_251_LATE', 'NPM_TOKEN', 'NODE_OPTIONS', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDECODE', 'ANTHROPIC_MODEL']) expect(name in env, name).toBe(false);
+      expect(env).toMatchObject({ PATH: '/usr/bin:/bin', LC_ALL: 'C', https_proxy: 'http://127.0.0.1:1', AWS_PROFILE: 'bedrock', ANTHROPIC_API_KEY: 'fake-k', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1', CLAUDE_CONFIG_DIR: '/cfg' });
+      // Every name passed is the forced table's or one the tool-less allowlist admits.
+      for (const name of Object.keys(env)) expect(name in FORCED_CHILD_ENV || isToollessAllowedName(name), name).toBe(true);
     });
   });
 

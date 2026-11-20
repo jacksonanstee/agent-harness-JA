@@ -49,7 +49,9 @@ import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 import { SCHEDULED_TASKS_FILE } from '../internal/child-env.js';
 import { CASE_INSENSITIVE_PLATFORM, canonicalizePath, TOOL_TARGET_FIELDS } from '../internal/tool-targets.js';
+import { managedSettingsDir } from './agent-definitions.js';
 import type { PreToolLike } from './pre-tool-like.js';
+import { ALL_SETTING_SOURCES, managedDropInDir, settingsEnvFiles } from './settings-env.js';
 
 /** The one reason the model reads. Fixed text: it never echoes a path (ADR-0031). */
 export const SELF_PROTECTION_REASON =
@@ -117,6 +119,11 @@ export interface ProtectedRootsInput {
    * whatever this says.
    */
   claudeConfigDir: string | undefined;
+  /**
+   * The directory of the CLI's managed settings. Default: the platform's own
+   * (`managedSettingsDir`). A seam for tests.
+   */
+  managedDir?: string;
 }
 
 /** The directory under the CLI's config directory that holds each project's auto-memory (and its transcripts). */
@@ -129,6 +136,19 @@ const CLI_PROJECTS_DIR = 'projects';
  */
 const AGENT_MEMORY_DIR = 'agent-memory';
 const AGENT_MEMORY_LOCAL_DIR = 'agent-memory-local';
+/**
+ * A relative path word that names a CLI settings file under a `.claude`
+ * directory, for a command that changed directory first. A bare
+ * `settings.json` after `cd .claude` is NOT matched: that name is too common
+ * to refuse wherever it points (R-23's limit, a path built at run time).
+ */
+const SETTINGS_WALK = /(?:^|\/)\.claude\/(?:settings(?:\.local)?|cowork_settings)\.json$/u;
+/**
+ * Last components that are refused wherever they point, because nothing but
+ * the CLI uses them: its global config file under each name suffix, its
+ * managed settings file, and the two settings names of its own.
+ */
+const CLI_ONLY_SETTINGS_NAME = /^(?:\.claude(?:-[a-z]+-oauth)?\.json|managed-settings\.json|settings\.local\.json|cowork_settings\.json)$/u;
 /** A path word that walks into a per-agent memory directory, for a command that changed directory first. */
 const AGENT_MEMORY_WALK = /(?:^|\/)agent-memory(?:-local)?(?:\/|$)/u;
 /**
@@ -233,13 +253,28 @@ export function buildProtectedRoots(input: ProtectedRootsInput): ProtectedRoots 
     const db = resolve(cwd, input.dbPath);
     for (const suffix of DB_SIDECARS) files.push(db + suffix);
   }
+  // #251 (owner ruling 13/11/2026): every settings file the settings-env scan would read, for EVERY
+  // source, and the managed drop-in directory. The CLI re-read a settings file the agent wrote during
+  // the run and ran the command hook in it (OBSERVED; the runs are named at `settingsEnvFiles`). The
+  // list is the scan's own, so what is scanned and what is protected cannot drift.
+  const managedDir = input.managedDir ?? managedSettingsDir(process.platform);
+  dirs.push(managedDropInDir(managedDir));
+  const settingsFiles = settingsEnvFiles({
+    settingSources: ALL_SETTING_SOURCES,
+    cwd,
+    homeDir: input.userDir,
+    env: { CLAUDE_CONFIG_DIR: configured === undefined || configured === '' ? undefined : resolve(cwd, configured) },
+    managedDir,
+  }).map((file) => file.path);
   const root = (kind: 'dir' | 'file', path: string): ProtectedRoot => ({ kind, forms: forms(resolve(path)).forms });
   const dirRoots = dirs.map((d) => root('dir', d));
   const fileRoots = files.map((f) => root('file', f));
+  // Protected by path only: `settings.json` is too common a name to refuse wherever it points.
+  const settingsRoots = settingsFiles.map((f) => root('file', f));
   const insideADir = (file: ProtectedRoot): boolean =>
     file.forms.some((form) => dirRoots.some((dir) => dir.forms.some((d) => under(form, d))));
   return {
-    roots: [...dirRoots, ...fileRoots],
+    roots: [...dirRoots, ...fileRoots, ...settingsRoots],
     fileNames: new Set(fileRoots.filter((file) => !insideADir(file)).flatMap((file) => file.forms.map(lastComponent))),
     home: resolve(input.userDir),
     cwd,
@@ -254,7 +289,8 @@ function lastComponent(path: string): string {
 
 /** True when the path's last component is the name of a protected file (see `ProtectedRoots.fileNames`). */
 function namesProtectedFile(path: string, roots: ProtectedRoots): boolean {
-  return roots.fileNames.has(lastComponent(path));
+  const name = lastComponent(path);
+  return roots.fileNames.has(name) || CLI_ONLY_SETTINGS_NAME.test(name);
 }
 
 function expandTilde(path: string, home: string): string {
@@ -366,7 +402,7 @@ function mentionsAbsolute(folded: string, roots: ProtectedRoots): boolean {
 function commandIsProtected(command: string, roots: ProtectedRoots): boolean {
   const expanded = expandHome(command, roots);
   return (
-    candidatePaths(expanded).some((path) => isProtected(path, roots) || namesProtectedFile(path, roots) || MEMORY_WALK.test(path) || AGENT_MEMORY_WALK.test(path)) ||
+    candidatePaths(expanded).some((path) => isProtected(path, roots) || namesProtectedFile(path, roots) || MEMORY_WALK.test(path) || AGENT_MEMORY_WALK.test(path) || SETTINGS_WALK.test(path)) ||
     mentionsAbsolute(fold(expanded.replace(/["'\\]/gu, '')), roots)
   );
 }

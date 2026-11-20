@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../cli.js';
 import { runInit } from './init-command.js';
 import type { SdkMessage } from '../session/index.js';
+import { fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
 
 // Issue #127. Every stderr diagnostic that echoes an operator- or repo-named
 // path must drop bidi controls and default-ignorable code points. The hostile
@@ -194,13 +195,14 @@ describe('run stdout prose keeps legitimate ZWJ and LRM (sink-level pin of the #
     try {
       const code = await main(['run', '--skills-dir', join(base, 'skills'), '--db', join(base, 'run.db'), 'hi'], {
         userDir: join(base, 'home'),
+        spawnChild: fakeSpawnChild,
         importSdk: async () => ({
-          query: () =>
+          query: promptHookFirst(() =>
             (async function* () {
               yield { type: 'system', subtype: 'init', session_id: 'sdk-1' };
               yield { type: 'assistant', message: { content: [{ type: 'text', text: prose }] } };
               yield RESULT;
-            })(),
+            })()),
         }),
       });
       expect(code).toBe(0);

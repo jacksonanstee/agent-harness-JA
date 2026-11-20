@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { redact } from '../../security/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
 import { createGoldenRunner, DEFAULT_MAX_TASKS, EvalUsageError, portableTaskDir } from './runner.js';
@@ -586,6 +587,43 @@ describe('createGoldenRunner rows', () => {
     expect(alpha?.failureKind).toBe('session-error');
     expect(alpha?.reason).toContain('SDK exploded');
     expect(scorecard.rows).toHaveLength(3);
+  });
+
+  // #251: the session puts the tail of the CLI's stderr on the error it rejects with, raw. The row is where eval stores it.
+  it('a session error that carries a secret from the CLI stderr tail is stored redacted in the session-error row', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
+    const runner = createGoldenRunner({
+      createTaskSession: () => ({
+        run: () => Promise.reject(new Error(`Claude Code process exited with code 2. stderr: fatal: key ${secret} rejected`)),
+      }),
+      redactSecrets: redact,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    const alpha = scorecard.rows.find((r) => r.id === 'alpha');
+    expect(alpha?.failureKind).toBe('session-error');
+    expect(alpha?.reason).toContain('Claude Code process exited with code 2. stderr: fatal: key ');
+    expect(alpha?.reason).toContain('[REDACTED:');
+    expect(JSON.stringify(scorecard)).not.toContain(secret);
+  });
+
+  it.each([
+    ['a zero-width space', '\u200b'],
+    ['a soft hyphen', '\u00ad'],
+    ['an ANSI reset', '\u001b[0m'],
+  ])('a secret in a session error split by %s is still redacted in the row', async (_name, splitter) => {
+    const secret = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
+    const runner = createGoldenRunner({
+      createTaskSession: () => ({
+        run: () => Promise.reject(new Error(`exited 2. stderr: key ${secret.slice(0, 8)}${splitter}${secret.slice(8)} rejected`)),
+      }),
+      redactSecrets: redact,
+      now: fakeNow(),
+    });
+    const scorecard = await runner.run(fixtures('run'));
+    const alpha = scorecard.rows.find((r) => r.id === 'alpha');
+    expect(alpha?.reason).toBe('exited 2. stderr: key [REDACTED:aws-access-key-id] rejected');
+    expect(JSON.stringify(scorecard)).not.toContain(secret.slice(8));
   });
 
   it('turns an oracle throw into an oracle-error row', async () => {

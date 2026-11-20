@@ -71,6 +71,8 @@ export { argumentDenyHook } from './argument-deny.js';
 export {
   REFUSED_SETTINGS_KEYS,
   scanSettingsEnv,
+  ALL_SETTING_SOURCES,
+  managedDropInDir,
   SETTINGS_ENV_MAX_FILE_BYTES,
   SETTINGS_ENV_REFUSED_REASON,
   SETTINGS_KEY_REFUSED_REASON,
@@ -81,6 +83,7 @@ export type {
   SettingsEnvFile,
   SettingsEnvFilesInput,
   SettingsEnvIo,
+  SettingsEnvNamePolicy,
   SettingsEnvRefusal,
   SettingsEnvRefusalReason,
   SettingsEnvScanLimits,
@@ -158,6 +161,7 @@ export {
   continuePrivateKey,
   OPEN_PRIVATE_KEY,
   opensUnterminatedPrivateKey,
+  redactErrorText,
 } from './secrets/index.js';
 export type { PrivateKeyCarry } from './secrets/index.js';
 // SECRET_CORPUS / SecretCase omitted: test-only fixture, not published (ADR-0022).

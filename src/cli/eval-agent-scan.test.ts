@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../cli.js';
@@ -112,5 +113,41 @@ describe('eval pre-flights the settings-env scan (#250)', () => {
     const { stderr, sdkLoaded } = await evalWithUserSettings({ env: { FOO: '1' } });
     expect(stderr).not.toMatch(/refusing to run/);
     expect(sdkLoaded).toBe(true);
+  });
+});
+
+// #251, owner ruling 20/11/2026: a session error can carry the tail of the bundled CLI's stderr, as the CLI
+// wrote it. Eval stores the error's text in the task's row, so the command hands its runner the real redactor.
+describe('eval stores a session error redacted (#251)', () => {
+  it('a secret in the error a task session fails with is not in the scorecard the command writes, nor in what it prints', async () => {
+    const secret = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
+    const base = mkdtempSync(join(tmpdir(), 'eval-stderr-'));
+    bases.push(base);
+    const home = join(base, 'home');
+    mkdirSync(home);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'unused');
+    vi.spyOn(process, 'cwd').mockReturnValue(base);
+    const printed: string[] = [];
+    const keep = (chunk: string | Uint8Array): boolean => (printed.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()), true);
+    vi.spyOn(process.stdout, 'write').mockImplementation(keep);
+    vi.spyOn(process.stderr, 'write').mockImplementation(keep);
+    const fixtureTasks = fileURLToPath(new URL('../eval/golden/__fixtures__/run', import.meta.url));
+    await main(['eval', fixtureTasks], {
+      userDir: home,
+      evalOutDir: join(base, 'eval-out'),
+      importSdk: async () => ({
+        query: () => {
+          throw new Error(`Claude Code process exited with code 2. stderr: fatal: key ${secret} rejected`);
+        },
+      }),
+    });
+    const files = readdirSync(join(base, 'eval-out'));
+    expect(files.length).toBeGreaterThan(0);
+    const written = files.map((name) => readFileSync(join(base, 'eval-out', name), 'utf8')).join('\n');
+    expect(written).toContain('session-error');
+    expect(written).toContain('stderr: fatal: key [REDACTED:');
+    expect(written).not.toContain(secret);
+    expect(printed.join('')).not.toContain(secret);
   });
 });

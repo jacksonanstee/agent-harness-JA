@@ -10,6 +10,7 @@ import type { QueryFn, QueryOptions, SdkMessage } from '../session/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { installSigintHandler } from './interrupt.js';
 import { USAGE } from './shared.js';
+import { fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
 
 // Issue #187 at the CLI: `--max-budget-usd`, precedence flag > user settings >
 // session default (D3), the stop line (D4, D7) and Ctrl-C (D5). The real SDK
@@ -66,7 +67,7 @@ async function runMain(extraArgv: string[], query: QueryFn, opts: RunOpts = {}) 
   const argv = ['run', 'hi', '--db', db, '--skills-dir', dir(), ...extraArgv];
   const code = await main(argv, {
     userDir: dir(opts.user),
-    importSdk: async () => ({ query }),
+    importSdk: async () => ({ query: promptHookFirst(query) }), spawnChild: fakeSpawnChild,
     ...(opts.onInterrupt === undefined ? {} : { onInterrupt: opts.onInterrupt }),
   });
   return { code, stdout: out.join(''), stderr: err.join(''), db };

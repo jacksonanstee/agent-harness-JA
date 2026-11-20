@@ -2,6 +2,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { formatUsd } from '../../internal/money.js';
 import type { TaskDescriptor } from '../../router/index.js';
+import { redactErrorText } from '../../security/index.js';
 import type { RedactResult } from '../../security/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
 import { cleanForScorecard, computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
@@ -361,11 +362,14 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
   // it, and every id reaching here is already safe — parse-failure ids are
   // bidi-stripped at parse time (before the uniqueness check), success-path
   // ids are regex-pinned by the schema.
-  const failRow = (id: string, kind: GoldenFailureKind, reason: string): GoldenRow => ({
+  /** For an error's text: invisibles and control characters out before the redactor looks (`redactErrorText`). */
+  const cleanError = (text: string): string => cleanForScorecard(text, (t) => redactErrorText(t, deps.redactSecrets));
+
+  const failRow = (id: string, kind: GoldenFailureKind, reason: string, cleaner: (text: string) => string = clean): GoldenRow => ({
     id,
     pass: false,
     failureKind: kind,
-    reason: clean(reason),
+    reason: cleaner(reason),
     volatile: emptyVolatile(),
   });
 
@@ -407,7 +411,8 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       });
       result = await session.run(task.prompt);
     } catch (cause: unknown) {
-      const row = failRow(task.id, 'session-error', errorMessage(cause));
+      // #251: a session error can carry the tail of the CLI's stderr, so it is redacted as error text.
+      const row = failRow(task.id, 'session-error', errorMessage(cause), cleanError);
       return {
         row: { ...row, volatile: { ...row.volatile, durationMs: now() - startedAt } },
         model: null,

@@ -23,10 +23,14 @@ import type {
   SDKResultSuccess,
   SDKUserMessage,
   SettingSource as SettingSource_SDK,
+  SpawnedProcess,
+  SpawnOptions as SdkSpawnOptionsDeclared,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SettingSource } from '../security/index.js';
 import type {
   QueryOptions,
+  SdkSpawnedProcess,
+  SdkSpawnOptions,
   SdkHookCallback,
   SdkHookInput,
   SdkHookMatcher,
@@ -187,7 +191,8 @@ const _viewReadsNoDurationApiMs: Assignable<'duration_api_ms', keyof SdkResultMe
 // query too) and `maxBudgetUsd` (#187, ADR-0041, primary query only).
 // and `env` (#250, primary query only: the child environment from `buildChildEnv`).
 // and `settings` (#250, primary query only: the same table as flag settings, `buildChildSettings`).
-// Thirteen keys. The judge passes all five isolation keys; since ADR-0040 the
+// and `spawnClaudeCodeProcess` (#251: the harness starts every child itself, so the session holds the process a missed hook canary kills).
+// Fourteen keys. The judge passes all five isolation keys; since ADR-0040 the
 // SESSION passes `settingSources` and `strictMcpConfig` from `buildSessionIsolation`.
 const _seamExact: ExactKeys<
   QueryOptions,
@@ -204,7 +209,13 @@ const _seamExact: ExactKeys<
   | 'maxBudgetUsd'
   | 'env'
   | 'settings'
+  | 'spawnClaudeCodeProcess'
 > = true;
+// #251: the spawn key mirrors the SDK's, harness -> SDK: a harness spawn function is one the SDK accepts,
+// because the SDK's spawn options are a harness `SdkSpawnOptions` and a harness process is an SDK one.
+const _spawnMirrorsSdk: Assignable<NonNullable<QueryOptions['spawnClaudeCodeProcess']>, NonNullable<Options['spawnClaudeCodeProcess']>> = true;
+const _spawnOptionsFromSdk: Assignable<SdkSpawnOptionsDeclared, SdkSpawnOptions> = true;
+const _spawnedProcessToSdk: Assignable<SdkSpawnedProcess, SpawnedProcess> = true;
 // PR-B1 (spec D4, pin 12): the abort key mirrors the SDK's type, harness -> SDK.
 const _abortMirrorsSdk: Assignable<
   NonNullable<QueryOptions['abortController']>,
@@ -285,6 +296,9 @@ describe('roadmap pins for requirements H-7 and H-8 (issue #101)', () => {
       _viewReadsNoDurationMs,
       _viewReadsNoDurationApiMs,
       _seamExact,
+      _spawnMirrorsSdk,
+      _spawnOptionsFromSdk,
+      _spawnedProcessToSdk,
       _seamScalarsMatchSdk,
       _abortMirrorsSdk,
       _matcherTimeoutMirrorsSdk,

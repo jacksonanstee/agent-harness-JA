@@ -5,7 +5,7 @@ import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { redact } from '../security/index.js';
 import type { RedactResult } from '../security/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkMessage, SessionDeps } from './types.js';
 
 // Issue #111 (S-2): assistant text is redacted one block at a time, and the

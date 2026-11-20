@@ -3,7 +3,8 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV, SCHEDULED_TASKS_FILE } from './child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, BARE_MODE_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV, SCHEDULED_TASKS_FILE } from './child-env.js';
+import { KEPT_VENDOR_NAMES, TOOLLESS_ALLOWED_NAMES } from './child-env-policy.js';
 import {
   ACKNOWLEDGED_NON_TARGET_FIELDS,
   ACKNOWLEDGED_TOOLS,
@@ -587,7 +588,46 @@ describe('the background-tasks switch and field still exist in the installed SDK
     expect(names).toContain(CRON_SWITCH);
     expect(names).toContain(ATTACHMENTS_SWITCH);
     expect(names).toContain(AUTO_MEMORY_SWITCH);
+    expect(names).toContain(BARE_MODE_SWITCH);
     expect(names.filter((name) => !binaryHolds(name))).toEqual([]);
+  });
+
+  // #251: the keep list is the vendor names a child may inherit. A name the binary no longer holds is a
+  // name the CLI no longer reads, so keeping it is dead weight and its replacement is being stripped.
+  it('the platform binary names every vendor variable on the keep list', () => {
+    expect(KEPT_VENDOR_NAMES.length).toBeGreaterThan(0);
+    expect(KEPT_VENDOR_NAMES.filter((name) => !binaryHolds(name))).toEqual([]);
+  });
+
+  // #251: the tool-less allowlist passes the operator's traffic opt-outs because the CLI reads each as an
+  // off-only switch (a binary reading). A name the binary no longer holds is one the CLI no longer reads.
+  it('the platform binary names every traffic opt-out the tool-less allowlist passes, and the list still passes them', () => {
+    const optOuts = ['DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_AUTOUPDATER', 'DO_NOT_TRACK'];
+    for (const name of optOuts) expect(TOOLLESS_ALLOWED_NAMES, name).toContain(name);
+    expect(optOuts.filter((name) => !binaryHolds(name))).toEqual([]);
+    expect(KEPT_VENDOR_NAMES).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC');
+    // The reading the "off-only" claim rests on: set means no telemetry, and nothing else is derived from it there.
+    expect(binaryHolds('if(process.env.DISABLE_TELEMETRY)return"no-telemetry"')).toBe(true);
+  });
+
+  // #251: a missed hook canary kills the child, which the harness holds because it started it: the SDK
+  // calls `spawnClaudeCodeProcess` in place of its own spawn. If the SDK stopped calling it, the session
+  // would hold nothing and every run would stop as `ChildNotOwned`.
+  it('the SDK still starts the CLI through spawnClaudeCodeProcess, and still waits before signalling an aborted child', () => {
+    const sdkDir = join(process.cwd(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+    const mjs = readFileSync(join(sdkDir, 'sdk.mjs'), 'utf8');
+    expect(mjs).toContain('this.process=this.options.spawnClaudeCodeProcess(');
+    // The unit suite never loads the SDK (pin 30), so that the call is made is shown by the keyless probe: every
+    // healthy probe run goes through the harness's spawn function, or it would stop as `ChildNotOwned`.
+    // The reason the kill exists: the declarations document a grace window between an abort and the signal.
+    expect(readFileSync(join(sdkDir, 'sdk.d.ts'), 'utf8')).toMatch(/stdin EOF[\s\S]{0,80}GRACEFUL_EXIT_TIMEOUT_MS/u);
+  });
+
+  // #251: the bare-mode switch is read as a boolean that is on for these four words (a binary reading; "0"
+  // and "" were each observed to leave hooks on). The forced "0" rests on that list not growing a "0".
+  it('the platform binary still holds the truthy word list the bare-mode value was chosen against', () => {
+    expect(binaryHolds('["1","true","yes","on"]')).toBe(true);
+    expect(binaryHolds('"unset CLAUDE_CODE_SIMPLE"')).toBe(true);
   });
 
   // #254: the self-protection deny names the file the CLI reads durable jobs from. This catches the

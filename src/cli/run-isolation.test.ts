@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../cli.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage } from '../session/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
+import { fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
+import { spawnChildProcess } from '../session/child-process.js';
+import { redact } from '../security/index.js';
+import { fatalErrorLine, redactedErrorMessage } from './shared.js';
 
 // Issue #140, ADR-0040 D1; spec 6a.2 (default case). The dir, runMain and
 // runArgs helpers are trimmed copies of those in run-judge.test.ts (this file
@@ -71,8 +75,20 @@ async function runMain(argv: string[], userSettings: unknown, query: QueryFn | u
     mkdirSync(join(userDir, '.harness'));
     writeFileSync(join(userDir, '.harness', 'settings.json'), JSON.stringify(userSettings));
   }
-  const code = await main(argv, { userDir, importSdk: async () => ({ query }) });
+  const code = await main(argv, { userDir, importSdk: async () => ({ query: query === undefined ? query : promptHookFirst(query) }), spawnChild: fakeSpawnChild });
   return { code, stdout: out.join(''), stderr: err.join(''), userDir };
+}
+
+/** `main` over the fake exactly as given: nothing calls the session's prompt hook for it (#251). */
+async function runMainRaw(argv: string[], query: QueryFn) {
+  process.env.ANTHROPIC_API_KEY = 'dummy';
+  const out: string[] = [];
+  const err: string[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+  vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+  vi.spyOn(process, 'cwd').mockReturnValue(dir());
+  const code = await main(argv, { userDir: dir(), importSdk: async () => ({ query }), spawnChild: fakeSpawnChild });
+  return { code, stdout: out.join(''), stderr: err.join('') };
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -206,7 +222,7 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
     vi.spyOn(process, 'cwd').mockReturnValue(dir());
     try {
-      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: sdk.query }) });
+      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: promptHookFirst(sdk.query) }), spawnChild: fakeSpawnChild });
       return { code, sdk, stderr: err.join('') };
     } finally {
       vi.unstubAllEnvs();
@@ -241,7 +257,7 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
     vi.spyOn(process, 'cwd').mockReturnValue(dir());
     try {
-      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: sdk.query }) });
+      const code = await main(runArgs().argv, { userDir, importSdk: async () => ({ query: promptHookFirst(sdk.query) }), spawnChild: fakeSpawnChild });
       return { code, sdk, stderr: err.join('') };
     } finally {
       vi.unstubAllEnvs();
@@ -267,6 +283,79 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
       expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
     },
   );
+
+  // #251: the gate refuses every vendor name the harness strips, not only the ones it forces. The CLI's
+  // bare-mode switch ran no harness hook when the user settings file or the global config file set it.
+  it.each(['CLAUDE_CODE_SIMPLE', 'claude_code_simple', 'CLAUDECODE', 'CLAUDE_CODE_MESSAGING_SOCKET', 'ANTHROPIC_MODEL', 'CLAUDE_MADE_UP_TOMORROW'])(
+    'a user settings file whose env sets %s refuses the run under sdk.settingSources [user], the SDK never called, no value echoed (#251)',
+    async (name) => {
+      const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { [name]: 'SENTINEL-VALUE' } });
+      expect(code).toBe(2);
+      expect(sdk.primary).toEqual([]);
+      expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
+      expect(stderr).not.toContain('SENTINEL-VALUE');
+      expect(stderr).toContain('#251');
+    },
+  );
+
+  it('the global config file whose env sets the bare-mode switch refuses the run under the default isolation (#251)', async () => {
+    const { code, sdk, stderr } = await runWithSettingsEnv([], 'global', { env: { CLAUDE_CODE_SIMPLE: '1' } });
+    expect(code).toBe(2);
+    expect(sdk.primary).toEqual([]);
+    expect(stderr).toMatch(/^refusing to run: settings env refused: global:.*\.claude\.json \(env\)\. /m);
+  });
+
+  // Owner ruling 13/11/2026: a file may set no vendor name, the kept ones included (a file's block moved the
+  // endpoint, added a header and moved the config directory; observed).
+  it.each(['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', '_CLAUDE_CODE_X'])(
+    'a user settings file whose env sets %s refuses the run too: the keep list is for the inherited environment only',
+    async (name) => {
+      const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { [name]: 'SENTINEL-VALUE' } });
+      expect(code).toBe(2);
+      expect(sdk.primary).toEqual([]);
+      expect(stderr).toMatch(/^refusing to run: settings env refused: user:.*settings\.json \(env\)\. /m);
+      expect(stderr).not.toContain('SENTINEL-VALUE');
+    },
+  );
+
+  it.each(['AWS_REGION', 'DISABLE_TELEMETRY', 'MY_CLAUDE_FLAG'])('a user settings file whose env sets %s, a name outside the vendor namespace, runs (#251 control)', async (name) => {
+    const { code, sdk, stderr } = await runWithSettingsEnv(['user'], 'user', { env: { [name]: 'x' } });
+    expect(code).toBe(0);
+    expect(sdk.primary).toHaveLength(1);
+    expect(stderr).not.toMatch(/refusing to run/);
+  });
+
+  // #251: the canary. A CLI that begins the turn without calling the session's prompt hook has its hooks off.
+  it('a CLI that sends its init message without having run the prompt hook stops the run: exit 2, a fixed line on stderr, no summary line', async () => {
+    const sdk = fakeSdk([]);
+    // The SDK started the CLI through the session's spawn function, and the CLI never called the prompt hook.
+    const query: QueryFn = (args) => (args.options?.spawnClaudeCodeProcess?.({ command: 'fake', args: [], env: {}, signal: new AbortController().signal }), sdk.query(args));
+    const { code, stdout, stderr } = await runMainRaw(runArgs().argv, query);
+    expect(code).toBe(2);
+    expect(sdk.primary).toHaveLength(1);
+    expect(sdk.primary[0]?.hooks?.UserPromptSubmit).toHaveLength(1);
+    expect(stderr).toMatch(/^run stopped: hook canary missed: The bundled CLI began the turn without running the harness's prompt hook/m);
+    expect(stderr).toContain('#251');
+    expect(stderr).not.toMatch(/init check did not run/);
+    expect(stdout).not.toMatch(/\[harness\] model=/);
+  });
+
+  // #251: with no process held the harness could not kill a CLI whose hooks were off, so the run does not go ahead.
+  it('a query function that never calls the spawn function stops the run: exit 2, its own fixed line, even though the prompt hook ran', async () => {
+    const sdk = fakeSdk([]);
+    const query: QueryFn = (args) =>
+      (async function* () {
+        for (const matcher of args.options?.hooks?.UserPromptSubmit ?? []) {
+          for (const cb of matcher.hooks) await cb({ hook_event_name: 'UserPromptSubmit', prompt: args.prompt }, undefined, { signal: new AbortController().signal });
+        }
+        yield* sdk.query(args);
+      })();
+    const { code, stdout, stderr } = await runMainRaw(runArgs().argv, query);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/^run stopped: child not owned: The bundled CLI was not started through the harness's spawn function/m);
+    expect(stderr).not.toMatch(/hook canary missed/);
+    expect(stdout).not.toMatch(/\[harness\] model=/);
+  });
 
   // Round 3: a settings file that moves the CLI's memory directory is refused the same way.
   it('a user settings file that sets autoMemoryDirectory refuses the run under sdk.settingSources [user], no value echoed', async () => {
@@ -329,5 +418,78 @@ describe('the agent-definition scan on the run path (#229, ADR-0046)', () => {
         },
       },
     ]);
+  });
+});
+
+// #251, owner ruling 20/11/2026. The session puts the last bytes of the CLI's stderr on the error it rejects with,
+// as the CLI wrote them. A library caller gets that error as it is; the command line redacts before it prints.
+describe('a run error is redacted before the command line prints it (#251)', () => {
+  const SECRET = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
+
+  it('a CLI child that prints a secret to stderr and exits non-zero: main rejects with the tail on the message, the secret redacted', async () => {
+    const child = spawnChildProcess({ command: process.execPath, args: ['-e', `process.stderr.write('fatal: key ${SECRET} rejected\\n', () => process.exit(2))`], env: {}, signal: new AbortController().signal });
+    const exit = new Promise((resolve) => child.once('exit', resolve));
+    const query: QueryFn = (args) => {
+      args.options?.spawnClaudeCodeProcess?.({ command: 'fake', args: [], env: {}, signal: new AbortController().signal });
+      return (async function* () {
+        for (const matcher of args.options?.hooks?.UserPromptSubmit ?? []) {
+          for (const cb of matcher.hooks) await cb({ hook_event_name: 'UserPromptSubmit', prompt: args.prompt }, undefined, { signal: new AbortController().signal });
+        }
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-1' } as never;
+        await exit;
+        throw new Error('Claude Code process exited with code 2');
+      })();
+    };
+    process.env.ANTHROPIC_API_KEY = 'dummy';
+    const out: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    vi.spyOn(process.stderr, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    vi.spyOn(process, 'cwd').mockReturnValue(dir());
+    const run = main(runArgs().argv, { userDir: dir(), importSdk: async () => ({ query }), spawnChild: () => child });
+    await expect(run).rejects.toThrow('Claude Code process exited with code 2. stderr: fatal: key [REDACTED:');
+    await expect(run).rejects.not.toThrow(SECRET);
+    expect(out.join('')).not.toContain(SECRET);
+  });
+
+  it.each([
+    ['a zero-width space', '\u200b'],
+    ['a soft hyphen', '\u00ad'],
+    ['an ANSI reset', '\u001b[0m'],
+  ])('a secret split by %s is redacted at both sinks: the error `run` rethrows and the line the entry point prints', async (_name, splitter) => {
+    const split = `${SECRET.slice(0, 8)}${splitter}${SECRET.slice(8)}`;
+    const line = fatalErrorLine(new Error(`exited 9. stderr: credential ${split} rejected`), redact);
+    expect(line).toBe('error: exited 9. stderr: credential [REDACTED:aws-access-key-id] rejected');
+    const query: QueryFn = () => {
+      throw new Error(`Claude Code process exited with code 9. stderr: credential ${split} rejected`);
+    };
+    process.env.ANTHROPIC_API_KEY = 'dummy';
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'cwd').mockReturnValue(dir());
+    const run = main(runArgs().argv, { userDir: dir(), importSdk: async () => ({ query }), spawnChild: fakeSpawnChild });
+    await expect(run).rejects.toThrow('Claude Code process exited with code 9. stderr: credential [REDACTED:aws-access-key-id] rejected');
+    await expect(run).rejects.not.toThrow(SECRET.slice(8));
+  });
+
+  it('fatalErrorLine: the line the entry point prints for any error that escapes a command is redacted and has no control characters', () => {
+    const line = fatalErrorLine(new Error(`exited. stderr: key ${SECRET}\u001b[31m rejected`), redact);
+    expect(line).toMatch(/^error: exited\. stderr: key \[REDACTED:/);
+    expect(line).not.toContain(SECRET);
+    expect(line).not.toContain('\u001b');
+    expect(fatalErrorLine(`a thrown string with ${SECRET}`, redact)).not.toContain(SECRET);
+    expect(fatalErrorLine(new Error('plain'), redact)).toBe('error: plain');
+    // Whatever the redactor hands back is still cleared for the terminal.
+    expect(fatalErrorLine(new Error('x'), () => ({ redacted: 'a\u001b[31mb\u202ec', findings: [] }))).not.toMatch(/[\u001b\u202e]/);
+  });
+
+  it('redactedErrorMessage: a redactor that throws, or returns no string, gives the fixed sentinel and never the raw text', () => {
+    const error = new Error(`stderr: ${SECRET}`);
+    expect(
+      redactedErrorMessage(error, () => {
+        throw new Error('redactor broke');
+      }),
+    ).toBe('[REDACTION FAILED]');
+    expect(redactedErrorMessage(error, () => ({ redacted: undefined }) as never)).toBe('[REDACTION FAILED]');
+    expect(redactedErrorMessage(error, (text) => ({ redacted: text.replace(SECRET, 'X'), findings: [] }) as never)).toBe('stderr: X');
   });
 });

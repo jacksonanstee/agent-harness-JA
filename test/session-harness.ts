@@ -6,7 +6,7 @@ import { createMemoryStore } from '../src/memory/index.js';
 import { route } from '../src/router/index.js';
 import { redact, scan } from '../src/security/index.js';
 import type { JudgeCall, JudgeCallResult, ScanResult, Verdict } from '../src/security/index.js';
-import { createSession } from '../src/session/session.js';
+import { createLiveSession as createSession } from './prompt-hook.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionConfig, SessionDeps, SessionJudge } from '../src/session/types.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../src/telemetry/index.js';
 import type { JudgeCallPayload, TelemetryEvent } from '../src/telemetry/index.js';

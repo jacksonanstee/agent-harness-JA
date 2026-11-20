@@ -143,12 +143,13 @@ const PREFIX = 'check-corpus:';
 const BASELINE = 'eval/redteam/baseline.json';
 /** Mirrors MAX_BASELINE_BYTES in src/eval/redteam/baseline.ts. */
 const MAX_BASELINE_BYTES = 1_000_000;
-/** Same cap for a doc; the largest live one is 66 KB. */
+/** Same cap for a doc; the largest live one was 143 KB on 20/11/2026. */
 const MAX_DOC_BYTES = 1_000_000;
 /**
  * Per line, in UTF-16 code units (what `.length` counts, so an astral
- * character counts twice and the cap is conservative); the longest live line
- * is 9,584 (a security-model table row).
+ * character counts twice and the cap is conservative); the longest line in scope (README.md, docs, docs/blog)
+ * was 18,820 on 20/11/2026 (a security-model table row; one that nears the cap
+ * is split, as R-28 was into R-28 and R-29).
  */
 const MAX_LINE_CHARS = 20_000;
 /**

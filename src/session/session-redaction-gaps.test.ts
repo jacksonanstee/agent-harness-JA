@@ -4,7 +4,7 @@ import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { RedactResult } from '../security/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SessionDeps } from './types.js';
 
 // Issues #112 (resultText returned raw to library callers) and #113 (a thrown

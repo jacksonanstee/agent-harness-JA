@@ -8,7 +8,7 @@ import { route } from '../router/index.js';
 import type { RedactResult, ScanResult } from '../security/index.js';
 import { boundHookEventReason, HOOK_EVENT_REASON_MAX } from '../telemetry/index.js';
 import { judgeScanFailedWarning } from './judged-scan-lines.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SessionDeps } from './types.js';
 
 // Issue #234: three more sinks of the #113 class, each rendering text whose

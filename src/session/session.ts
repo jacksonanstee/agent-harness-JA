@@ -50,6 +50,9 @@ import {
 } from '../internal/sanitize.js';
 import { buildChildEnv, buildChildSettings } from '../internal/child-env.js';
 import { assertSettingsEnv } from './settings-env-gate.js';
+import { createChildOwner, withStderrTail } from './child-process.js';
+import { createHookCanary } from './hook-canary.js';
+import type { CanaryStop } from './hook-canary.js';
 import {
   DEFAULT_MAX_BUDGET_USD,
   isBudgetUsd,
@@ -654,8 +657,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // isolation is built first so a non-array settingSources throws its TypeError.
     const isolation = buildSessionIsolation(config);
     const agentGate = createAgentGate(isolation.settingSources ?? [], deps.scanAgents);
-    // Step 1b (#250): a settings file whose env block would replace a forced
-    // child variable refuses the run; throws SettingsEnvRefused.
+    // Step 1b (#250, #251): a settings file whose env block would replace a forced
+    // child variable, or set any other of the vendor's variables, refuses the run; throws SettingsEnvRefused.
     assertSettingsEnv(isolation.settingSources ?? [], deps.scanSettingsEnv);
 
     // Step 2: model selection.
@@ -1852,6 +1855,10 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     let modelUsage: { rows: ModelUsageRow[]; truncated: boolean } | null = null;
     let numTurns: number | null = null;
     let streamError: unknown = null;
+    // #251: the session's own prompt hook, and whether the CLI started the turn without calling it.
+    const childOwner = createChildOwner(deps.spawnChild);
+    const hookCanary = createHookCanary(childOwner);
+    let canaryStop: CanaryStop | null = null;
     // D7 (issue #187): when its read loop fails after an is_error result, the
     // SDK replaces the failure with "Claude Code returned an error result"
     // (sdk.mjs readMessages; seen after error_max_budget_usd, probe 29/10/2026).
@@ -1883,10 +1890,14 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           abortController,
           ...isolation,
           // #250, #254, #255 (ADR-0040 D-8 as amended): read at run time; background tasks, scheduled
-          // tasks and attachments off in the child.
+          // tasks and attachments off in the child. #251: vendor names stripped but for the keep list.
           env: buildChildEnv(process.env),
           settings: buildChildSettings(),
+          // #251: the harness starts the CLI itself and keeps the process, so a missed canary can kill it.
+          spawnClaudeCodeProcess: childOwner.spawn,
           hooks: {
+            // #251: the canary. It proves the CLI runs this session's hooks at all.
+            UserPromptSubmit: [{ hooks: [hookCanary.callback] }],
             PreToolUse: [{ hooks: [preToolCallback] }],
             PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
             PostToolUseFailure: [{ hooks: [postToolFailureCallback], ...judgeTimeout }],
@@ -1895,6 +1906,13 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       });
 
       for await (const message of stream) {
+        // #251: checked before the message is used. A failed check has already killed the child
+        // where it could (`hook-canary.ts` says why the abort alone is not enough).
+        canaryStop = isSystemInit(message) || isAssistant(message) ? hookCanary.check('turn-start') : isResult(message) ? hookCanary.check('result') : null;
+        if (canaryStop !== null) {
+          abortController.abort();
+          break;
+        }
         if (isSystemInit(message)) {
           if (initCheck === null) {
             initCheck = agentGate.checkInit(message);
@@ -1968,8 +1986,17 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // SDK's follow-up to it (keyed on "a result arrived", not on the
       // message text), so the run completed and the result is returned. A
       // caller's interrupt always rethrows, even after an error result.
-      if (!errorResultArrived || config.signal?.aborted === true) streamError = error;
+      // #251: the harness reads the child's stderr itself, so it is the one to put the tail on the SDK's exit error.
+      if (!errorResultArrived || config.signal?.aborted === true) streamError = withStderrTail(error, await childOwner.stderrTail());
     } finally {
+      // #251: a stream that ended on its own without the prompt hook having run is a miss too.
+      if (canaryStop === null && streamError === null) canaryStop = hookCanary.check('stream-end');
+      // Set here so that a throw from the SDK while the stopped stream is closed cannot replace it.
+      // The caller's own interrupt comes first: an aborted run ends as an interrupt, as before.
+      if (canaryStop !== null) {
+        if (config.signal?.aborted !== true) streamError = canaryStop.error;
+        for (const line of canaryStop.warnings) warn(line);
+      }
       interrupted = config.signal?.aborted === true;
       config.signal?.removeEventListener('abort', onCallerAbort);
       // D4 stream-end flush (S-15): every rewrite the stream never resolved is
@@ -2004,11 +2031,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       }
     }
 
-    // #229: no init message means neither list was checked; say so.
+    // #229: no init message means neither list was checked; say so. Not after a #251 stop: there
+    // the init message may have arrived and been set aside unread, and the stop's own lines say why.
     if (initCheck === null) {
       initCheck = INIT_CHECK_NOT_RUN;
       const line = initCheckWarning(initCheck);
-      if (line !== null) warn(line);
+      if (line !== null && canaryStop === null) warn(line);
     }
     // #232: one row per run, not-run included, so "checked and clean" and
     // "never checked" stay distinguishable. Fresh arrays: the row never shares
