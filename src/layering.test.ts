@@ -271,7 +271,7 @@ describe('SDK import wall (issue #96 pin 20 / issue #102)', () => {
 
 // Issue #96 PR-B1, architecture lens A-1 (ADR-0023 decision 3 applied to the
 // CLI): every import from src/cli.ts and src/cli/** into another domain goes
-// through that domain's barrel (index.js), with ONE named exception. The lint
+// through that domain's barrel (index.js), with the named exceptions below. The lint
 // config exempts the composition root by design, so this pin holds the rule.
 // A second deep import must be re-homed on a barrel, or added here with its reason.
 
@@ -279,6 +279,9 @@ const DOMAIN_DEEP_IMPORT = /(?:from|import\()\s*(['"])((?:\.\.?\/)+(?:session|se
 const ALLOWED_CLI_DEEP_IMPORTS: readonly string[] = [
   // judgeCapWarning: kept off the root barrel on purpose (a warning text, not API).
   'cli/run-judge.ts -> ../session/judged-scan.js',
+  // spawnChildProcess (#251): kept off the root barrel by ruling (the session's workings, not API); the eval
+  // adversary is a CLI child the command starts itself, so it needs the function the judge gets inside the session.
+  'cli/eval-command.ts -> ../session/child-process.js',
 ];
 
 /** Non-test CLI files: src/cli.ts and every non-test .ts under src/cli/. */
@@ -317,8 +320,9 @@ describe('cli.ts DEFAULT_MAX_TURNS source (#128 review follow-up)', () => {
 });
 
 describe('CLI barrel rule (issue #96 PR-B1, architecture lens A-1)', () => {
-  it('the only non-barrel import from the CLI into another domain is the pinned judgeCapWarning one', () => {
-    expect(cliDeepImports()).toEqual([...ALLOWED_CLI_DEEP_IMPORTS]);
+  it('the only non-barrel imports from the CLI into another domain are the pinned ones, each with its reason', () => {
+    expect(cliDeepImports().sort()).toEqual([...ALLOWED_CLI_DEEP_IMPORTS].sort());
+    expect(ALLOWED_CLI_DEEP_IMPORTS).toHaveLength(2);
   });
 
   it('the scan sees the CLI root and its subdirectory, and a deep import in either shape (self-check)', () => {

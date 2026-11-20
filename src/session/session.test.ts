@@ -22,6 +22,7 @@ import {
 } from '../telemetry/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
 import { redact, scan } from '../security/index.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { RedactResult, ScanResult } from '../security/index.js';
 import {
   createPermissionEvaluator,
@@ -40,7 +41,6 @@ import {
   stripInvisibles,
 } from '../internal/sanitize.js';
 import {
-  createSession,
   DEFAULT_DESCRIPTOR,
   FENCE_OPENER_RE,
   SKILL_DROP_CHANNELS,

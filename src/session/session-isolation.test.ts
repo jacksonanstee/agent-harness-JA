@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
-import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, CRON_SWITCH, FORCED_CHILD_ENV } from '../internal/child-env.js';
+import { ATTACHMENTS_SWITCH, AUTO_MEMORY_SWITCH, BACKGROUND_TASKS_SWITCH, BARE_MODE_SWITCH, CRON_SWITCH } from '../internal/child-env.js';
+import { isStrippedVendorName } from '../internal/child-env-policy.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { SettingSource } from '../security/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, QueryOptions, SdkMessage, SessionDeps } from './types.js';
 
 // Issue #140, ADR-0040 D1/D3. The INIT/RESULT messages, the capturing fake
@@ -92,17 +93,43 @@ describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR
     vi.unstubAllEnvs();
   });
 
-  it('passes an env that carries the switch as "1" and every inherited variable', async () => {
+  it('passes an env that carries the switch as "1" and every inherited variable outside the stripped vendor names', async () => {
     vi.stubEnv('HARNESS_250_SENTINEL', 'kept');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-not-a-key');
     const fake = fakeQuery([INIT, RESULT]);
     await createSession(makeDeps(fake), { skillsDir: null }).run('p');
     const env = fake.captured[0]?.options?.env;
     expect(env?.[BACKGROUND_TASKS_SWITCH]).toBe('1');
     expect(env?.['HARNESS_250_SENTINEL']).toBe('kept');
-    // The SDK's `env` replaces the child environment, so nothing inherited may be dropped.
+    expect(env?.['ANTHROPIC_API_KEY']).toBe('test-not-a-key');
+    // The SDK's `env` replaces the child environment, so nothing the agent's tools need may be dropped.
+    let carried = 0;
     for (const [name, value] of Object.entries(process.env)) {
-      if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
+      if (isStrippedVendorName(name)) continue;
+      expect(env?.[name], name).toBe(value);
+      carried += 1;
     }
+    expect(carried).toBeGreaterThan(2);
+  });
+
+  // #251: the CLI's bare mode ran no harness hook. The primary child never inherits it, in any spelling.
+  it.each(['1', 'TRUE', 'on', '0', ''])('holds the bare-mode switch at "0" in env and in flag settings over an inherited %j', async (inherited) => {
+    vi.stubEnv(BARE_MODE_SWITCH, inherited);
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null }).run('p');
+    expect(fake.captured[0]?.options?.env?.[BARE_MODE_SWITCH]).toBe('0');
+    expect(fake.captured[0]?.options?.settings?.env[BARE_MODE_SWITCH]).toBe('0');
+  });
+
+  it('strips the vendor names that are not kept: a parent CLI session\'s, a model override, a made-up switch', async () => {
+    const stripped = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_EFFORT', 'ANTHROPIC_MODEL', 'CLAUDE_MADE_UP_TOMORROW'];
+    for (const name of stripped) vi.stubEnv(name, 'operator');
+    const fake = fakeQuery([INIT, RESULT]);
+    await createSession(makeDeps(fake), { skillsDir: null }).run('p');
+    const env = fake.captured[0]?.options?.env ?? {};
+    for (const name of stripped) expect(name in env, name).toBe(false);
+    // Nothing in the vendor namespace reaches the child except the keep list and the forced table.
+    for (const name of Object.keys(env)) expect(isStrippedVendorName(name) && !(name in (fake.captured[0]?.options?.settings?.env ?? {})), name).toBe(false);
   });
 
   it.each(['0', '', 'false'])('the harness value wins over an inherited %j', async (inherited) => {
@@ -131,7 +158,7 @@ describe('createSession turns the bundled CLI\'s background tasks off (#250, ADR
     const fake = fakeQuery([INIT, RESULT]);
     await createSession(makeDeps(fake), { skillsDir: null, settingSources: [...sources] }).run('p');
     expect(fake.captured[0]?.options?.settings).toEqual({
-      env: { [BACKGROUND_TASKS_SWITCH]: '1', [CRON_SWITCH]: '1', [ATTACHMENTS_SWITCH]: '1', [AUTO_MEMORY_SWITCH]: '1' },
+      env: { [BACKGROUND_TASKS_SWITCH]: '1', [CRON_SWITCH]: '1', [ATTACHMENTS_SWITCH]: '1', [AUTO_MEMORY_SWITCH]: '1', [BARE_MODE_SWITCH]: '0' },
     });
   });
 

@@ -5,14 +5,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FORCED_CHILD_ENV } from '../internal/child-env.js';
+import { isToollessAllowedName } from '../internal/child-env-policy.js';
 import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore } from '../memory/index.js';
-import { createSession } from '../session/index.js';
+import { createLiveSession as createSession, fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
 import type { QueryFn, QueryOptions, SdkHookCallback, SdkMessage, SessionDeps } from '../session/index.js';
 import { mergeLayers, parsePermissionSettings, SELF_PROTECTION_REASON } from '../security/index.js';
 import type { SettingSource } from '../security/index.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import { USAGE } from './shared.js';
+import { spawnChildProcess } from '../session/child-process.js';
 import { buildAdversary, makeEvalSessionFactory, parseEvalArgs } from './eval-command.js';
 
 const RESULT: SdkMessage = {
@@ -159,6 +161,12 @@ describe('buildAdversary', () => {
     expect(outcome).toEqual({ text: 'adversary verdict text', costUsd: 0.002 });
   });
 
+  it("starts its CLI through the harness's own spawn function (#251)", async () => {
+    const fake = fakeQuery([RESULT]);
+    await buildAdversary(fake.query, 'claude-adversary-model')('challenge this transcript');
+    expect(fake.captured[0]?.options?.spawnClaudeCodeProcess).toBe(spawnChildProcess);
+  });
+
   it('returns empty text and null cost when no result message is yielded', async () => {
     const fake = fakeQuery([]);
     const adversary = buildAdversary(fake.query, 'claude-adversary-model');
@@ -208,7 +216,8 @@ describe('buildAdversary', () => {
   describe('the child environment (#254, #255)', () => {
     // Literals, not the table: these must fail if the table loses a switch.
     const FORCED_NAMES = ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'] as const;
-    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+    // #251: the same table also holds the CLI's bare mode off.
+    const FORCED_ON = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_ATTACHMENTS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_SIMPLE: '0' };
 
     afterEach(() => {
       vi.unstubAllEnvs();
@@ -222,17 +231,39 @@ describe('buildAdversary', () => {
       expect(fake.captured[0]?.options?.settings).toEqual({ env: FORCED_ON });
     });
 
-    it('carries every inherited variable, read at call time', async () => {
+    // #251, #261: a tool-less child inherits an allowlist, not the operator's environment.
+    it.each(['1', 'TRUE', 'on'])('holds bare mode off in env and in flag settings over an inherited %j', async (inherited) => {
+      vi.stubEnv('CLAUDE_CODE_SIMPLE', inherited);
       const fake = fakeQuery([RESULT]);
-      const adversary = buildAdversary(fake.query, 'claude-adversary-model');
-      vi.stubEnv('HARNESS_254_LATE', 'late');
-      await adversary('p');
-      const env = fake.captured[0]?.options?.env;
-      expect(env?.['HARNESS_254_LATE']).toBe('late');
+      const call = buildAdversary(fake.query, 'claude-adversary-model');
+      await call('p');
+      expect(fake.captured[0]?.options?.env?.['CLAUDE_CODE_SIMPLE']).toBe('0');
+      expect(fake.captured[0]?.options?.settings?.env['CLAUDE_CODE_SIMPLE']).toBe('0');
+    });
+
+    it('passes the allowlisted names and the keep list, read at call time, and nothing else of the operator\'s environment', async () => {
+      const fake = fakeQuery([RESULT]);
+      const call = buildAdversary(fake.query, 'claude-adversary-model');
+      vi.stubEnv('HARNESS_251_LATE', 'late');
+      vi.stubEnv('NPM_TOKEN', 'not-for-the-child');
+      vi.stubEnv('NODE_OPTIONS', '--max-old-space-size=4096');
+      vi.stubEnv('CLAUDE_CODE_MESSAGING_SOCKET', '/tmp/parent.sock');
+      vi.stubEnv('CLAUDECODE', '1');
+      vi.stubEnv('ANTHROPIC_MODEL', 'operator-model');
+      vi.stubEnv('PATH', '/usr/bin:/bin');
+      vi.stubEnv('LC_ALL', 'C');
+      vi.stubEnv('https_proxy', 'http://127.0.0.1:1');
+      vi.stubEnv('AWS_PROFILE', 'bedrock');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'fake-k');
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:1');
+      vi.stubEnv('CLAUDE_CONFIG_DIR', '/cfg');
+      await call('p');
+      const env = fake.captured[0]?.options?.env ?? {};
       expect(env).not.toBe(process.env);
-      for (const [name, value] of Object.entries(process.env)) {
-        if (!(name in FORCED_CHILD_ENV)) expect(env?.[name], name).toBe(value);
-      }
+      for (const name of ['HARNESS_251_LATE', 'NPM_TOKEN', 'NODE_OPTIONS', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDECODE', 'ANTHROPIC_MODEL']) expect(name in env, name).toBe(false);
+      expect(env).toMatchObject({ PATH: '/usr/bin:/bin', LC_ALL: 'C', https_proxy: 'http://127.0.0.1:1', AWS_PROFILE: 'bedrock', ANTHROPIC_API_KEY: 'fake-k', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1', CLAUDE_CONFIG_DIR: '/cfg' });
+      // Every name passed is the forced table's or one the tool-less allowlist admits.
+      for (const name of Object.keys(env)) expect(name in FORCED_CHILD_ENV || isToollessAllowedName(name), name).toBe(true);
     });
   });
 
@@ -269,7 +300,8 @@ describe('R5: eval stays heuristic (pin 23)', () => {
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
       const factory = makeEvalSessionFactory({
-        query,
+        query: promptHookFirst(query),
+        spawnChild: fakeSpawnChild,
         security: { permissions: { rules: [] }, grantPolicy: { ungrantableTools: new Set(['Bash']) }, sandbox: {}, judge: { mode: 'always', maxCallsPerRun: 5, withhold: 'off' }, sdk: { settingSources: [], allowedMcpServers: [] }, budget: { maxUsd: null }, warnings: [] },
         telemetry: createTelemetryStore(db),
         memory: createMemoryStore(db),
@@ -316,7 +348,8 @@ describe('the eval session registers the security hooks (#140, I-1)', () => {
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
       const factory = makeEvalSessionFactory({
-        query,
+        query: promptHookFirst(query),
+        spawnChild: fakeSpawnChild,
         security: {
           permissions: mergeLayers(
             parsePermissionSettings({ permissions: { rules: [{ tool: 'Bash', decision: 'deny' }] } }),
@@ -359,7 +392,8 @@ describe('the eval session carries the composed sdk.settingSources (#140, D2)', 
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
       const factory = makeEvalSessionFactory({
-        query: fake.query,
+        query: promptHookFirst(fake.query),
+        spawnChild: fakeSpawnChild,
         security: {
           permissions: { rules: [] },
           grantPolicy: { ungrantableTools: new Set(['Bash']) },
@@ -399,7 +433,8 @@ describe('the eval session carries the composed budget.maxUsd (#187)', () => {
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
       const factory = makeEvalSessionFactory({
-        query: fake.query,
+        query: promptHookFirst(fake.query),
+        spawnChild: fakeSpawnChild,
         security: {
           permissions: { rules: [] },
           grantPolicy: { ungrantableTools: new Set(['Bash']) },
@@ -450,7 +485,8 @@ describe('the eval session registers the self-protection deny (#188)', () => {
     const db = openTelemetryDatabase({ path: ':memory:' });
     try {
       const factory = makeEvalSessionFactory({
-        query,
+        query: promptHookFirst(query),
+        spawnChild: fakeSpawnChild,
         security: {
           permissions: mergeLayers(parsePermissionSettings({ permissions: { rules: [{ tool: '*', decision: 'allow' }] } }), parsePermissionSettings({})),
           grantPolicy: { ungrantableTools: new Set(['Bash']) },

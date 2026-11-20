@@ -1,3 +1,4 @@
+import { childConfigDir } from '../internal/child-env.js';
 import { homedir } from 'node:os';
 import {
   AgentDefinitionRefused,
@@ -33,7 +34,8 @@ export function agentScanFor(homeDir: string): AgentScanFn {
         settingSources,
         cwd: process.cwd(),
         homeDir,
-        env: { CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'] },
+        // The directory the child is handed, not a second reading of the environment.
+        env: { CLAUDE_CONFIG_DIR: childConfigDir(process.env) },
         managedDir: managedSettingsDir(process.platform),
       }),
     );

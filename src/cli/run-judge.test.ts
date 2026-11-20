@@ -11,6 +11,7 @@ import { JUDGE_SYSTEM_PROMPT } from '../session/judge.js';
 import { createTelemetryStore, openTelemetryDatabase } from '../telemetry/index.js';
 import type { JudgeCallPayload } from '../telemetry/index.js';
 import { judgeStartLine, judgeSummaryLines, runJudgeDeps } from './run-judge.js';
+import { fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
 
 // Issue #96 PR-B1, spec D2 and D7 at the CLI. `main` is driven with CliSeams
 // (the user dir, which a vitest worker cannot redirect through HOME, lesson
@@ -83,7 +84,7 @@ async function runMain(argv: string[], userSettings: unknown, projectSettings: u
   vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
   vi.spyOn(process, 'cwd').mockReturnValue(dir(projectSettings));
   const userDir = dir(userSettings);
-  const code = await main(argv, { userDir, importSdk: async () => ({ query }) });
+  const code = await main(argv, { userDir, importSdk: async () => ({ query: query === undefined ? query : promptHookFirst(query) }), spawnChild: fakeSpawnChild });
   return { code, stdout: out.join(''), stderr: err.join(''), userDir };
 }
 
@@ -328,7 +329,7 @@ describe('a project judge key warns with the path neutralised (Task 2 deferral; 
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
     vi.spyOn(process, 'cwd').mockReturnValue(hostile);
-    await main(runArgs().argv, { userDir: dir(), importSdk: async () => ({ query: sdk.query }) });
+    await main(runArgs().argv, { userDir: dir(), importSdk: async () => ({ query: promptHookFirst(sdk.query) }), spawnChild: fakeSpawnChild });
     const stderr = err.join('');
     expect(stderr).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
     expect(stderr).toMatch(/^warning: ignoring "judge" in .*evil {0,3}\[2J {0,3}name.*settings\.json: the judge is configured only in ~\/\.harness\/settings\.json$/m);

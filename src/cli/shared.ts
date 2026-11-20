@@ -30,10 +30,10 @@ import {
 } from '../security/index.js';
 import type { EvaluatorOptions, GrantPolicy, JudgeSettings, RedactResult, SandboxConfig, SettingSource } from '../security/index.js';
 import { JUDGE_MODEL } from '../session/index.js';
-import type { QueryFn } from '../session/index.js';
+import type { QueryFn, SpawnChildFn } from '../session/index.js';
 import { DEFAULT_ROUTING_TABLE, TASK_SENSITIVITIES, TASK_SHAPES } from '../router/index.js';
 import { boundHookEventReason, TELEMETRY_EVENT_TYPES } from '../telemetry/index.js';
-import { BudgetSettingsError, grantPolicyFor, hasBudgetKey, parseBudgetSettings, builtInDenyHooks } from '../security/index.js';
+import { BudgetSettingsError, grantPolicyFor, hasBudgetKey, parseBudgetSettings, builtInDenyHooks, redactErrorText } from '../security/index.js';
 import type { ProtectedRoots } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
 
@@ -262,7 +262,7 @@ export type ImportSdk = () => Promise<{ query: unknown }>;
  * settings layer, which a vitest worker cannot redirect through HOME because
  * `os.homedir()` reads libuv's environment (lesson 2026-08-28). `importSdk`:
  * the SDK loader, so a test drives the run path with a fake `query` (D8a).
- * Production passes neither.
+ * Production passes none of them.
  */
 export interface CliSeams {
   userDir?: string;
@@ -271,6 +271,8 @@ export interface CliSeams {
   evalOutDir?: string;
   /** Installs the `run` interrupt handler; defaults to `installSigintHandler`. A test triggers the handler directly instead of signalling the worker. */
   onInterrupt?: (handler: () => void) => () => void;
+  /** How the `run` session starts the bundled CLI (#251); defaults to the session's own, a Node spawn. A test's fake `query` starts no real process, so it passes a stand-in. `runEval` does not read it: no test drives a task session through it. */
+  spawnChild?: SpawnChildFn;
 }
 
 const defaultImportSdk: ImportSdk = () => import(SDK_PACKAGE) as Promise<{ query: unknown }>;
@@ -585,6 +587,31 @@ export interface HookTelemetryDeps {
  * Control characters are not stripped here: the store's write-path
  * sanitizer already does that for every payload string.
  */
+/**
+ * An escaped error's message for a command-line sink, redacted (issue #251,
+ * owner ruling 20/11/2026). The session puts the last bytes of the bundled
+ * CLI's stderr on the error it rejects with, as the CLI wrote them, and what
+ * the CLI can write there is not known in full. A library caller gets that
+ * error untouched; the command line passes the whole message through the
+ * redactor before it prints it. Fail-closed like `boundReason`: a redactor
+ * that throws, or returns anything but a string, gives the fixed sentinel.
+ */
+export function redactedErrorMessage(error: unknown, redactSecrets: (text: string) => RedactResult): string {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    // Invisibles and control characters come out BEFORE the redactor looks (`redactErrorText` says why).
+    const { redacted } = redactErrorText(message, redactSecrets);
+    return typeof redacted === 'string' ? redacted : REDACTION_FAILED;
+  } catch {
+    return REDACTION_FAILED;
+  }
+}
+
+/** The line the entry point prints for an error that escaped a command: redacted, then cleared of control characters. */
+export function fatalErrorLine(error: unknown, redactSecrets: (text: string) => RedactResult): string {
+  return `error: ${sanitizeDiagnostic(redactedErrorMessage(error, redactSecrets))}`;
+}
+
 function boundReason(reason: string, deps: HookTelemetryDeps): string {
   try {
     const { redacted } = deps.redactSecrets(reason);

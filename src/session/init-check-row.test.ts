@@ -8,7 +8,7 @@ import { AgentDefinitionRefused, INIT_CHECK_LIST_MAX, INIT_CHECK_NAME_MAX } from
 import type { AgentScanResult, InitCheckState } from '../security/index.js';
 import { createTelemetryStore, INIT_CHECK_ROW_LIST_MAX, INIT_CHECK_ROW_NAME_MAX, INIT_CHECK_ROW_STATES } from '../telemetry/index.js';
 import type { InitCheckPayload, InitCheckRowState } from '../telemetry/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkMessage, SessionDeps } from './types.js';
 
 // Issue #232 (ADR-0046 D4): the session records its init check as one telemetry

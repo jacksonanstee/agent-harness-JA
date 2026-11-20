@@ -1,3 +1,5 @@
+import type { Readable, Writable } from 'node:stream';
+
 import type { ModelChoice, TaskDescriptor } from '../router/index.js';
 import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hooks/index.js';
 import type { MemoryStore } from '../memory/index.js';
@@ -184,6 +186,66 @@ export interface SdkPostToolUseFailureInput {
   session_id?: string;
 }
 
+/**
+ * Structural view of the SDK's `UserPromptSubmitHookInput` (issue #251): what
+ * the CLI hands a prompt hook. The session's canary reads none of it.
+ * Parity-pinned like the tool-hook inputs. It is not a member of
+ * `SdkHookInput`, which is the union of the TOOL hook inputs.
+ */
+export interface SdkUserPromptSubmitInput {
+  hook_event_name: 'UserPromptSubmit';
+  prompt: string;
+  session_id?: string;
+}
+
+/** A prompt hook's output: empty, or the SDK's fields for adding context to the prompt or blocking it. */
+export interface SdkUserPromptSubmitOutput {
+  decision?: 'block';
+  reason?: string;
+  hookSpecificOutput?: { hookEventName: 'UserPromptSubmit'; additionalContext?: string };
+}
+
+/** Structural view of the SDK's `SpawnOptions` (issue #251): what the SDK hands a spawn function. Parity-pinned. */
+export interface SdkSpawnOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string | undefined>;
+  /** The SDK's forwarded signal: it aborts only after stdin has been closed and about two seconds have passed. */
+  signal: AbortSignal;
+}
+
+/** Structural view of the SDK's `SpawnedProcess` (issue #251): what a spawn function returns. A Node `ChildProcess` with stdin and stdout pipes is one. Parity-pinned. */
+export interface SdkSpawnedProcess {
+  stdin: Writable;
+  stdout: Readable;
+  readonly killed: boolean;
+  readonly exitCode: number | null;
+  readonly signalCode?: NodeJS.Signals | null;
+  kill(signal: NodeJS.Signals): boolean;
+  on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  on(event: 'error', listener: (error: Error) => void): void;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  once(event: 'error', listener: (error: Error) => void): void;
+  off(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  off(event: 'error', listener: (error: Error) => void): void;
+}
+
+/** A function that starts the bundled CLI: the SDK's `spawnClaudeCodeProcess`. */
+export type SpawnChildFn = (options: SdkSpawnOptions) => SdkSpawnedProcess;
+
+/** A prompt hook as the SDK calls it: the input, no tool-use id, and the hook's abort signal. */
+export type SdkUserPromptSubmitCallback = (
+  input: SdkUserPromptSubmitInput,
+  toolUseID: string | undefined,
+  context: { signal: AbortSignal },
+) => Promise<SdkUserPromptSubmitOutput>;
+
+export interface SdkUserPromptSubmitMatcher {
+  hooks: SdkUserPromptSubmitCallback[];
+  timeout?: number;
+}
+
 export type SdkHookInput =
   | SdkPreToolUseInput
   | SdkPostToolUseInput
@@ -320,10 +382,12 @@ export interface QueryOptions {
   /**
    * The child process environment, the SDK's `Options.env` (issue #250). The
    * SDK REPLACES the child's environment with it rather than merging, so the
-   * session's primary query passes `buildChildEnv(process.env)`: every
-   * inherited variable plus the harness's forced table. Since issues #254 and
-   * #255 the judge and the eval adversary pass the same (`tools: []` did not
-   * stop a scheduled job or an `@path` expansion in either).
+   * session's primary query passes `buildChildEnv(process.env)`: the inherited
+   * variables minus the vendor's own names that are not on a keep list (issue
+   * #251), plus the harness's forced table. Since issues #254 and #255 the
+   * judge and the eval adversary pass an environment and the forced table
+   * too (`tools: []` did not stop a scheduled job or an `@path` expansion in
+   * either); since #251 theirs is an allowlist, `buildToollessChildEnv`.
    */
   env?: Record<string, string | undefined>;
   /**
@@ -332,7 +396,8 @@ export interface QueryOptions {
    * the forced table. Its value won over the user, project and local
    * settings files and the global config file (observed); that it is applied
    * later is inferred from that. The judge and the eval adversary pass the
-   * same table (issues #254, #255).
+   * same table (issues #254, #255). Since #251 the table also holds the CLI's
+   * bare mode off.
    */
   settings?: { env: Record<string, string> };
   /**
@@ -346,6 +411,18 @@ export interface QueryOptions {
    * judging for the run (ADR-0037).
    */
   abortController?: AbortController;
+  /**
+   * The SDK's `Options.spawnClaudeCodeProcess` (issue #251): the function the
+   * SDK calls to start the bundled CLI in place of its own spawn. The
+   * primary query passes its run's `ChildOwner.spawn`, so the session holds
+   * the process and a missed hook canary can kill it at once (the SDK's
+   * abort waits about two seconds); the judge and the eval adversary pass
+   * the harness's spawn function too. A consumer-supplied `QueryFn` MUST
+   * start its process by calling it, before it yields an init or assistant
+   * message: a turn that starts with no process held is stopped
+   * (`ChildNotOwned`).
+   */
+  spawnClaudeCodeProcess?: SpawnChildFn;
   // Typed per event so a callback that reads a post-only field (`tool_response`)
   // cannot be registered under `PreToolUse`, and so each callback returns only
   // the outputs valid for its event (D6). `PostToolUseFailure` is the failure
@@ -354,6 +431,15 @@ export interface QueryOptions {
     PreToolUse?: SdkHookMatcher<SdkPreToolUseInput>[];
     PostToolUse?: SdkHookMatcher<SdkPostToolUseInput>[];
     PostToolUseFailure?: SdkHookMatcher<SdkPostToolUseFailureInput>[];
+    /**
+     * The session's hook canary (issue #251), typed as the SDK types a prompt
+     * hook. The primary query always registers one matcher with one callback
+     * that ignores its input and returns an empty output; the judge and the
+     * eval adversary register none. A consumer-supplied `QueryFn` must call
+     * it before it yields an init or assistant message, as the CLI does, or
+     * the session stops the run (`HookCanaryMissed`).
+     */
+    UserPromptSubmit?: SdkUserPromptSubmitMatcher[];
   };
 }
 
@@ -362,7 +448,12 @@ export interface QueryOptions {
  * SDK's own `query`. Contract for a consumer-supplied one (issue #96 PR-B1,
  * spec D4, U-5): it must honour `options.abortController` (stop iterating and
  * reject when it aborts), or the judge's abort never reaches the call; see
- * `QueryOptions.abortController` and ADR-0037.
+ * `QueryOptions.abortController` and ADR-0037. Since issue #251 it must also,
+ * before it yields an init or assistant message, start its process by
+ * calling `options.spawnClaudeCodeProcess` and call every
+ * `options.hooks.UserPromptSubmit` callback, as the SDK and the bundled CLI
+ * do: the session stops a run that does neither (`ChildNotOwned`,
+ * `HookCanaryMissed`).
  */
 export type QueryFn = (args: {
   prompt: string;
@@ -423,11 +514,24 @@ export interface SessionDeps {
    * The settings-env scan (#250), run at the start of every `run()` with the
    * config's setting sources: the run is refused (`SettingsEnvRefused`) when a
    * settings file the CLI would load names, in its `env` block, a variable
-   * the harness forces into the child. Default: the real files (the managed
+   * the harness forces into the child or, since #251, any variable in the
+   * vendor namespace.
+   * Default: the real files (the managed
    * and global ones always). A seam for tests; a library caller should leave
    * it unset.
    */
   scanSettingsEnv?: (settingSources: readonly SettingSource[]) => readonly SettingsEnvRefusal[];
+  /**
+   * How the bundled CLI is started (issue #251). The session wraps it in a
+   * per-run owner and passes that to the SDK as `spawnClaudeCodeProcess`, so
+   * the session holds the process it may have to kill. Default:
+   * `spawnChildProcess`, a Node spawn. A seam for tests, whose fake queries
+   * must not start a real process; a library caller should leave it unset.
+   * The stderr tail on an exit error is kept by `spawnChildProcess` itself,
+   * so a function given here that does not start its process through it
+   * gets an empty tail.
+   */
+  spawnChild?: SpawnChildFn;
   /**
    * The S-5 judge (issue #96 PR-B1, spec D3, R1): the call and the per-run
    * cap. When present, every non-block PostToolUse and PostToolUseFailure

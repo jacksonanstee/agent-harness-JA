@@ -12,6 +12,7 @@ import {
   selfProtectionHook,
   SelfProtectionViolation,
 } from './self-protection.js';
+import { ALL_SETTING_SOURCES, settingsEnvFiles } from './settings-env.js';
 
 // Issue #188 (ADR-0042): a built-in, non-configurable deny on agent writes to
 // the harness's own state. Jackson's rulings 29/10/2026: both `.harness`
@@ -230,7 +231,7 @@ describe('the scheduled-tasks file (#254)', () => {
   });
 
   it('protects the file, not the directory: its neighbours and a prefix-sharing name stay writable', async () => {
-    await allowed('Write', { file_path: join(project, '.claude', 'settings.local.json') });
+    await allowed('Write', { file_path: join(project, '.claude', 'notes.md') });
     await allowed('Write', { file_path: join(project, '.claude', 'scheduled_tasks.json.bak') });
     await allowed('Write', { file_path: join(project, '.claude', 'my-scheduled_tasks.json') });
     await allowed('Read', { file_path: planted });
@@ -588,5 +589,112 @@ describe('buildProtectedRoots', () => {
       SelfProtectionViolation,
     );
     await expect(h({ tool: 'Bash', args: { command: 'cat harness' } } as never)).resolves.toBeUndefined();
+  });
+});
+
+// Issue #251, owner ruling 13/11/2026. The CLI re-read a settings file the agent had written during the run and
+// ran the command hooks in it, outside the gate and the sandbox (observed by the security review). So every file
+// the settings-env scan would read is protected from the agent, and the two sets come from one list.
+describe('the CLI settings files (#251): every file the settings-env scan reads is protected from the agent', () => {
+  const managed = tmp('sp-managed-');
+  const cfg = tmp('sp-cfg2-');
+  const input = { userDir: home, projectDir: project, skillsDir: null, dbPath: null, claudeConfigDir: cfg, managedDir: managed };
+  const guard = selfProtectionHook(buildProtectedRoots(input));
+  const run = (tool: string, args: Record<string, unknown>) => guard({ tool, args } as never);
+  const scanned = settingsEnvFiles({ settingSources: ALL_SETTING_SOURCES, cwd: project, homeDir: home, env: { CLAUDE_CONFIG_DIR: cfg }, managedDir: managed }).map((f) => f.path);
+
+  it('the list is not empty and holds the files the review wrote: user, project, local, and the global config in both places', () => {
+    for (const path of [
+      join(cfg, 'settings.json'),
+      join(home, '.claude', 'settings.json'),
+      join(project, '.claude', 'settings.json'),
+      join(project, '.claude', 'settings.local.json'),
+      join(cfg, '.claude.json'),
+      join(home, '.claude.json'),
+      join(managed, 'managed-settings.json'),
+    ]) {
+      if (path === join(home, '.claude', 'settings.json')) continue; // with CLAUDE_CONFIG_DIR set the user file is the config directory's
+      expect(scanned, path).toContain(path);
+    }
+    expect(scanned.length).toBeGreaterThan(8);
+  });
+
+  it('PIN: a Write and an Edit to EVERY scanned file is refused, so the scanned set and the protected set cannot drift', async () => {
+    for (const path of scanned) {
+      await expect(run('Write', { file_path: path, content: '{}' }), path).rejects.toThrowError(SelfProtectionViolation);
+      await expect(run('Edit', { file_path: path, old_string: 'a', new_string: 'b' }), path).rejects.toThrowError(SelfProtectionViolation);
+    }
+  });
+
+  it('PIN: a Bash command that names any scanned file is refused, redirect or not', async () => {
+    for (const path of scanned) {
+      await expect(run('Bash', { command: `echo '{}' > ${path}` }), path).rejects.toThrowError(SelfProtectionViolation);
+      await expect(run('Bash', { command: `tee "${path}" < /tmp/x` }), path).rejects.toThrowError(SelfProtectionViolation);
+    }
+  });
+
+  it('with no CLAUDE_CONFIG_DIR the user files under ~/.claude and the global config under home are protected', async () => {
+    const plain = selfProtectionHook(buildProtectedRoots({ ...input, claudeConfigDir: undefined }));
+    for (const path of [join(home, '.claude', 'settings.json'), join(home, '.claude', 'cowork_settings.json'), join(home, '.claude.json'), join(home, '.claude-custom-oauth.json'), join(home, '.claude', '.config.json')]) {
+      await expect(plain({ tool: 'Write', args: { file_path: path } } as never), path).rejects.toThrowError(SelfProtectionViolation);
+    }
+  });
+
+  it('a relative, a tilde and a $HOME spelling are refused too', async () => {
+    await expect(run('Write', { file_path: '.claude/settings.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Write', { file_path: '.claude/settings.local.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Write', { file_path: '~/.claude.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'echo {} > "$HOME/.claude.json"' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'echo {} > .claude/settings.json' })).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  it('a write through a symlink set up before the call is refused', async () => {
+    symlinkSync(join(project, '.claude', 'settings.json'), join(outside, 'innocent-settings.json'));
+    await expect(run('Write', { file_path: join(outside, 'innocent-settings.json') })).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  it('the managed drop-in directory is protected whole, a file that does not exist yet included', async () => {
+    await expect(run('Write', { file_path: join(managed, 'managed-settings.d', 'new.json') })).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  it('after a cd, a path word that walks into .claude and the names only the CLI uses are refused', async () => {
+    await expect(run('Bash', { command: 'cd /tmp && echo {} > sub/.claude/settings.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'cd /tmp && echo {} > x/.claude/settings.local.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'cd ~ && echo {} > .claude.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'cd .claude && echo {} > settings.local.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Write', { file_path: join(outside, 'elsewhere', '.claude.json') })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Write', { file_path: join(outside, 'managed-settings.json') })).rejects.toThrowError(SelfProtectionViolation);
+  });
+
+  // The project above sits outside any git checkout and outside the home directory, so its list of
+  // settings files runs up to the filesystem root and holds `/.claude/settings.json`; any command
+  // text with `/.claude/settings.json` in it then matches that absolute path, and the walk rule is
+  // never the one that decides. A project under the home directory has a short list, as a real one does.
+  it('in a project under the home directory, a path word that walks into .claude/settings.json is refused after a cd, and its neighbours are not', async () => {
+    const nestedHome = tmp('sp-home3-');
+    const nested = join(nestedHome, 'work', 'proj');
+    mkdirSync(join(nested, '.claude'), { recursive: true });
+    const g = selfProtectionHook(buildProtectedRoots({ userDir: nestedHome, projectDir: nested, skillsDir: null, dbPath: null, claudeConfigDir: cfg, managedDir: managed }));
+    const bash = (command: string) => g({ tool: 'Bash', args: { command } } as never);
+    await expect(bash('cd /tmp && echo {} > sub/.claude/settings.json')).rejects.toThrowError(SelfProtectionViolation);
+    await expect(bash('cd .. && echo {} > proj/.claude/settings.json')).rejects.toThrowError(SelfProtectionViolation);
+    await expect(bash('cd /tmp && cp x .claude/cowork_settings.json')).rejects.toThrowError(SelfProtectionViolation);
+    await expect(bash('cd /tmp && echo {} > sub/.vscode/settings.json')).resolves.toBeUndefined();
+    await expect(bash('cd /tmp && echo {} > sub/.claude/settings.json.bak')).resolves.toBeUndefined();
+    await expect(bash('cd /tmp && echo {} > sub/x.claude/settings.json')).resolves.toBeUndefined();
+  });
+
+  it('what stays writable: a settings.json that is not the CLI\'s, other files in .claude, and reads of the settings files', async () => {
+    await expect(run('Write', { file_path: join(project, '.vscode', 'settings.json') })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(project, 'config', 'settings.json') })).resolves.toBeUndefined();
+    await expect(run('Bash', { command: 'echo {} > .vscode/settings.json' })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(project, '.claude', 'commands', 'x.md') })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(project, '.claude', 'settings.json.bak') })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(project, 'claude.json') })).resolves.toBeUndefined();
+    await expect(run('Read', { file_path: join(project, '.claude', 'settings.json') })).resolves.toBeUndefined();
+  });
+
+  it('LIMIT, stated: after `cd .claude` a bare settings.json is not matched (the name is too common to refuse everywhere)', async () => {
+    await expect(run('Bash', { command: 'cd .claude && echo {} > settings.json' })).resolves.toBeUndefined();
   });
 });

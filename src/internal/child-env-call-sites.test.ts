@@ -31,8 +31,15 @@ const CALL = /(?<![\w$])((?:[\w$]+\s*\??\.\s*)*[\w$]*[qQ]uery)\s*(?:<[^>()]*>)?\
 // A member access that is not called, a bracket access, or a destructuring that takes `query` out of something.
 const REFERENCE = /[\w$\])]\s*\??\.\s*query\b(?!\s*(?:<[^>()]*>)?\()|\[\s*['"`]query['"`]\s*\]|\{[^{}]*\bquery\b[^{}]*\}\s*=(?!=|>)/gu;
 const SDK_MENTION = /claude-agent-sdk/gu;
+// The primary session passes `buildChildEnv`; a tool-less child passes the allowlist builder (#251, #261).
 const WIRED_ENV = /\benv: buildChildEnv\(process\.env\)/u;
+const WIRED_TOOLLESS_ENV = /\benv: buildToollessChildEnv\(process\.env\)/u;
+const TOOLLESS = /\btools: \[\]/u;
 const WIRED_SETTINGS = /\bsettings: buildChildSettings\(\)/u;
+// #251: the harness starts every child itself. The primary session passes its run's owner, which keeps the
+// process so a missed canary can kill it; a tool-less child passes the spawn function as it is.
+const WIRED_SPAWN = /\bspawnClaudeCodeProcess: childOwner\.spawn\b/u;
+const WIRED_TOOLLESS_SPAWN = /\bspawnClaudeCodeProcess: spawnChildProcess\b/u;
 
 /** Block comments and line comments out (a `//` inside a URL or a string keeps its line). */
 function stripComments(text: string): string {
@@ -69,7 +76,10 @@ function scan(text: string): Found {
     const callee = (match[1] ?? '').replace(/\s+/gu, '');
     const args = argumentText(clean, match.index + match[0].length);
     calls[callee] = (calls[callee] ?? 0) + 1;
-    if (WIRED_ENV.test(args) && WIRED_SETTINGS.test(args)) wired[callee] = (wired[callee] ?? 0) + 1;
+    // A call that passes `tools: []` must use the allowlist builder, and a call that does not must not.
+    const env = TOOLLESS.test(args) ? WIRED_TOOLLESS_ENV : WIRED_ENV;
+    const spawn = TOOLLESS.test(args) ? WIRED_TOOLLESS_SPAWN : WIRED_SPAWN;
+    if (env.test(args) && WIRED_SETTINGS.test(args) && spawn.test(args)) wired[callee] = (wired[callee] ?? 0) + 1;
   }
   return { calls, wired, references: (clean.match(REFERENCE) ?? []).length, sdkMentions: (clean.match(SDK_MENTION) ?? []).length };
 }
@@ -119,6 +129,7 @@ const SITES: Readonly<Record<string, Site>> = {
     references: [2, HANDED_ON],
     sdk: [1, 'its own import of the SDK'],
   },
+  'test/prompt-hook.ts': { calls: { query: [1, "a test wrapper around a fake query: it calls the session's prompt hook first (#251) and forwards the arguments it is given"] }, references: [1, 'takes the fake out of the deps to wrap it'] },
   'test/sdk-guard.setup.ts': { sdk: [3, 'the test guard that refuses a real SDK import'] },
   'test/session-harness.ts': { calls: { 'telemetry.query': [1, TELEMETRY] } },
 };
@@ -194,11 +205,26 @@ describe('every SDK query call site is wired to the forced child environment, or
   });
 
   it('wiring is judged per call: one wired call does not cover an unwired one in the same file', () => {
-    const two = scan('query({ env: buildChildEnv(process.env), settings: buildChildSettings() });\nquery({ prompt });');
+    const P = 'env: buildChildEnv(process.env), settings: buildChildSettings(), spawnClaudeCodeProcess: childOwner.spawn';
+    const T = 'tools: [], env: buildToollessChildEnv(process.env), settings: buildChildSettings(), spawnClaudeCodeProcess: spawnChildProcess';
+    const two = scan(`query({ ${P} });\nquery({ prompt });`);
     expect(two.calls).toEqual({ query: 2 });
     expect(two.wired).toEqual({ query: 1 });
-    // Mutation M18: both layers are required; either one alone is not wired.
-    expect(scan('query({ env: buildChildEnv(process.env) });').wired).toEqual({});
-    expect(scan('query({ settings: buildChildSettings() });').wired).toEqual({});
+    expect(scan(`query({ ${T} });`).wired).toEqual({ query: 1 });
+    // Mutation M18: every layer is required; a call that lacks one is not wired.
+    for (const whole of [P, T]) {
+      for (const part of whole.split(', ').filter((piece) => piece !== 'tools: []')) {
+        expect(scan(`query({ ${whole.replace(part, 'x: 1')} });`).wired, part).toEqual({});
+      }
+    }
+    // #251: the builder must match the child. A tool-less call on the primary builder is not wired, nor the reverse.
+    expect(scan(`query({ ${T.replace('buildToollessChildEnv', 'buildChildEnv')} });`).wired).toEqual({});
+    expect(scan(`query({ ${P.replace('buildChildEnv', 'buildToollessChildEnv')} });`).wired).toEqual({});
+    // The spawn must match the child too: the primary session passes the owner that keeps the process.
+    expect(scan(`query({ ${P.replace('childOwner.spawn', 'spawnChildProcess')} });`).wired).toEqual({});
+    expect(scan(`query({ ${T.replace('spawnChildProcess', 'childOwner.spawn')} });`).wired).toEqual({});
+    // A call site that hands a builder a forced table of its own is not wired: that parameter is a test seam.
+    expect(scan(`query({ ${P.replace('(process.env)', '(process.env, {})')} });`).wired).toEqual({});
+    expect(scan(`query({ ${T.replace('(process.env)', '(process.env, {})')} });`).wired).toEqual({});
   });
 });

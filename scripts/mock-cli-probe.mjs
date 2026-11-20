@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// Keyless probe for "does X reach the model?" questions (R-28 and its issues). It drives the
+// Keyless probe for "does X reach the model?" questions (R-28, R-29 and their issues). It drives the
 // harness's real `run` from a built dist and the real bundled CLI against a LOOPBACK mock of the
 // Messages API. The base URL is loopback, other traffic goes to a dead proxy, cloud-provider
 // switches are cleared, and the key is a dummy string with an isolated CLAUDE_CONFIG_DIR, so no
 // Anthropic endpoint should be reachable and nothing is spent (this rests on the CLI honouring
-// those variables).
+// those variables). The harness passes a child only some of this environment: the primary child
+// loses every CLAUDE_*/ANTHROPIC_* name that is not on its keep list, and the judge and the
+// adversary get an allowlist (src/internal/child-env-policy.ts). Everything the probe sets for
+// isolation is on those lists; a variable you add for an experiment may not be, and then it never
+// reaches the CLI.
 //
 // Usage (after `npm run build`):
 //   SCEN=<scenario> OUT=<empty or earlier probe dir> [DIST=./dist] node scripts/mock-cli-probe.mjs
@@ -20,8 +24,9 @@
 // Optional knobs: INHERIT=1 (inherit permissive settings); SOURCES=user,project,local (harness
 // opts in to CLI setting sources); SENV, PENV, LENV, GENV (an `env` block in the user, project,
 // local or global settings file: a value, __none__, __malformed__, or for SENV __utf16__);
-// FLAGSET=1 (pass the switch as flag settings); HOOKSPY=1, HOOKFULL=1, HOOKBLOCK=1 (log, dump or
-// block UserPromptSubmit); SWITCH (which forced variable SENV, PENV, LENV, GENV and FLAGSET name;
+// FLAGSET=1 (pass the switch as flag settings, REPLACING the harness's own flag settings); HOOKSPY=1,
+// HOOKFULL=1, HOOKBLOCK=1 (log, dump or block UserPromptSubmit; the spies are added after the
+// harness's own hooks); SWITCH (which forced variable SENV, PENV, LENV, GENV and FLAGSET name;
 // default the background-tasks switch); PROMPT (the operator prompt; it must contain MAIN-TASK);
 // PLANT=cron (an overdue recurring job in <cwd>/.claude/scheduled_tasks.json, issue #254:
 // `cron_mark` counts the user blocks carrying its prompt), PLANT=memory (CLAUDE.md files) or
@@ -310,7 +315,7 @@ const server = http.createServer((req, res) => {
     let step = steps[Math.min(s.assistantTurns, steps.length - 1)] ?? text('ok');
     if (s.kind === 'aux') step = text('ok');
     if (typeof step === 'function') step = await step(body);
-    log({ event: 'request', url: req.url, stream: body.stream === true, ...s, reply: step.type === 'tool_use' ? { tool: step.name, input_keys: Object.keys(step.input) } : { text: step.text.slice(0, 60) } });
+    log({ event: 'request', url: req.url, key_is_dummy: req.headers['x-api-key'] === 'mock-not-a-key', stream: body.stream === true, ...s, reply: step.type === 'tool_use' ? { tool: step.name, input_keys: Object.keys(step.input) } : { text: step.text.slice(0, 60) } });
     if (body.stream === true) sse(res, body.model ?? 'mock', step);
     else { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'msg_mock_' + (++n), type: 'message', role: 'assistant', model: body.model ?? 'mock', content: [step.type === 'tool_use' ? { ...step, id: 'toolu_mock_' + n } : step], stop_reason: step.type === 'tool_use' ? 'tool_use' : 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 20 } })); }
   });
@@ -334,7 +339,10 @@ const importSdk = async () => {
       const spy = (name) => [{ hooks: [async (input) => { log({ event: 'hookspy', name, has_raw: flat(input).includes(RAW), has_notif: flat(input).includes('task-notification'), keys: Object.keys(input ?? {}), excerpt: flat(input).replaceAll(RAW, '<<RAW>>').slice(0, 400), full: process.env.HOOKFULL === '1' && name === 'UserPromptSubmit' ? flat(input).replaceAll(RAW, '<<RAW>>') : undefined }); if (process.env.HOOKBLOCK === '1' && name === 'UserPromptSubmit' && flat(input).includes('task-notification')) return { decision: 'block', reason: 'harness: notification withheld' }; return {}; }] }];
       const extra = {};
       for (const ev of sdk.HOOK_EVENTS) if (!['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(ev)) extra[ev] = spy(ev);
-      args = { ...args, options: { ...args.options, hooks: { ...args.options.hooks, ...extra } } };
+      // Appended, never replacing: the session registers its own UserPromptSubmit hook and stops a run whose CLI never calls it.
+      const merged = { ...args.options.hooks };
+      for (const [ev, matchers] of Object.entries(extra)) merged[ev] = [...(merged[ev] ?? []), ...matchers];
+      args = { ...args, options: { ...args.options, hooks: merged } };
     }
     if (process.env.FLAGSET === '1') args = { ...args, options: { ...args.options, settings: { env: { [SW]: '1' } } } };
     const inner = sdk.query(args); return (async function* () { for await (const m of inner) { if (m?.type === 'system' && m.subtype === 'init') log({ event: 'init', version: m.claude_code_version, tools: m.tools, permissionMode: m.permissionMode }); else if (m?.type === 'result') log({ event: 'result', subtype: m.subtype, is_error: m.is_error, num_turns: m.num_turns, permission_denials: (m.permission_denials ?? []).map((d) => d.tool_name) }); else if (m?.type === 'system') log({ event: 'system', subtype: m.subtype, has_raw: flat(m).includes(RAW) }); yield m; } })(); } };

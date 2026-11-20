@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
@@ -6,8 +10,8 @@ import { route } from '../router/index.js';
 import { AgentDefinitionRefused, BUNDLED_AGENT_NAMES, UNSCANNED_AGENT_DENY_REASON } from '../security/index.js';
 import type { AgentScanResult, SettingSource } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
-import { createAgentGate, defaultAgentScan } from './agent-gate.js';
-import { createSession } from './session.js';
+import { agentScanFor, createAgentGate, defaultAgentScan } from './agent-gate.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SdkPreToolUseInput, SessionDeps } from './types.js';
 
 const clean = (names: string[] = []): AgentScanResult => ({ admittedNames: new Set(names), refusals: [], filesScanned: names.length });
@@ -24,6 +28,38 @@ describe('this machine', () => {
   // why other session suites are red.
   it('has no managed agent file the gate refuses', () => {
     expect(defaultAgentScan([]).refusals).toEqual([]);
+  });
+});
+
+describe('agentScanFor: the directory scanned is the one the child is handed (#251)', () => {
+  const made: string[] = [];
+  const dir = (): string => {
+    const d = mkdtempSync(join(tmpdir(), 'agent-gate-'));
+    made.push(d);
+    return d;
+  };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('on Windows a config directory spelt in another letter case is the one scanned for user agents', () => {
+    const saved = process.env['CLAUDE_CONFIG_DIR'];
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    delete process.env['CLAUDE_CONFIG_DIR'];
+    const home = dir();
+    const cfg = dir();
+    mkdirSync(join(cfg, 'agents'));
+    writeFileSync(join(cfg, 'agents', 'probe.md'), '---\nname: probe-agent\ndescription: helps\n---\nYou help.\n');
+    vi.stubEnv('Claude_Config_Dir', cfg);
+    try {
+      expect([...agentScanFor(home)(['user']).admittedNames]).toEqual([]);
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      expect([...agentScanFor(home)(['user']).admittedNames]).toEqual(['probe-agent']);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      if (saved !== undefined) process.env['CLAUDE_CONFIG_DIR'] = saved;
+    }
   });
 });
 

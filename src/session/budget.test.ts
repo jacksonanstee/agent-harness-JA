@@ -5,7 +5,7 @@ import { DEFAULT_MAX_BUDGET_USD } from '../internal/limits.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, QueryOptions, SdkMessage, SessionConfig, SessionDeps } from './types.js';
 
 // Issue #187 (ADR-0041): the default-on per-run dollar ceiling, the

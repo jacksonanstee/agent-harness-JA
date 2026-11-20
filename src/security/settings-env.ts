@@ -5,7 +5,8 @@ import { projectConfigDirs } from './agent-definitions.js';
 import type { SettingSource } from './sdk-settings.js';
 
 /**
- * Settings-env scan (issue #250, ADR-0040 D-8 as amended 12/11/2026).
+ * Settings-env scan (issue #250, ADR-0040 D-8 as amended 12/11/2026; widened
+ * by issue #251, amended 13/11/2026).
  *
  * The harness turns the bundled CLI's background tasks off by forcing a
  * variable into the child's environment (`src/internal/child-env.ts`). The
@@ -14,10 +15,16 @@ import type { SettingSource } from './sdk-settings.js';
  * the harness's (OBSERVED, loopback mock API, CLI 2.1.312, 12/11/2026: a block
  * holding `""` or `"0"` in the user, project or local settings file under the
  * matching `sdk.settingSources` entry, and in the global config file under
- * the default isolation, each brought the unhooked stall notice back).
+ * the default isolation, each brought the unhooked stall notice back). The
+ * same block can also put back a variable the harness REMOVED from the
+ * child's environment (OBSERVED 13/11/2026 and again 20/11/2026, runs
+ * `before-genv` and `before-senv`: the global config file and the user
+ * settings file each turned the CLI's bare mode on that way, #251).
  *
  * This module lists the files whose `env` block the CLI applies for the chosen
- * sources and refuses the run when one of them names a forced variable. The
+ * sources and refuses the run when one of them names a refused variable: one
+ * the caller's policy refuses (the session's refuses every name in the
+ * vendor namespace and every name the harness forces). The
  * paths are a BINARY READING of CLI 2.1.312 (located by needle, not run,
  * except where the mock runs above exercised them). Two sources the CLI also
  * reads are out of reach of a file scan and are not covered: an OS-level
@@ -64,10 +71,12 @@ export interface SettingsEnvRefusal {
   readonly reason: SettingsEnvRefusalReason;
 }
 
-/** Fixed text: it names no variable and echoes no value (ADR-0031). */
+/** Fixed text: it names the class of variable, never the one found, and echoes no value (ADR-0031). */
 export const SETTINGS_ENV_REFUSED_REASON =
-  'A settings file the bundled CLI would load sets, in its env block, a variable the harness sets itself, and the file ' +
-  'would win: remove that entry, or drop the setting source (#250)';
+  'A settings file the bundled CLI would load sets, in its env block, one of the CLI\'s own variables (a name starting ' +
+  'CLAUDE_ or ANTHROPIC_, with or without a leading underscore, or CLAUDECODE). The file would win over the harness and ' +
+  'over your environment, so no settings file may set one: remove that entry and set the variable in your environment ' +
+  'if you need it, or drop the setting source (#250, #251)';
 
 const MAX_LISTED_REFUSALS = 8;
 const MAX_REPORTED_PATH = 200;
@@ -102,8 +111,16 @@ export interface SettingsEnvFilesInput {
 /** The global config file's name suffixes (`mV()` in the 2.1.312 binary, read): one per OAuth environment. */
 const GLOBAL_CONFIG_SUFFIXES = ['', '-custom-oauth', '-local-oauth', '-staging-oauth'] as const;
 
+/** The directory of managed drop-in settings files; every entry in it is loaded (2.1.312, read). */
+export function managedDropInDir(managedDir: string): string {
+  return join(managedDir, 'managed-settings.d');
+}
+
+/** Every setting source, for a caller that wants the whole list whatever a run opts in to. */
+export const ALL_SETTING_SOURCES: readonly SettingSource[] = Object.freeze(['user', 'project', 'local']);
+
 function managedFiles(managedDir: string): SettingsEnvFile[] {
-  const dropInDir = join(managedDir, 'managed-settings.d');
+  const dropInDir = managedDropInDir(managedDir);
   let dropIns: string[] = [];
   try {
     dropIns = readdirSync(dropInDir).sort();
@@ -120,18 +137,37 @@ function managedFiles(managedDir: string): SettingsEnvFile[] {
  * Every file whose `env` block the CLI applies for these setting sources
  * (2.1.312, read). The lists over-approximate on purpose, since an extra file
  * can only add a refusal: both user file names (the second is used in one CLI
- * mode), every global-config suffix, and for `project` and `local` every
- * directory from cwd up to the git root where the CLI reads one or two.
+ * mode), every global-config suffix, the global config file under the home
+ * directory even when `CLAUDE_CONFIG_DIR` moves it (whether the CLI still
+ * reads that one then was not established), and for `project` and `local`
+ * every directory from cwd up to the git root where the CLI reads one or two.
+ *
+ * This list is also what self-protection refuses the agent's writes to
+ * (called with every source, `ALL_SETTING_SOURCES`): the CLI re-read a
+ * settings file the agent had written during the run and ran the command
+ * hook in it (found by the security review of #251; OBSERVED again, loopback
+ * mock, CLI 2.1.312, 20/11/2026, on the build before this change, run
+ * `before-hot-user-settings-bypass-wait3s`: the agent's Write replaced the
+ * user settings file and, with 3 s before the next tool call, the hook it
+ * held ran; with 20 ms it had not run yet). That run inherited the
+ * operator's `user` source with permissions bypassed. With the `project`
+ * source inherited and nothing granted, and with `user` and `project`
+ * inherited and the operator's user settings allowing Write by name, the CLI
+ * refused the write itself (`before-hot-settings`,
+ * `before-hot-settings-granted`). The guard is on the files: a command that
+ * names only a directory above one passes it (ADR-0042, a stated limit).
+ * One list, so the scanned set and the protected set cannot drift.
  */
 export function settingsEnvFiles(input: SettingsEnvFilesInput): SettingsEnvFile[] {
   const configured = input.env.CLAUDE_CONFIG_DIR;
   const hasConfigDir = configured !== undefined && configured !== '';
   const configDir = hasConfigDir ? configured : join(input.homeDir, '.claude');
   const globalDir = hasConfigDir ? configured : input.homeDir;
+  const globalDirs = hasConfigDir ? [globalDir, input.homeDir] : [globalDir];
   const files: SettingsEnvFile[] = [
     ...managedFiles(input.managedDir),
     { source: 'global', path: join(configDir, '.config.json') },
-    ...GLOBAL_CONFIG_SUFFIXES.map((suffix) => ({ source: 'global' as const, path: join(globalDir, `.claude${suffix}.json`) })),
+    ...globalDirs.flatMap((dir) => GLOBAL_CONFIG_SUFFIXES.map((suffix) => ({ source: 'global' as const, path: join(dir, `.claude${suffix}.json`) }))),
   ];
   if (input.settingSources.includes('user')) {
     files.push({ source: 'user', path: join(configDir, 'settings.json') }, { source: 'user', path: join(configDir, 'cowork_settings.json') });
@@ -150,9 +186,25 @@ const isMissing = (error: unknown): boolean =>
 const comparable = (text: string): string =>
   text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16))).toUpperCase();
 
-function textVerdict(raw: string, forced: readonly string[], settingKeys: readonly string[]): SettingsEnvRefusalReason | null {
+/**
+ * Which `env` names refuse a file. `needles` are upper-case strings: a text
+ * that holds none of them (after `\u` decoding and upper-casing) is passed
+ * without parsing, so every name `refuses` accepts must contain one.
+ */
+export interface SettingsEnvNamePolicy {
+  refuses(name: string): boolean;
+  readonly needles: readonly string[];
+}
+
+/** A list of names as a policy: a name is refused when it is one of them, in any letter case. */
+function namesPolicy(names: readonly string[]): SettingsEnvNamePolicy {
+  const upper = names.map((key) => key.toUpperCase());
+  return { refuses: (name) => upper.includes(name.toUpperCase()), needles: upper };
+}
+
+function textVerdict(raw: string, policy: SettingsEnvNamePolicy, settingKeys: readonly string[]): SettingsEnvRefusalReason | null {
   const upper = comparable(raw);
-  if (!forced.some((key) => upper.includes(key)) && !settingKeys.some((key) => upper.includes(key))) return null;
+  if (!policy.needles.some((key) => upper.includes(key)) && !settingKeys.some((key) => upper.includes(key))) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -164,7 +216,7 @@ function textVerdict(raw: string, forced: readonly string[], settingKeys: readon
   if (!Object.hasOwn(parsed, 'env')) return null;
   const env: unknown = (parsed as Record<string, unknown>)['env'];
   if (typeof env !== 'object' || env === null || Array.isArray(env)) return null;
-  return Object.keys(env).some((name) => forced.includes(name.toUpperCase())) ? 'env' : null;
+  return Object.keys(env).some((name) => policy.refuses(name)) ? 'env' : null;
 }
 
 /** The four fs calls the bounded read makes; a seam so a test can change the file between them. */
@@ -229,6 +281,8 @@ function isForeignEncoding(bytes: Buffer): boolean {
   return bytes.includes(0);
 }
 
+const isNameList = (refused: readonly string[] | SettingsEnvNamePolicy): refused is readonly string[] => Array.isArray(refused);
+
 export interface SettingsEnvScanLimits {
   readonly maxFileBytes?: number;
   /** The fs calls to read with. Default: node's. A seam for tests. */
@@ -242,19 +296,23 @@ export interface SettingsEnvScanLimits {
 }
 
 /**
- * Refusals for the files that name a forced variable. Per file:
+ * Refusals for the files that name a refused variable: one of `refused` when
+ * it is a list of names, or one its `refuses` accepts when it is a policy (the
+ * session passes the child-env policy: every name in the vendor namespace,
+ * the ones a child may inherit included, and every name the harness forces). "Names one" below means the text holds one of
+ * the policy's needles. Per file:
  * - missing: skipped (the CLI loads nothing from it);
  * - present but unreadable, not a regular file, or over the size limit:
  *   refused, since the scan cannot vouch for it;
  * - a UTF-16 or UTF-32 byte-order mark, or a NUL byte: refused, whatever the
  *   text says, since a UTF-8 search of it proves nothing;
- * - text that names no forced variable, in any letter case and after `\u`
- *   escapes are decoded: passed without parsing, whatever its syntax (the CLI
- *   cannot find a name the text does not hold);
+ * - text that holds no needle, in any letter case and after `\u` escapes are
+ *   decoded: passed without parsing, whatever its syntax (the CLI cannot find
+ *   a name the text does not hold);
  * - a JSON object: refused when one of its own top-level keys is a refused
  *   settings key (`refusedTopLevelKeys`), or when its own top-level `env`
- *   object has a key that is a forced variable, whatever the value; a mention
- *   anywhere else passes;
+ *   object has a key that is a refused variable, whatever the value; a
+ *   mention anywhere else passes;
  * - anything else that names one (not JSON, or JSON that is not an object):
  *   refused. The CLI's parser is not this one, so a file this scan cannot
  *   read the way the CLI does is not waved through.
@@ -263,12 +321,12 @@ export interface SettingsEnvScanLimits {
  */
 export function scanSettingsEnv(
   files: readonly SettingsEnvFile[],
-  forcedKeys: readonly string[],
+  refused: readonly string[] | SettingsEnvNamePolicy,
   limits: SettingsEnvScanLimits = {},
 ): SettingsEnvRefusal[] {
-  const forced = forcedKeys.map((key) => key.toUpperCase());
+  const policy = isNameList(refused) ? namesPolicy(refused) : refused;
   const settingKeys = (limits.refusedTopLevelKeys ?? []).map((key) => key.toUpperCase());
-  if (forced.length === 0 && settingKeys.length === 0) return [];
+  if (policy.needles.length === 0 && settingKeys.length === 0) return [];
   const maxFileBytes = limits.maxFileBytes ?? SETTINGS_ENV_MAX_FILE_BYTES;
   const refusals: SettingsEnvRefusal[] = [];
   for (const file of files) {
@@ -283,7 +341,7 @@ export function scanSettingsEnv(
       continue;
     }
     const raw = read.toString('utf8');
-    const reason = textVerdict(raw, forced, settingKeys);
+    const reason = textVerdict(raw, policy, settingKeys);
     if (reason !== null) refusals.push({ ...file, reason });
   }
   return refusals;

@@ -14,7 +14,7 @@ import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import { redact, scan } from '../security/index.js';
 import type { TelemetryEventInput } from '../telemetry/index.js';
-import { createSession } from './session.js';
+import { createLiveSession as createSession } from '../../test/prompt-hook.js';
 import type { QueryFn, SdkHookCallback, SdkMessage, SessionDeps } from './types.js';
 
 const INIT: SdkMessage = { type: 'system', subtype: 'init', session_id: 'sdk-1' };

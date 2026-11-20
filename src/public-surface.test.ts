@@ -169,3 +169,21 @@ describe('walkSurface detection (fixture, no disk)', () => {
     expect(walk.resolvedCount).toBeGreaterThan(0);
   });
 });
+
+// #251, architecture review and owner ruling of 20/11/2026. The harness starts every bundled-CLI child through
+// its own spawn function and holds the process. Those are the session's workings, not the package's API: a
+// caller who could import the spawn function or the owner would have a second way to start the CLI that the
+// session knows nothing of. The seam's TYPES stay public, because `SessionDeps.spawnChild` is typed with them.
+describe('the child-process internals are not on the package root (#251)', () => {
+  it.each(['spawnChildProcess', 'createChildOwner', 'stderrTailOf', 'withStderrTail', 'STDERR_TAIL_MAX_BYTES', 'STDERR_LINE_TOO_LONG'])('%s is not a root export', async (name) => {
+    const root: Record<string, unknown> = await import('./index.js');
+    expect(Object.keys(root)).not.toContain(name);
+    const session: Record<string, unknown> = await import('./session/index.js');
+    expect(Object.keys(session)).not.toContain(name);
+  });
+
+  it('the names the seam is typed with, and the two errors a run can end with, are still there', async () => {
+    const root: Record<string, unknown> = await import('./index.js');
+    expect(Object.keys(root)).toEqual(expect.arrayContaining(['HookCanaryMissed', 'ChildNotOwned', 'createSession']));
+  });
+});

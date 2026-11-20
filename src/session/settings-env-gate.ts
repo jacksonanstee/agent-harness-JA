@@ -1,13 +1,14 @@
 import { homedir } from 'node:os';
-import { FORCED_CHILD_ENV } from '../internal/child-env.js';
+import { CHILD_ENV_NAME_POLICY, childConfigDir } from '../internal/child-env.js';
 import { managedSettingsDir, REFUSED_SETTINGS_KEYS, scanSettingsEnv, SettingsEnvRefused, settingsEnvFiles } from '../security/index.js';
 import type { SettingSource, SettingsEnvRefusal } from '../security/index.js';
 
 /**
  * The session's settings-env gate (issue #250). Run at the start of every
  * `run()`, BEFORE the SDK is called: a settings file the CLI would load whose
- * `env` block names a variable in FORCED_CHILD_ENV would replace the
- * harness's value in the child, so the run is refused. It lives in the
+ * `env` block names any of the CLI's own variables (CHILD_ENV_NAME_POLICY;
+ * widened by issue #251) would replace the harness's value, put a stripped
+ * one back or move one the operator set, so the run is refused. It lives in the
  * session, beside the agent gate, so a library caller that composes its own
  * hook stack does not lose it.
  */
@@ -21,10 +22,11 @@ export function settingsEnvScanFor(homeDir: string): SettingsEnvScanFn {
         settingSources,
         cwd: process.cwd(),
         homeDir,
-        env: { CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'] },
+        // The directory the child is handed, not a second reading of the environment.
+        env: { CLAUDE_CONFIG_DIR: childConfigDir(process.env) },
         managedDir: managedSettingsDir(process.platform),
       }),
-      Object.keys(FORCED_CHILD_ENV),
+      CHILD_ENV_NAME_POLICY,
       { refusedTopLevelKeys: REFUSED_SETTINGS_KEYS },
     );
 }

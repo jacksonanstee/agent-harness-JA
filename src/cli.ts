@@ -8,8 +8,10 @@ import { resolve } from 'node:path';
 import {
   apiKeyMissingMessage,
   composeSecurity,
+  fatalErrorLine,
   hookRecordToTelemetryInput,
   loadSdkQuery,
+  redactedErrorMessage,
   parseSafeInt,
   parseUsd,
   registerSecurityHooks,
@@ -44,7 +46,7 @@ import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
-import { agentScanFor, createSession, DEFAULT_DESCRIPTOR, settingsEnvScanFor } from './session/index.js';
+import { agentScanFor, ChildNotOwned, createSession, DEFAULT_DESCRIPTOR, HookCanaryMissed, settingsEnvScanFor } from './session/index.js';
 import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session/index.js';
 import {
   AgentDefinitionRefused,
@@ -740,6 +742,7 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       scanAgents: agentScanFor(seams.userDir ?? homedir()),
       // #250: the settings-env scan reads the same home directory.
       scanSettingsEnv: settingsEnvScanFor(seams.userDir ?? homedir()),
+      ...(seams.spawnChild === undefined ? {} : { spawnChild: seams.spawnChild }),
       ...runJudgeDeps(security.judge, query),
     },
     {
@@ -774,7 +777,16 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       process.stderr.write(`refusing to run: ${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
-    if (!interrupt.signal.aborted) throw error;
+    // #251: the CLI began the turn without running the session's prompt hook, or was not started through
+    // the harness's spawn function; the session stopped the run. (Thrown only when the operator did not interrupt.)
+    if (error instanceof HookCanaryMissed || error instanceof ChildNotOwned) {
+      process.stderr.write(`run stopped: ${sanitizeDiagnostic(error.message)}\n`);
+      return 2;
+    }
+    // #251: the error may carry the tail of the CLI's stderr, raw. Nothing leaves `run` unredacted: the message
+    // the entry point prints is the redacted one. (A library caller of `createSession` gets the error as thrown.)
+    // eslint-disable-next-line preserve-caught-error -- the caught error is the unredacted text; a `cause` would carry it out with this one
+    if (!interrupt.signal.aborted) throw new Error(redactedErrorMessage(error, redact));
     process.stderr.write(`${formatInterruptedLine(null)}\n`);
     return EXIT_INTERRUPTED;
   } finally {
@@ -848,8 +860,7 @@ if (invokedDirectly) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`error: ${sanitizeDiagnostic(message)}\n`);
+      process.stderr.write(`${fatalErrorLine(error, redact)}\n`);
       process.exit(1);
     },
   );

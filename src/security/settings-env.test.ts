@@ -5,8 +5,9 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { REFUSED_SETTINGS_KEYS, scanSettingsEnv, SETTINGS_ENV_REFUSED_REASON, SETTINGS_KEY_REFUSED_REASON, settingsEnvFiles, SettingsEnvRefused } from './settings-env.js';
+import { ALL_SETTING_SOURCES, managedDropInDir, REFUSED_SETTINGS_KEYS, scanSettingsEnv, SETTINGS_ENV_REFUSED_REASON, SETTINGS_KEY_REFUSED_REASON, settingsEnvFiles, SettingsEnvRefused } from './settings-env.js';
 import type { SettingsEnvFile } from './settings-env.js';
+import { CHILD_ENV_NAME_POLICY } from '../internal/child-env.js';
 
 const KEY = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
 const FORCED = [KEY];
@@ -71,6 +72,27 @@ describe('settingsEnvFiles (#250): every settings file whose env block the bundl
       join(managed, 'managed-settings.d', 'a.json'),
       join(managed, 'managed-settings.d', 'b.json'),
     ]);
+  });
+});
+
+describe('settingsEnvFiles is one list for the scan and for self-protection (#251)', () => {
+  it('with CLAUDE_CONFIG_DIR set, the global config file is listed under the config directory AND under home, each name suffix', () => {
+    const files = settingsEnvFiles({ settingSources: [], cwd: '/work', homeDir: '/home/u', env: { CLAUDE_CONFIG_DIR: '/cfg' }, managedDir: '/managed' });
+    const global = files.filter((f) => f.source === 'global').map((f) => f.path);
+    for (const dir of ['/cfg', '/home/u']) {
+      for (const name of ['.claude.json', '.claude-custom-oauth.json', '.claude-local-oauth.json', '.claude-staging-oauth.json']) expect(global).toContain(join(dir, name));
+    }
+    expect(global).toContain(join('/cfg', '.config.json'));
+  });
+
+  it('ALL_SETTING_SOURCES is every source, and with it the list holds the user, project and local files', () => {
+    expect([...ALL_SETTING_SOURCES].sort()).toEqual(['local', 'project', 'user']);
+    expect(Object.isFrozen(ALL_SETTING_SOURCES)).toBe(true);
+    const paths = settingsEnvFiles({ settingSources: ALL_SETTING_SOURCES, cwd: '/work', homeDir: '/home/u', env: {}, managedDir: '/managed' }).map((f) => f.path);
+    for (const path of ['/home/u/.claude/settings.json', '/home/u/.claude/cowork_settings.json', '/work/.claude/settings.json', '/work/.claude/settings.local.json', '/home/u/.claude.json', '/managed/managed-settings.json']) {
+      expect(paths).toContain(path);
+    }
+    expect(managedDropInDir('/managed')).toBe(join('/managed', 'managed-settings.d'));
   });
 });
 
@@ -316,6 +338,84 @@ describe('scanSettingsEnv refuses a settings file that sets a refused top-level 
     expect(both.message).toBe(
       `settings env refused: user:/cfg/settings.json (setting); global:/cfg/.claude.json (env). ${SETTINGS_ENV_REFUSED_REASON} ${SETTINGS_KEY_REFUSED_REASON}`,
     );
+  });
+});
+
+// #251: the session passes a POLICY, not a list: every vendor name the harness strips from the child, and
+// every name it forces. The scan must refuse a name nobody listed.
+describe('scanSettingsEnv with a name policy (#251): a stripped or forced variable in an env block is refused', () => {
+  const scanPolicy = (text: string) => scanSettingsEnv([file(tmp(), 'settings.json', text)], CHILD_ENV_NAME_POLICY);
+
+  it.each(['CLAUDE_CODE_SIMPLE', 'claude_code_simple', 'Claude_Code_Simple', 'CLAUDECODE', 'CLAUDE_CODE_MESSAGING_SOCKET', 'ANTHROPIC_MODEL', 'CLAUDE_MADE_UP_TOMORROW', KEY])(
+    'refuses env naming %s, whatever the value',
+    (name) => {
+      for (const value of ['1', '0', '', null]) {
+        const refusals = scanPolicy(JSON.stringify({ env: { [name]: value } }));
+        expect(refusals, `${name}=${String(value)}`).toHaveLength(1);
+        expect(refusals[0]).toMatchObject({ source: 'user', reason: 'env' });
+      }
+    },
+  );
+
+  // Owner ruling 13/11/2026: the keep list is for the inherited environment. A file's env block that moved the
+  // endpoint, added a request header or moved the config directory was applied by the CLI (observed).
+  it.each(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '_CLAUDE_CODE_X', '_anthropic_x'])(
+    'refuses env naming %s: a kept name and an underscore-led name are vendor names too',
+    (name) => {
+      expect(scanPolicy(JSON.stringify({ env: { [name]: '1' } }))[0]).toMatchObject({ reason: 'env' });
+    },
+  );
+
+  it.each(['PATH', 'AWS_REGION', 'DISABLE_TELEMETRY', 'MY_CLAUDE_FLAG', '__CLAUDE_X'])('passes env naming %s: outside the vendor namespace', (name) => {
+    expect(scanPolicy(JSON.stringify({ env: { [name]: '1' } }))).toEqual([]);
+  });
+
+  it('one refused name among passed ones refuses the file', () => {
+    expect(scanPolicy(JSON.stringify({ env: { PATH: '/bin', AWS_REGION: 'r', CLAUDE_CODE_SIMPLE: '1' } }))).toHaveLength(1);
+  });
+
+  it('passes a refused name outside the top-level env block, and an env that is not an object', () => {
+    expect(scanPolicy(JSON.stringify({ history: ['export CLAUDE_CODE_SIMPLE=1'], permissions: { env: { CLAUDE_CODE_SIMPLE: '1' } } }))).toEqual([]);
+    expect(scanPolicy(JSON.stringify({ env: 'CLAUDE_CODE_SIMPLE' }))).toEqual([]);
+    expect(scanPolicy(JSON.stringify({ env: ['CLAUDE_CODE_SIMPLE'] }))).toEqual([]);
+  });
+
+  it('refuses a file it cannot parse that holds a vendor needle, plainly or through a unicode escape; passes one that holds none', () => {
+    expect(scanPolicy('// c\n{ "env": { "CLAUDE_CODE_SIMPLE": "1" }, }')[0]).toMatchObject({ reason: 'unparsable' });
+    expect(scanPolicy('{ "env": { "\\u0043LAUDE_CODE_SIMPLE": "1" }, }')[0]).toMatchObject({ reason: 'unparsable' });
+    expect(scanPolicy('{ "env": { "anthropic_model": "m" }, }')[0]).toMatchObject({ reason: 'unparsable' });
+    expect(scanPolicy('// a comment\n{ "env": { "PATH": "/bin" }, }')).toEqual([]);
+  });
+
+  it('a unicode escape in a parsable file is decoded by the parser and refused as env', () => {
+    expect(scanPolicy('{ "env": { "\\u0043LAUDE_CODE_SIMPLE": "1" } }')[0]).toMatchObject({ reason: 'env' });
+  });
+
+  it('a policy is asked only about the names of a top-level env block, and not at all when the text holds none of its needles', () => {
+    const asked: string[] = [];
+    const policy = { refuses: (name: string) => (asked.push(name), name === 'B'), needles: ['NEEDLE'] };
+    const d = tmp();
+    const files = [
+      file(d, 'a.json', JSON.stringify({ env: { A: '1', B: '1' } })),
+      file(d, 'b.json', JSON.stringify({ note: 'needle', env: { A: '1', B: '1' }, other: { env: { C: '1' } } })),
+      file(d, 'c.json', JSON.stringify({ note: 'NEEDLE', env: { A: '1' } })),
+    ];
+    const refusals = scanSettingsEnv(files, policy);
+    expect(refusals.map((r) => r.path)).toEqual([join(d, 'b.json')]);
+    expect(asked.sort()).toEqual(['A', 'A', 'B']);
+  });
+
+  it('a policy with no needles and no refused setting key scans nothing', () => {
+    expect(scanSettingsEnv([file(tmp(), 's.json', JSON.stringify({ env: { X: '1' } }))], { refuses: () => true, needles: [] })).toEqual([]);
+  });
+
+  it('the reason names the class of variable and both issues, and no variable the scan found', () => {
+    expect(SETTINGS_ENV_REFUSED_REASON).toContain('#250');
+    expect(SETTINGS_ENV_REFUSED_REASON).toContain('#251');
+    expect(SETTINGS_ENV_REFUSED_REASON).toContain('CLAUDE_ or ANTHROPIC_');
+    expect(SETTINGS_ENV_REFUSED_REASON).toContain('leading underscore');
+    expect(SETTINGS_ENV_REFUSED_REASON).toContain('no settings file may set one');
+    expect(SETTINGS_ENV_REFUSED_REASON).not.toMatch(/CLAUDE_[A-Z]|ANTHROPIC_[A-Z]/);
   });
 });
 

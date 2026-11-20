@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../cli.js';
 import { SELF_PROTECTION_REASON } from '../security/index.js';
 import type { QueryFn, SdkHookCallback, SdkMessage } from '../session/index.js';
+import { fakeSpawnChild, promptHookFirst } from '../../test/prompt-hook.js';
 
 // Issue #188 (ADR-0042) at the `run` entrypoint: main builds the protected
 // roots from the user dir, the cwd, --skills-dir and --db, and registers the
@@ -70,7 +71,7 @@ async function drive(d: Dirs, calls: { tool: string; input: Record<string, unkno
       yield { type: 'result', subtype: 'success', result: 'ok', session_id: 's', num_turns: 1, total_cost_usd: 0.01 } as SdkMessage;
     })();
   const argv = ['run', 'hi', '--skills-dir', d.skills, '--db', d.db];
-  const code = await main(argv, { userDir: d.userDir, importSdk: async () => ({ query }), onInterrupt: () => () => undefined });
+  const code = await main(argv, { userDir: d.userDir, importSdk: async () => ({ query: promptHookFirst(query) }), spawnChild: fakeSpawnChild, onInterrupt: () => () => undefined });
   return { code, outputs };
 }
 
