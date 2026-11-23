@@ -41,7 +41,7 @@ import type { SdkConfigChangeCallback, SdkConfigChangeOutput, SdkPreToolDenyOutp
  * tracked: `runs/` holds the design pass's runs on the build before this
  * change, some with a prototype of a layer in the probe's wrapper;
  * `impl/runs/` the runs of the first build of this change; `impl2/runs/`
- * and `impl3/runs/` the runs of this build.
+ * the second build's, `impl3/runs/` this build's.
  *
  * Layer 1, the CLI's own gate. The CLI calls its `ConfigChange` hooks when a
  * settings file it watches has changed and BEFORE it applies the file, and
@@ -86,10 +86,11 @@ import type { SdkConfigChangeCallback, SdkConfigChangeOutput, SdkPreToolDenyOutp
  * this build (`impl3/runs/`): 12 scenarios, 3 runs each, 36 runs of 36
  * ended with exit 2, the child ended by SIGKILL and no hook in the written
  * file run; three controls, 3 runs each, did not stop; the run after a stop
- * was refused in 4 runs of 4, one of them after a shell the stopped call
+ * was refused in 5 runs of 5, one of them after a shell the stopped call
  * left behind had written the file again. On the second build
- * (`impl2/runs/`; the stubs were made in scratch copies of it, and the
- * guard, kill and compare are this build's): with layer 1 stubbed out,
+ * (`impl2/runs/`; the stubs were made in scratch copies of it; its
+ * guard and kill are this build's, and its compare lacks only the five
+ * global-config keys added in the third round): with layer 1 stubbed out,
  * layer 2 alone stopped 17 runs of 17 (`nol1-*`); with layer 2 stubbed out,
  * layer 1 alone stopped 15 of 17, the two global config scenarios being the
  * ones it cannot see (`nol2-*`); with the kill stubbed out the run still
@@ -394,8 +395,8 @@ export function createSettingsGuard(input: SettingsGuardInput): SettingsGuard {
   }
 
   /**
-   * The one stop path. The kill comes FIRST, before anything is read or
-   * written. Then every listed file is compared once more, so that the
+   * The one stop path. The kill comes FIRST, before anything further is
+   * read or written. Then every listed file is compared once more, so that the
    * marker and the lines name all that differs and not only what was seen
    * first; then the marker; then the session's abort. Never throws.
    */

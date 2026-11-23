@@ -43,8 +43,12 @@ import type { SettingsChange, SettingsChangeKind } from './settings-snapshot.js'
  * died, and is taken over by ONE waiter: the one that creates the claim file
  * named after the stale lock's token, checks the lock still holds that
  * token, and renames its own lock over it; every other waiter keeps
- * waiting, so a second waiter cannot remove the lock the first has just
- * taken. A writer that cannot get the lock within `MARKER_LOCK_WAIT_MS`
+ * waiting. Staleness is judged from the lock's mtime before the token is
+ * read, so a waiter whose view is outdated (or whose clock is ahead) can
+ * still replace a lock another waiter has just taken, and one concurrent
+ * entry may then be lost; a claim file left by a waiter that died is never
+ * cleared, after which every update waits and writes without the lock.
+ * Both are tracked with the process-group follow-up. A writer that cannot get the lock within `MARKER_LOCK_WAIT_MS`
  * writes anyway, since a marker that may lose a concurrent entry is better
  * than no marker. What this does not cover: a holder that is alive but
  * stalled for longer than the stale time can finish after its lock was
