@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { CHILD_ENV_NAME_POLICY, childConfigDir } from '../internal/child-env.js';
 import { managedSettingsDir, REFUSED_SETTINGS_KEYS, scanSettingsEnv, SettingsEnvRefused, settingsEnvFiles } from '../security/index.js';
-import type { SettingSource, SettingsEnvRefusal } from '../security/index.js';
+import type { SettingsEnvFilesInput, SettingsEnvRefusal, SettingSource } from '../security/index.js';
 
 /**
  * The session's settings-env gate (issue #250). Run at the start of every
@@ -14,18 +14,29 @@ import type { SettingSource, SettingsEnvRefusal } from '../security/index.js';
  */
 export type SettingsEnvScanFn = (settingSources: readonly SettingSource[]) => readonly SettingsEnvRefusal[];
 
+/**
+ * What the settings list is built from for a home directory: this process's
+ * working directory, the config directory the child is handed and the
+ * platform's managed directory, read when called. The start-of-run scan and
+ * the run-long watch (`settings-watch.ts`, issue #264) both build their list
+ * from this, so the two cannot read different places.
+ */
+export function settingsFilesInputFor(homeDir: string, settingSources: readonly SettingSource[]): SettingsEnvFilesInput {
+  return {
+    settingSources,
+    cwd: process.cwd(),
+    homeDir,
+    // The directory the child is handed, not a second reading of the environment.
+    env: { CLAUDE_CONFIG_DIR: childConfigDir(process.env) },
+    managedDir: managedSettingsDir(process.platform),
+  };
+}
+
 /** The real scan for a home directory, for this process's cwd, env and platform. The CLI passes its `userDir` seam. */
 export function settingsEnvScanFor(homeDir: string): SettingsEnvScanFn {
   return (settingSources) =>
     scanSettingsEnv(
-      settingsEnvFiles({
-        settingSources,
-        cwd: process.cwd(),
-        homeDir,
-        // The directory the child is handed, not a second reading of the environment.
-        env: { CLAUDE_CONFIG_DIR: childConfigDir(process.env) },
-        managedDir: managedSettingsDir(process.platform),
-      }),
+      settingsEnvFiles(settingsFilesInputFor(homeDir, settingSources)),
       CHILD_ENV_NAME_POLICY,
       { refusedTopLevelKeys: REFUSED_SETTINGS_KEYS },
     );

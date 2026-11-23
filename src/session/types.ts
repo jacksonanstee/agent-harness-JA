@@ -5,7 +5,7 @@ import type { FireResult, HookEvent, HookPayloadMap, HookRuntime } from '../hook
 import type { MemoryStore } from '../memory/index.js';
 import type { LoadResult, SkillError } from '../skills/index.js';
 import type { TelemetryStore } from '../telemetry/index.js';
-import type { AgentScanResult, InitCheck, JudgeCall, RedactResult, ScanResult, SettingSource, SettingsEnvRefusal } from '../security/index.js';
+import type { AgentScanResult, InitCheck, JudgeCall, RedactResult, ScanResult, SettingsChange, SettingsEnvRefusal, SettingsEnvSource, SettingSource } from '../security/index.js';
 
 /**
  * Minimal structural view of the Claude Agent SDK surface the session uses.
@@ -246,6 +246,38 @@ export interface SdkUserPromptSubmitMatcher {
   timeout?: number;
 }
 
+/**
+ * Structural view of the SDK's `ConfigChangeHookInput` (issue #264): what the
+ * CLI hands a hook when a settings file it watches has changed, BEFORE it
+ * applies the file. `source` is typed as the SDK's five literals and read as
+ * an open string: a name the SDK does not list stops the run too.
+ * Parity-pinned. Not a member of `SdkHookInput`.
+ */
+export interface SdkConfigChangeInput {
+  hook_event_name: 'ConfigChange';
+  source: 'user_settings' | 'project_settings' | 'local_settings' | 'policy_settings' | 'skills';
+  file_path?: string;
+  session_id?: string;
+}
+
+/** A config-change hook's output: empty, or a block, which keeps the CLI from applying the changed file (not honoured for a policy file). */
+export interface SdkConfigChangeOutput {
+  decision?: 'block';
+  reason?: string;
+}
+
+/** A config-change hook as the SDK calls it. */
+export type SdkConfigChangeCallback = (
+  input: SdkConfigChangeInput,
+  toolUseID: string | undefined,
+  context: { signal: AbortSignal },
+) => Promise<SdkConfigChangeOutput>;
+
+export interface SdkConfigChangeMatcher {
+  hooks: SdkConfigChangeCallback[];
+  timeout?: number;
+}
+
 export type SdkHookInput =
   | SdkPreToolUseInput
   | SdkPostToolUseInput
@@ -440,6 +472,14 @@ export interface QueryOptions {
      * the session stops the run (`HookCanaryMissed`).
      */
     UserPromptSubmit?: SdkUserPromptSubmitMatcher[];
+    /**
+     * The settings-change stop (issue #264). The primary query always
+     * registers one matcher with one callback: the CLI calls it when a
+     * settings file it watches has changed and before it applies the file,
+     * and the callback stops the run (`SettingsChangeDetected`). The judge
+     * and the eval adversary register none.
+     */
+    ConfigChange?: SdkConfigChangeMatcher[];
   };
 }
 
@@ -459,6 +499,40 @@ export type QueryFn = (args: {
   prompt: string;
   options?: QueryOptions;
 }) => AsyncIterable<SdkMessage>;
+
+/**
+ * What the session needs to watch the CLI's settings files for one run
+ * (issue #264). `settingsWatchFor` in `settings-watch.ts` builds the real one.
+ * No method throws, but `record`.
+ */
+export interface SettingsWatch {
+  /** Where the marker is; named in the stop's lines. */
+  readonly markerPath: string;
+  /**
+   * The marker's entries that refuse THIS run: those whose path is not back
+   * in the state it was in at the start of the run that saw it change, and
+   * that are either a user, global or managed entry or name a path on this
+   * run's own settings list. Only an entry whose path is back in that state
+   * is dropped from the marker. `'unreadable'` when a marker exists and
+   * cannot be read as one, which refuses the run too.
+   */
+  pending(): readonly SettingsChange[] | 'unreadable';
+  /**
+   * The files as they are now. `changes()` then returns EVERY difference
+   * from that (`force`: read a global config file whatever was read lately),
+   * and `baselineOf` the start state of a path, in the marker's form.
+   */
+  snapshot(): { changes(force?: boolean): SettingsChange[]; baselineOf(path: string): string };
+  /** The present state of a path the CLI named in a config-change event, as a change to record; the guard fills in its baseline. */
+  reported(source: SettingsEnvSource, path: string): SettingsChange;
+  /**
+   * Adds these changes to the marker, one entry per path; none is ever
+   * dropped. `'over-cap'` when the marker now holds more entries than a
+   * reader accepts: it then reads as unreadable and refuses every run.
+   * Throws when the marker cannot be written.
+   */
+  record(changes: readonly SettingsChange[]): 'ok' | 'over-cap';
+}
 
 export interface SessionDeps {
   query: QueryFn;
@@ -532,6 +606,24 @@ export interface SessionDeps {
    * gets an empty tail.
    */
   spawnChild?: SpawnChildFn;
+  /**
+   * The settings-change watch (issue #264): the marker an earlier stop left,
+   * read at the start of every `run()`, and the snapshot of the CLI's
+   * settings files that the run is compared with until its child exits. A
+   * difference stops the run (`SettingsChangeDetected`). Default: the real
+   * files for the current user's home directory, this process's working
+   * directory and environment, with the marker under `<home>/.harness`. A
+   * seam for tests; a library caller should leave it unset.
+   *
+   * Precedence, for a caller that reads the rejection. A caller's own
+   * interrupt (`SessionConfig.signal` aborted) comes first: the run rejects
+   * as the interrupt does, the stop's lines are still warned and the marker
+   * is still written, but the rejection is NOT a `SettingsChangeDetected`,
+   * so a caller that interrupts must not take its absence as "no change".
+   * Otherwise a settings stop comes before a missed hook canary and before
+   * any error of the stream's own.
+   */
+  watchSettings?: SettingsWatch;
   /**
    * The S-5 judge (issue #96 PR-B1, spec D3, R1): the call and the per-run
    * cap. When present, every non-block PostToolUse and PostToolUseFailure

@@ -1,3 +1,4 @@
+import { SettingsChangeDetected } from '../../session/index.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -587,6 +588,21 @@ describe('createGoldenRunner rows', () => {
     expect(alpha?.failureKind).toBe('session-error');
     expect(alpha?.reason).toContain('SDK exploded');
     expect(scorecard.rows).toHaveLength(3);
+  });
+
+  // #264 (owner ruling 5): a settings-change stop is not a task's failure. It ends the pack.
+  it('a settings-change stop from a task session is rethrown: no row for it, and no later task runs', async () => {
+    const stop = new SettingsChangeDetected('snapshot', 'killed', []);
+    let runs = 0;
+    const runner = createGoldenRunner({
+      createTaskSession: () => ({
+        run: () => ((runs += 1), Promise.reject(stop)),
+      }),
+      redactSecrets: (t: string) => identityRedact(t),
+      now: fakeNow(),
+    });
+    await expect(runner.run(fixtures('run'))).rejects.toBe(stop);
+    expect(runs).toBe(1);
   });
 
   // #251: the session puts the tail of the CLI's stderr on the error it rejects with, raw. The row is where eval stores it.

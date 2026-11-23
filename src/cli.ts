@@ -46,7 +46,7 @@ import { createHookRuntime } from './hooks/index.js';
 import { createMemoryStore, DEFAULT_DB_PATH } from './memory/index.js';
 import { route, TASK_SENSITIVITIES, TASK_SHAPES } from './router/index.js';
 import type { TaskDescriptor, TaskSensitivity, TaskShape } from './router/index.js';
-import { agentScanFor, ChildNotOwned, createSession, DEFAULT_DESCRIPTOR, HookCanaryMissed, settingsEnvScanFor } from './session/index.js';
+import { agentScanFor, ChildNotOwned, createSession, DEFAULT_DESCRIPTOR, HookCanaryMissed, SettingsChangeDetected, settingsEnvScanFor, settingsWatchFor } from './session/index.js';
 import type { CliDeniedToolCall, SessionRefusal, SessionResult } from './session/index.js';
 import {
   AgentDefinitionRefused,
@@ -742,6 +742,8 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
       scanAgents: agentScanFor(seams.userDir ?? homedir()),
       // #250: the settings-env scan reads the same home directory.
       scanSettingsEnv: settingsEnvScanFor(seams.userDir ?? homedir()),
+      // #264: the settings-change watch reads the same files, and keeps its marker under the same home directory.
+      watchSettings: settingsWatchFor(seams.userDir ?? homedir()),
       ...(seams.spawnChild === undefined ? {} : { spawnChild: seams.spawnChild }),
       ...runJudgeDeps(security.judge, query),
     },
@@ -781,6 +783,13 @@ export async function main(argv: string[], seams: CliSeams = {}): Promise<number
     // the harness's spawn function; the session stopped the run. (Thrown only when the operator did not interrupt.)
     if (error instanceof HookCanaryMissed || error instanceof ChildNotOwned) {
       process.stderr.write(`run stopped: ${sanitizeDiagnostic(error.message)}\n`);
+      return 2;
+    }
+    // #264: a settings file the CLI loads changed during the run and the session stopped it, or an earlier
+    // stop's marker still matches and the run was refused before the SDK was called. The lines naming the file
+    // were warned already. (Thrown only when the operator did not interrupt.)
+    if (error instanceof SettingsChangeDetected) {
+      process.stderr.write(`${error.layer === 'marker' ? 'refusing to run' : 'run stopped'}: ${sanitizeDiagnostic(error.message)}\n`);
       return 2;
     }
     // #251: the error may carry the tail of the CLI's stderr, raw. Nothing leaves `run` unredacted: the message

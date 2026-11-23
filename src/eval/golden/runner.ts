@@ -4,6 +4,7 @@ import { formatUsd } from '../../internal/money.js';
 import type { TaskDescriptor } from '../../router/index.js';
 import { redactErrorText } from '../../security/index.js';
 import type { RedactResult } from '../../security/index.js';
+import { SettingsChangeDetected } from '../../session/index.js';
 import type { Session, SessionResult } from '../../session/index.js';
 import { cleanForScorecard, computeByFailureKind, UNKNOWN_HARNESS_VERSION } from '../scorecard/index.js';
 import type {
@@ -411,6 +412,10 @@ export function createGoldenRunner(deps: GoldenRunnerDeps): GoldenRunner {
       });
       result = await session.run(task.prompt);
     } catch (cause: unknown) {
+      // #264 (owner ruling 5): a settings file the CLI loads changed during this task, or an earlier stop's marker
+      // still matches. That is not this task's failure: the pack stops, since the file would be loaded by the
+      // next task's child. Rethrown past the per-task isolation; `runEval` turns it into exit 2 with no scorecard.
+      if (cause instanceof SettingsChangeDetected) throw cause;
       // #251: a session error can carry the tail of the CLI's stderr, so it is redacted as error text.
       const row = failRow(task.id, 'session-error', errorMessage(cause), cleanError);
       return {

@@ -53,6 +53,8 @@ import { assertSettingsEnv } from './settings-env-gate.js';
 import { createChildOwner, withStderrTail } from './child-process.js';
 import { createHookCanary } from './hook-canary.js';
 import type { CanaryStop } from './hook-canary.js';
+import { assertNoPendingSettingsChange, createSettingsGuard, defaultSettingsWatch, SETTINGS_STOP_DENY } from './settings-watch.js';
+import type { SettingsStop } from './settings-watch.js';
 import {
   DEFAULT_MAX_BUDGET_USD,
   isBudgetUsd,
@@ -660,6 +662,12 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     // Step 1b (#250, #251): a settings file whose env block would replace a forced
     // child variable, or set any other of the vendor's variables, refuses the run; throws SettingsEnvRefused.
     assertSettingsEnv(isolation.settingSources ?? [], deps.scanSettingsEnv);
+    // Step 1c (#264): the scan above is a reading at one moment. A marker left by an earlier stop refuses the run
+    // while its file is as it was left (throws SettingsChangeDetected); then the files are snapshotted, for every
+    // source, and compared with that until the child has exited (`settings-watch.ts`).
+    const settingsWatch = deps.watchSettings ?? defaultSettingsWatch();
+    assertNoPendingSettingsChange(settingsWatch, warn);
+    const settingsSnapshot = settingsWatch.snapshot();
 
     // Step 2: model selection.
     const descriptor = config.descriptor ?? DEFAULT_DESCRIPTOR;
@@ -1859,6 +1867,8 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const childOwner = createChildOwner(deps.spawnChild);
     const hookCanary = createHookCanary(childOwner);
     let canaryStop: CanaryStop | null = null;
+    // #264: the settings-change stop. One guard for the run: the CLI's ConfigChange event and the harness's own re-check.
+    let settingsStop: SettingsStop | null = null;
     // D7 (issue #187): when its read loop fails after an is_error result, the
     // SDK replaces the failure with "Claude Code returned an error result"
     // (sdk.mjs readMessages; seen after error_max_budget_usd, probe 29/10/2026).
@@ -1875,10 +1885,22 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     const onCallerAbort = (): void => abortController.abort(config.signal?.reason);
     if (config.signal?.aborted === true) onCallerAbort();
     else config.signal?.addEventListener('abort', onCallerAbort, { once: true });
+    // #264: a stop kills the child first and then aborts the query here; the loop below reads no more.
+    const settingsGuard = createSettingsGuard({ watch: settingsWatch, snapshot: settingsSnapshot, child: childOwner, onStop: () => abortController.abort() });
+    // #264: the re-check at the entry of every tool hook, before the hook's own work. After a stop no further tool is allowed.
+    const guardedPreTool: SdkHookCallback<SdkPreToolUseInput> = async (input, toolUseID, context) =>
+      settingsGuard.check('tool-hook') === null ? preToolCallback(input, toolUseID, context) : SETTINGS_STOP_DENY;
+    // Once stopped, a post-tool hook does no work of its own: the child is gone, and the judge would start another one.
+    const guardedPostTool: SdkHookCallback<SdkPostToolUseInput> = async (input, toolUseID, context) =>
+      settingsGuard.check('tool-hook') === null ? postToolCallback(input, toolUseID, context) : {};
+    const guardedPostToolFailure: SdkHookCallback<SdkPostToolUseFailureInput> = async (input, toolUseID, context) =>
+      settingsGuard.check('tool-hook') === null ? postToolFailureCallback(input, toolUseID, context) : {};
 
     try {
       // Spec D5: the explicit hook budget, set only when a judge is on.
       const judgeTimeout = judgeRun === null ? {} : { timeout: judgeRun.hookTimeoutS };
+      // #264: the timer runs from here until the `finally` below, on every way out.
+      settingsGuard.start();
       // Steps 5-14: the SDK turn.
       const stream = deps.query({
         prompt,
@@ -1898,14 +1920,20 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
           hooks: {
             // #251: the canary. It proves the CLI runs this session's hooks at all.
             UserPromptSubmit: [{ hooks: [hookCanary.callback] }],
-            PreToolUse: [{ hooks: [preToolCallback] }],
-            PostToolUse: [{ hooks: [postToolCallback], ...judgeTimeout }],
-            PostToolUseFailure: [{ hooks: [postToolFailureCallback], ...judgeTimeout }],
+            PreToolUse: [{ hooks: [guardedPreTool] }],
+            PostToolUse: [{ hooks: [guardedPostTool], ...judgeTimeout }],
+            PostToolUseFailure: [{ hooks: [guardedPostToolFailure], ...judgeTimeout }],
+            // #264: the CLI calls this before it applies a settings file that changed; the callback stops the run.
+            ConfigChange: [{ hooks: [settingsGuard.configChangeCallback] }],
           },
         },
       });
 
       for await (const message of stream) {
+        // #264: a stop made by the timer, a tool hook or the CLI's event has killed the child; nothing more is read.
+        // The result message is a check point of its own, before the result is used.
+        settingsStop = isResult(message) ? settingsGuard.check('result') : settingsGuard.stopped();
+        if (settingsStop !== null) break;
         // #251: checked before the message is used. A failed check has already killed the child
         // where it could (`hook-canary.ts` says why the abort alone is not enough).
         canaryStop = isSystemInit(message) || isAssistant(message) ? hookCanary.check('turn-start') : isResult(message) ? hookCanary.check('result') : null;
@@ -1989,13 +2017,23 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
       // #251: the harness reads the child's stderr itself, so it is the one to put the tail on the SDK's exit error.
       if (!errorResultArrived || config.signal?.aborted === true) streamError = withStderrTail(error, await childOwner.stderrTail());
     } finally {
+      // #264: the last re-check, whatever ended the stream and after a canary stop too, so that no run finishes with
+      // a change unseen and unrecorded. Then the guard is done: its timer is cleared on every path.
+      if (settingsStop === null) settingsStop = settingsGuard.check('stream-end');
+      settingsGuard.dispose();
       // #251: a stream that ended on its own without the prompt hook having run is a miss too.
-      if (canaryStop === null && streamError === null) canaryStop = hookCanary.check('stream-end');
+      if (canaryStop === null && settingsStop === null && streamError === null) canaryStop = hookCanary.check('stream-end');
       // Set here so that a throw from the SDK while the stopped stream is closed cannot replace it.
       // The caller's own interrupt comes first: an aborted run ends as an interrupt, as before.
       if (canaryStop !== null) {
         if (config.signal?.aborted !== true) streamError = canaryStop.error;
         for (const line of canaryStop.warnings) warn(line);
+      }
+      // #264: when both stops happened, the settings stop is the one the run ends with: it carries the marker, and
+      // it is the one that stops an eval pack. Both sets of lines are warned.
+      if (settingsStop !== null) {
+        if (config.signal?.aborted !== true) streamError = settingsStop.error;
+        for (const line of settingsStop.warnings) warn(line);
       }
       interrupted = config.signal?.aborted === true;
       config.signal?.removeEventListener('abort', onCallerAbort);
@@ -2036,7 +2074,7 @@ export function createSession(deps: SessionDeps, config: SessionConfig): Session
     if (initCheck === null) {
       initCheck = INIT_CHECK_NOT_RUN;
       const line = initCheckWarning(initCheck);
-      if (line !== null && canaryStop === null) warn(line);
+      if (line !== null && canaryStop === null && settingsStop === null) warn(line);
     }
     // #232: one row per run, not-run included, so "checked and clean" and
     // "never checked" stay distinguishable. Fresh arrays: the row never shares
