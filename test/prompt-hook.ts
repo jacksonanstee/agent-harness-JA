@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 
 import { createSession } from '../src/session/session.js';
-import type { QueryFn, SdkSpawnedProcess, Session, SessionConfig, SessionDeps, SpawnChildFn } from '../src/session/types.js';
+import type { QueryFn, SdkSpawnedProcess, Session, SessionConfig, SessionDeps, SettingsWatch, SpawnChildFn } from '../src/session/types.js';
 
 // Issue #251. The session stops a run whose query function started no process through the
 // harness's spawn function by the time the turn starts, and one whose CLI began the turn without
@@ -63,7 +63,20 @@ export function promptHookFirst(query: QueryFn): QueryFn {
   };
 }
 
-/** `createSession` over a fake query that behaves like a healthy SDK and CLI, with a spawn function that starts nothing. */
+/**
+ * Issue #264. A settings watch that watches nothing: no marker, no file, no change. The session's default reads the
+ * real settings files and keeps its marker under the real home directory, which a unit test must neither read nor
+ * write, so every test session that is not about the watch is given this one.
+ */
+export const noSettingsWatch: SettingsWatch = {
+  markerPath: 'test/prompt-hook.ts: no marker',
+  pending: () => [],
+  snapshot: () => ({ changes: () => [], baselineOf: () => 'unknown' }),
+  reported: (source, path) => ({ source, path, kind: 'reported', fingerprint: 'test', baseline: 'unknown' }),
+  record: () => 'ok',
+};
+
+/** `createSession` over a fake query that behaves like a healthy SDK and CLI, with a spawn function that starts nothing and a settings watch that watches nothing. */
 export function createLiveSession(deps: SessionDeps, config: SessionConfig): Session {
-  return createSession({ spawnChild: fakeSpawnChild, ...deps, query: promptHookFirst(deps.query) }, config);
+  return createSession({ spawnChild: fakeSpawnChild, watchSettings: noSettingsWatch, ...deps, query: promptHookFirst(deps.query) }, config);
 }

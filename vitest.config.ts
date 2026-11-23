@@ -10,7 +10,9 @@ export default defineConfig({
     // leaks cwd to the rest of its file.
     pool: 'forks',
     // Spec D8a, pin 30: the keyless guard runs in every worker.
-    setupFiles: ['./test/sdk-guard.setup.ts'],
+    // #264: every worker gets a temporary HOME, and no test may change the settings-change marker under the real one.
+    // The redirect needs this pool: under threads an assignment to process.env does not reach os.homedir().
+    setupFiles: ['./test/sdk-guard.setup.ts', './test/home-marker-guard.setup.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**'],

@@ -4,7 +4,7 @@ import { createHookRuntime } from '../hooks/index.js';
 import { createMemoryStore, openMemoryDatabase } from '../memory/index.js';
 import { route } from '../router/index.js';
 import type { TelemetryEvent, TelemetryEventInput } from '../telemetry/index.js';
-import { fakeChild } from '../../test/prompt-hook.js';
+import { fakeChild, noSettingsWatch } from '../../test/prompt-hook.js';
 import { spawnChildProcess } from './child-process.js';
 import type { ChildKillOutcome } from './child-process.js';
 import { CHILD_NOT_OWNED_REASON, ChildNotOwned, createHookCanary, HOOK_CANARY_REASON, HookCanaryMissed } from './hook-canary.js';
@@ -133,6 +133,7 @@ function build(fake: { query: QueryFn; spawnChild: SpawnChildFn }, overrides: Pa
     scanAgents: () => ({ admittedNames: new Set<string>(), refusals: [], filesScanned: 0 }),
     scanSettingsEnv: () => [],
     spawnChild,
+    watchSettings: noSettingsWatch,
     telemetry: {
       record: (event) => {
         events.push(event);
@@ -302,11 +303,11 @@ describe('the session registers the canary and stops a run whose CLI never calle
     expect(child.signals).toEqual(['SIGKILL']);
   });
 
-  it('registers exactly one UserPromptSubmit matcher with one callback, beside the three tool hooks', async () => {
+  it('registers exactly one UserPromptSubmit matcher with one callback, beside the three tool hooks and the config-change hook (#264)', async () => {
     const fake = scripted({ fireCanary: 'before', messages: [INIT, RESULT] });
     await createSession(build(fake).deps, { skillsDir: null }).run('p');
     const hooks = fake.options[0]?.hooks;
-    expect(Object.keys(hooks ?? {}).sort()).toEqual(['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'UserPromptSubmit']);
+    expect(Object.keys(hooks ?? {}).sort()).toEqual(['ConfigChange', 'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'UserPromptSubmit']);
     expect(hooks?.UserPromptSubmit).toHaveLength(1);
     expect(hooks?.UserPromptSubmit?.[0]?.hooks).toHaveLength(1);
     expect(Object.keys(hooks?.UserPromptSubmit?.[0] ?? {})).toEqual(['hooks']);

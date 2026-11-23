@@ -5,6 +5,16 @@ export { settingsEnvScanFor } from './settings-env-gate.js';
 export type { SettingsEnvScanFn } from './settings-env-gate.js';
 // #251: the hook canary's error and its fixed reason.
 export { CHILD_NOT_OWNED_REASON, ChildNotOwned, HOOK_CANARY_REASON, HookCanaryMissed } from './hook-canary.js';
+// #264: the settings-change stop's error, its fixed reasons, and the real watch for a home directory.
+export {
+  assertNoPendingSettingsChange,
+  SETTINGS_CHANGE_MARKER_UNREADABLE_REASON,
+  SETTINGS_CHANGE_PENDING_REASON,
+  SETTINGS_CHANGED_REASON,
+  SettingsChangeDetected,
+  settingsWatchFor,
+} from './settings-watch.js';
+export type { SettingsChangeLayer } from './settings-watch.js';
 // #251: what a kill reports. The spawn function and the owner in `child-process.ts` are NOT exported: they are the
 // session's workings, and the CLI imports the one it needs from that file (`src/public-surface.test.ts` pins this).
 export type { ChildKillOutcome } from './child-process.js';
@@ -61,6 +71,12 @@ export type {
   SdkUserPromptSubmitInput,
   SdkUserPromptSubmitMatcher,
   SdkUserPromptSubmitOutput,
+  // #264: the config-change seam `QueryOptions.hooks.ConfigChange` is typed with, and the watch `SessionDeps.watchSettings` is.
+  SdkConfigChangeCallback,
+  SdkConfigChangeInput,
+  SdkConfigChangeMatcher,
+  SdkConfigChangeOutput,
+  SettingsWatch,
   Session,
   SessionConfig,
   SessionDeps,

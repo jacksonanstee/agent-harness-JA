@@ -15,7 +15,7 @@ import { GuardedReadError } from '../internal/guarded-read.js';
 import { createMemoryStore } from '../memory/index.js';
 import type { MemoryStore } from '../memory/index.js';
 import { route } from '../router/index.js';
-import { agentScanFor, createSession, settingsEnvScanFor } from '../session/index.js';
+import { agentScanFor, assertNoPendingSettingsChange, createSession, SettingsChangeDetected, settingsEnvScanFor, settingsWatchFor } from '../session/index.js';
 // #251: off the session barrel on purpose (it is not package API); the adversary is a CLI child like the judge.
 import { spawnChildProcess } from '../session/child-process.js';
 import type { SpawnChildFn } from '../session/index.js';
@@ -215,6 +215,8 @@ export function makeEvalSessionFactory(deps: EvalSessionFactoryDeps): (config: T
         // #229: the same home directory the settings were read from.
         scanAgents: agentScanFor(deps.selfProtection.userDir),
         scanSettingsEnv: settingsEnvScanFor(deps.selfProtection.userDir),
+        // #264: the settings-change watch, with its marker under the same home directory.
+        watchSettings: settingsWatchFor(deps.selfProtection.userDir),
         ...(deps.spawnChild === undefined ? {} : { spawnChild: deps.spawnChild }),
       },
       {
@@ -289,6 +291,15 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     return 2;
   }
 
+  // #264: the same pre-flight for the marker an earlier settings-change stop left; each task's session checks it again.
+  try {
+    assertNoPendingSettingsChange(settingsWatchFor(seams.userDir ?? homedir()), (line) => process.stderr.write(`${WARNING_PREFIX}${sanitizeDiagnostic(line)}\n`));
+  } catch (error: unknown) {
+    if (!(error instanceof SettingsChangeDetected)) throw error;
+    process.stderr.write(`refusing to run: ${sanitizeDiagnostic(error.message)}\n`);
+    return 2;
+  }
+
   const query = await loadSdkQuery(seams.importSdk);
   if (query === null) return 2;
 
@@ -342,6 +353,12 @@ export async function runEval(args: EvalArgs, seams: CliSeams = {}): Promise<num
     } catch (error: unknown) {
       if (error instanceof EvalUsageError) {
         process.stderr.write(`${sanitizeDiagnostic(error.message)}\n`);
+        return 2;
+      }
+      // #264 (owner ruling 5): a settings file changed during a task. The pack stops there, with no scorecard:
+      // the file is still on disk, and the next task's child would load it at start-up.
+      if (error instanceof SettingsChangeDetected) {
+        process.stderr.write(`eval stopped: ${sanitizeDiagnostic(error.message)}\n`);
         return 2;
       }
       throw error;

@@ -83,7 +83,9 @@ const MAX_REPORTED_PATH = 200;
 /** The global config file holds per-project state and can run to megabytes; past this the scan refuses rather than reads. */
 export const SETTINGS_ENV_MAX_FILE_BYTES = 32 * 1024 * 1024;
 
-const reportPath = (path: string): string => truncateTailWellFormed(stripBidi(sanitizeControlChars(path)), MAX_REPORTED_PATH - 1);
+/** A path made safe to print: control and bidi characters gone, and the TAIL kept when it is long (the file name is what identifies it). */
+export const reportSettingsPath = (path: string): string => truncateTailWellFormed(stripBidi(sanitizeControlChars(path)), MAX_REPORTED_PATH - 1);
+const reportPath = reportSettingsPath;
 
 export class SettingsEnvRefused extends Error {
   readonly refusals: readonly SettingsEnvRefusal[];
@@ -156,6 +158,9 @@ function managedFiles(managedDir: string): SettingsEnvFile[] {
  * refused the write itself (`before-hot-settings`,
  * `before-hot-settings-granted`). The guard is on the files: a command that
  * names only a directory above one passes it (ADR-0042, a stated limit).
+ * Since issue #264 the session also snapshots this list for every source
+ * and stops a run during which one of the files changes, however it was
+ * written (`src/session/settings-watch.ts`).
  * One list, so the scanned set and the protected set cannot drift.
  */
 export function settingsEnvFiles(input: SettingsEnvFilesInput): SettingsEnvFile[] {
@@ -240,7 +245,7 @@ const READ_CHUNK_BYTES = 64 * 1024;
  * the stat are read too; the read stops, as `'unreadable'`, once it holds one
  * byte more than `maxBytes`.
  */
-function readBounded(path: string, maxBytes: number, io: SettingsEnvIo): Buffer | 'missing' | 'unreadable' {
+export function readSettingsBytes(path: string, maxBytes: number = SETTINGS_ENV_MAX_FILE_BYTES, io: SettingsEnvIo = NODE_IO): Buffer | 'missing' | 'unreadable' {
   let fd: number;
   try {
     // O_NONBLOCK is absent on Windows, where there is no FIFO to block on.
@@ -279,6 +284,20 @@ function isForeignEncoding(bytes: Buffer): boolean {
   const [a, b] = [bytes[0], bytes[1]];
   if ((a === 0xff && b === 0xfe) || (a === 0xfe && b === 0xff)) return true;
   return bytes.includes(0);
+}
+
+/** The verdict on one file's bytes: `encoding` for bytes a UTF-8 search proves nothing about, else the text's verdict. */
+function bytesVerdict(bytes: Buffer, policy: SettingsEnvNamePolicy, settingKeys: readonly string[]): SettingsEnvRefusalReason | null {
+  return isForeignEncoding(bytes) ? 'encoding' : textVerdict(bytes.toString('utf8'), policy, settingKeys);
+}
+
+/**
+ * The scan's verdict on bytes already read (issue #264: the run-long re-check
+ * compares the global config file by what the scan reads from it). Null when
+ * the scan would pass them. `refusedTopLevelKeys` as in `SettingsEnvScanLimits`.
+ */
+export function settingsBytesVerdict(bytes: Buffer, policy: SettingsEnvNamePolicy, refusedTopLevelKeys: readonly string[] = []): SettingsEnvRefusalReason | null {
+  return bytesVerdict(bytes, policy, refusedTopLevelKeys.map((key) => key.toUpperCase()));
 }
 
 const isNameList = (refused: readonly string[] | SettingsEnvNamePolicy): refused is readonly string[] => Array.isArray(refused);
@@ -330,18 +349,13 @@ export function scanSettingsEnv(
   const maxFileBytes = limits.maxFileBytes ?? SETTINGS_ENV_MAX_FILE_BYTES;
   const refusals: SettingsEnvRefusal[] = [];
   for (const file of files) {
-    const read = readBounded(file.path, maxFileBytes, limits.io ?? NODE_IO);
+    const read = readSettingsBytes(file.path, maxFileBytes, limits.io ?? NODE_IO);
     if (read === 'missing') continue;
     if (read === 'unreadable') {
       refusals.push({ ...file, reason: 'unreadable' });
       continue;
     }
-    if (isForeignEncoding(read)) {
-      refusals.push({ ...file, reason: 'encoding' });
-      continue;
-    }
-    const raw = read.toString('utf8');
-    const reason = textVerdict(raw, policy, settingKeys);
+    const reason = bytesVerdict(read, policy, settingKeys);
     if (reason !== null) refusals.push({ ...file, reason });
   }
   return refusals;

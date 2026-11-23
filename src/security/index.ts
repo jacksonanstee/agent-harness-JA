@@ -76,9 +76,23 @@ export {
   SETTINGS_ENV_MAX_FILE_BYTES,
   SETTINGS_ENV_REFUSED_REASON,
   SETTINGS_KEY_REFUSED_REASON,
+  reportSettingsPath,
   settingsEnvFiles,
   SettingsEnvRefused,
 } from './settings-env.js';
+// #264: the run-long re-check of the same files, and the marker a stop leaves.
+export { GLOBAL_CONFIRM_MS, GLOBAL_REREAD_MIN_MS, settingsFingerprint, takeSettingsSnapshot, UNKNOWN_BASELINE } from './settings-snapshot.js';
+export type { SettingsChange, SettingsChangeKind, SettingsSnapshot, SettingsSnapshotIo, SettingsSnapshotOptions } from './settings-snapshot.js';
+export {
+  mergeMarkerEntries,
+  readSettingsChangeMarker,
+  SETTINGS_CHANGE_MARKER_MAX_ENTRIES,
+  SETTINGS_CHANGE_MARKER_NAME,
+  settingsChangeMarkerPath,
+  updateSettingsChangeMarker,
+  writeSettingsChangeMarker,
+} from './settings-change-marker.js';
+export type { SettingsChangeMarkerEntry, SettingsChangeMarkerRead } from './settings-change-marker.js';
 export type {
   SettingsEnvFile,
   SettingsEnvFilesInput,

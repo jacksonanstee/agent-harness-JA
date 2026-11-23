@@ -149,6 +149,8 @@ export type {
   SettingsEnvRefusal,
   SettingsEnvRefusalReason,
   SettingsEnvSource,
+  SettingsChange,
+  SettingsChangeKind,
   AgentScanResult,
   AgentSource,
   InitCheck,

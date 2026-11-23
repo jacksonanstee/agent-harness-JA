@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, it, expect } from 'vitest';
 
 // SDK types imported in a test only (ADR-0010 decision 2). This file is a
@@ -6,7 +10,9 @@ import { describe, it, expect } from 'vitest';
 // runtime assertion exists so vitest counts the file; the real work is the
 // type-level constants, which only compile when the relations below hold.
 import type {
+  ConfigChangeHookInput,
   HookCallbackMatcher,
+  HookEvent,
   HookJSONOutput,
   Options,
   PostToolUseFailureHookInput,
@@ -29,6 +35,8 @@ import type {
 import type { SettingSource } from '../security/index.js';
 import type {
   QueryOptions,
+  SdkConfigChangeInput,
+  SdkConfigChangeOutput,
   SdkSpawnedProcess,
   SdkSpawnOptions,
   SdkHookCallback,
@@ -465,5 +473,43 @@ describe('issue #209 permission_denials type parity', () => {
       _sdkDenialsRequiredOnSuccess,
       _sdkDenialsRequiredOnError,
     ]).toBeDefined();
+  });
+});
+
+// Issue #264: the settings-change stop hangs on the CLI's ConfigChange event. These pins fail `npm run typecheck`
+// when the installed SDK drops the event, renames an input field the callback reads, or changes the set of sources.
+// What they do NOT catch: a CLI that keeps the declarations and stops calling the hook, or stops waiting for its
+// answer before it applies the file. Only the keyless probe (scripts/mock-cli-probe.mjs, the hot-* scenarios) shows that.
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const _configChangeIsAnEvent: Assignable<'ConfigChange', HookEvent> = true;
+const _configChangeIsAHookKey: Assignable<'ConfigChange', keyof NonNullable<Options['hooks']>> = true;
+const _configChangeInputToView: Assignable<ConfigChangeHookInput, SdkConfigChangeInput> = true;
+// Strict equality: a source the SDK adds must be ruled on (stop the run, or not), so it must redden this line.
+const _configChangeSourcesSame: Same<ConfigChangeHookInput['source'], SdkConfigChangeInput['source']> = true;
+const _configChangeSourceCount: Same<ConfigChangeHookInput['source'], 'user_settings' | 'project_settings' | 'local_settings' | 'policy_settings' | 'skills'> = true;
+const _configChangeHasFilePath: Assignable<'file_path', keyof ConfigChangeHookInput> = true;
+const _configChangeFilePathIsString: Same<ConfigChangeHookInput['file_path'], string | undefined> = true;
+const _configChangeOutputToSdk: Assignable<SdkConfigChangeOutput, HookJSONOutput> = true;
+const _configChangeBlockIsADecision: Assignable<'block', NonNullable<Extract<HookJSONOutput, { decision?: unknown }>['decision']>> = true;
+
+describe('issue #264 ConfigChange type parity', () => {
+  it('holds at compile time', () => {
+    expect([
+      _configChangeIsAnEvent,
+      _configChangeIsAHookKey,
+      _configChangeInputToView,
+      _configChangeSourcesSame,
+      _configChangeSourceCount,
+      _configChangeHasFilePath,
+      _configChangeFilePathIsString,
+      _configChangeOutputToSdk,
+      _configChangeBlockIsADecision,
+    ]).toBeDefined();
+  });
+
+  it("the SDK's HOOK_EVENTS list holds ConfigChange (read from its declarations, since the unit suite never loads the SDK)", () => {
+    const declarations = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.d.ts'), 'utf8');
+    const list = /export declare const HOOK_EVENTS: readonly \[([^\]]*)\]/u.exec(declarations)?.[1] ?? '';
+    expect(list.split(',').map((name) => name.trim())).toContain("'ConfigChange'");
   });
 });

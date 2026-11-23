@@ -666,6 +666,16 @@ describe('the CLI settings files (#251): every file the settings-env scan reads 
     await expect(run('Write', { file_path: join(outside, 'managed-settings.json') })).rejects.toThrowError(SelfProtectionViolation);
   });
 
+  // #264 (owner ruling 8): the global config file's legacy name is refused wherever it points, like the other names of the CLI's own.
+  it('.config.json is refused by name, and its neighbours are not', async () => {
+    await expect(run('Write', { file_path: join(outside, 'elsewhere', '.config.json') })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'cd /tmp && echo {} > .config.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Bash', { command: 'cp stage.json sub/.config.json' })).rejects.toThrowError(SelfProtectionViolation);
+    await expect(run('Write', { file_path: join(outside, 'elsewhere', 'config.json') })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(outside, 'elsewhere', 'app.config.json') })).resolves.toBeUndefined();
+    await expect(run('Write', { file_path: join(outside, 'elsewhere', '.config.json.bak') })).resolves.toBeUndefined();
+  });
+
   // The project above sits outside any git checkout and outside the home directory, so its list of
   // settings files runs up to the filesystem root and holds `/.claude/settings.json`; any command
   // text with `/.claude/settings.json` in it then matches that absolute path, and the walk rule is

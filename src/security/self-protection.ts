@@ -146,9 +146,13 @@ const SETTINGS_WALK = /(?:^|\/)\.claude\/(?:settings(?:\.local)?|cowork_settings
 /**
  * Last components that are refused wherever they point, because nothing but
  * the CLI uses them: its global config file under each name suffix, its
- * managed settings file, and the two settings names of its own.
+ * managed settings file, and the two settings names of its own. Since issue
+ * #264 (owner ruling 8 of 23/11/2026) also `.config.json`, the global config
+ * file's legacy name, which before was refused only at the path the CLI
+ * reads it from. That name is not the CLI's alone, so a project with a
+ * `.config.json` of its own cannot have the agent write it.
  */
-const CLI_ONLY_SETTINGS_NAME = /^(?:\.claude(?:-[a-z]+-oauth)?\.json|managed-settings\.json|settings\.local\.json|cowork_settings\.json)$/u;
+const CLI_ONLY_SETTINGS_NAME = /^(?:\.claude(?:-[a-z]+-oauth)?\.json|\.config\.json|managed-settings\.json|settings\.local\.json|cowork_settings\.json)$/u;
 /** A path word that walks into a per-agent memory directory, for a command that changed directory first. */
 const AGENT_MEMORY_WALK = /(?:^|\/)agent-memory(?:-local)?(?:\/|$)/u;
 /**
